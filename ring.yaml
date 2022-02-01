@@ -1,0 +1,20 @@
+pod:
+    php:
+        runtime: docker
+        name: php
+        image: "php:7.3-fpm"
+        namespace: ring
+        ports: []
+        replicas: 3
+        labels: []
+        secret:
+            DATABASE_URL: postgres://postgres:postgres@postgres:5432
+            SECRET_ENV: $SECRET_ENV
+#    nginx:
+#        runtime: kvm
+#        image: "nginx:1.19.5"
+services:
+    app:
+        ports: []
+        selector: php
+        networks: []
