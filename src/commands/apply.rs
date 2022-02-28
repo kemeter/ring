@@ -1,4 +1,5 @@
 use clap::App;
+use clap::Arg;
 use clap::SubCommand;
 use log::info;
 use clap::ArgMatches;
@@ -13,16 +14,25 @@ use std::collections::HashMap;
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
         .name("apply")
+        .arg(
+            Arg::with_name("file")
+                .short("f")
+                .long("file")
+                .value_name("FILE")
+                .help("Sets a custom config file")
+                .takes_value(true),
+        )
+        .about("Apply a configuration file")
 }
 
-pub(crate) fn apply(_args: &ArgMatches) {
+pub(crate) fn apply(args: &ArgMatches) {
     info!("Apply configuration");
 
-    let file = "ring.yaml";
-    let mut file = File::open(file).expect("Unable to open file");
+    let file = args.value_of("file").unwrap_or("ring.yaml");
+    let mut config = File::open(file).expect("Unable to open file");
     let mut contents = String::new();
-  
-    file.read_to_string(&mut contents).expect("Unable to read file");
+
+    config.read_to_string(&mut contents).expect("Unable to read file");
 
     let docs = YamlLoader::load_from_str(&contents).unwrap();
     let pods = &docs[0]["pod"].as_hash().unwrap();
