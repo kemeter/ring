@@ -1,5 +1,7 @@
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
+use std::process::Command;
+use std::env;
 
 #[macro_use]
 extern crate log;
@@ -39,7 +41,7 @@ fn main() {
     ];
 
     let app = App::new("ring")
-      .version("0.0")
+      .version("0.1.0")
       .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
       .about("The ring to rule them all")
       .subcommands(commands);
@@ -65,7 +67,17 @@ fn main() {
           crate::commands::apply::apply(matches.subcommand_matches("apply").unwrap());
         }
         _ => {
-          println!("ddd");
+            let process_args: Vec<String> = env::args().collect();
+            let process_name = process_args[0].as_str().to_owned();
+
+            let mut subprocess = Command::new(process_name.as_str())
+                .arg("--help")
+                .spawn()
+                .expect("failed to execute process");
+
+            subprocess
+                .wait()
+                .expect("failed to wait for process");
         }
     }
 }
