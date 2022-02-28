@@ -73,6 +73,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, server_address: &str)
                 return warp::reply::with_status(warp::reply::json(&pod_output), StatusCode::OK);
 
             }  else {
+                info!("Pod not found, create a new one");
 
                 let utc: DateTime<Utc> = Utc::now();
                 let pod = pods::Pod {
@@ -108,8 +109,7 @@ struct PodInput {
     namespace: String,
     image: String,
     replicas: i64,
-    #[serde(skip_deserializing)]
-    labels: HashMap<String, String>
+    labels: String
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -127,6 +127,7 @@ struct PodOutput {
 }
 
 fn hydrate_output(pod: pods::Pod) -> PodOutput {
+    let labels: HashMap<String, String> = pods::Pod::deserialize_labels(&pod.labels);
 
     return PodOutput{
         id: pod.id,
@@ -138,6 +139,6 @@ fn hydrate_output(pod: pods::Pod) -> PodOutput {
         image: pod.image,
         replicas: 0,
         ports: [].to_vec(),
-        labels: pod.labels,
+        labels: labels
     };
 }

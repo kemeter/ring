@@ -18,8 +18,14 @@ pub(crate) struct Pod {
     pub(crate) replicas: i64,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
-    #[serde(flatten)]
-    pub(crate) labels: HashMap<String, String>
+    pub(crate) labels: String
+}
+
+impl Pod {
+    pub fn deserialize_labels(serialized: &str) -> HashMap<String, String> {
+        let deserialized: HashMap<String, String> = serde_json::from_str(&serialized).unwrap();
+        deserialized
+    }
 }
 
 pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Pod> {
@@ -45,11 +51,7 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Pod> {
         match rows_iter.next() {
             None => { break; },
             Some(pod) => {
-                let mut pod = pod.expect("Could not deserialize Pod item");
-
-                let labels = pod.labels.get("labels").unwrap();
-                pod.labels = json_to_hashmap(&labels).unwrap();
-
+                let pod = pod.expect("Could not deserialize Pod item");
                 pods.push(pod);
             }
         }
@@ -111,9 +113,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, pod: &Pod) -> Pod {
         ":name": pod.name,
         ":image": pod.image,
         ":runtime": pod.runtime,
-        ":labels": serde_json::to_string(&pod.labels).unwrap(),
+        ":labels": pod.labels,
         ":replicas": pod.replicas,
-        ":labels": "{}"
     }).expect("Could not create pod");
 
     return pod.clone();
@@ -134,11 +135,4 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, pod: &Pod) {
         ":id": pod.id,
         ":status": pod.status
     }).expect("Could not update pod");
-}
-
-pub(crate) fn json_to_hashmap(json: &str) -> Result<HashMap<std::string::String, std::string::String>, serde_json::Error> {
-
-    let key_values: Result<HashMap<String, String>, serde_json::Error> = serde_json::from_str(&json);
-
-    return key_values;
 }

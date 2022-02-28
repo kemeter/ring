@@ -5,8 +5,9 @@ use clap::ArgMatches;
 use std::fs::File;
 use std::io::prelude::*;
 use yaml_rust::YamlLoader;
-
+use std::str;
 use ureq::json;
+use std::collections::HashMap;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -35,8 +36,10 @@ pub(crate) fn apply(_args: &ArgMatches) {
         let mut image: &str = "";
         let mut name: &str = "";
         let mut replicas = 0;
+        let mut labels = String::from("{}");
 
         for key in configs.iter() {
+
             let label = key.0.as_str().unwrap();
             let value = &docs[0]["pod"][pod_name][label];
 
@@ -57,13 +60,28 @@ pub(crate) fn apply(_args: &ArgMatches) {
                 runtime = value.as_str().unwrap();
             }
 
-
             if "image" == label {
                 image = value.as_str().unwrap();
             }
 
             if "replicas" == label {
                 replicas = value.as_i64().unwrap();
+            }
+
+            if "labels" == label {
+                let labels_vec = value.as_vec().unwrap();
+
+                if labels_vec.len() > 0 {
+                    let mut map = HashMap::new();
+
+                    for l in labels_vec {
+                        for v in l.as_hash().unwrap().iter() {
+                            map.insert(v.0.as_str().unwrap(), v.1.as_str().unwrap());
+                        }
+                    }
+
+                    labels = serde_json::to_string(&map).unwrap();
+                }
             }
         }
 
@@ -77,7 +95,7 @@ pub(crate) fn apply(_args: &ArgMatches) {
                 "runtime": runtime,
                 "namespace": namespace,
                 "replicas": replicas,
-                "labels": "{}"
+                "labels": labels
             }));
     }
 

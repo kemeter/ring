@@ -10,11 +10,13 @@ pod:
         secret:
             DATABASE_URL: postgres://postgres:postgres@postgres:5432
             SECRET_ENV: $SECRET_ENV
-#    nginx:
-#        runtime: kvm
-#        image: "nginx:1.19.5"
-services:
-    app:
-        ports: []
-        selector: php
-        networks: []
+    nginx:
+        runtime: docker
+        image: "nginx:1.19.5"
+        labels:
+            - sozune.host: "nginx.localhost"
+#services:
+#    app:
+#        ports: []
+#        selector: php
+#        networks: []

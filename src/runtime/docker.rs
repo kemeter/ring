@@ -87,7 +87,9 @@ async fn create_container(config: &mut Pod, docker: &Docker) {
 
     labels.insert("ring_pod", config.id.as_str());
 
-    for (key, value) in config.labels.iter() {
+    let labels_format = Pod::deserialize_labels(&config.labels);
+
+    for (key, value) in labels_format.iter() {
         labels.insert(key, value);
     }
 
