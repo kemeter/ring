@@ -7,7 +7,7 @@ pod:
         ports: []
         replicas: 3
         labels: []
-        secret:
+        secrets:
             DATABASE_URL: postgres://postgres:postgres@postgres:5432
             SECRET_ENV: $SECRET_ENV
     nginx:

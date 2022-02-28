@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use yaml_rust::YamlLoader;
 use std::str;
+use std::env;
 use ureq::json;
 use std::collections::HashMap;
 
@@ -37,6 +38,7 @@ pub(crate) fn apply(_args: &ArgMatches) {
         let mut name: &str = "";
         let mut replicas = 0;
         let mut labels = String::from("{}");
+        let mut secrets = String::from("{}");
 
         for key in configs.iter() {
 
@@ -83,6 +85,21 @@ pub(crate) fn apply(_args: &ArgMatches) {
                     labels = serde_json::to_string(&map).unwrap();
                 }
             }
+
+            if "secrets" == label {
+                let secrets_vec = value.as_hash().unwrap();
+                let mut map = HashMap::new();
+
+                for v in secrets_vec.iter() {
+                    let mut secret_value = String::from(v.1.as_str().unwrap());
+                    secret_value.remove(0);
+
+                    let value_format = env::var(&secret_value).unwrap_or(v.1.as_str().unwrap().to_string());
+                    map.insert(v.0.as_str().unwrap(), value_format);
+                }
+
+                secrets = serde_json::to_string(&map).unwrap();
+            }
         }
 
         let api_url = "http://127.0.0.1:3030/pods";
@@ -95,7 +112,8 @@ pub(crate) fn apply(_args: &ArgMatches) {
                 "runtime": runtime,
                 "namespace": namespace,
                 "replicas": replicas,
-                "labels": labels
+                "labels": labels,
+                "secrets": secrets
             }));
     }
 
