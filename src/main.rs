@@ -2,6 +2,7 @@ use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use std::process::Command;
 use std::env;
+use clap::App;
 
 #[macro_use]
 extern crate log;
@@ -13,6 +14,7 @@ mod commands {
   pub(crate) mod server;
   pub(crate) mod apply;
 }
+
 mod scheduler {
   pub(crate) mod scheduler;
 }
@@ -29,10 +31,15 @@ mod api {
     pub(crate) mod server;
 }
 
-use clap::App;
+mod config {
+    pub(crate) mod api;
+    pub(crate) mod config;
+}
 
 fn main() {
     env_logger::init();
+
+    let config = config::config::load_config();
 
     let commands = vec![
         crate::commands::init::command_config(),
@@ -64,7 +71,10 @@ fn main() {
           )
         }
         Some("apply") => {
-          crate::commands::apply::apply(matches.subcommand_matches("apply").unwrap());
+          crate::commands::apply::apply(
+              matches.subcommand_matches("apply").unwrap(),
+              config,
+          );
         }
         _ => {
             let process_args: Vec<String> = env::args().collect();
@@ -93,3 +103,4 @@ fn get_database_connection() -> Connection {
 
     Connection::open_with_flags("ring.db", db_flags).expect("Could not test: DB not created")
 }
+

@@ -1,0 +1,5 @@
+ip = "127.0.0.1"
+
+[api]
+scheme = "http"
+port = 3000

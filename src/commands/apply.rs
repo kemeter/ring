@@ -10,6 +10,7 @@ use std::str;
 use std::env;
 use ureq::json;
 use std::collections::HashMap;
+use crate::config::config::Config;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -25,7 +26,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         .about("Apply a configuration file")
 }
 
-pub(crate) fn apply(args: &ArgMatches) {
+pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
     info!("Apply configuration");
 
     let file = args.value_of("file").unwrap_or("ring.yaml");
@@ -112,10 +113,10 @@ pub(crate) fn apply(args: &ArgMatches) {
             }
         }
 
-        let api_url = "http://127.0.0.1:3030/pods";
+        let api_url = format!("{}://{}:{}/pods", configuration.api.scheme, configuration.ip, configuration.api.port);
 
         info!("push configuration: {}", api_url);
-        let _resp = ureq::post(api_url)
+        let _resp = ureq::post(&api_url)
             .send_json(json!({
                 "image": image,
                 "name": name,
