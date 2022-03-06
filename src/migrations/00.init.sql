@@ -1,4 +1,4 @@
-CREATE TABLE pod (
+CREATE TABLE deployment (
      id VARCHAR(255) NOT NULL,
      created_at datetime NOT NULL,
      updated_at datetime DEFAULT NULL,

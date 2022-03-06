@@ -3,7 +3,7 @@ extern crate job_scheduler;
 use job_scheduler::{Job, JobScheduler};
 use std::time::Duration;
 use crate::runtime::docker;
-use crate::models::pods;
+use crate::models::deployments;
 use rusqlite::Connection;
 use std::sync::{Mutex, Arc};
 
@@ -15,14 +15,14 @@ pub(crate) fn schedule(storage: Arc<Mutex<Connection>>) {
 
         let guard = storage.lock().unwrap();
 
-        let list_pods = pods::find_all(guard);
-        for pod in list_pods.into_iter() {
+        let list_deployments = deployments::find_all(guard);
+        for deployment in list_deployments.into_iter() {
 
-            if "docker" == pod.runtime {
-                docker::apply(pod.clone());
+            if "docker" == deployment.runtime {
+                docker::apply(deployment.clone());
             }
 
-            println!("{:?}", pod);
+            debug!("{:?}", deployment);
         }
 
     }));

@@ -7,7 +7,7 @@ use std::sync::MutexGuard;
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct Pod {
+pub(crate) struct Deployment {
     pub(crate) id: String,
     pub(crate) created_at: i64,
     pub(crate) status: String,
@@ -21,14 +21,14 @@ pub(crate) struct Pod {
     pub(crate) labels: String
 }
 
-impl Pod {
+impl Deployment {
     pub fn deserialize_labels(serialized: &str) -> HashMap<String, String> {
         let deserialized: HashMap<String, String> = serde_json::from_str(&serialized).unwrap();
         deserialized
     }
 }
 
-pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Pod> {
+pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Deployment> {
     println!("find_all");
     let mut statement = connection.prepare("
             SELECT
@@ -41,30 +41,30 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Pod> {
                 runtime,
                 replicas,
                 labels
-            FROM pod"
-    ).expect("Could not fetch pods");
+            FROM deployment"
+    ).expect("Could not fetch deployments");
 
-    let mut pods: Vec<Pod> = Vec::new();
-    let mut rows_iter = from_rows::<Pod>(statement.query([]).unwrap());
+    let mut deployments: Vec<Deployment> = Vec::new();
+    let mut rows_iter = from_rows::<Deployment>(statement.query([]).unwrap());
 
     loop {
         match rows_iter.next() {
             None => { break; },
-            Some(pod) => {
-                let pod = pod.expect("Could not deserialize Pod item");
-                pods.push(pod);
+            Some(deployment) => {
+                let deployment = deployment.expect("Could not deserialize Deployment item");
+                deployments.push(deployment);
             }
         }
     }
 
-    return pods;
+    return deployments;
 }
 
-pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Pod>, serde_rusqlite::Error> {
+pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Deployment>, serde_rusqlite::Error> {
 
     println!("find_one_by_filters {:?}", filters);
 
-    let mut statement = connection.prepare("SELECT * FROM pod WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
+    let mut statement = connection.prepare("SELECT * FROM deployment WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
     let mut rows = statement.query(named_params!{
         ":namespace": filters[0],
         ":name": filters[1],
@@ -72,17 +72,17 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
     }).unwrap();
 
 
-    let mut ref_rows = from_rows_ref::<Pod>(&mut rows);
+    let mut ref_rows = from_rows_ref::<Deployment>(&mut rows);
     let result = ref_rows.next();
 
     result.transpose()
 }
 
-pub(crate) fn create(connection: &MutexGuard<Connection>, pod: &Pod) -> Pod {
+pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
     println!("create");
-    println!("{:?}", pod);
+    println!("{:?}", deployment);
     let mut statement = connection.prepare("
-            INSERT INTO pod (
+            INSERT INTO deployment (
                 id,
                 created_at,
                 status,
@@ -103,36 +103,36 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, pod: &Pod) -> Pod {
                 :replicas,
                 :labels
             )"
-    ).expect("Could not create pod");
+    ).expect("Could not create deployment");
 
     statement.execute(named_params!{
-        ":id": pod.id,
-        ":created_at": pod.created_at,
+        ":id": deployment.id,
+        ":created_at": deployment.created_at,
         ":status": "running",
-        ":namespace": pod.namespace,
-        ":name": pod.name,
-        ":image": pod.image,
-        ":runtime": pod.runtime,
-        ":labels": pod.labels,
-        ":replicas": pod.replicas,
-    }).expect("Could not create pod");
+        ":namespace": deployment.namespace,
+        ":name": deployment.name,
+        ":image": deployment.image,
+        ":runtime": deployment.runtime,
+        ":labels": deployment.labels,
+        ":replicas": deployment.replicas,
+    }).expect("Could not create deployment");
 
-    return pod.clone();
+    return deployment.clone();
 }
 
-pub(crate) fn update(connection: &MutexGuard<Connection>, pod: &Pod) {
-    println!("update pod");
+pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deployment) {
+    println!("update deployment");
 
     let mut statement = connection.prepare("
-            UPDATE pod
+            UPDATE deployment
             SET
                 status = :status
             WHERE
                 id = :id"
-    ).expect("Could not update pod");
+    ).expect("Could not update deployment");
 
     statement.execute(named_params!{
-        ":id": pod.id,
-        ":status": pod.status
-    }).expect("Could not update pod");
+        ":id": deployment.id,
+        ":status": deployment.status
+    }).expect("Could not update deployment");
 }

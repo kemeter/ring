@@ -2,10 +2,10 @@ use shiplift::{ContainerOptions, Docker, PullOptions, NetworkCreateOptions, Cont
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::models::pods::Pod;
+use crate::models::deployments::Deployment;
 
 #[tokio::main]
-pub(crate) async fn apply(mut config: Pod) {
+pub(crate) async fn apply(mut config: Deployment) {
     let docker = Docker::new();
 
     info!("docker runtime search");
@@ -16,7 +16,7 @@ pub(crate) async fn apply(mut config: Pod) {
                 let container_id = &container.id;
 
                 for (label, value) in container.labels.into_iter() {
-                    if "ring_pod" == label && value == config.id {
+                    if "ring_deployment" == label && value == config.id {
                         config.instances.push(container_id.to_string());
                     }
                 }
@@ -74,7 +74,7 @@ async fn pull_image(docker: Docker, image: String) {
     }
 }
 
-async fn create_container(config: &mut Pod, docker: &Docker) {
+async fn create_container(config: &mut Deployment, docker: &Docker) {
 
     // @todo: Add a check to see if the image is already pulled
     pull_image(docker.clone(), config.image.to_string()).await;
@@ -85,9 +85,9 @@ async fn create_container(config: &mut Pod, docker: &Docker) {
     let mut container_options = ContainerOptions::builder(config.image.as_str());
     let mut labels = HashMap::new();
 
-    labels.insert("ring_pod", config.id.as_str());
+    labels.insert("ring_deployment", config.id.as_str());
 
-    let labels_format = Pod::deserialize_labels(&config.labels);
+    let labels_format = Deployment::deserialize_labels(&config.labels);
 
     for (key, value) in labels_format.iter() {
         labels.insert(key, value);

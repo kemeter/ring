@@ -36,12 +36,12 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
     config.read_to_string(&mut contents).expect("Unable to read file");
 
     let docs = YamlLoader::load_from_str(&contents).unwrap();
-    let pods = &docs[0]["pod"].as_hash().unwrap();
+    let deployments = &docs[0]["deployments"].as_hash().unwrap();
 
-    for entry in pods.iter() {
-        let pod_name = entry.0.as_str().unwrap();
+    for entry in deployments.iter() {
+        let deployment_name = entry.0.as_str().unwrap();
 
-        let configs = &docs[0]["pod"][pod_name].as_hash().unwrap();
+        let configs = &docs[0]["deployments"][deployment_name].as_hash().unwrap();
 
         let mut namespace: &str = "";
         let mut runtime: &str = "";
@@ -54,7 +54,7 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
         for key in configs.iter() {
 
             let label = key.0.as_str().unwrap();
-            let value = &docs[0]["pod"][pod_name][label];
+            let value = &docs[0]["deployments"][deployment_name][label];
 
             if "runtime" == label && "docker" != value.as_str().unwrap() {
                 println!("Runtime \"{}\" not supported", value.as_str().unwrap());
@@ -113,7 +113,7 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
             }
         }
 
-        let api_url = format!("{}://{}:{}/pods", configuration.api.scheme, configuration.ip, configuration.api.port);
+        let api_url = format!("{}://{}:{}/deployments", configuration.api.scheme, configuration.ip, configuration.api.port);
 
         info!("push configuration: {}", api_url);
         let _resp = ureq::post(&api_url)

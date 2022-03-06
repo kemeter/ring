@@ -1,4 +1,4 @@
-pod:
+deployments:
     php:
         runtime: docker
         name: php

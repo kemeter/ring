@@ -2,7 +2,7 @@ use warp::Filter;
 use warp::http::StatusCode;
 use serde::{Serialize, Deserialize};
 use rusqlite::Connection;
-use crate::models::pods;
+use crate::models::deployments;
 use uuid::Uuid;
 use log::info;
 use std::sync::{Mutex, Arc};
@@ -18,82 +18,80 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, server_address: &str)
     let conn2 = Arc::clone(&storage);
 
     let list = warp::get()
-        .and(warp::path("pods"))
+        .and(warp::path("deployments"))
         .map(move || {
-            println!("List pods");
-            let mut pods: Vec<PodOutput> = Vec::new();
+            println!("List deployments");
+            let mut deployments: Vec<DeploymentOutput> = Vec::new();
             let guard = conn.lock().unwrap();
 
-            let list_pods = pods::find_all(guard);
-            for pod in list_pods.into_iter() {
-                let output = hydrate_output(pod);
+            let list_deployments = deployments::find_all(guard);
+            for deployment in list_deployments.into_iter() {
+                let output = hydrate_deployment_output(deployment);
 
-                pods.push(output);
+                deployments.push(output);
             }
 
-            warp::reply::json(&pods)
+            warp::reply::json(&deployments)
         });
 
     let post = warp::post()
-        .and(warp::path("pods"))
+        .and(warp::path("deployments"))
         .and(warp::body::json())
-        .map(move |pod_input: PodInput| {
+        .map(move |deployment_input: DeploymentInput| {
 
             let mut filters = Vec::new();
-            filters.push(pod_input.namespace.clone());
-            filters.push(pod_input.name.clone());
+            filters.push(deployment_input.namespace.clone());
+            filters.push(deployment_input.name.clone());
 
             let guard = conn2.lock().unwrap();
-            let option = pods::find_one_by_filters(&guard, filters);
+            let option = deployments::find_one_by_filters(&guard, filters);
             let config = option.as_ref().unwrap();
 
-            // pod found
+            // deployment found
             if config.is_some() {
-                info!("Found pod");
-                let mut pod = config.clone().unwrap();
-                println!("{:?}", pod);
-                println!("image: {:?}  image: {:?}", pod_input.image.clone(), pod.image);
+                info!("Found deployment");
+                let mut deployment = config.clone().unwrap();
 
-                //@todo: implement reel pod diff
-                if pod_input.image.clone() != pod.image {
+                //@todo: implement reel deployment diff
+                if deployment_input.image.clone() != deployment.image {
                     info!("Image changed");
                     println!("Image changed");
 
-                    pod.status = "delete".to_string();
-                    pods::update(&guard, &pod);
+                    deployment.status = "delete".to_string();
+                    deployments::update(&guard, &deployment);
 
-                    pod.image = pod_input.image.clone();
-                    pods::create(&guard, &pod);
+                    deployment.image = deployment_input.image.clone();
+                    deployments::create(&guard, &deployment);
 
-                    println!("{:?}", pod);
+                    debug!("{:?}", deployment);
                 }
 
-                let pod_output = hydrate_output(pod);
+                let deployment_output = hydrate_deployment_output(deployment);
 
-                return warp::reply::with_status(warp::reply::json(&pod_output), StatusCode::OK);
+                return warp::reply::with_status(warp::reply::json(&deployment_output), StatusCode::OK);
 
             }  else {
-                info!("Pod not found, create a new one");
+                info!("Deployment not found, create a new one");
 
                 let utc: DateTime<Utc> = Utc::now();
-                let pod = pods::Pod {
+                let deployment = deployments::Deployment {
                     id: Uuid::new_v4().to_string(),
-                    name: pod_input.name.clone(),
-                    runtime: pod_input.runtime.clone(),
-                    namespace: pod_input.namespace.clone(),
-                    image: pod_input.image.clone(),
+                    name: deployment_input.name.clone(),
+                    runtime: deployment_input.runtime.clone(),
+                    namespace: deployment_input.namespace.clone(),
+                    image: deployment_input.image.clone(),
                     status: "running".to_string(),
                     created_at: utc.timestamp(),
-                    labels: pod_input.labels,
+                    labels: deployment_input.labels,
                     instances: [].to_vec(),
-                    replicas: pod_input.replicas,
+                    replicas: deployment_input.replicas,
                 };
 
-                pods::create(&guard, &pod);
+                deployments::create(&guard, &deployment);
 
-                let pod_output = hydrate_output(pod);
+                let deployment_output = hydrate_deployment_output(deployment);
 
-                return warp::reply::with_status(warp::reply::json(&pod_output), StatusCode::CREATED);
+                return warp::reply::with_status(warp::reply::json(&deployment_output), StatusCode::CREATED);
             }
         });
 
@@ -103,7 +101,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, server_address: &str)
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct PodInput {
+struct DeploymentInput {
     name: String,
     runtime: String,
     namespace: String,
@@ -113,7 +111,7 @@ struct PodInput {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct PodOutput {
+struct DeploymentOutput {
     id: String,
     created_at: String,
     status: String,
@@ -126,17 +124,17 @@ struct PodOutput {
     labels: HashMap<String, String>
 }
 
-fn hydrate_output(pod: pods::Pod) -> PodOutput {
-    let labels: HashMap<String, String> = pods::Pod::deserialize_labels(&pod.labels);
+fn hydrate_deployment_output(deployment: deployments::Deployment) -> DeploymentOutput {
+    let labels: HashMap<String, String> = deployments::Deployment::deserialize_labels(&deployment.labels);
 
-    return PodOutput{
-        id: pod.id,
-        created_at: NaiveDateTime::from_timestamp(pod.created_at, 0).to_string(),
-        status: pod.status,
-        name: pod.name,
-        namespace: pod.namespace,
-        runtime: pod.runtime,
-        image: pod.image,
+    return DeploymentOutput {
+        id: deployment.id,
+        created_at: NaiveDateTime::from_timestamp(deployment.created_at, 0).to_string(),
+        status: deployment.status,
+        name: deployment.name,
+        namespace: deployment.namespace,
+        runtime: deployment.runtime,
+        image: deployment.image,
         replicas: 0,
         ports: [].to_vec(),
         labels: labels

@@ -24,7 +24,7 @@ mod runtime {
 }
 
 mod models {
-  pub(crate) mod pods;
+  pub(crate) mod deployments;
 }
 
 mod api {
