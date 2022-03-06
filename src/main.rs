@@ -9,10 +9,13 @@ extern crate log;
 extern crate env_logger;
 extern crate ureq;
 
+mod database;
+
 mod commands {
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
+  pub(crate) mod login;
 }
 
 mod scheduler {
@@ -25,6 +28,7 @@ mod runtime {
 
 mod models {
   pub(crate) mod deployments;
+  pub(crate) mod users;
 }
 
 mod api {
@@ -45,6 +49,7 @@ fn main() {
         crate::commands::init::command_config(),
         crate::commands::server::command_config(),
         crate::commands::apply::command_config(),
+        crate::commands::login::command_config(),
     ];
 
     let app = App::new("ring")
@@ -55,7 +60,7 @@ fn main() {
 
     let matches = app.get_matches();
     let subcommand_name = matches.subcommand_name();
-    let storage = get_database_connection();
+    let storage = database::get_database_connection();
 
     match subcommand_name {
         Some("init") => {
@@ -76,6 +81,12 @@ fn main() {
               config,
           );
         }
+        Some("login") => {
+          crate::commands::login::apply(
+              matches.subcommand_matches("login").unwrap(),
+              config,
+          );
+        }
         _ => {
             let process_args: Vec<String> = env::args().collect();
             let process_name = process_args[0].as_str().to_owned();
@@ -90,17 +101,5 @@ fn main() {
                 .expect("failed to wait for process");
         }
     }
-}
-
-fn get_database_connection() -> Connection {
-    let mut db_flags = OpenFlags::empty();
-
-    db_flags.insert(OpenFlags::SQLITE_OPEN_READ_WRITE);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_CREATE);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_FULL_MUTEX);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_NOFOLLOW);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_PRIVATE_CACHE);
-
-    Connection::open_with_flags("ring.db", db_flags).expect("Could not test: DB not created")
 }
 

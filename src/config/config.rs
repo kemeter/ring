@@ -12,10 +12,16 @@ pub(crate) struct Config {
     pub(crate) api: config::api::Api,
 }
 
-pub(crate) fn load_config() -> Config {
-    let home_dir = env::var("HOME").unwrap();
+pub(crate) fn get_config_dir() -> String {
+    let config_dir = env::var("HOME").unwrap();
 
-    let file = format!("{}/.config/kemeter/ring/config.toml", home_dir);
+    return format!("{}/.config/kemeter/ring", config_dir);
+}
+
+pub(crate) fn load_config() -> Config {
+    let home_dir = get_config_dir();
+
+    let file = format!("{}/config.toml", home_dir);
 
     if fs::metadata(file.clone()).is_ok() {
         let mut config = File::open(file).expect("Unable to open file");
@@ -31,7 +37,7 @@ pub(crate) fn load_config() -> Config {
     let my_local_ip = local_ip().unwrap();
 
     return Config {
-        ip: format!("{}:3030", my_local_ip).to_string(),
+        ip: my_local_ip.to_string(),
         api: config::api::Api {
             scheme: "http".to_string(),
             port: 3030
