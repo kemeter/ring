@@ -1,7 +1,7 @@
 use clap::App;
+use clap::Arg;
 use clap::SubCommand;
 use clap::ArgMatches;
-use crate::config::config::Config;
 use crate::models::deployments;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use rusqlite::Connection;
@@ -9,7 +9,14 @@ use std::sync::{Mutex, Arc};
 use chrono::NaiveDateTime;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("deployment list")
+    SubCommand::with_name("deployment:list")
+        .arg(
+            Arg::with_name("namespace")
+                .short("n")
+                .long("namespace")
+                .help("restrict only namespace")
+                .takes_value(true)
+        )
 }
 
 #[derive(Table)]
@@ -28,11 +35,12 @@ struct DeploymentItem {
     runtime: String,
     #[table(title = "Replicas")]
     replicas: i64,
+    #[table(title = "Status")]
+    status: String
 }
 
-pub(crate) fn list(_args: &ArgMatches, storage: Connection) {
+pub(crate) fn execute(args: &ArgMatches, storage: Connection) {
     let mut deployments = vec![];
-
     let connection = Arc::new(Mutex::new(storage));
     let arc = Arc::clone(&connection);
 
@@ -40,6 +48,15 @@ pub(crate) fn list(_args: &ArgMatches, storage: Connection) {
 
     let list_deployments = deployments::find_all(guard);
     for deployment in list_deployments {
+
+        if args.is_present("namespace") {
+            let namespace = args.value_of("namespace").unwrap();
+
+            if namespace != deployment.namespace {
+                continue;
+            }
+        }
+
         deployments.push(
             DeploymentItem {
                 id: deployment.id,
@@ -49,13 +66,10 @@ pub(crate) fn list(_args: &ArgMatches, storage: Connection) {
                 image: deployment.image,
                 runtime: deployment.runtime,
                 replicas: deployment.replicas,
+                status: deployment.status,
             },
         )
     }
 
     print_stdout(deployments.with_title());
-}
-
-pub(crate) fn inspect(_args: &ArgMatches, storage: Connection) {
-
 }

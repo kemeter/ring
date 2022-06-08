@@ -29,7 +29,6 @@ impl Deployment {
 }
 
 pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Deployment> {
-    println!("find_all");
     let mut statement = connection.prepare("
             SELECT
                 id,

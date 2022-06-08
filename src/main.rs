@@ -13,7 +13,7 @@ mod commands {
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
-  pub(crate) mod deployments;
+  pub(crate) mod deployment;
 }
 
 mod scheduler {
@@ -46,7 +46,7 @@ fn main() {
         crate::commands::init::command_config(),
         crate::commands::server::command_config(),
         crate::commands::apply::command_config(),
-        crate::commands::deployments::command_config(),
+        crate::commands::deployment::list::command_config(),
     ];
 
     let app = App::new("ring")
@@ -78,9 +78,9 @@ fn main() {
               config,
           );
         }
-        Some("deployments") => {
-            crate::commands::deployments::list(
-                matches.subcommand_matches("deployments").unwrap(),
+        Some("deployment:list") => {
+            crate::commands::deployment::list::execute(
+                matches.subcommand_matches("deployment:list").unwrap(),
                 storage,
             );
         }
