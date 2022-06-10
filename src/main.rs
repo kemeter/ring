@@ -47,6 +47,7 @@ fn main() {
         crate::commands::server::command_config(),
         crate::commands::apply::command_config(),
         crate::commands::deployment::list::command_config(),
+        crate::commands::deployment::inspect::command_config(),
     ];
 
     let app = App::new("ring")
@@ -81,6 +82,12 @@ fn main() {
         Some("deployment:list") => {
             crate::commands::deployment::list::execute(
                 matches.subcommand_matches("deployment:list").unwrap(),
+                storage,
+            );
+        }
+        Some("deployment:inspect") => {
+            crate::commands::deployment::inspect::execute(
+                matches.subcommand_matches("deployment:inspect").unwrap(),
                 storage,
             );
         }

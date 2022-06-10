@@ -77,6 +77,33 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
     result.transpose()
 }
 
+pub(crate) fn find(connection: MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {
+    let mut statement = connection.prepare("
+            SELECT
+                id,
+                created_at,
+                status,
+                namespace,
+                name,
+                image,
+                runtime,
+                replicas,
+                labels
+            FROM deployment
+            WHERE id = :id
+            "
+    ).expect("Could not fetch deployment");
+
+    let mut rows = statement.query(named_params!{
+        ":id": id,
+    }).unwrap();
+
+    let mut ref_rows = from_rows_ref::<Deployment>(&mut rows);
+    let result = ref_rows.next();
+
+    result.transpose()
+}
+
 pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
     println!("create");
     println!("{:?}", deployment);
