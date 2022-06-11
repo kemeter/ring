@@ -54,29 +54,37 @@ pub(crate) async fn apply(mut config: Deployment) {
 
         debug!("docker runtime apply {:?}", config);
     }
-
 }
 
-async fn pull_image(docker: Docker, image: String) {
+async fn pull_image(docker: Docker, path: String) {
 
-    println!("pull docker image: {}", image);
-    info!("pull docker image: {}", image);
+    println!("pull docker image: {}", path);
+    info!("pull docker image: {}", path);
 
-    let mut stream = docker
-        .images()
-        .pull(&PullOptions::builder().image(image).build());
+    let image_path = path.clone();
 
-     while let Some(pull_result) = stream.next().await {
-        match pull_result {
-            Ok(_output) => { }
-            Err(e) => eprintln!("Error: {}", e),
-        }
+    let split: Vec<&str> = image_path.split(':').collect();
+    let image = split[0];
+    let tag = split[1];
+
+    match docker.images().get(path).inspect().await {
+        Ok(_) => { },
+        Err(e) => {
+            let mut stream = docker
+                .images()
+                .pull(&PullOptions::builder().image(image).tag(tag).build());
+
+            while let Some(pull_result) = stream.next().await {
+                match pull_result {
+                    Ok(output) => println!("{:?}", output),
+                    Err(e) => eprintln!("Error: {}", e),
+                }
+            }
+        },
     }
 }
 
 async fn create_container(config: &mut Deployment, docker: &Docker) {
-
-    // @todo: Add a check to see if the image is already pulled
     pull_image(docker.clone(), config.image.to_string()).await;
 
     let network_name = format!("ring_{}", config.namespace.clone());
