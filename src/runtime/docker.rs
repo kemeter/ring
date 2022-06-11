@@ -29,7 +29,7 @@ pub(crate) async fn apply(mut config: Deployment) {
     if config.status == "delete" {
         println!("delete container {:?}", config.instances);
         for instance in config.instances.iter_mut() {
-            println!("{}", instance);
+            debug!("deployment instance {}", instance);
 
             remove_container(docker.clone(), instance.to_string()).await;
 
@@ -57,8 +57,6 @@ pub(crate) async fn apply(mut config: Deployment) {
 }
 
 async fn pull_image(docker: Docker, path: String) {
-
-    println!("pull docker image: {}", path);
     info!("pull docker image: {}", path);
 
     let image_path = path.clone();
@@ -112,7 +110,7 @@ async fn create_container(config: &mut Deployment, docker: &Docker) {
         .await
     {
         Ok(container) => {
-            debug!("{:?}", container.id);
+            debug!("create container {:?}", container.id);
             config.instances.push(container.id.to_string());
 
             let networks = docker.networks();
@@ -149,7 +147,7 @@ async fn create_network(docker: Docker, network_name: String) {
 
     match docker.networks().get(&network_name).inspect().await {
         Ok(_network_info) => {
-            println!("{:?}", _network_info);
+            debug!("{:?}", _network_info);
             debug!("network {:?} already exist", network_name);
         },
         Err(e) => {

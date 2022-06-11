@@ -11,7 +11,7 @@ pub(crate) fn schedule(storage: Arc<Mutex<Connection>>) {
     let mut scheduler = JobScheduler::new();
 
     scheduler.add(Job::new("1/10 * * * * *".parse().unwrap(), move || {
-        println!("Get executed every 10 seconds!");
+        debug!("Get executed every 10 seconds!");
 
         let guard = storage.lock().unwrap();
 

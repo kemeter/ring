@@ -61,7 +61,7 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Deployment> {
 
 pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Deployment>, serde_rusqlite::Error> {
 
-    println!("find_one_by_filters {:?}", filters);
+    debug!("find_one_by_filters {:?}", filters);
 
     let mut statement = connection.prepare("SELECT * FROM deployment WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
     let mut rows = statement.query(named_params!{
