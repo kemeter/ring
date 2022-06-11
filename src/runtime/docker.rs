@@ -91,6 +91,9 @@ async fn create_container(config: &mut Deployment, docker: &Docker) {
     create_network(docker.clone(), network_name.clone()).await;
 
     let mut container_options = ContainerOptions::builder(config.image.as_str());
+    let container_name = format!("{}_{}", &config.namespace, &config.name);
+
+    container_options.name(&container_name);
     let mut labels = HashMap::new();
 
     labels.insert("ring_deployment", config.id.as_str());
@@ -113,9 +116,12 @@ async fn create_container(config: &mut Deployment, docker: &Docker) {
             config.instances.push(container.id.to_string());
 
             let networks = docker.networks();
+            let mut builder = ContainerConnectionOptions::builder(&container.id);
+            builder.aliases(vec![&config.name, &container_name]);
+
             networks
                 .get(&network_name)
-                .connect(&ContainerConnectionOptions::builder(&container.id).build())
+                .connect(&builder.build())
                 .await;
 
             docker.containers().get(container.id).start().await;
