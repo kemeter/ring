@@ -31,7 +31,7 @@ pub(crate) fn load_config() -> Config {
     let my_local_ip = local_ip().unwrap();
 
     return Config {
-        ip: format!("{}:3030", my_local_ip).to_string(),
+        ip: format!("{}", my_local_ip).to_string(),
         api: config::api::Api {
             scheme: "http".to_string(),
             port: 3030
