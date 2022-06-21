@@ -3,7 +3,7 @@ use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
-use std::sync::MutexGuard;
+use tokio::sync::MutexGuard;
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

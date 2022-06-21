@@ -12,6 +12,12 @@ pub(crate) struct Config {
     pub(crate) api: config::api::Api,
 }
 
+impl Config {
+    pub(crate) fn get_api_url(&mut self)-> String {
+        return format!("{}://{}:{}", self.api.scheme, self.ip, self.api.port);
+    }
+}
+
 pub(crate) fn load_config() -> Config {
     let home_dir = env::var("HOME").unwrap();
 

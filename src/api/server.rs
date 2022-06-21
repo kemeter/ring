@@ -1,103 +1,158 @@
-use warp::Filter;
-use warp::http::StatusCode;
 use serde::{Serialize, Deserialize};
 use rusqlite::Connection;
-use crate::models::deployments;
 use uuid::Uuid;
 use log::info;
-use std::sync::{Mutex, Arc};
+use std::sync::Arc;
 use chrono::{NaiveDateTime, DateTime, Utc};
 use std::collections::HashMap;
+use crate::models::deployments;
+use crate::runtime::docker;
 
-#[tokio::main]
-pub(crate) async fn start(storage: Arc<Mutex<Connection>>, server_address: &str)
+use std::{
+    net::SocketAddr,
+    time::Duration
+};
+use axum::{
+    error_handling::HandleErrorLayer,
+    extract::{Extension, Path},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get},
+    Json, Router,
+};
+
+use tower::{BoxError, ServiceBuilder};
+use tokio::sync::Mutex;
+use crate::config::config::Config;
+
+pub type Db = Arc<Mutex<Connection>>;
+
+async fn deployment_list(Extension(connexion): Extension<Db>) -> impl IntoResponse {
+
+    let mut deployments: Vec<DeploymentOutput> = Vec::new();
+    let guard = connexion.lock().await;
+
+    let list_deployments = deployments::find_all(guard);
+
+    for deployment in list_deployments.into_iter() {
+        let d = deployment.clone();
+
+        let mut output = hydrate_deployment_output(deployment);
+        let instances = docker::list_instances(d.id.to_string()).await;
+        output.instances = instances;
+
+        deployments.push(output);
+    }
+
+    Json(deployments)
+}
+
+async fn deployment_create(Json(input): Json<DeploymentInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+    let mut filters = Vec::new();
+    filters.push(input.namespace.clone());
+    filters.push(input.name.clone());
+
+    let guard = connexion.lock().await;
+    let option = deployments::find_one_by_filters(&guard, filters);
+    let config = option.as_ref().unwrap();
+
+    // deployment found
+    if config.is_some() {
+        info!("Found deployment");
+        let mut deployment = config.clone().unwrap();
+
+        //@todo: implement reel deployment diff
+        if input.image.clone() != deployment.image {
+            info!("Image changed");
+            println!("Image changed");
+
+            deployment.status = "delete".to_string();
+            deployments::update(&guard, &deployment);
+
+            deployment.image = input.image.clone();
+            deployments::create(&guard, &deployment);
+
+            debug!("{:?}", deployment);
+        }
+
+        let deployment_output = hydrate_deployment_output(deployment);
+
+        (StatusCode::CREATED, Json(deployment_output))
+
+    }  else {
+        info!("Deployment not found, create a new one");
+
+        let utc: DateTime<Utc> = Utc::now();
+        let deployment = deployments::Deployment {
+            id: Uuid::new_v4().to_string(),
+            name: input.name.clone(),
+            runtime: input.runtime.clone(),
+            namespace: input.namespace.clone(),
+            image: input.image.clone(),
+            status: "running".to_string(),
+            created_at: utc.timestamp(),
+            labels: input.labels,
+            instances: [].to_vec(),
+            replicas: input.replicas,
+        };
+
+        deployments::create(&guard, &deployment);
+
+        let deployment_output = hydrate_deployment_output(deployment);
+
+        return (StatusCode::CREATED, Json(deployment_output));
+    }
+}
+
+async fn deployment_get(Path(id): Path<String>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+    let guard = connexion.lock().await;
+
+    let option = deployments::find(guard, id);
+
+    let deployment = option.unwrap().unwrap();
+
+    let instances = docker::list_instances(deployment.id.to_string()).await;
+
+    let mut output = hydrate_deployment_output(deployment);
+    output.instances = instances;
+
+    Json(output)
+}
+
+pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
 {
-    info!("Starting server on {}", server_address);
+    debug!("Pre start http server");
 
-    let conn = Arc::clone(&storage);
-    let conn2 = Arc::clone(&storage);
+    let connexion = Arc::clone(&storage);
 
-    let list = warp::get()
-        .and(warp::path("deployments"))
-        .map(move || {
-            println!("List deployments");
-            let mut deployments: Vec<DeploymentOutput> = Vec::new();
-            let guard = conn.lock().unwrap();
+    let app = Router::new()
+        .route("/deployments", get(deployment_list).post(deployment_create))
+        .route("/deployments/:id", get(deployment_get))
 
-            let list_deployments = deployments::find_all(guard);
-            for deployment in list_deployments.into_iter() {
-                let output = hydrate_deployment_output(deployment);
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|error: BoxError| async move {
+                    if error.is::<tower::timeout::error::Elapsed>() {
+                        Ok(StatusCode::REQUEST_TIMEOUT)
+                    } else {
+                        Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Unhandled internal error: {}", error),
+                        ))
+                    }
+                }))
+                .timeout(Duration::from_secs(10))
+                .layer(Extension(connexion))
+                .into_inner(),
+        );
 
-                deployments.push(output);
-            }
+    let addr = SocketAddr::from(([0, 0, 0, 0], configuration.api.port));
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 
-            warp::reply::json(&deployments)
-        });
-
-    let post = warp::post()
-        .and(warp::path("deployments"))
-        .and(warp::body::json())
-        .map(move |deployment_input: DeploymentInput| {
-
-            let mut filters = Vec::new();
-            filters.push(deployment_input.namespace.clone());
-            filters.push(deployment_input.name.clone());
-
-            let guard = conn2.lock().unwrap();
-            let option = deployments::find_one_by_filters(&guard, filters);
-            let config = option.as_ref().unwrap();
-
-            // deployment found
-            if config.is_some() {
-                info!("Found deployment");
-                let mut deployment = config.clone().unwrap();
-
-                //@todo: implement reel deployment diff
-                if deployment_input.image.clone() != deployment.image {
-                    info!("Image changed");
-                    println!("Image changed");
-
-                    deployment.status = "delete".to_string();
-                    deployments::update(&guard, &deployment);
-
-                    deployment.image = deployment_input.image.clone();
-                    deployments::create(&guard, &deployment);
-
-                    debug!("{:?}", deployment);
-                }
-
-                let deployment_output = hydrate_deployment_output(deployment);
-
-                return warp::reply::with_status(warp::reply::json(&deployment_output), StatusCode::OK);
-
-            }  else {
-                info!("Deployment not found, create a new one");
-
-                let utc: DateTime<Utc> = Utc::now();
-                let deployment = deployments::Deployment {
-                    id: Uuid::new_v4().to_string(),
-                    name: deployment_input.name.clone(),
-                    runtime: deployment_input.runtime.clone(),
-                    namespace: deployment_input.namespace.clone(),
-                    image: deployment_input.image.clone(),
-                    status: "running".to_string(),
-                    created_at: utc.timestamp(),
-                    labels: deployment_input.labels,
-                    instances: [].to_vec(),
-                    replicas: deployment_input.replicas,
-                };
-
-                deployments::create(&guard, &deployment);
-
-                let deployment_output = hydrate_deployment_output(deployment);
-
-                return warp::reply::with_status(warp::reply::json(&deployment_output), StatusCode::CREATED);
-            }
-        });
-
-    let routes = list.or(post);
-
-    warp::serve(routes).run(([0,0,0,0], 3030)).await
+    info!("Starting server on {}", configuration.get_api_url());
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -119,9 +174,10 @@ struct DeploymentOutput {
     runtime: String,
     namespace: String,
     image: String,
-    replicas: u8,
+    replicas: i64,
     ports: Vec<String>,
-    labels: HashMap<String, String>
+    labels: HashMap<String, String>,
+    instances: Vec<String>
 }
 
 fn hydrate_deployment_output(deployment: deployments::Deployment) -> DeploymentOutput {
@@ -135,8 +191,9 @@ fn hydrate_deployment_output(deployment: deployments::Deployment) -> DeploymentO
         namespace: deployment.namespace,
         runtime: deployment.runtime,
         image: deployment.image,
-        replicas: 0,
+        replicas: deployment.replicas,
         ports: [].to_vec(),
-        labels: labels
+        labels: labels,
+        instances: [].to_vec()
     };
 }

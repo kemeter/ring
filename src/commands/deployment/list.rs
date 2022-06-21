@@ -2,11 +2,10 @@ use clap::App;
 use clap::Arg;
 use clap::SubCommand;
 use clap::ArgMatches;
-use crate::models::deployments;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use rusqlite::Connection;
-use std::sync::{Mutex, Arc};
-use chrono::NaiveDateTime;
+use serde_json::Result;
+use crate::config::config::Config;
+use crate::api::dto::DeploymentDTO;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("deployment:list")
@@ -20,7 +19,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 }
 
 #[derive(Table)]
-struct DeploymentItem {
+struct DeploymentTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
     #[table(title = "Created at")]
@@ -34,21 +33,21 @@ struct DeploymentItem {
     #[table(title = "Runtime")]
     runtime: String,
     #[table(title = "Replicas")]
-    replicas: i64,
+    replicas: String,
     #[table(title = "Status")]
     status: String
 }
 
-pub(crate) fn execute(args: &ArgMatches, storage: Connection) {
+pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let mut deployments = vec![];
-    let connection = Arc::new(Mutex::new(storage));
-    let arc = Arc::clone(&connection);
+    let api_url = configuration.get_api_url();
+    let response = ureq::get(&format!("{}/deployments", api_url)).send_json({});
+    let response_content = response.unwrap().into_string().unwrap();
 
-    let guard = arc.lock().unwrap();
+    let value: Result<Vec<DeploymentDTO>> = serde_json::from_str(&response_content);
+    let deployments_list = value.unwrap();
 
-    let list_deployments = deployments::find_all(guard);
-    for deployment in list_deployments {
-
+    for deployment in deployments_list {
         if args.is_present("namespace") {
             let namespace = args.value_of("namespace").unwrap();
 
@@ -58,14 +57,14 @@ pub(crate) fn execute(args: &ArgMatches, storage: Connection) {
         }
 
         deployments.push(
-            DeploymentItem {
+            DeploymentTableItem {
                 id: deployment.id,
-                created_at: NaiveDateTime::from_timestamp(deployment.created_at, 0).to_string(),
+                created_at: deployment.created_at,
                 namespace: deployment.namespace,
                 name: deployment.name,
                 image: deployment.image,
                 runtime: deployment.runtime,
-                replicas: deployment.replicas,
+                replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
                 status: deployment.status,
             },
         )

@@ -2,12 +2,9 @@ use clap::App;
 use clap::Arg;
 use clap::SubCommand;
 use clap::ArgMatches;
-use crate::models::deployments;
-use rusqlite::Connection;
-use std::sync::{Mutex, Arc};
-use chrono::NaiveDateTime;
-use std::collections::HashMap;
-use shiplift::Docker;
+use serde_json::Result;
+use crate::config::config::Config;
+use crate::api::dto::DeploymentDTO;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("deployment:inspect")
@@ -16,47 +13,28 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         )
 }
 
-#[tokio::main]
-pub(crate) async fn execute(args: &ArgMatches<'_>, storage: Connection) {
+pub(crate) async fn execute(args: &ArgMatches<'_>, mut configuration: Config) {
     let id = args.value_of("id").unwrap();
+    let api_url = configuration.get_api_url();
 
-    let connection = Arc::new(Mutex::new(storage));
-    let arc = Arc::clone(&connection);
-
-    let guard = arc.lock().unwrap();
-
-    let deployment = deployments::find(guard, id.to_string()).unwrap().unwrap();
-    let labels: HashMap<String, String> = deployments::Deployment::deserialize_labels(&deployment.labels);
-
-    let mut instances: Vec<String> = vec![];
-    let docker = Docker::new();
-
-    match docker.containers().list(&Default::default()).await {
-        Ok(containers) => {
-            for container in containers {
-                let container_id = &container.id;
-
-                for (label, value) in container.labels.into_iter() {
-                    if "ring_deployment" == label && value == id {
-                        instances.push(container_id.to_string());
-                    }
-                }
-            }
-        }
-        Err(e) => eprintln!("Error: {}", e),
-    }
+    let response = ureq::get(&format!("{}/deployments/{}", api_url, id)).send_json({});
+    let response_content = response.unwrap().into_string().unwrap();
+    let value: Result<DeploymentDTO> = serde_json::from_str(&response_content);
+    let deployment = value.unwrap();
 
     println!("Name: {}", deployment.name);
     println!("Namespace: {}", deployment.namespace);
-    println!("Created AT: {}", NaiveDateTime::from_timestamp(deployment.created_at, 0).to_string());
+    println!("Image: {}", deployment.image);
+    println!("Replicas: {}", deployment.replicas);
+    println!("Created AT: {}", deployment.created_at);
 
     println!("Labels:");
-    for label in labels {
+    for label in deployment.labels {
         println!("  {:?} = {:?}", label.0, label.1)
     }
 
-    println!("Containers:");
-    for instance in instances {
+    println!("Instances:");
+    for instance in deployment.instances {
         println!("  {:?}", instance)
     }
 }

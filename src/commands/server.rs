@@ -4,33 +4,35 @@ use log::info;
 use clap::ArgMatches;
 use rusqlite::Connection;
 use crate::api::server as ApiServer;
-use std::thread;
-use std::sync::{Mutex, Arc};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::task;
 
 use crate::scheduler::scheduler::schedule;
+use crate::config::config::Config;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("server:start")
         .name("server:start")
 }
 
-pub(crate) fn server(_args: &ArgMatches, storage: Connection) {
+pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, storage: Connection) {
     info!("Start server");
     println!("Start server");
 
     let connection = Arc::new(Mutex::new(storage));
+
     let arc = Arc::clone(&connection);
     let arc2 = Arc::clone(&connection);
 
-    let handle = thread::spawn(move || {
-        let server_address = "127.0.0.1:8080";
-        ApiServer::start(arc, server_address);
+    let api_server_handler = task::spawn(async move {
+        ApiServer::start(arc, configuration).await;
     });
 
-    let jq = thread::spawn(move || {
-        schedule(arc2);
+    let scheduler_handler = task::spawn(async move {
+        schedule(arc2).await;
     });
 
-    handle.join().unwrap();
-    jq.join().unwrap();
+    api_server_handler.await;
+    scheduler_handler.await;
 }

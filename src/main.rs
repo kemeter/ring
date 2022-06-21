@@ -28,16 +28,15 @@ mod models {
   pub(crate) mod deployments;
 }
 
-mod api {
-    pub(crate) mod server;
-}
+mod api;
 
 mod config {
     pub(crate) mod api;
     pub(crate) mod config;
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
 
     let config = config::config::load_config();
@@ -68,10 +67,11 @@ fn main() {
             );
         }
         Some("server:start") => {
-          crate::commands::server::server(
-              matches.subcommand_matches("server:start").unwrap(),
-              storage
-          )
+            crate::commands::server::execute(
+                matches.subcommand_matches("server:start").unwrap(),
+                config,
+                storage
+            ).await
         }
         Some("apply") => {
           crate::commands::apply::apply(
@@ -82,14 +82,14 @@ fn main() {
         Some("deployment:list") => {
             crate::commands::deployment::list::execute(
                 matches.subcommand_matches("deployment:list").unwrap(),
-                storage,
+                config,
             );
         }
         Some("deployment:inspect") => {
             crate::commands::deployment::inspect::execute(
                 matches.subcommand_matches("deployment:inspect").unwrap(),
-                storage,
-            );
+                config
+            ).await
         }
         _ => {
             let process_args: Vec<String> = env::args().collect();

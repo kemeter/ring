@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 use crate::models::deployments::Deployment;
 
-#[tokio::main]
 pub(crate) async fn apply(mut config: Deployment) {
     let docker = Docker::new();
 
@@ -38,7 +37,7 @@ pub(crate) async fn apply(mut config: Deployment) {
     } else {
         let number_instances = config.instances.len();
         let n_us: i64 = (number_instances as i16).into();
-        println!("{:?}", n_us);
+        info!("Instance {:?}", n_us);
 
         if n_us < config.replicas {
             info!("create container {}", config.image.clone());
@@ -67,7 +66,7 @@ async fn pull_image(docker: Docker, path: String) {
 
     match docker.images().get(path).inspect().await {
         Ok(_) => { },
-        Err(e) => {
+        Err(_) => {
             let mut stream = docker
                 .images()
                 .pull(&PullOptions::builder().image(image).tag(tag).build());
@@ -167,4 +166,27 @@ async fn create_network(docker: Docker, network_name: String) {
             }
         },
     }
+}
+
+pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
+    let docker = Docker::new();
+    let mut instances: Vec<String> = Vec::new();
+
+    match docker.containers().list(&Default::default()).await {
+        Ok(containers) => {
+            for container in containers {
+                let container_id = &container.id;
+
+                for (label, value) in container.labels.into_iter() {
+                    if "ring_deployment" == label && value == id {
+                        instances.push(container_id.to_string());
+                    }
+                }
+            }
+            println!("{:?}", instances);
+        }
+        Err(e) => eprintln!("Error: {}", e),
+    }
+
+     return instances;
 }

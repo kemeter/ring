@@ -1,35 +1,30 @@
-extern crate job_scheduler;
-
-use job_scheduler::{Job, JobScheduler};
 use std::time::Duration;
 use crate::runtime::docker;
 use crate::models::deployments;
 use rusqlite::Connection;
-use std::sync::{Mutex, Arc};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::sync::MutexGuard;
+use std::{thread, time};
 
-pub(crate) fn schedule(storage: Arc<Mutex<Connection>>) {
-    let mut scheduler = JobScheduler::new();
+pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
+    let duration = time::Duration::from_secs(10);
 
-    scheduler.add(Job::new("1/10 * * * * *".parse().unwrap(), move || {
-        debug!("Get executed every 10 seconds!");
+    info!("Starting schedule");
 
-        let guard = storage.lock().unwrap();
+    loop {
+        let guard = storage.lock().await;
 
         let list_deployments = deployments::find_all(guard);
         for deployment in list_deployments.into_iter() {
 
             if "docker" == deployment.runtime {
-                docker::apply(deployment.clone());
+                docker::apply(deployment.clone()).await;
             }
 
             debug!("{:?}", deployment);
         }
 
-    }));
-
-    // Adding a task to scheduler to execute it in every 2 minutes.
-    loop {
-        scheduler.tick();
-        std::thread::sleep(Duration::from_millis(100));
+        thread::sleep(duration);
     }
 }
