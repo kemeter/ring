@@ -4,16 +4,14 @@ use axum::{
     Json,
 };
 
-use serde::{Serialize, Deserialize};
 use chrono::{NaiveDateTime};
 use serde_json::json;
 use crate::api::server::Db;
-use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments;
 use crate::runtime::docker;
 use crate::models::users::User;
 use crate::models::users as users_model;
-use crate::api::dto::deployment::hydrate_deployment_output;
+use crate::api::dto::user::UserOutput;
 
 pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
 
@@ -36,14 +34,4 @@ pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> im
     }
 
     Json(users)
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct UserOutput {
-    pub(crate) id: String,
-    pub(crate) username: String,
-    pub(crate) created_at: String,
-    pub(crate) updated_at: String,
-    pub(crate) status: String,
-    pub(crate) login_at: String,
 }

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::MutexGuard;
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct User {
@@ -90,4 +91,29 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {
     }
 
     return users;
+}
+
+pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, password: &str) {
+    let mut statement = connection.prepare("
+            INSERT INTO user (
+                id,
+                created_at,
+                status,
+                username,
+                password
+            ) VALUES (
+                :id,
+                date('now'),
+                :status,
+                :username,
+                :password
+            )"
+    ).expect("Could not create deployment");
+
+    statement.execute(named_params!{
+        ":id": Uuid::new_v4().to_string(),
+        ":status": "active",
+        ":username": username,
+        ":password": password,
+    }).expect("Could not create user");
 }
