@@ -18,6 +18,11 @@ impl Config {
     }
 }
 
+#[derive(Deserialize, Debug)]
+pub(crate) struct AuthConfig {
+    pub(crate) token: String
+}
+
 pub(crate) fn get_config_dir() -> String {
     let config_dir = env::var("HOME").unwrap();
 
@@ -49,3 +54,18 @@ pub(crate) fn load_config() -> Config {
         }
     }
 }
+
+pub(crate) fn load_auth_config() -> AuthConfig {
+    let home_dir = get_config_dir();
+    let file = format!("{}/auth.json", home_dir);
+
+    let mut config = File::open(file).expect("Unable to open file");
+    let mut contents = String::new();
+
+    config.read_to_string(&mut contents).expect("Unable to read file");
+
+    let config: AuthConfig = serde_json::from_str(&contents).unwrap();
+
+    return config;
+}
+

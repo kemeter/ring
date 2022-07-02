@@ -60,3 +60,34 @@ pub(crate) fn find_by_token(connection: &Connection, token: &str) -> Result<Opti
 
     result.transpose()
 }
+
+
+pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {
+    let mut statement = connection.prepare("
+            SELECT
+                id,
+                created_at,
+                updated_at,
+                status,
+                username,
+                password,
+                token,
+                login_at
+            FROM user"
+    ).expect("Could not fetch users");
+
+    let mut users: Vec<User> = Vec::new();
+    let mut rows_iter = from_rows::<User>(statement.query([]).unwrap());
+
+    loop {
+        match rows_iter.next() {
+            None => { break; },
+            Some(user) => {
+                let user = user.expect("Could not deserialize User item");
+                users.push(user);
+            }
+        }
+    }
+
+    return users;
+}

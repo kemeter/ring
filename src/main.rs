@@ -13,6 +13,7 @@ mod commands {
   pub(crate) mod apply;
   pub(crate) mod deployment;
   pub(crate) mod login;
+  pub(crate) mod user;
 }
 
 mod scheduler {
@@ -52,6 +53,7 @@ async fn main() {
         crate::commands::login::command_config(),
         crate::commands::deployment::list::command_config(),
         crate::commands::deployment::inspect::command_config(),
+        crate::commands::user::list::command_config(),
     ];
 
     let app = App::new("ring")
@@ -100,6 +102,12 @@ async fn main() {
             crate::commands::login::execute(
                 matches.subcommand_matches("login").unwrap(),
                 config,
+            );
+        }
+        Some("user:list") => {
+            crate::commands::user::list::execute(
+                matches.subcommand_matches("user:list").unwrap(),
+                config
             );
         }
         _ => {

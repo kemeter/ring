@@ -6,6 +6,7 @@ use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
 use crate::config::config::Config;
 use crate::api::dto::deployment::DeploymentDTO;
+use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("deployment:list")
@@ -41,7 +42,11 @@ struct DeploymentTableItem {
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let mut deployments = vec![];
     let api_url = configuration.get_api_url();
-    let response = ureq::get(&format!("{}/deployments", api_url)).send_json({});
+    let auth_config = load_auth_config();
+
+    let response = ureq::get(&format!("{}/deployments", api_url))
+        .set("Authorization", &format!("Bearer {}", auth_config.token))
+        .send_json({});
     let response_content = response.unwrap().into_string().unwrap();
 
     let value: Result<Vec<DeploymentDTO>> = serde_json::from_str(&response_content);
