@@ -1,5 +1,3 @@
-use rusqlite::Connection;
-use rusqlite::OpenFlags;
 use std::process::Command;
 use std::env;
 use clap::App;
@@ -14,6 +12,7 @@ mod commands {
   pub(crate) mod server;
   pub(crate) mod apply;
   pub(crate) mod deployment;
+  pub(crate) mod login;
 }
 
 mod scheduler {
@@ -26,6 +25,7 @@ mod runtime {
 
 mod models {
   pub(crate) mod deployments;
+  pub(crate) mod users;
 }
 
 mod api;
@@ -34,6 +34,10 @@ mod config {
     pub(crate) mod api;
     pub(crate) mod config;
 }
+
+mod database;
+
+use crate::database::get_database_connection;
 
 #[tokio::main]
 async fn main() {
@@ -45,6 +49,7 @@ async fn main() {
         crate::commands::init::command_config(),
         crate::commands::server::command_config(),
         crate::commands::apply::command_config(),
+        crate::commands::login::command_config(),
         crate::commands::deployment::list::command_config(),
         crate::commands::deployment::inspect::command_config(),
     ];
@@ -91,6 +96,12 @@ async fn main() {
                 config
             ).await
         }
+        Some("login") => {
+            crate::commands::login::execute(
+                matches.subcommand_matches("login").unwrap(),
+                config,
+            );
+        }
         _ => {
             let process_args: Vec<String> = env::args().collect();
             let process_name = process_args[0].as_str().to_owned();
@@ -106,16 +117,3 @@ async fn main() {
         }
     }
 }
-
-fn get_database_connection() -> Connection {
-    let mut db_flags = OpenFlags::empty();
-
-    db_flags.insert(OpenFlags::SQLITE_OPEN_READ_WRITE);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_CREATE);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_FULL_MUTEX);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_NOFOLLOW);
-    db_flags.insert(OpenFlags::SQLITE_OPEN_PRIVATE_CACHE);
-
-    Connection::open_with_flags("ring.db", db_flags).expect("Could not test: DB not created")
-}
-

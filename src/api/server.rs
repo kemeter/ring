@@ -1,27 +1,89 @@
 use rusqlite::Connection;
 use log::info;
 use std::sync::Arc;
-use chrono::{NaiveDateTime};
 use std::collections::HashMap;
 use std::{net::SocketAddr, time::Duration};
 use axum::{
+    async_trait,
     error_handling::HandleErrorLayer,
-    extract::{Extension},
+    extract::{FromRequest, Extension, RequestParts, TypedHeader},
+    headers::{authorization::Bearer, Authorization},
     http::StatusCode,
-    routing::{get},
+    routing::{get, post},
     Router,
+    response::{IntoResponse, Response},
+    Json
 };
+use serde_json::json;
 
 use tower::{BoxError, ServiceBuilder};
 use tokio::sync::Mutex;
+
 use crate::config::config::Config;
 use crate::models::deployments;
+use crate::api::action::login::login;
+
 use crate::api::action::deployment::list::list as deployment_list;
 use crate::api::action::deployment::get::get as deployment_get;
 use crate::api::action::deployment::create::create as deployment_create;
 use crate::api::dto::deployment::DeploymentOutput;
 
 pub type Db = Arc<Mutex<Connection>>;
+use crate::models::users::User;
+use crate::models::users as users_model;
+use crate::database::get_database_connection;
+
+#[async_trait]
+impl<B> FromRequest<B> for User
+    where
+        B: Send,
+{
+    type Rejection = AuthError;
+
+    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) =
+            TypedHeader::<Authorization<Bearer>>::from_request(req)
+                .await
+                .map_err(|_| AuthError::InvalidToken)?;
+
+        let storage = get_database_connection();
+        let token = bearer.token();
+
+        let option = users_model::find_by_token(&storage, token);
+        let config = option.as_ref().unwrap();
+
+        if config.is_some() {
+            let user = config.as_ref().unwrap();
+            Ok(user.clone())
+        }
+        else {
+            Err(AuthError::InvalidToken)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum AuthError {
+    WrongCredentials,
+    MissingCredentials,
+    TokenCreation,
+    InvalidToken,
+}
+
+impl IntoResponse for AuthError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match self {
+            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
+            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
+            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Token creation error"),
+            AuthError::InvalidToken => (StatusCode::BAD_REQUEST, "Invalid token"),
+        };
+        let body = Json(json!({
+            "error": error_message,
+        }));
+        (status, body).into_response()
+    }
+}
 
 pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
 {
@@ -30,6 +92,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
     let connexion = Arc::clone(&storage);
 
     let app = Router::new()
+        .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route("/deployments/:id", get(deployment_get))
 
@@ -57,22 +120,4 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .unwrap();
 
     info!("Starting server on {}", configuration.get_api_url());
-}
-
-pub(crate) fn hydrate_deployment_output(deployment: deployments::Deployment) -> DeploymentOutput {
-    let labels: HashMap<String, String> = deployments::Deployment::deserialize_labels(&deployment.labels);
-
-    return DeploymentOutput {
-        id: deployment.id,
-        created_at: NaiveDateTime::from_timestamp(deployment.created_at, 0).to_string(),
-        status: deployment.status,
-        name: deployment.name,
-        namespace: deployment.namespace,
-        runtime: deployment.runtime,
-        image: deployment.image,
-        replicas: deployment.replicas,
-        ports: [].to_vec(),
-        labels: labels,
-        instances: [].to_vec()
-    };
 }

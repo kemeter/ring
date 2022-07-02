@@ -11,3 +11,14 @@ CREATE TABLE deployment (
      ports text,
      labels JSON
 );
+
+CREATE TABLE user (
+    id VARCHAR(255) NOT NULL,
+    created_at datetime NOT NULL,
+    updated_at datetime DEFAULT NULL,
+    status VARCHAR(255) NOT NULL,
+    username VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    login_at datetime DEFAULT NULL,
+    token text DEFAULT NULL
+);

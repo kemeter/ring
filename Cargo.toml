@@ -25,7 +25,9 @@ serde_json = "1.0"
 toml = "0.5.8"
 local-ip-address = "0.4.4"
 cli-table = "0.4"
-axum = "0.5.9"
+axum = { version = "0.5.9", features = ["headers"] }
 axum-debug = "0.3.3"
 tower = { version = "0.4", features = ["util", "timeout"] }
 axum-macros = "0.2.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

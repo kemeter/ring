@@ -10,9 +10,10 @@ use axum::{
 
 use serde::{Serialize, Deserialize};
 
-use crate::api::server::hydrate_deployment_output;
 use crate::api::server::Db;
 use crate::models::deployments;
+use crate::api::dto::deployment::hydrate_deployment_output;
+use crate::models::users::User;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct DeploymentInput {
@@ -24,7 +25,7 @@ pub(crate) struct DeploymentInput {
     labels: String
 }
 
-pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());

@@ -5,11 +5,12 @@ use axum::{
 };
 
 use crate::api::server::Db;
-use crate::api::server::hydrate_deployment_output;
 use crate::models::deployments;
+use crate::api::dto::deployment::hydrate_deployment_output;
 use crate::runtime::docker;
+use crate::models::users::User;
 
-pub(crate) async fn get(Path(id): Path<String>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn get(Path(id): Path<String>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
     let guard = connexion.lock().await;
 
     let option = deployments::find(guard, id);

@@ -18,10 +18,15 @@ impl Config {
     }
 }
 
-pub(crate) fn load_config() -> Config {
-    let home_dir = env::var("HOME").unwrap();
+pub(crate) fn get_config_dir() -> String {
+    let config_dir = env::var("HOME").unwrap();
 
-    let file = format!("{}/.config/kemeter/ring/config.toml", home_dir);
+    return format!("{}/.config/kemeter/ring", config_dir);
+}
+
+pub(crate) fn load_config() -> Config {
+    let home_dir = get_config_dir();
+    let file = format!("{}/config.toml", home_dir);
 
     if fs::metadata(file.clone()).is_ok() {
         let mut config = File::open(file).expect("Unable to open file");

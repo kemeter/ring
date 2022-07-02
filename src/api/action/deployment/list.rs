@@ -4,13 +4,16 @@ use axum::{
     Json,
 };
 
-use crate::api::server::hydrate_deployment_output;
+use serde_json::json;
 use crate::api::server::Db;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments;
 use crate::runtime::docker;
+use crate::models::users::User;
+use crate::models::deployments::Deployment;
+use crate::api::dto::deployment::hydrate_deployment_output;
 
-pub(crate) async fn list(Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
 
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
     let guard = connexion.lock().await;
