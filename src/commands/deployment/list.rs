@@ -5,7 +5,7 @@ use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
 use crate::config::config::Config;
-use crate::api::dto::DeploymentDTO;
+use crate::api::dto::deployment::DeploymentDTO;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("deployment:list")

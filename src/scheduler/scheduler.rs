@@ -1,10 +1,8 @@
-use std::time::Duration;
 use crate::runtime::docker;
 use crate::models::deployments;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::MutexGuard;
 use std::{thread, time};
 
 pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {

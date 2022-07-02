@@ -16,3 +16,18 @@ pub(crate) struct DeploymentDTO {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>
 }
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub(crate) struct DeploymentOutput {
+    pub(crate) id: String,
+    pub(crate) created_at: String,
+    pub(crate) status: String,
+    pub(crate) name: String,
+    pub(crate) runtime: String,
+    pub(crate) namespace: String,
+    pub(crate) image: String,
+    pub(crate) replicas: i64,
+    pub(crate) ports: Vec<String>,
+    pub(crate) labels: HashMap<String, String>,
+    pub(crate) instances: Vec<String>
+}
