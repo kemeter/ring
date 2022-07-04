@@ -1,7 +1,6 @@
 use rusqlite::Connection;
 use log::info;
 use std::sync::Arc;
-use std::collections::HashMap;
 use std::{net::SocketAddr, time::Duration};
 use axum::{
     async_trait,
@@ -20,21 +19,21 @@ use tower::{BoxError, ServiceBuilder};
 use tokio::sync::Mutex;
 
 use crate::config::config::Config;
-use crate::models::deployments;
 use crate::api::action::login::login;
 
 use crate::api::action::deployment::list::list as deployment_list;
 use crate::api::action::deployment::get::get as deployment_get;
 use crate::api::action::deployment::create::create as deployment_create;
-use crate::api::dto::deployment::DeploymentOutput;
 
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
 
-pub type Db = Arc<Mutex<Connection>>;
 use crate::models::users::User;
 use crate::models::users as users_model;
 use crate::database::get_database_connection;
+
+pub(crate) type Db = Arc<Mutex<Connection>>;
+pub(crate) type ArcConfig = Arc<Mutex<Config>>;
 
 #[async_trait]
 impl<B> FromRequest<B> for User
@@ -93,6 +92,10 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
     debug!("Pre start http server");
 
     let connexion = Arc::clone(&storage);
+    let c = configuration.clone();
+
+    let config = Arc::new(Mutex::new(c.clone()));
+    // let config = Arc::clone(&c);
 
     let app = Router::new()
         .route("/login", post(login))
@@ -114,6 +117,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
                 }))
                 .timeout(Duration::from_secs(10))
                 .layer(Extension(connexion))
+                .layer(Extension(config))
                 .into_inner(),
         );
 

@@ -5,10 +5,7 @@ use axum::{
 };
 
 use chrono::{NaiveDateTime};
-use serde_json::json;
 use crate::api::server::Db;
-use crate::models::deployments;
-use crate::runtime::docker;
 use crate::models::users::User;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
@@ -24,10 +21,10 @@ pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> im
         let output = UserOutput {
             id: user.id,
             username: user.username,
-            created_at: NaiveDateTime::from_timestamp(user.created_at, 0).to_string(),
-            updated_at: NaiveDateTime::from_timestamp(user.created_at, 0).to_string(),
+            created_at: user.created_at,
+            updated_at: user.updated_at,
             status: user.status,
-            login_at: NaiveDateTime::from_timestamp(user.created_at, 0).to_string(),
+            login_at: user.login_at
         };
 
         users.push(output);

@@ -6,16 +6,24 @@ use axum::{
 };
 use chrono::{NaiveDateTime};
 use serde::{Serialize, Deserialize};
-use serde_json::json;
-use uuid::Uuid;
+use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
+use crate::api::server::ArcConfig;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
 
-pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): Extension<Db>, Extension(config): Extension<ArcConfig>) -> impl IntoResponse {
     let guard = connexion.lock().await;
+    let configuration = config.lock().await;
+    let argon2_config = Argon2Config::default();
+    let salt = b"randomsalt";
 
-    users_model::create(&guard, &input.username, &input.password);
+    println!("{:?}", config);
+    debug!("{:?}", config);
+
+    let password_hash = argon2::hash_encoded(input.password.as_bytes(), salt, &argon2_config).unwrap();
+
+    users_model::create(&guard, &input.username, &password_hash);
     let option = users_model::find_by_username(&guard, &input.username);
     let user = option.as_ref().unwrap();
 
@@ -24,22 +32,17 @@ pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): E
     let output = UserOutput {
         id: member.id,
         username: member.username,
-        created_at: NaiveDateTime::from_timestamp(member.created_at, 0).to_string(),
-        updated_at: NaiveDateTime::from_timestamp(member.created_at, 0).to_string(),
+        created_at: member.created_at,
+        updated_at: member.updated_at,
         status: member.status,
-        login_at: NaiveDateTime::from_timestamp(member.created_at, 0).to_string(),
+        login_at: member.login_at
     };
 
-    Json(output)
+    (StatusCode::CREATED, Json(output))
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct UserInput {
     username: String,
     password: String
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct LoginOutput {
-    token: String
 }

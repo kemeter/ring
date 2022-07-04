@@ -6,10 +6,11 @@ use serde::Deserialize;
 use local_ip_address::local_ip;
 use crate::config;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) ip: String,
     pub(crate) api: config::api::Api,
+    pub(crate) user: config::user::User,
 }
 
 impl Config {
@@ -51,6 +52,9 @@ pub(crate) fn load_config() -> Config {
         api: config::api::Api {
             scheme: "http".to_string(),
             port: 3030
+        },
+        user: config::user::User {
+            salt: "changeme".to_string()
         }
     }
 }

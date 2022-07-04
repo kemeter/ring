@@ -9,15 +9,17 @@ use uuid::Uuid;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct User {
     pub(crate) id: String,
-    pub(crate) created_at: i64,
-    pub(crate) updated_at: i64,
+    pub(crate) created_at: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(crate) updated_at: String,
     pub(crate) status: String,
     pub(crate) username: String,
     pub(crate) password: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) token: String,
     #[serde(skip_deserializing)]
     #[serde(skip_serializing)]
-    pub(crate) login_at: i64
+    pub(crate) login_at: String
 }
 
 pub(crate) fn find_by_username(connection: &MutexGuard<Connection>, username: &str) -> Result<Option<User>, serde_rusqlite::Error> {
@@ -100,13 +102,19 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
                 created_at,
                 status,
                 username,
-                password
+                password,
+                token,
+                updated_at,
+                login_at
             ) VALUES (
                 :id,
                 date('now'),
                 :status,
                 :username,
-                :password
+                :password,
+                :token,
+                date('now'),
+                date('now')
             )"
     ).expect("Could not create deployment");
 
@@ -115,5 +123,6 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
         ":status": "active",
         ":username": username,
         ":password": password,
+        ":token": Uuid::new_v4().to_string()
     }).expect("Could not create user");
 }

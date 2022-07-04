@@ -29,10 +29,10 @@ pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, stora
         ApiServer::start(arc, configuration).await;
     });
 
-    let scheduler_handler = task::spawn(async move {
-        schedule(arc2).await;
-    });
+    // let scheduler_handler = task::spawn(async move {
+    //     schedule(arc2).await;
+    // });
 
     api_server_handler.await;
-    scheduler_handler.await;
+    // scheduler_handler.await;
 }

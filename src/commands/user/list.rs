@@ -5,7 +5,6 @@ use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
 use serde::{Serialize, Deserialize};
 use crate::config::config::Config;
-use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
@@ -13,7 +12,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 }
 
 #[derive(Table)]
-struct userTableItem {
+struct UserTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
 
@@ -50,7 +49,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
     for user in users_list {
         users.push(
-            userTableItem {
+            UserTableItem {
                 id: user.id,
                 created_at: user.created_at,
                 updated_at: user.updated_at,
