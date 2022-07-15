@@ -14,32 +14,54 @@ pub(crate) async fn login(Json(input): Json<LoginInput>, Extension(connexion): E
     let guard = connexion.lock().await;
 
     let option = users_model::find_by_username(&guard, &input.username);
-    let user = option.as_ref().unwrap();
 
-    let mut member = user.clone().unwrap();
+    match option {
+        Ok(Some(mut user)) => {
+            let matches = argon2::verify_encoded(&user.password, input.password.as_bytes()).unwrap();
+            if !matches {
+                let output = HttpResponse {
+                    errors: vec!["Bad identifiers".to_string()],
+                    token: "".to_string()
+                };
 
-    let matches = argon2::verify_encoded(&member.password, input.password.as_bytes()).unwrap();
+                return (StatusCode::BAD_REQUEST, Json(output));
+            }
 
-    if !matches {
-        let output = HttpResponse {
-            errors: vec!["Bad identifiers".to_string()],
-            token: "".to_string()
-        };
+            let token = Uuid::new_v4().to_string();
+            user.token = token.clone();
+            let output = HttpResponse {
+                errors: vec![],
+                token: token
+            };
 
-        return (StatusCode::BAD_REQUEST, Json(output));
+            users_model::login(&guard, user);
+
+            (StatusCode::OK, Json(output))
+        }
+        Ok(None) => {
+            let output = HttpResponse {
+                errors: vec!["Bad identifiers".to_string()],
+                token: "".to_string()
+            };
+
+            return (StatusCode::BAD_REQUEST, Json(output));
+        }
+        Err(_) => {
+
+            //@todo fix me
+            let output = HttpResponse {
+                errors: vec!["Bad identifiers".to_string()],
+                token: "".to_string()
+            };
+
+            return (StatusCode::BAD_REQUEST, Json(output));
+        }
     }
 
-    let token = Uuid::new_v4().to_string();
-    member.token = token.clone();
 
-    let output = HttpResponse {
-        errors: vec![],
-        token
-    };
 
-    users_model::login(&guard, member);
 
-    (StatusCode::OK, Json(output))
+
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

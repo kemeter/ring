@@ -3,17 +3,21 @@ use crate::models::deployments;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::{thread, time};
+use tokio::time::{sleep, Duration};
 
 pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
-    let duration = time::Duration::from_secs(10);
+    let duration = Duration::from_secs(10);
 
     info!("Starting schedule");
 
     loop {
-        let guard = storage.lock().await;
 
-        let list_deployments = deployments::find_all(guard);
+        let list_deployments = {
+            let guard = storage.lock().await;
+
+            deployments::find_all(guard)
+        };
+
         for deployment in list_deployments.into_iter() {
 
             if "docker" == deployment.runtime {
@@ -23,6 +27,6 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             debug!("{:?}", deployment);
         }
 
-        thread::sleep(duration);
+        sleep(duration).await;
     }
 }

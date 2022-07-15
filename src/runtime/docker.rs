@@ -36,16 +36,16 @@ pub(crate) async fn apply(mut config: Deployment) {
         }
     } else {
         let number_instances = config.instances.len();
-        let n_us: i64 = (number_instances as i16).into();
-        info!("Instance {:?}", n_us);
+        let instance: i64 = (number_instances as i16).into();
+        info!("Instance {:?}", instance);
 
-        if n_us < config.replicas {
+        if instance < config.replicas {
             info!("create container {}", config.image.clone());
 
             create_container(&mut config, &docker).await
         }
 
-        if n_us > config.replicas {
+        if instance > config.replicas {
             let first_container_id = &config.instances[0];
 
             remove_container(docker.clone(), first_container_id.to_string()).await;

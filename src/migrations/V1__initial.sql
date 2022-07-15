@@ -22,3 +22,24 @@ CREATE TABLE user (
     login_at datetime DEFAULT NULL,
     token text DEFAULT NULL
 );
+
+INSERT INTO user (
+    id,
+    created_at,
+    updated_at,
+    status,
+    username,
+    password,
+    token,
+    login_at
+)
+VALUES (
+    '1c5a5fe9-84e0-4a18-821e-8058232c2c23',
+    '2022-07-12',
+    '2022-07-12',
+    'active',
+    'admin',
+    '$argon2i$v=19$m=4096,t=3,p=1$cmFuZG9tc2FsdA$JYSqhpZWaZIlroh1VY0p+Hp0q9VX6T9hV4gauhJNOt4',
+    'dba77b04-72aa-4fb5-9bf7-2bd8ac8ead92',
+    '2022-07-12'
+);

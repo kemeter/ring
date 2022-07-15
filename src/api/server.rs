@@ -21,9 +21,9 @@ use tokio::sync::Mutex;
 use crate::config::config::Config;
 use crate::api::action::login::login;
 
-use crate::api::action::deployment::list::list as deployment_list;
-use crate::api::action::deployment::get::get as deployment_get;
-use crate::api::action::deployment::create::create as deployment_create;
+use crate::api::action::deployment::list as deployment_list;
+use crate::api::action::deployment::get as deployment_get;
+use crate::api::action::deployment::create as deployment_create;
 
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
@@ -33,7 +33,7 @@ use crate::models::users as users_model;
 use crate::database::get_database_connection;
 
 pub(crate) type Db = Arc<Mutex<Connection>>;
-pub(crate) type ArcConfig = Arc<Mutex<Config>>;
+pub(crate) type ArcConfig = Config;
 
 #[async_trait]
 impl<B> FromRequest<B> for User
@@ -89,13 +89,12 @@ impl IntoResponse for AuthError {
 
 pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
 {
-    debug!("Pre start http server");
+    info!("Starting server on {}", configuration.get_api_url());
 
     let connexion = Arc::clone(&storage);
     let c = configuration.clone();
 
     let config = Arc::new(Mutex::new(c.clone()));
-    // let config = Arc::clone(&c);
 
     let app = Router::new()
         .route("/login", post(login))
@@ -127,5 +126,4 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .await
         .unwrap();
 
-    info!("Starting server on {}", configuration.get_api_url());
 }

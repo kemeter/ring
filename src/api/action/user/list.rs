@@ -4,7 +4,6 @@ use axum::{
     Json,
 };
 
-use chrono::{NaiveDateTime};
 use crate::api::server::Db;
 use crate::models::users::User;
 use crate::models::users as users_model;

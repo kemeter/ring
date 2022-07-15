@@ -1,6 +1,5 @@
 use clap::App;
 use clap::SubCommand;
-use log::info;
 use clap::ArgMatches;
 use rusqlite::Connection;
 use crate::api::server as ApiServer;
@@ -16,9 +15,10 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         .name("server:start")
 }
 
-pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, storage: Connection) {
-    info!("Start server");
-    println!("Start server");
+pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, mut storage: Connection) {
+    embedded::migrations::runner()
+        .run(&mut storage)
+        .expect("Could not execute database migrations.");
 
     let connection = Arc::new(Mutex::new(storage));
 
@@ -29,10 +29,14 @@ pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, stora
         ApiServer::start(arc, configuration).await;
     });
 
-    // let scheduler_handler = task::spawn(async move {
-    //     schedule(arc2).await;
-    // });
+    let scheduler_handler = task::spawn(async move {
+        schedule(arc2).await;
+    });
 
     api_server_handler.await;
-    // scheduler_handler.await;
+    scheduler_handler.await;
+}
+
+mod embedded {
+    refinery::embed_migrations!("src/migrations");
 }

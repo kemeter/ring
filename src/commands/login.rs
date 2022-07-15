@@ -51,7 +51,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                 return println!("Logging in as {}", username);
             }
         }
-        Err(err) => {
+        Err(_err) => {
             println!("Unable to login");
         }
     }

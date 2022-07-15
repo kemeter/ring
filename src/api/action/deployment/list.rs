@@ -14,9 +14,11 @@ use crate::api::dto::deployment::hydrate_deployment_output;
 pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
 
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
-    let guard = connexion.lock().await;
 
-    let list_deployments = deployments::find_all(guard);
+    let list_deployments = {
+        let guard = connexion.lock().await;
+        deployments::find_all(guard)
+    };
 
     for deployment in list_deployments.into_iter() {
         let d = deployment.clone();

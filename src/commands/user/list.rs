@@ -32,7 +32,7 @@ struct UserTableItem {
     login_at: String,
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) fn execute(_args: &ArgMatches, mut configuration: Config) {
     let mut users = vec![];
     let api_url = configuration.get_api_url();
 
