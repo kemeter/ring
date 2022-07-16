@@ -13,7 +13,7 @@ use crate::models::users::User;
 pub(crate) async fn get(Path(id): Path<String>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
     let guard = connexion.lock().await;
 
-    let option = deployments::find(guard, id);
+    let option = deployments::find(&guard, id);
 
     let deployment = option.unwrap().unwrap();
 

@@ -77,7 +77,7 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
     result.transpose()
 }
 
-pub(crate) fn find(connection: MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {
+pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {
     let mut statement = connection.prepare("
             SELECT
                 id,

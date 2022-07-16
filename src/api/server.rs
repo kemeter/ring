@@ -24,6 +24,7 @@ use crate::api::action::login::login;
 use crate::api::action::deployment::list as deployment_list;
 use crate::api::action::deployment::get as deployment_get;
 use crate::api::action::deployment::create as deployment_create;
+use crate::api::action::deployment::delete as deployment_delete;
 
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
@@ -99,7 +100,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
     let app = Router::new()
         .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
-        .route("/deployments/:id", get(deployment_get))
+        .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
         .route("/users", get(user_list).post(user_create))
 
         .layer(
