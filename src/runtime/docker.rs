@@ -3,6 +3,7 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
 use crate::models::deployments::Deployment;
+use uuid::Uuid;
 
 pub(crate) async fn apply(mut config: Deployment) {
     let docker = Docker::new();
@@ -87,7 +88,8 @@ async fn create_container(deployment: &mut Deployment, docker: &Docker) {
     create_network(docker.clone(), network_name.clone()).await;
 
     let mut container_options = ContainerOptions::builder(deployment.image.as_str());
-    let container_name = format!("{}_{}", &deployment.namespace, &deployment.name);
+    let tiny_id = tiny_id();
+    let container_name = format!("{}_{}_{}", &deployment.namespace, &deployment.name, tiny_id);
 
     container_options.name(&container_name);
     let mut labels = HashMap::new();
@@ -196,4 +198,12 @@ pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
     }
 
      return instances;
+}
+
+fn tiny_id()-> String {
+    let id = Uuid::new_v4().to_string();
+
+    let (_, name) = id.rsplit_once('-').unwrap();
+
+    return String::from(name);
 }
