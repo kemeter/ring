@@ -11,8 +11,10 @@ deployments:
             DATABASE_URL: postgres://postgres:postgres@postgres:5432
             SECRET_ENV: "$SECRET_ENV"
     nginx:
+        name: nginx
         runtime: docker
         image: "nginx:1.19.5"
+        namespace: ring
         labels:
             - sozune.host: "nginx.localhost"
 #services:

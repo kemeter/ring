@@ -9,8 +9,10 @@ use yaml_rust::YamlLoader;
 use std::str;
 use std::env;
 use ureq::json;
+use ureq::Error;
 use std::collections::HashMap;
 use crate::config::config::Config;
+use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -26,7 +28,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         .about("Apply a configuration file")
 }
 
-pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
+pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     info!("Apply configuration");
 
     let file = args.value_of("file").unwrap_or("ring.yaml");
@@ -37,6 +39,10 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
 
     let docs = YamlLoader::load_from_str(&contents).unwrap();
     let deployments = &docs[0]["deployments"].as_hash().unwrap();
+
+    let auth_config = load_auth_config();
+
+    let mut i:i32 = 0;
 
     for entry in deployments.iter() {
         let deployment_name = entry.0.as_str().unwrap();
@@ -113,10 +119,11 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
             }
         }
 
-        let api_url = format!("{}://{}:{}/deployments", configuration.api.scheme, configuration.ip, configuration.api.port);
+        let api_url = configuration.get_api_url();
 
         info!("push configuration: {}", api_url);
-        let _resp = ureq::post(&api_url)
+        let request = ureq::post(&format!("{}/deployments", api_url))
+            .set("Authorization", &format!("Bearer {}", auth_config.token))
             .send_json(json!({
                 "image": image,
                 "name": name,
@@ -126,7 +133,18 @@ pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
                 "labels": labels,
                 "secrets": secrets
             }));
+
+        match request {
+            Ok(response) => {
+                i += 1;
+            }
+            Err(error) => {
+                println!("{:?}", error)
+            }
+        }
     }
 
-    println!("deployment created");
+    if i > 0 {
+        println!("deployment created");
+    }
 }

@@ -24,7 +24,6 @@ pub(crate) async fn apply(mut config: Deployment) {
         Err(e) => eprintln!("Error: {}", e),
     }
 
-
     if config.status == "delete" {
         println!("delete container {:?}", config.instances);
         for instance in config.instances.iter_mut() {
@@ -73,7 +72,7 @@ async fn pull_image(docker: Docker, path: String) {
 
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
-                    Ok(output) => println!("{:?}", output),
+                    Ok(output) => { },
                     Err(e) => eprintln!("Error: {}", e),
                 }
             }
@@ -81,27 +80,35 @@ async fn pull_image(docker: Docker, path: String) {
     }
 }
 
-async fn create_container(config: &mut Deployment, docker: &Docker) {
-    pull_image(docker.clone(), config.image.to_string()).await;
+async fn create_container(deployment: &mut Deployment, docker: &Docker) {
+    pull_image(docker.clone(), deployment.image.to_string()).await;
 
-    let network_name = format!("ring_{}", config.namespace.clone());
+    let network_name = format!("ring_{}", deployment.namespace.clone());
     create_network(docker.clone(), network_name.clone()).await;
 
-    let mut container_options = ContainerOptions::builder(config.image.as_str());
-    let container_name = format!("{}_{}", &config.namespace, &config.name);
+    let mut container_options = ContainerOptions::builder(deployment.image.as_str());
+    let container_name = format!("{}_{}", &deployment.namespace, &deployment.name);
 
     container_options.name(&container_name);
     let mut labels = HashMap::new();
 
-    labels.insert("ring_deployment", config.id.as_str());
+    labels.insert("ring_deployment", deployment.id.as_str());
 
-    let labels_format = Deployment::deserialize_labels(&config.labels);
+    let labels_format = Deployment::deserialize_labels(&deployment.labels);
 
     for (key, value) in labels_format.iter() {
         labels.insert(key, value);
     }
 
+    let secrets_format = Deployment::deserialize_labels(&deployment.secrets);
+
+    let mut envs = vec![];
+    for (key, value) in secrets_format {
+        envs.push(format!("{}={}", key, value))
+    }
+
     container_options.labels(&labels);
+    container_options.env(envs);
 
     match docker
         .containers()
@@ -110,11 +117,11 @@ async fn create_container(config: &mut Deployment, docker: &Docker) {
     {
         Ok(container) => {
             debug!("create container {:?}", container.id);
-            config.instances.push(container.id.to_string());
+            deployment.instances.push(container.id.to_string());
 
             let networks = docker.networks();
             let mut builder = ContainerConnectionOptions::builder(&container.id);
-            builder.aliases(vec![&config.name, &container_name]);
+            builder.aliases(vec![&deployment.name, &container_name]);
 
             networks
                 .get(&network_name)

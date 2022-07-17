@@ -22,7 +22,8 @@ pub(crate) struct DeploymentInput {
     namespace: String,
     image: String,
     replicas: i64,
-    labels: String
+    labels: String,
+    secrets: String
 }
 
 pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
@@ -70,8 +71,9 @@ pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexi
             status: "running".to_string(),
             created_at: utc.timestamp(),
             labels: input.labels,
-            instances: [].to_vec(),
+            secrets: input.secrets,
             replicas: input.replicas,
+            instances: [].to_vec(),
         };
 
         deployments::create(&guard, &deployment);

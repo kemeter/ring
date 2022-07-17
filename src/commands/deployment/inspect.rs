@@ -41,4 +41,9 @@ pub(crate) async fn execute(args: &ArgMatches<'_>, mut configuration: Config) {
     for instance in deployment.instances {
         println!("  {:?}", instance)
     }
+
+    println!("Environment:");
+    for secret in deployment.secrets {
+        println!("  {:?}: {:?}", secret.0, secret.1)
+    }
 }

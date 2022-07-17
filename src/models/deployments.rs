@@ -18,7 +18,8 @@ pub(crate) struct Deployment {
     pub(crate) replicas: i64,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
-    pub(crate) labels: String
+    pub(crate) labels: String,
+    pub(crate) secrets: String
 }
 
 impl Deployment {
@@ -39,7 +40,8 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Deployment> {
                 image,
                 runtime,
                 replicas,
-                labels
+                labels,
+                secrets
             FROM deployment"
     ).expect("Could not fetch deployments");
 
@@ -88,7 +90,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 image,
                 runtime,
                 replicas,
-                labels
+                labels,
+                secrets
             FROM deployment
             WHERE id = :id
             "
@@ -117,7 +120,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 image,
                 runtime,
                 replicas,
-                labels
+                labels,
+                secrets
             ) VALUES (
                 :id,
                 :created_at,
@@ -127,7 +131,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :image,
                 :runtime,
                 :replicas,
-                :labels
+                :labels,
+                :secrets
             )"
     ).expect("Could not create deployment");
 
@@ -141,6 +146,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":runtime": deployment.runtime,
         ":labels": deployment.labels,
         ":replicas": deployment.replicas,
+        ":secrets": deployment.secrets,
     }).expect("Could not create deployment");
 
     return deployment.clone();

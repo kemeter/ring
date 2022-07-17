@@ -9,7 +9,8 @@ CREATE TABLE deployment (
      image text,
      replicas int,
      ports text,
-     labels JSON
+     labels JSON,
+     secrets JSON
 );
 
 CREATE TABLE user (
