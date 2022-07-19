@@ -21,7 +21,7 @@ pub(crate) struct DeploymentInput {
     runtime: String,
     namespace: String,
     image: String,
-    replicas: i64,
+    replicas: u32,
     labels: String,
     secrets: String
 }

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use crate::models::deployments::Deployment;
 use uuid::Uuid;
+use std::convert::TryInto;
 
 pub(crate) async fn apply(mut config: Deployment) {
     let docker = Docker::new();
@@ -25,8 +26,9 @@ pub(crate) async fn apply(mut config: Deployment) {
         Err(e) => eprintln!("Error: {}", e),
     }
 
-    if config.status == "delete" {
+    if config.status == "deleted" {
         println!("delete container {:?}", config.instances);
+
         for instance in config.instances.iter_mut() {
             debug!("deployment instance {}", instance);
 
@@ -35,17 +37,17 @@ pub(crate) async fn apply(mut config: Deployment) {
             info!("container {} delete", instance);
         }
     } else {
-        let number_instances = config.instances.len();
+        let number_instances: usize = config.instances.len();
         let instance: i64 = (number_instances as i16).into();
         info!("Instance {:?}", instance);
 
-        if instance < config.replicas {
+        if number_instances < config.replicas.try_into().unwrap() {
             info!("create container {}", config.image.clone());
 
             create_container(&mut config, &docker).await
         }
 
-        if instance > config.replicas {
+        if number_instances > config.replicas.try_into().unwrap() {
             let first_container_id = &config.instances[0];
 
             remove_container(docker.clone(), first_container_id.to_string()).await;
@@ -192,7 +194,6 @@ pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
                     }
                 }
             }
-            println!("{:?}", instances);
         }
         Err(e) => eprintln!("Error: {}", e),
     }

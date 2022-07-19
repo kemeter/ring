@@ -17,7 +17,7 @@ pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> im
 
     let list_deployments = {
         let guard = connexion.lock().await;
-        deployments::find_all(guard)
+        deployments::find_all(&guard)
     };
 
     for deployment in list_deployments.into_iter() {

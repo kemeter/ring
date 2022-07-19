@@ -15,7 +15,7 @@ pub(crate) struct Deployment {
     pub(crate) name: String,
     pub(crate) image: String,
     pub(crate) runtime: String,
-    pub(crate) replicas: i64,
+    pub(crate) replicas: u32,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
     pub(crate) labels: String,
@@ -29,7 +29,7 @@ impl Deployment {
     }
 }
 
-pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<Deployment> {
+pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
     let mut statement = connection.prepare("
             SELECT
                 id,
@@ -153,8 +153,6 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
 }
 
 pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deployment) {
-    println!("update deployment");
-
     let mut statement = connection.prepare("
             UPDATE deployment
             SET
@@ -168,3 +166,18 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":status": deployment.status
     }).expect("Could not update deployment");
 }
+
+
+pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) {
+    let mut statement = connection.prepare("
+            DELETE FROM deployment
+            WHERE
+                id = :id"
+    ).expect("Could not update deployment");
+
+    statement.execute(named_params!{
+        ":id": id
+    }).expect("Could not update deployment");
+}
+
+
