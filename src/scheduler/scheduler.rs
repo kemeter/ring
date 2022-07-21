@@ -11,24 +11,25 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     info!("Starting schedule");
 
     loop {
-        let guard = storage.lock().await;
-        let list_deployments = deployments::find_all(&guard);
+        let list_deployments =  {
+            let guard = storage.lock().await;
+            deployments::find_all(&guard)
+        };
+
+        let mut deleted:Vec<String> = Vec::new();
 
         for deployment in list_deployments.into_iter() {
-            let config = deployment.clone();
-
             if "docker" == deployment.runtime {
-                let instances = docker::list_instances(deployment.id.to_string()).await;
+                let config = docker::apply(deployment.clone()).await;
 
-                if "deleted" == deployment.status && instances.len() == 0 {
-                    deployments::delete(&guard, config.id);
+                if "deleted" == config.status && config.instances.len() == 0 {
+                    deleted.push(config.id);
                 }
-
-                docker::apply(deployment.clone()).await;
             }
-
-            debug!("{:?}", deployment);
         }
+
+        let guard = storage.lock().await;
+        deployments::delete_batch(&guard, deleted);
 
         sleep(duration).await;
     }
