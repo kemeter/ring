@@ -6,7 +6,7 @@ use crate::models::deployments::Deployment;
 use uuid::Uuid;
 use std::convert::TryInto;
 
-pub(crate) async fn apply(mut config: Deployment) {
+pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     let docker = Docker::new();
 
     info!("docker runtime search");
@@ -27,11 +27,7 @@ pub(crate) async fn apply(mut config: Deployment) {
     }
 
     if config.status == "deleted" {
-        println!("delete container {:?}", config.instances);
-
         for instance in config.instances.iter_mut() {
-            debug!("deployment instance {}", instance);
-
             remove_container(docker.clone(), instance.to_string()).await;
 
             info!("container {} delete", instance);
@@ -55,6 +51,8 @@ pub(crate) async fn apply(mut config: Deployment) {
 
         debug!("docker runtime apply {:?}", config);
     }
+
+    return config;
 }
 
 async fn pull_image(docker: Docker, path: String) {
