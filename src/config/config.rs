@@ -38,11 +38,8 @@ pub(crate) fn load_config() -> Config {
     debug!("load config file {}", file);
 
     if fs::metadata(file.clone()).is_ok() {
-        let mut config = File::open(file).expect("Unable to open file");
-        let mut contents = String::new();
 
-        config.read_to_string(&mut contents).expect("Unable to read file");
-
+        let contents = fs::read_to_string(file).unwrap();
         let config: Config = toml::from_str(&contents).unwrap();
 
         return config;
@@ -65,11 +62,7 @@ pub(crate) fn load_config() -> Config {
 pub(crate) fn load_auth_config() -> AuthConfig {
     let home_dir = get_config_dir();
     let file = format!("{}/auth.json", home_dir);
-
-    let mut config = File::open(file).expect("Unable to open file");
-    let mut contents = String::new();
-
-    config.read_to_string(&mut contents).expect("Unable to read file");
+    let contents = fs::read_to_string(file).unwrap();
 
     let config: AuthConfig = serde_json::from_str(&contents).unwrap();
 

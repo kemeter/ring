@@ -3,7 +3,7 @@ use clap::Arg;
 use clap::SubCommand;
 use log::info;
 use clap::ArgMatches;
-use std::fs::File;
+use std::fs;
 use std::io::prelude::*;
 use yaml_rust::YamlLoader;
 use std::str;
@@ -32,10 +32,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     info!("Apply configuration");
 
     let file = args.value_of("file").unwrap_or("ring.yaml");
-    let mut config = File::open(file).expect("Unable to open file");
-    let mut contents = String::new();
 
-    config.read_to_string(&mut contents).expect("Unable to read file");
+    let contents = fs::read_to_string(file).unwrap();
 
     let docs = YamlLoader::load_from_str(&contents).unwrap();
     let deployments = &docs[0]["deployments"].as_hash().unwrap();
