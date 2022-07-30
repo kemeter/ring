@@ -22,6 +22,19 @@ pub(crate) struct User {
     pub(crate) login_at: String
 }
 
+pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<User>, serde_rusqlite::Error> {
+    let mut statement = connection.prepare("SELECT * FROM user WHERE id = :id").unwrap();
+    let mut rows = statement.query(named_params!{
+        ":id": id,
+    }).unwrap();
+
+
+    let mut ref_rows = from_rows_ref::<User>(&mut rows);
+    let result = ref_rows.next();
+
+    result.transpose()
+}
+
 pub(crate) fn find_by_username(connection: &MutexGuard<Connection>, username: &str) -> Result<Option<User>, serde_rusqlite::Error> {
     let mut statement = connection.prepare("SELECT * FROM user WHERE username = :username").unwrap();
     let mut rows = statement.query(named_params!{
@@ -63,7 +76,6 @@ pub(crate) fn find_by_token(connection: &Connection, token: &str) -> Result<Opti
 
     result.transpose()
 }
-
 
 pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {
     let mut statement = connection.prepare("
@@ -125,4 +137,19 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
         ":password": password,
         ":token": Uuid::new_v4().to_string()
     }).expect("Could not create user");
+}
+
+pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
+    let mut statement = connection.prepare("
+            UPDATE user
+            SET
+                username = :username
+            WHERE
+                id = :id"
+    ).expect("Could not update deployment");
+
+    statement.execute(named_params!{
+        ":id": user.id,
+        ":username": user.username
+    }).expect("Could not update deployment");
 }

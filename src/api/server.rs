@@ -8,7 +8,7 @@ use axum::{
     extract::{FromRequest, Extension, RequestParts, TypedHeader},
     headers::{authorization::Bearer, Authorization},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
     response::{IntoResponse, Response},
     Json
@@ -28,8 +28,10 @@ use crate::api::action::deployment::delete as deployment_delete;
 
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
+use crate::api::action::user::me::me as user_current;
+use crate::api::action::user::update::update as user_update;
 
-use crate::models::users::User;
+use crate::models::users::{update, User};
 use crate::models::users as users_model;
 use crate::database::get_database_connection;
 
@@ -102,6 +104,8 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
         .route("/users", get(user_list).post(user_create))
+        .route("/users/:id", put(user_update))
+        .route("/users/me", get(user_current))
 
         .layer(
             ServiceBuilder::new()

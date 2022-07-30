@@ -56,6 +56,7 @@ async fn main() {
         crate::commands::deployment::inspect::command_config(),
         crate::commands::deployment::delete::command_config(),
         crate::commands::user::list::command_config(),
+        crate::commands::user::update::command_config(),
     ];
 
     let app = App::new("ring")
@@ -115,6 +116,12 @@ async fn main() {
         Some("user:list") => {
             crate::commands::user::list::execute(
                 matches.subcommand_matches("user:list").unwrap(),
+                config
+            );
+        }
+        Some("user:update") => {
+            crate::commands::user::update::execute(
+                matches.subcommand_matches("user:update").unwrap(),
                 config
             );
         }

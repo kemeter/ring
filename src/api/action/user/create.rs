@@ -1,5 +1,5 @@
 use axum::{
-    Extension,
+    extract::Extension,
     http::StatusCode,
     response::IntoResponse,
     Json
@@ -7,15 +7,19 @@ use axum::{
 use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
-use crate::api::server::ArcConfig;
+use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
+use crate::config::config::load_config;
 
-pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): Extension<Db>, Extension(configuration): Extension<ArcConfig>) -> impl IntoResponse {
+pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
     let guard = connexion.lock().await;
     let argon2_config = Argon2Config::default();
 
-    let password_hash = argon2::hash_encoded(input.password.as_bytes(), configuration.user.salt.as_bytes(), &argon2_config).unwrap();
+    //@todo: use axum extension
+    let config = load_config();
+
+    let password_hash = argon2::hash_encoded(input.password.as_bytes(), config.user.salt.as_bytes(), &argon2_config).unwrap();
 
     users_model::create(&guard, &input.username, &password_hash);
     let option = users_model::find_by_username(&guard, &input.username);
