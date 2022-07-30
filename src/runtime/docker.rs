@@ -34,7 +34,6 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
         }
     } else {
         let number_instances: usize = config.instances.len();
-        let instance: i64 = (number_instances as i16).into();
         info!("Instance {:?}", instance);
 
         if number_instances < config.replicas.try_into().unwrap() {

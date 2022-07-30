@@ -69,7 +69,7 @@ pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexi
             namespace: input.namespace.clone(),
             image: input.image.clone(),
             status: "running".to_string(),
-            created_at: utc.timestamp(),
+            created_at: utc.to_string(),
             labels: input.labels,
             secrets: input.secrets,
             replicas: input.replicas,

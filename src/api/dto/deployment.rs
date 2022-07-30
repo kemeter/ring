@@ -42,7 +42,7 @@ pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOut
 
     return DeploymentOutput {
         id: deployment.id,
-        created_at: NaiveDateTime::from_timestamp(deployment.created_at, 0).to_string(),
+        created_at: deployment.created_at,
         status: deployment.status,
         name: deployment.name,
         namespace: deployment.namespace,

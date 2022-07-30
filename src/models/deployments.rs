@@ -9,7 +9,7 @@ use std::collections::HashMap;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
     pub(crate) id: String,
-    pub(crate) created_at: i64,
+    pub(crate) created_at: String,
     pub(crate) status: String,
     pub(crate) namespace: String,
     pub(crate) name: String,
