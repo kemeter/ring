@@ -31,7 +31,7 @@ use crate::api::action::user::create::create as user_create;
 use crate::api::action::user::me::me as user_current;
 use crate::api::action::user::update::update as user_update;
 
-use crate::models::users::{update, User};
+use crate::models::users::User;
 use crate::models::users as users_model;
 use crate::database::get_database_connection;
 

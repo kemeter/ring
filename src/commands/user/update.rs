@@ -36,8 +36,6 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .send_json({});
 
-    let username = "".to_string();
-    let password = "".to_string();
 
     match user_request {
         Ok(user_response ) => {

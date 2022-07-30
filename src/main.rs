@@ -56,6 +56,7 @@ async fn main() {
         crate::commands::deployment::inspect::command_config(),
         crate::commands::deployment::delete::command_config(),
         crate::commands::user::list::command_config(),
+        crate::commands::user::create::command_config(),
         crate::commands::user::update::command_config(),
     ];
 
@@ -116,6 +117,12 @@ async fn main() {
         Some("user:list") => {
             crate::commands::user::list::execute(
                 matches.subcommand_matches("user:list").unwrap(),
+                config
+            );
+        }
+        Some("user:create") => {
+            crate::commands::user::create::execute(
+                matches.subcommand_matches("user:create").unwrap(),
                 config
             );
         }

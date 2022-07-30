@@ -7,7 +7,6 @@ use axum::{
 use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
-use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
 use crate::config::config::load_config;

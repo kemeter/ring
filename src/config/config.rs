@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::Read;
 use std::fs;
 use std::env;
 use serde::Deserialize;

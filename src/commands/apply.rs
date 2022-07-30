@@ -133,7 +133,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }));
 
         match request {
-            Ok(response) => {
+            Ok(_response) => {
                 i += 1;
             }
             Err(error) => {

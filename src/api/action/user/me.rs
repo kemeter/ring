@@ -1,7 +1,6 @@
 use crate::api::dto::user::UserOutput;
 use crate::models::users::User;
-use axum::{response::IntoResponse, Extension, Json};
-use serde::{Deserialize, Serialize};
+use axum::{response::IntoResponse, Json};
 
 pub(crate) async fn me(user: User) -> impl IntoResponse {
     let output = UserOutput {
