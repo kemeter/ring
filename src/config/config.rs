@@ -23,7 +23,7 @@ pub(crate) struct AuthConfig {
 }
 
 pub(crate) fn get_config_dir() -> String {
-    return match env::var_os("RING_CONFIG_FILE") {
+    return match env::var_os("RING_CONFIG_DIR") {
         Some(variable) => variable.into_string().unwrap(),
         None => format!("{}/.config/kemeter/ring", env::var("HOME").unwrap())
     };
