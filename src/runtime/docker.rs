@@ -27,6 +27,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     }
 
     if config.status == "deleted" {
+        debug!("{} mark as delete. Remove all instance", config.id.to_string());
         for instance in config.instances.iter_mut() {
             remove_container(docker.clone(), instance.to_string()).await;
 

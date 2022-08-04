@@ -45,7 +45,7 @@ pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexi
             info!("Image changed");
             println!("Image changed");
 
-            deployment.status = "delete".to_string();
+            deployment.status = "deleted".to_string();
             deployments::update(&guard, &deployment);
 
             deployment.image = input.image.clone();
