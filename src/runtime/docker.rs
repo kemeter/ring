@@ -33,13 +33,19 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
             info!("container {} delete", instance);
         }
     } else {
-        let number_instances: usize = config.instances.len();
-        info!("Instance {:?}", instance);
+        if config.restart > 3 {
+            config.status = String::from("Failed");
 
+            return config;
+        }
+
+        let number_instances: usize = config.instances.len();
         if number_instances < config.replicas.try_into().unwrap() {
             info!("create container {}", config.image.clone());
 
-            create_container(&mut config, &docker).await
+            create_container(&mut config, &docker).await;
+
+            config.status = String::from("running");
         }
 
         if number_instances > config.replicas.try_into().unwrap() {
@@ -54,8 +60,10 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     return config;
 }
 
-async fn pull_image(docker: Docker, path: String) {
-    info!("pull docker image: {}", path);
+async fn pull_image(docker: Docker, deployment: &mut Deployment) {
+    let path = deployment.image.to_string();
+
+    info!("pull docker image: {}", path.to_string());
 
     let image_path = path.clone();
 
@@ -66,13 +74,18 @@ async fn pull_image(docker: Docker, path: String) {
     match docker.images().get(path).inspect().await {
         Ok(_) => { },
         Err(_) => {
+            if deployment.restart >= 3 {
+                info!("Impossible to pull {:?}", path.to_string());
+                deployment.status = String::from("ImagePullBackOff")
+            }
+
             let mut stream = docker
                 .images()
                 .pull(&PullOptions::builder().image(image).tag(tag).build());
 
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
-                    Ok(output) => { },
+                    Ok(_output) => { },
                     Err(e) => eprintln!("Error: {}", e),
                 }
             }
@@ -81,7 +94,7 @@ async fn pull_image(docker: Docker, path: String) {
 }
 
 async fn create_container(deployment: &mut Deployment, docker: &Docker) {
-    pull_image(docker.clone(), deployment.image.to_string()).await;
+    pull_image(docker.clone(), deployment).await;
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
     create_network(docker.clone(), network_name.clone()).await;

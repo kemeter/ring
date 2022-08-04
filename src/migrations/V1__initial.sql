@@ -10,7 +10,8 @@ CREATE TABLE deployment (
      replicas int,
      ports text,
      labels JSON,
-     secrets JSON
+     secrets JSON,
+     restart int
 );
 
 CREATE TABLE user (

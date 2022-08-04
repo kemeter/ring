@@ -19,7 +19,8 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
     pub(crate) labels: String,
-    pub(crate) secrets: String
+    pub(crate) secrets: String,
+    pub(crate) restart: u32
 }
 
 impl Deployment {
@@ -41,7 +42,8 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
                 runtime,
                 replicas,
                 labels,
-                secrets
+                secrets,
+                restart
             FROM deployment"
     ).expect("Could not fetch deployments");
 
@@ -91,7 +93,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 runtime,
                 replicas,
                 labels,
-                secrets
+                secrets,
+                restart
             FROM deployment
             WHERE id = :id
             "
@@ -121,7 +124,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 runtime,
                 replicas,
                 labels,
-                secrets
+                secrets,
+                restart
             ) VALUES (
                 :id,
                 :created_at,
@@ -132,7 +136,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :runtime,
                 :replicas,
                 :labels,
-                :secrets
+                :secrets,
+                :restart
             )"
     ).expect("Could not create deployment");
 
@@ -147,6 +152,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":labels": deployment.labels,
         ":replicas": deployment.replicas,
         ":secrets": deployment.secrets,
+        ":restart": 0
     }).expect("Could not create deployment");
 
     return deployment.clone();
@@ -156,14 +162,16 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
     let mut statement = connection.prepare("
             UPDATE deployment
             SET
-                status = :status
+                status = :status,
+                restart = :restart
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
 
     statement.execute(named_params!{
         ":id": deployment.id,
-        ":status": deployment.status
+        ":status": deployment.status,
+        ":restart": deployment.restart
     }).expect("Could not update deployment");
 }
 
