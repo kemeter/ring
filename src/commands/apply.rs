@@ -27,6 +27,12 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
                 .help("Sets a custom config file")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("dry-run")
+                .long("dry-run")
+                .short("d")
+                .help("previews the object that would be sent to your cluster, without actually sending it.")
+        )
         .about("Apply a configuration file")
 }
 
@@ -41,8 +47,6 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     let deployments = &docs[0]["deployments"].as_hash().unwrap();
 
     let auth_config = load_auth_config();
-
-    let mut i:i32 = 0;
 
     for entry in deployments.iter() {
         let deployment_name = entry.0.as_str().unwrap();
@@ -124,30 +128,33 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         let api_url = configuration.get_api_url();
 
         info!("push configuration: {}", api_url);
-        let request = ureq::post(&format!("{}/deployments", api_url))
-            .set("Authorization", &format!("Bearer {}", auth_config.token))
-            .send_json(json!({
-                "image": image,
-                "name": name,
-                "runtime": runtime,
-                "namespace": namespace,
-                "replicas": replicas,
-                "labels": labels,
-                "secrets": secrets
-            }));
 
-        match request {
-            Ok(_response) => {
-                i += 1;
-            }
-            Err(error) => {
-                println!("{:?}", error)
+        let json = json!({
+            "image": image,
+            "name": name,
+            "runtime": runtime,
+            "namespace": namespace,
+            "replicas": replicas,
+            "labels": labels,
+            "secrets": secrets
+        });
+
+        if args.is_present("dry-run") {
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        } else {
+            let request = ureq::post(&format!("{}/deployments", api_url))
+                .set("Authorization", &format!("Bearer {}", auth_config.token))
+                .send_json(json);
+
+            match request {
+                Ok(_response) => {
+                    println!("deployment {} created", name);
+                }
+                Err(error) => {
+                    println!("{:?}", error)
+                }
             }
         }
-    }
-
-    if i > 0 {
-        println!("deployment created");
     }
 }
 
