@@ -10,9 +10,11 @@ use std::str;
 use std::env;
 use ureq::json;
 use ureq::Error;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use serde::de::Unexpected::Str;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use regex::Regex;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -49,7 +51,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let mut namespace: &str = "";
         let mut runtime: &str = "";
-        let mut image: &str = "";
+        let mut image= String::new();
         let mut name: &str = "";
         let mut replicas = 0;
         let mut labels = String::from("{}");
@@ -78,7 +80,9 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }
 
             if "image" == label {
-                image = value.as_str().unwrap();
+
+                let v = value.as_str().unwrap();
+                image = env_resolver(v.to_string());
             }
 
             if "replicas" == label {
@@ -144,5 +148,43 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
     if i > 0 {
         println!("deployment created");
+    }
+}
+
+fn env_resolver(text: String) -> String {
+    let tag_regex: Regex = Regex::new(
+            r"\$[a-zA-Z][0-9a-zA-Z_]*"
+        ).unwrap();
+    let list: HashSet<&str> = tag_regex.find_iter(text.as_str()).map(|mat| mat.as_str()).collect();
+    let mut content = text.clone();
+
+    for variable in list.into_iter() {
+        let key = variable.replace("$", "");
+
+        let value = match env::var(key) {
+            Ok(val) => String::from(val),
+            Err(e) => String::from(variable),
+        };
+        content = content.replace(variable, value.as_str());
+    }
+
+    return String::from(content);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+    use crate::commands::apply::env_resolver;
+
+    #[test]
+    fn test_env_resolver() {
+        env::set_var("APP_VERSION", "v1");
+
+        let result = env_resolver(String::from("registry.hub.docker.com/busybox:$APP_VERSION"));
+        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
+
+        env::set_var("REGISTRY", "hub.docker.com");
+        let result = env_resolver(String::from("registry.$REGISTRY/busybox:$APP_VERSION"));
+        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
     }
 }

@@ -32,3 +32,4 @@ tower-http = { version = "0.3.0", features = ["add-extension", "trace"] }
 axum-macros = "0.2.2"
 rust-argon2 = "1.0"
 refinery = { version = "0.8", features = [ "rusqlite-bundled" ] }
+regex = "1.6.0"
