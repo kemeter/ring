@@ -34,6 +34,11 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
                 .short("d")
                 .help("previews the object that would be sent to your cluster, without actually sending it.")
         )
+        .arg(
+            Arg::with_name("force")
+                .long("force")
+                .help("Force update configuration")
+        )
         .about("Apply a configuration file")
 }
 
@@ -149,12 +154,19 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         if args.is_present("dry-run") {
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         } else {
-            let request = ureq::post(&format!("{}/deployments", api_url))
+            let mut url = format!("{}/deployments", api_url);
+
+            if args.is_present("force"){
+                url.push_str("?force=true");
+            }
+
+            let request = ureq::post(&url)
                 .set("Authorization", &format!("Bearer {}", auth_config.token))
                 .send_json(json);
 
             match request {
                 Ok(_response) => {
+                    dbg!(_response);
                     println!("deployment {} created", name);
                 }
                 Err(error) => {

@@ -9,6 +9,8 @@ use axum::{
 };
 
 use serde::{Serialize, Deserialize};
+use std::collections::HashMap;
+use axum::extract::Query;
 
 use crate::api::server::Db;
 use crate::models::deployments;
@@ -26,7 +28,16 @@ pub(crate) struct DeploymentInput {
     secrets: String
 }
 
-pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
+#[derive(Deserialize, Debug)]
+pub(crate) struct QueryParameters {
+    force: bool
+}
+
+pub(crate) async fn create(
+    query_parameters: Query<QueryParameters>,
+    Json(input): Json<DeploymentInput>,
+    Extension(connexion): Extension<Db>, _user: User
+) -> impl IntoResponse {
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
@@ -37,21 +48,18 @@ pub(crate) async fn create(Json(input): Json<DeploymentInput>, Extension(connexi
 
     // deployment found
     if config.is_some() {
-        info!("Found deployment");
+        info!("Found deployment", );
         let mut deployment = config.clone().unwrap();
 
         //@todo: implement reel deployment diff
-        if input.image.clone() != deployment.image {
-            info!("Image changed");
-            println!("Image changed");
+        if input.image.to_string() != deployment.image || query_parameters.force {
+            info!("force update");
 
             deployment.status = "deleted".to_string();
             deployments::update(&guard, &deployment);
 
             deployment.image = input.image.clone();
             deployments::create(&guard, &deployment);
-
-            debug!("{:?}", deployment);
         }
 
         let deployment_output = hydrate_deployment_output(deployment);
