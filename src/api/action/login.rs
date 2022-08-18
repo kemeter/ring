@@ -27,11 +27,13 @@ pub(crate) async fn login(Json(input): Json<LoginInput>, Extension(connexion): E
                 return (StatusCode::BAD_REQUEST, Json(output));
             }
 
-            let token = Uuid::new_v4().to_string();
-            user.token = token.clone();
+            if user.token.is_empty() {
+                user.token = Uuid::new_v4().to_string();
+            }
+
             let output = HttpResponse {
                 errors: vec![],
-                token: token
+                token: user.token.to_string()
             };
 
             users_model::login(&guard, user);
