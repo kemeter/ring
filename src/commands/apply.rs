@@ -11,8 +11,9 @@ use std::env;
 use ureq::json;
 use ureq::Error;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use serde::de::Unexpected::Str;
-use crate::config::config::Config;
+use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
 use regex::Regex;
 
@@ -45,6 +46,12 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
     let docs = YamlLoader::load_from_str(&contents).unwrap();
     let deployments = &docs[0]["deployments"].as_hash().unwrap();
+
+    let auth_config_file= format!("{}/auth.json", get_config_dir());
+
+    if !Path::new(&auth_config_file).exists() {
+        return println!("Account not found. Login first");
+    }
 
     let auth_config = load_auth_config();
 
