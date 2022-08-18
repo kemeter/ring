@@ -5,6 +5,8 @@ use std::time::Duration;
 use crate::models::deployments::Deployment;
 use uuid::Uuid;
 use std::convert::TryInto;
+use crate::api::dto::deployment::DeploymentVolume;
+use std::iter::FromIterator;
 
 pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     let docker = Docker::new();
@@ -80,7 +82,7 @@ async fn pull_image(docker: Docker, path: String) {
     }
 }
 
-async fn create_container(deployment: &mut Deployment, docker: &Docker) {
+async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     pull_image(docker.clone(), deployment.image.to_string()).await;
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
@@ -110,6 +112,19 @@ async fn create_container(deployment: &mut Deployment, docker: &Docker) {
 
     container_options.labels(&labels);
     container_options.env(envs);
+
+    dbg!(&deployment.volumes);
+    let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
+
+    let mut volumes: Vec<String> = vec![];
+    for volume in volumes_collection {
+        let format: String = format!("{}:{}:{}", volume.source, volume.destination, volume.permission);
+        volumes.push(format);
+    }
+
+
+    let v = Vec::from_iter(volumes.iter().map(String::as_str));
+    container_options.volumes(v);
 
     match docker
         .containers()
@@ -154,7 +169,6 @@ async fn create_network(docker: Docker, network_name: String) {
 
     match docker.networks().get(&network_name).inspect().await {
         Ok(_network_info) => {
-            debug!("{:?}", _network_info);
             debug!("network {:?} already exist", network_name);
         },
         Err(e) => {

@@ -17,6 +17,8 @@ pub(crate) struct DeploymentDTO {
     pub(crate) labels: HashMap<String, String>,
     pub(crate) secrets: HashMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) volumes: Vec<DeploymentVolume>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>
 }
 
@@ -33,12 +35,22 @@ pub(crate) struct DeploymentOutput {
     pub(crate) ports: Vec<String>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
-    pub(crate) secrets: HashMap<String, String>
+    pub(crate) secrets: HashMap<String, String>,
+    pub(crate) volumes: Vec<DeploymentVolume>
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct DeploymentVolume {
+    pub(crate) source: String,
+    pub(crate) destination: String,
+    pub(crate) driver: String,
+    pub(crate) permission: String
 }
 
 pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOutput {
     let labels: HashMap<String, String> = Deployment::deserialize_labels(&deployment.labels);
     let secrets: HashMap<String, String> = Deployment::deserialize_labels(&deployment.secrets);
+    let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
 
     return DeploymentOutput {
         id: deployment.id,
@@ -52,6 +64,7 @@ pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOut
         ports: [].to_vec(),
         labels: labels,
         secrets: secrets,
+        volumes: volumes,
         instances: [].to_vec()
     };
 }

@@ -25,12 +25,13 @@ pub(crate) struct DeploymentInput {
     image: String,
     replicas: u32,
     labels: String,
-    secrets: String
+    secrets: String,
+    volumes: String
 }
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct QueryParameters {
-    force: bool
+    force: Option<bool>
 }
 
 pub(crate) async fn create(
@@ -52,7 +53,7 @@ pub(crate) async fn create(
         let mut deployment = config.clone().unwrap();
 
         //@todo: implement reel deployment diff
-        if input.image.to_string() != deployment.image || query_parameters.force {
+        if input.image.to_string() != deployment.image || query_parameters.force.is_some() {
             info!("force update");
 
             deployment.status = "deleted".to_string();
@@ -82,6 +83,7 @@ pub(crate) async fn create(
             secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
+            volumes: input.volumes
         };
 
         deployments::create(&guard, &deployment);

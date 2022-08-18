@@ -15,6 +15,10 @@ deployments:
         runtime: docker
         image: "nginx:1.19.5"
         namespace: ring
+        replicas: 1
+        volumes:
+            - "/tmp/ring:/project/ring"
+            - "/tmp/ring:/project2/ring"
         labels:
             - sozune.host: "nginx.localhost"
 #services:

@@ -11,11 +11,14 @@ use std::env;
 use ureq::json;
 use ureq::Error;
 use std::collections::{HashMap, HashSet};
+use std::fmt::format;
 use std::path::Path;
 use serde::de::Unexpected::Str;
 use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use crate::api::dto::deployment::DeploymentVolume;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -72,6 +75,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         let mut replicas = 0;
         let mut labels = String::from("{}");
         let mut secrets = String::from("{}");
+        let mut volumes = String::from("[]");
 
         for key in configs.iter() {
 
@@ -103,6 +107,25 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
             if "replicas" == label {
                 replicas = value.as_i64().unwrap();
+            }
+
+            if "volumes" == label {
+                let mut volumes_list: Vec<DeploymentVolume> = vec![];
+                for  volume in value.as_vec().unwrap()  {
+                    let v = volume.as_str().unwrap();
+                    let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
+
+                    let volume_struct = DeploymentVolume {
+                        source: volume_string[0].to_string(),
+                        destination: volume_string[1].to_string(),
+                        driver: "local".to_string(),
+                        permission: "rw".to_string()
+                    };
+
+                    volumes_list.push(volume_struct);
+                }
+
+                volumes = serde_json::to_string(&volumes_list).unwrap();
             }
 
             if "labels" == label {
@@ -148,7 +171,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             "namespace": namespace,
             "replicas": replicas,
             "labels": labels,
-            "secrets": secrets
+            "secrets": secrets,
+            "volumes": volumes
         });
 
         if args.is_present("dry-run") {
