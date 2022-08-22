@@ -111,8 +111,6 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
 }
 
 pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
-    println!("create");
-    println!("{:?}", deployment);
     let mut statement = connection.prepare("
             INSERT INTO deployment (
                 id,

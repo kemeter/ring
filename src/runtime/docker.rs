@@ -13,20 +13,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
 
     info!("docker runtime search");
 
-    match docker.containers().list(&Default::default()).await {
-        Ok(containers) => {
-            for container in containers {
-                let container_id = &container.id;
-
-                for (label, value) in container.labels.into_iter() {
-                    if "ring_deployment" == label && value == config.id {
-                        config.instances.push(container_id.to_string());
-                    }
-                }
-            }
-        }
-        Err(e) => eprintln!("Error: {}", e),
-    }
+    config.instances = list_instances(config.id.to_string()).await;
 
     if config.status == "deleted" {
         debug!("{} mark as delete. Remove all instance", config.id.to_string());
@@ -113,7 +100,6 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     container_options.labels(&labels);
     container_options.env(envs);
 
-    dbg!(&deployment.volumes);
     let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
 
     let mut volumes: Vec<String> = vec![];
@@ -197,11 +183,13 @@ pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
     match docker.containers().list(&Default::default()).await {
         Ok(containers) => {
             for container in containers {
-                let container_id = &container.id;
+                if container.state == "running" {
+                    let container_id = &container.id;
 
-                for (label, value) in container.labels.into_iter() {
-                    if "ring_deployment" == label && value == id {
-                        instances.push(container_id.to_string());
+                    for (label, value) in container.labels.into_iter() {
+                        if "ring_deployment" == label && value == id {
+                            instances.push(container_id.to_string());
+                        }
                     }
                 }
             }
@@ -209,7 +197,7 @@ pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
         Err(e) => eprintln!("Error: {}", e),
     }
 
-     return instances;
+    return instances;
 }
 
 fn tiny_id()-> String {

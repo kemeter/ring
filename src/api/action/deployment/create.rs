@@ -60,6 +60,7 @@ pub(crate) async fn create(
             deployments::update(&guard, &deployment);
 
             deployment.image = input.image.clone();
+            deployment.id = Uuid::new_v4().to_string();
             deployments::create(&guard, &deployment);
         }
 
