@@ -115,11 +115,13 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
                     let v = volume.as_str().unwrap();
                     let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
 
+                    let permission = if volume_string.len() == 3 { volume_string[2] } else { "rw"};
+
                     let volume_struct = DeploymentVolume {
                         source: volume_string[0].to_string(),
                         destination: volume_string[1].to_string(),
                         driver: "local".to_string(),
-                        permission: "rw".to_string()
+                        permission: permission.to_string()
                     };
 
                     volumes_list.push(volume_struct);
