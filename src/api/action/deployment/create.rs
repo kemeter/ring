@@ -77,6 +77,7 @@ pub(crate) async fn create(
             name: input.name.clone(),
             runtime: input.runtime.clone(),
             namespace: input.namespace.clone(),
+            kind: String::from("worker"),
             image: input.image.clone(),
             status: "running".to_string(),
             created_at: utc.to_string(),

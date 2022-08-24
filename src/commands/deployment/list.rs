@@ -33,7 +33,9 @@ struct DeploymentTableItem {
     image: String,
     #[table(title = "Runtime")]
     runtime: String,
-    #[table(title = "Replicas")]
+    #[table(title = "Runtime")]
+    kind: String,
+    #[table(title = "Kind")]
     replicas: String,
     #[table(title = "Status")]
     status: String
@@ -69,6 +71,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                 name: deployment.name,
                 image: deployment.image,
                 runtime: deployment.runtime,
+                kind: deployment.kind,
                 replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
                 status: deployment.status,
             },

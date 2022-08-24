@@ -70,6 +70,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let mut namespace: &str = "";
         let mut runtime: &str = "";
+        let mut kin: &str = "worker";
         let mut image= String::new();
         let mut name: &str = "";
         let mut replicas = 0;

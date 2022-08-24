@@ -15,6 +15,7 @@ pub(crate) struct Deployment {
     pub(crate) name: String,
     pub(crate) image: String,
     pub(crate) runtime: String,
+    pub(crate) kind: String,
     pub(crate) replicas: u32,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
@@ -40,6 +41,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
                 name,
                 image,
                 runtime,
+                kind,
                 replicas,
                 labels,
                 secrets,
@@ -91,10 +93,11 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 name,
                 image,
                 runtime,
+                kind,
                 replicas,
                 labels,
                 secrets,
-                volumes,
+                volumes
             FROM deployment
             WHERE id = :id
             "
@@ -120,6 +123,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 name,
                 image,
                 runtime,
+                kind,
                 replicas,
                 labels,
                 secrets,
@@ -132,6 +136,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :name,
                 :image,
                 :runtime,
+                :kind,
                 :replicas,
                 :labels,
                 :secrets,
@@ -147,6 +152,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":name": deployment.name,
         ":image": deployment.image,
         ":runtime": deployment.runtime,
+        ":kind": deployment.kind,
         ":labels": deployment.labels,
         ":replicas": deployment.replicas,
         ":secrets": deployment.secrets,

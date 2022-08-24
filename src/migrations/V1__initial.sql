@@ -5,6 +5,7 @@ CREATE TABLE deployment (
      status VARCHAR(255) NOT NULL,
      namespace varchar(255) NOT NULL,
      runtime varchar(255) NOT NULL,
+     kind varchar(255) NOT NULL,
      name varchar(255),
      image text,
      replicas int,

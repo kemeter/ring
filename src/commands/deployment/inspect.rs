@@ -28,6 +28,7 @@ pub(crate) async fn execute(args: &ArgMatches<'_>, mut configuration: Config) {
 
     println!("Name: {}", deployment.name);
     println!("Namespace: {}", deployment.namespace);
+    println!("Kind: {}", deployment.kind);
     println!("Image: {}", deployment.image);
     println!("Replicas: {}", deployment.replicas);
     println!("Created AT: {}", deployment.created_at);
