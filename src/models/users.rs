@@ -143,13 +143,15 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
     let mut statement = connection.prepare("
             UPDATE user
             SET
-                username = :username
+                username = :username,
+                password = :password
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
 
     statement.execute(named_params!{
         ":id": user.id,
-        ":username": user.username
+        ":username": user.username,
+        ":password": user.password
     }).expect("Could not update deployment");
 }

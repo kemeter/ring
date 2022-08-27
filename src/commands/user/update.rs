@@ -9,7 +9,6 @@ use crate::config::config::load_auth_config;
 use serde::{Serialize, Deserialize};
 use crate::api::dto::user::UserOutput;
 
-
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("user:update")
         .about("create user")
@@ -17,6 +16,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("username")
                 .short("u")
                 .long("username")
+                .takes_value(true)
                 .help("Your username")
                 .required(false)
         )
@@ -24,6 +24,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
             Arg::with_name("password")
                 .short("p")
                 .long("password")
+                .takes_value(true)
                 .help("Your password")
                 .required(false)
         )
@@ -36,19 +37,22 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .send_json({});
 
-
     match user_request {
         Ok(user_response ) => {
-            let api_url = format!("{}/users", configuration.get_api_url());
-
             let response_content = user_response.into_string().unwrap();
             let value: Result<UserOutput> = serde_json::from_str(&response_content);
             let user = value.unwrap();
 
-            let username = args.value_of("username").unwrap_or(&*user.username);
-            let password = args.value_of("password").unwrap_or("");
+            let api_url = format!("{}/users/{}", configuration.get_api_url(), user.id);
 
-            let values = if password == "" { json!({"username": username}) } else { json!({"username": username, "password": password})};
+            let username = args.value_of("username").unwrap_or(&*user.username);
+            let password = args.value_of("password").unwrap();
+
+            let values = if password.is_empty() {
+                json!({"username": username})
+            } else {
+                json!({"username": username, "password": password})
+            };
 
             let request = ureq::put(&api_url)
                  .set("Authorization", &format!("Bearer {}", auth_config.token))

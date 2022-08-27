@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
+use uuid::Uuid;
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
@@ -37,8 +38,6 @@ pub(crate) async fn update(Path(id): Path<String>, Json(input): Json<UserInput>,
             }
 
             users_model::update(&guard, &user);
-
-
         }
         Ok(None) => {
 
