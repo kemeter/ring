@@ -26,8 +26,16 @@ pub(crate) struct Deployment {
 
 impl Deployment {
     pub fn deserialize_labels(serialized: &str) -> HashMap<String, String> {
-        let deserialized: HashMap<String, String> = serde_json::from_str(&serialized).unwrap();
-        deserialized
+        let deserialized: Vec<HashMap<String, String>> = serde_json::from_str(&serialized).unwrap();
+        let mut labels = HashMap::new();
+
+        for data in deserialized.into_iter() {
+            for (key, value) in data {
+                labels.insert(key.clone(), value.clone());
+            }
+        }
+
+        labels
     }
 }
 
@@ -114,6 +122,10 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
 }
 
 pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
+
+    let labels = serde_json::to_string(&deployment.labels).unwrap();
+    let secrets = serde_json::to_string(&deployment.secrets).unwrap();
+
     let mut statement = connection.prepare("
             INSERT INTO deployment (
                 id,
@@ -153,9 +165,9 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":image": deployment.image,
         ":runtime": deployment.runtime,
         ":kind": deployment.kind,
-        ":labels": deployment.labels,
+        ":labels": labels,
         ":replicas": deployment.replicas,
-        ":secrets": deployment.secrets,
+        ":secrets": secrets,
         ":volumes": deployment.volumes,
     }).expect("Could not create deployment");
 

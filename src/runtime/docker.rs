@@ -70,6 +70,7 @@ async fn pull_image(docker: Docker, path: String) {
 }
 
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
+    debug!("create container for : {}", &deployment.id);
     pull_image(docker.clone(), deployment.image.to_string()).await;
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
@@ -92,7 +93,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 
     let secrets_format = Deployment::deserialize_labels(&deployment.secrets);
 
-    let mut envs = vec![];
+    let mut envs: Vec<String> = vec![];
     for (key, value) in secrets_format {
         envs.push(format!("{}={}", key, value))
     }
