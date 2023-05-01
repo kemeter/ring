@@ -19,20 +19,22 @@ pub(crate) struct Deployment {
     pub(crate) replicas: u32,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
-    pub(crate) labels: String,
-    pub(crate) secrets: String,
-    pub(crate) volumes: String
+    #[serde(skip_deserializing)]
+    pub(crate) labels: HashMap<String, String>,
+    #[serde(skip_deserializing)]
+    pub(crate) secrets: HashMap<String, String>,
+    pub(crate) secretsjson: String,
+    pub(crate) volumes: String,
+    pub(crate) labelsjson: String
 }
 
 impl Deployment {
     pub fn deserialize_labels(serialized: &str) -> HashMap<String, String> {
-        let deserialized: Vec<HashMap<String, String>> = serde_json::from_str(&serialized).unwrap();
+        let deserialized: HashMap<String, String> = serde_json::from_str(&serialized).unwrap();
         let mut labels = HashMap::new();
 
-        for data in deserialized.into_iter() {
-            for (key, value) in data {
-                labels.insert(key.clone(), value.clone());
-            }
+        for (key, value) in deserialized.iter() {
+            labels.insert(key.clone(), value.clone());
         }
 
         labels
@@ -52,7 +54,9 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
                 kind,
                 replicas,
                 labels,
+                labels as labelsjson,
                 secrets,
+                secrets as secretsjson,
                 volumes
             FROM deployment"
     ).expect("Could not fetch deployments");
@@ -64,7 +68,9 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
         match rows_iter.next() {
             None => { break; },
             Some(deployment) => {
-                let deployment = deployment.expect("Could not deserialize Deployment item");
+                let mut deployment = deployment.expect("Could not deserialize Deployment item");
+                deployment.labels = Deployment::deserialize_labels(&deployment.labelsjson);
+                deployment.secrets = Deployment::deserialize_labels(&deployment.secretsjson);
                 deployments.push(deployment);
             }
         }
@@ -77,7 +83,7 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
 
     debug!("find_one_by_filters {:?}", filters);
 
-    let mut statement = connection.prepare("SELECT * FROM deployment WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
+    let mut statement = connection.prepare("SELECT *, labels AS labelsjson, secrets AS secretsjson FROM deployment WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
     let mut rows = statement.query(named_params!{
         ":namespace": filters[0],
         ":name": filters[1],
@@ -104,7 +110,9 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 kind,
                 replicas,
                 labels,
+                labels as labelsjson,
                 secrets,
+                secrets as secretsjson,
                 volumes
             FROM deployment
             WHERE id = :id

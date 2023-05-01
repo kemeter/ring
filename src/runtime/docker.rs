@@ -85,13 +85,14 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 
     labels.insert("ring_deployment", deployment.id.as_str());
 
-    let labels_format = Deployment::deserialize_labels(&deployment.labels);
+    //let labels_format = Deployment::deserialize_labels(&deployment.labels);
+    let labels_format = &deployment.labels;
 
     for (key, value) in labels_format.iter() {
         labels.insert(key, value);
     }
 
-    let secrets_format = Deployment::deserialize_labels(&deployment.secrets);
+    let secrets_format = &deployment.secrets;
 
     let mut envs: Vec<String> = vec![];
     for (key, value) in secrets_format {

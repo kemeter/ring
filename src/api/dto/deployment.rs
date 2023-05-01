@@ -50,8 +50,8 @@ pub(crate) struct DeploymentVolume {
 }
 
 pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOutput {
-    let labels: HashMap<String, String> = Deployment::deserialize_labels(&deployment.labels);
-    let secrets: HashMap<String, String> = Deployment::deserialize_labels(&deployment.secrets);
+    let labels: HashMap<String, String> = Deployment::deserialize_labels(&deployment.labelsjson);
+    let secrets: HashMap<String, String> = Deployment::deserialize_labels(&deployment.secretsjson);
     let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
 
     return DeploymentOutput {

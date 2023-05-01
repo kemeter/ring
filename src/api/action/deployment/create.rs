@@ -24,8 +24,8 @@ pub(crate) struct DeploymentInput {
     namespace: String,
     image: String,
     replicas: u32,
-    labels: Vec<HashMap<String, String>>,
-    secrets: Vec<HashMap<String, String>>,
+    labels: HashMap<String, String>,
+    secrets: HashMap<String, String>,
     volumes: Vec<HashMap<String, String>>,
 }
 
@@ -72,8 +72,6 @@ pub(crate) async fn create(
         info!("Deployment not found, create a new one");
 
         let utc: DateTime<Utc> = Utc::now();
-        let labels = serde_json::to_string(&input.labels).unwrap();
-        let secrets = serde_json::to_string(&input.secrets).unwrap();
         let volumes = serde_json::to_string(&input.volumes).unwrap();
 
         let deployment = deployments::Deployment {
@@ -85,11 +83,13 @@ pub(crate) async fn create(
             image: input.image.clone(),
             status: "running".to_string(),
             created_at: utc.to_string(),
-            labels: labels,
-            secrets: secrets,
+            labels: input.labels,
+            secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
-            volumes: volumes
+            volumes: volumes,
+            labelsjson: "".parse().unwrap(),
+            secretsjson: "".parse().unwrap()
         };
 
         deployments::create(&guard, &deployment);
