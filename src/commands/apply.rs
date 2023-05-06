@@ -74,9 +74,9 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         let mut image= String::new();
         let mut name: &str = "";
         let mut replicas = 0;
-        let mut labels = String::from("{}");
-        let mut secrets = String::from("{}");
-        let mut volumes = String::from("[]");
+        let mut labels = HashMap::new();
+        let mut secrets = HashMap::new();
+        let mut volumes: Vec<DeploymentVolume> = Vec::new();
 
         for key in configs.iter() {
 
@@ -101,7 +101,6 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }
 
             if "image" == label {
-
                 let v = value.as_str().unwrap();
                 image = env_resolver(v.to_string());
             }
@@ -111,8 +110,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }
 
             if "volumes" == label {
-                let mut volumes_list: Vec<DeploymentVolume> = vec![];
-                for  volume in value.as_vec().unwrap()  {
+                for volume in value.as_vec().unwrap()  {
                     let v = volume.as_str().unwrap();
                     let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
 
@@ -125,41 +123,33 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
                         permission: permission.to_string()
                     };
 
-                    volumes_list.push(volume_struct);
+                    volumes.push(volume_struct);
                 }
-
-                volumes = serde_json::to_string(&volumes_list).unwrap();
             }
 
             if "labels" == label {
                 let labels_vec = value.as_vec().unwrap();
 
                 if labels_vec.len() > 0 {
-                    let mut map = HashMap::new();
 
                     for l in labels_vec {
                         for v in l.as_hash().unwrap().iter() {
-                            map.insert(v.0.as_str().unwrap(), v.1.as_str().unwrap());
+                            labels.insert(v.0.as_str().unwrap(), v.1.as_str().unwrap());
                         }
                     }
-
-                    labels = serde_json::to_string(&map).unwrap();
                 }
             }
 
             if "secrets" == label {
                 let secrets_vec = value.as_hash().unwrap();
-                let mut map = HashMap::new();
 
                 for v in secrets_vec.iter() {
                     let mut secret_value = String::from(v.1.as_str().unwrap());
                     secret_value.remove(0);
 
                     let value_format = env::var(&secret_value).unwrap_or(v.1.as_str().unwrap().to_string());
-                    map.insert(v.0.as_str().unwrap(), value_format);
+                    secrets.insert(v.0.as_str().unwrap(), value_format);
                 }
-
-                secrets = serde_json::to_string(&map).unwrap();
             }
         }
 
