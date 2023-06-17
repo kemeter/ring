@@ -78,5 +78,5 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         )
     }
 
-    print_stdout(deployments.with_title());
+    print_stdout(deployments.with_title()).expect("");
 }

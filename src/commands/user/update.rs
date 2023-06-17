@@ -65,6 +65,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                     }
                 }
                 Err(err) => {
+                    debug!("{}", err);
                     println!("Unable to update user");
                 }
             }

@@ -33,8 +33,8 @@ pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, mut s
         schedule(arc2).await;
     });
 
-    api_server_handler.await;
-    scheduler_handler.await;
+    let _ = api_server_handler.await;
+    let _ = scheduler_handler.await;
 }
 
 mod embedded {

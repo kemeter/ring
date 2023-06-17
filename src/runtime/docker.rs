@@ -61,7 +61,7 @@ async fn pull_image(docker: Docker, path: String) {
 
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
-                    Ok(output) => { },
+                    Ok(_output) => { },
                     Err(e) => eprintln!("Error: {}", e),
                 }
             }
@@ -130,9 +130,9 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
             networks
                 .get(&network_name)
                 .connect(&builder.build())
-                .await;
+                .await.expect("Cannot create network");
 
-            docker.containers().get(container.id).start().await;
+            let _ = docker.containers().get(container.id).start().await;
         },
         Err(e) => eprintln!("Error: {}", e),
     }

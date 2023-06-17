@@ -111,7 +111,6 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
             if "volumes" == label {
                 for volume in value.as_vec().unwrap()  {
-                    let v = volume.as_str().unwrap();
                     let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
 
                     let permission = if volume_string.len() == 3 { volume_string[2] } else { "rw"};
@@ -206,7 +205,7 @@ fn env_resolver(text: String) -> String {
 
         let value = match env::var(key) {
             Ok(val) => String::from(val),
-            Err(e) => String::from(variable),
+            Err(_e) => String::from(variable),
         };
         content = content.replace(variable, value.as_str());
     }

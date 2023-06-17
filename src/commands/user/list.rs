@@ -60,7 +60,7 @@ pub(crate) fn execute(_args: &ArgMatches, mut configuration: Config) {
         )
     }
 
-    print_stdout(users.with_title());
+    print_stdout(users.with_title()).expect("");
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
