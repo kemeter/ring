@@ -70,7 +70,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let mut namespace: &str = "";
         let mut runtime: &str = "";
-        let mut kin: &str = "worker";
+        let mut kind: &str = "worker";
         let mut image= String::new();
         let mut name: &str = "";
         let mut replicas = 0;
@@ -107,6 +107,10 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
             if "replicas" == label {
                 replicas = value.as_i64().unwrap();
+            }
+
+            if "kind" == label {
+                kind = value.as_str().unwrap();
             }
 
             if "volumes" == label {
@@ -157,6 +161,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         info!("push configuration: {}", api_url);
 
         let json = json!({
+            "kind": kind,
             "image": image,
             "name": name,
             "runtime": runtime,

@@ -33,7 +33,7 @@ struct DeploymentTableItem {
     image: String,
     #[table(title = "Runtime")]
     runtime: String,
-    #[table(title = "Runtime")]
+    #[table(title = "Kind")]
     kind: String,
     #[table(title = "Kind")]
     replicas: String,
