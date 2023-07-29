@@ -49,7 +49,7 @@ pub(crate) async fn create(
 
     // deployment found
     if config.is_some() {
-        info!("Found deployment", );
+        info!("Found deployment");
         let mut deployment = config.clone().unwrap();
 
         //@todo: implement reel deployment diff
@@ -61,6 +61,8 @@ pub(crate) async fn create(
 
             deployment.image = input.image.clone();
             deployment.id = Uuid::new_v4().to_string();
+            deployment.labels = input.labels;
+            deployment.secrets = input.secrets;
             deployments::create(&guard, &deployment);
         }
 
