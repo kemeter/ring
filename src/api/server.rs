@@ -8,7 +8,7 @@ use axum::{
     extract::{FromRequest, Extension, RequestParts, TypedHeader},
     headers::{authorization::Bearer, Authorization},
     http::StatusCode,
-    routing::{get, post, put},
+    routing::{get, post, put, delete},
     Router,
     response::{IntoResponse, Response},
     Json
@@ -30,6 +30,7 @@ use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
 use crate::api::action::user::me::me as user_current;
 use crate::api::action::user::update::update as user_update;
+use crate::api::action::user::delete::delete as user_delete;
 
 use crate::models::users::User;
 use crate::models::users as users_model;
@@ -105,6 +106,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
         .route("/users", get(user_list).post(user_create))
         .route("/users/:id", put(user_update))
+        .route("/users/:id", delete(user_delete))
         .route("/users/me", get(user_current))
 
         .layer(
