@@ -2,7 +2,7 @@ use clap::App;
 use clap::Arg;
 use clap::SubCommand;
 use clap::ArgMatches;
-use serde_json::Result;
+
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 

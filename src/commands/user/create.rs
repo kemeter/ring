@@ -3,11 +3,8 @@ use clap::Arg;
 use clap::SubCommand;
 use clap::ArgMatches;
 use ureq::json;
-use serde_json::Result;
+
 use crate::config::config::Config;
-use crate::config::config::load_auth_config;
-use serde::{Serialize, Deserialize};
-use crate::api::dto::user::UserOutput;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("user:create")

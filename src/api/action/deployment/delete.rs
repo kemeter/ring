@@ -6,7 +6,7 @@ use axum::{
 
 use crate::api::server::Db;
 use crate::models::deployments;
-use crate::runtime::docker;
+
 use crate::models::users::User;
 
 pub(crate) async fn delete(Path(id): Path<String>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {

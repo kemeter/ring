@@ -1,18 +1,17 @@
 use axum::{
     extract::{Path},
     Extension,
-    http::StatusCode,
     response::IntoResponse,
     Json
 };
 use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
-use uuid::Uuid;
+
 use crate::api::server::Db;
 use crate::models::users as users_model;
-use crate::api::dto::user::UserOutput;
+
 use crate::config::config::load_config;
-use crate::models::users::User;
+
 
 pub(crate) async fn update(Path(id): Path<String>, Json(input): Json<UserInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
     let guard = connexion.lock().await;

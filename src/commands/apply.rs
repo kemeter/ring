@@ -9,15 +9,15 @@ use yaml_rust::YamlLoader;
 use std::str;
 use std::env;
 use ureq::json;
-use ureq::Error;
+
 use std::collections::{HashMap, HashSet};
-use std::fmt::format;
+
 use std::path::Path;
-use serde::de::Unexpected::Str;
+
 use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+
 use crate::api::dto::deployment::DeploymentVolume;
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
