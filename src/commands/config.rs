@@ -8,10 +8,12 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         .name("config")
         .arg(
             Arg::with_name("parameter")
+                .required(false)
+                .help("show specific parameter")
         )
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
     let parameter = args.value_of("parameter").unwrap();
 
     if parameter == "current-context" {

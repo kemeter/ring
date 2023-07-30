@@ -14,6 +14,7 @@ struct Contexts {
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) current: bool,
+    #[serde(skip_deserializing)]
     pub(crate) name: String,
     pub(crate) ip: String,
     pub(crate) api: config::api::Api,
@@ -40,6 +41,9 @@ pub(crate) fn get_config_dir() -> String {
 
 pub(crate) fn load_config() -> Config {
     let home_dir = get_config_dir();
+
+    let context_current = get_current_context();
+
     let file = format!("{}/config.toml", home_dir);
 
     debug!("load config file {}", file);
@@ -47,19 +51,25 @@ pub(crate) fn load_config() -> Config {
     if fs::metadata(file.clone()).is_ok() {
         let contents = fs::read_to_string(file).unwrap();
         let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
-        //
+
         match contexts {
             Ok(contexts) => {
                 for (context_name, mut config) in contexts.contexts {
                     config.name = context_name.clone();
-                    if config.current {
+
+                    if context_name == context_current {
+                        debug!("Switch to context from {}", context_name);
+                        return config
+                    }
+
+                    if context_current.is_empty() && config.current {
                         debug!("Switch to context {}", context_name);
                         return config
                     }
                 }
             }
             Err(err) => {
-                eprintln!("Error while deserializing the TOML file : {}", err);
+                error!("Error while deserializing the TOML file : {}", err);
             }
         }
     }
@@ -80,6 +90,22 @@ pub(crate) fn load_config() -> Config {
     }
 }
 
+fn get_current_context() -> String {
+    let args: Vec<_> = std::env::args().collect();
+    let mut context_current = String::new();
+
+    for arg in args {
+        let path = arg.clone().to_string();
+        if path.starts_with("--c") || path.starts_with("--context") {
+            context_current = arg
+                .replace("--context", "")
+                .replace("--c", "")
+                .replace("=", "");
+        }
+    }
+    context_current
+}
+
 pub(crate) fn load_auth_config() -> AuthConfig {
     let home_dir = get_config_dir();
     let file = format!("{}/auth.json", home_dir);
@@ -89,4 +115,3 @@ pub(crate) fn load_auth_config() -> AuthConfig {
 
     return config;
 }
-

@@ -1,6 +1,6 @@
 use std::process::Command;
 use std::env;
-use clap::App;
+use clap::{App, Arg};
 
 #[macro_use]
 extern crate log;
@@ -46,8 +46,6 @@ use crate::database::get_database_connection;
 async fn main() {
     env_logger::init();
 
-    let config = config::config::load_config();
-
     let commands = vec![
         crate::commands::config::command_config(),
         crate::commands::init::command_config(),
@@ -66,11 +64,19 @@ async fn main() {
       .version("0.1.0")
       .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
       .about("The ring to rule them all")
+      .arg(
+          Arg::with_name("context")
+              .required(false)
+              .help("Sets the context to use")
+              .long("context")
+              .short("c")
+      )
       .subcommands(commands);
 
     let matches = app.get_matches();
     let subcommand_name = matches.subcommand_name();
     let storage = get_database_connection();
+    let config = config::config::load_config();
 
     match subcommand_name {
         Some("config") => {
