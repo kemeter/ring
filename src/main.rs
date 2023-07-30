@@ -8,6 +8,7 @@ extern crate env_logger;
 extern crate ureq;
 
 mod commands {
+  pub(crate) mod config;
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
@@ -48,6 +49,7 @@ async fn main() {
     let config = config::config::load_config();
 
     let commands = vec![
+        crate::commands::config::command_config(),
         crate::commands::init::command_config(),
         crate::commands::server::command_config(),
         crate::commands::apply::command_config(),
@@ -71,6 +73,12 @@ async fn main() {
     let storage = get_database_connection();
 
     match subcommand_name {
+        Some("config") => {
+            crate::commands::config::execute(
+                matches.subcommand_matches("config").unwrap(),
+                config,
+            );
+        }
         Some("init") => {
             crate::commands::init::init(
                 matches.subcommand_matches("init").unwrap(),

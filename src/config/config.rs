@@ -1,11 +1,20 @@
+use std::collections::HashMap;
 use std::fs;
 use std::env;
 use serde::Deserialize;
 use local_ip_address::local_ip;
 use crate::config;
+use toml::de::Error as TomlError;
+
+#[derive(Deserialize, Debug, Clone)]
+struct Contexts {
+    contexts: HashMap<String, Config>,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
+    pub(crate) current: bool,
+    pub(crate) name: String,
     pub(crate) ip: String,
     pub(crate) api: config::api::Api,
     pub(crate) user: config::user::User,
@@ -36,16 +45,30 @@ pub(crate) fn load_config() -> Config {
     debug!("load config file {}", file);
 
     if fs::metadata(file.clone()).is_ok() {
-
         let contents = fs::read_to_string(file).unwrap();
-        let config: Config = toml::from_str(&contents).unwrap();
-
-        return config;
+        let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
+        //
+        match contexts {
+            Ok(contexts) => {
+                for (context_name, mut config) in contexts.contexts {
+                    config.name = context_name.clone();
+                    if config.current {
+                        debug!("Switch to context {}", context_name);
+                        return config
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("Error while deserializing the TOML file : {}", err);
+            }
+        }
     }
 
     debug!("Switch to default configuration");
 
     return Config {
+        current: true,
+        name: "default".to_string(),
         ip: local_ip().unwrap().to_string(),
         api: config::api::Api {
             scheme: "http".to_string(),
