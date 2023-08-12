@@ -44,7 +44,7 @@ struct DeploymentTableItem {
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let mut deployments = vec![];
     let api_url = configuration.get_api_url();
-    let auth_config = load_auth_config();
+    let auth_config = load_auth_config(configuration.name.clone());
 
     let response = ureq::get(&format!("{}/deployments", api_url))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
