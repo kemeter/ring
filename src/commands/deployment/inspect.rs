@@ -17,7 +17,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 pub(crate) async fn execute(args: &ArgMatches<'_>, mut configuration: Config) {
     let id = args.value_of("id").unwrap();
     let api_url = configuration.get_api_url();
-    let auth_config = load_auth_config();
+    let auth_config = load_auth_config(configuration.name.clone());
 
     let response = ureq::get(&format!("{}/deployments/{}", api_url, id))
         .set("Authorization", &format!("Bearer {}", auth_config.token))

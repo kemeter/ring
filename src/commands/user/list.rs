@@ -36,7 +36,7 @@ pub(crate) fn execute(_args: &ArgMatches, mut configuration: Config) {
     let mut users = vec![];
     let api_url = configuration.get_api_url();
 
-    let auth_config = load_auth_config();
+    let auth_config = load_auth_config(configuration.name.clone());
 
     let response = ureq::get(&format!("{}/users", api_url))
         .set("Authorization", &format!("Bearer {}", auth_config.token))

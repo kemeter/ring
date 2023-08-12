@@ -9,11 +9,8 @@ use yaml_rust::YamlLoader;
 use std::str;
 use std::env;
 use ureq::json;
-
 use std::collections::{HashMap, HashSet};
-
 use std::path::Path;
-
 use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
 use regex::Regex;
@@ -61,7 +58,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         return println!("Account not found. Login first");
     }
 
-    let auth_config = load_auth_config();
+    let auth_config = load_auth_config(configuration.name.clone());
 
     for entry in deployments.iter() {
         let deployment_name = entry.0.as_str().unwrap();

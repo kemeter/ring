@@ -31,7 +31,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 }
 
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
-    let auth_config = load_auth_config();
+    let auth_config = load_auth_config(configuration.name.clone());
 
     let user_request = ureq::get(&format!("{}/users/me", configuration.get_api_url()))
         .set("Authorization", &format!("Bearer {}", auth_config.token))

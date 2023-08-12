@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::env;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use local_ip_address::local_ip;
 use crate::config;
 use toml::de::Error as TomlError;
@@ -27,9 +27,14 @@ impl Config {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct AuthConfig {
     pub(crate) token: String
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub(crate) struct AuthToken {
+    token: String,
 }
 
 pub(crate) fn get_config_dir() -> String {
@@ -106,12 +111,14 @@ fn get_current_context() -> String {
     context_current
 }
 
-pub(crate) fn load_auth_config() -> AuthConfig {
+pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
     let home_dir = get_config_dir();
     let file = format!("{}/auth.json", home_dir);
-    let contents = fs::read_to_string(file).unwrap();
+    let auth_file_content = fs::read_to_string(file).unwrap();
 
-    let config: AuthConfig = serde_json::from_str(&contents).unwrap();
+    let context_auth: HashMap<String, AuthToken> = serde_json::from_str(&auth_file_content).unwrap();
 
-    return config;
+    return AuthConfig {
+        token: context_auth.get(&context_name).unwrap().token.clone()
+    };
 }

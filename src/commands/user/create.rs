@@ -32,8 +32,11 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let username = args.value_of("username");
     let password = args.value_of("username");
 
+    let auth_config = load_auth_config(configuration.name.clone());
+
     let api_url = format!("{}/users", configuration.get_api_url());
     let request = ureq::post(&api_url)
+        .set("Authorization", &format!("Bearer {}", auth_config.token))
         .send_json(json!({
             "username": username,
             "password": password

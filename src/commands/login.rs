@@ -6,14 +6,11 @@ use clap::ArgMatches;
 use std::fs;
 use ureq::json;
 use crate::config::config::Config;
+use crate::config::config::AuthConfig;
+use crate::config::config::AuthToken;
 use crate::config::config::get_config_dir;
 use std::string::String;
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug)]
-struct AuthToken {
-    token: String,
-}
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("login")
