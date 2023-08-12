@@ -155,3 +155,15 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
         ":password": user.password
     }).expect("Could not update deployment");
 }
+
+pub(crate) fn delete(connection: &MutexGuard<Connection>, user: &User) {
+    let mut statement = connection.prepare("
+            DELETE FROM user
+            WHERE
+                id = :id"
+    ).expect("Could not delete deployment");
+
+    statement.execute(named_params!{
+        ":id": user.id
+    }).expect("Could not delete deployment");
+}

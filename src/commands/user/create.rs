@@ -4,7 +4,7 @@ use clap::SubCommand;
 use clap::ArgMatches;
 use ureq::json;
 
-use crate::config::config::Config;
+use crate::config::config::{Config, load_auth_config};
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("user:create")
