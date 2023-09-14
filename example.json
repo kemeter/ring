@@ -1,0 +1,10 @@
+{
+    "name": "demo",
+    "runtime": "docker",
+    "namespace": "ring_power",
+    "replicas": 1,
+    "image": "nginx:1.23",
+    "labels": {},
+    "secrets": {},
+    "volumes": []
+}
