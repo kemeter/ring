@@ -18,39 +18,48 @@ No load balancing, it is not the goal
 - openssl-sys v0.9.90 (sudo apt install librust-openssl-sys-dev)
 
 run 
-`cargo build`
+
+```cargo build```
 
 
-### usage 
+## usage 
 
-`cargo run init`
-or 
+1. Init the setup
 
-`ring init` 
-1. run orchestror deamon
-
-`cargo run ring server:start`
+```cargo run init```
 
 or 
 
-`./ring server:start`
+```ring init```
 
-2. login
+2. Start deamon
 
-mkdir -p ~/.config/kemeter/ring
-echo '{}' >> ~/.config/kemeter/ring
+```cargo run ring server:start```
 
-ring login 
+or
 
-3. Deploy containers
+```ring server:start```
 
-Using 
-apply with yaml
+2. Login
 
-create yaml
 
-```yaml
+```ring login --username admin --password changeme```
 
-```
+or 
 
-Using http endpoint
+```cargo run ring login --username admin --password changeme```
+
+
+3. Deploy containers (using yaml)
+
+```cargo run ring apply -f ring.yaml```
+
+or 
+
+```ring apply -f ring.yaml```
+
+3. Using http endpoint
+
+With httpie 
+
+```http bearer -A bearer -a <your_token> POST localhost:3030/deployments < example.json``` 
