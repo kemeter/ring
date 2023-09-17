@@ -17,17 +17,24 @@ use crate::models::deployments;
 use crate::api::dto::deployment::hydrate_deployment_output;
 use crate::models::users::User;
 
+fn default_replicas() -> u32 { 1 }
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct DeploymentInput {
     name: String,
     runtime: String,
     namespace: String,
     image: String,
+    #[serde(default = "default_replicas")]
     replicas: u32,
+    #[serde(default)]
     labels: HashMap<String, String>,
+    #[serde(default)]
     secrets: HashMap<String, String>,
+    #[serde(default)]
     volumes: Vec<HashMap<String, String>>,
 }
+
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct QueryParameters {
