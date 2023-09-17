@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
 use serde_rusqlite::from_rows;
@@ -41,8 +41,8 @@ impl Deployment {
     }
 }
 
-pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
-    let mut statement = connection.prepare("
+pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, String>) -> Vec<Deployment> {
+    let mut query = String::from("
             SELECT
                 id,
                 created_at,
@@ -58,11 +58,24 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>) -> Vec<Deployment> {
                 secrets,
                 secrets as secretsjson,
                 volumes
-            FROM deployment"
-    ).expect("Could not fetch deployments");
+            FROM deployment
+   ");
+
+    if !filters.is_empty() {
+        let conditions: Vec<String> = filters
+            .keys()
+            .map(|column| format!("{} = ?", column))
+            .collect();
+        query.push_str(" WHERE ");
+        query.push_str(&conditions.join(" AND "));
+    }
+
+    let values: Vec<&dyn rusqlite::ToSql> = filters.values().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let mut statement = connection.prepare(&query).unwrap();
+    let rows = statement.query(&values[..]).unwrap();
 
     let mut deployments: Vec<Deployment> = Vec::new();
-    let mut rows_iter = from_rows::<Deployment>(statement.query([]).unwrap());
+    let mut rows_iter = from_rows::<Deployment>(rows);
 
     loop {
         match rows_iter.next() {

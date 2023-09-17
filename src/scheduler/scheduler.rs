@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::runtime::docker;
 use crate::models::deployments;
 use rusqlite::Connection;
@@ -13,7 +14,7 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     loop {
         let list_deployments =  {
             let guard = storage.lock().await;
-            deployments::find_all(&guard)
+            deployments::find_all(&guard, HashMap::new())
         };
 
         let mut deleted:Vec<String> = Vec::new();

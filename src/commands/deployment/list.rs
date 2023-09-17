@@ -45,8 +45,13 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let mut deployments = vec![];
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
+    let mut query = format!("{}/deployments", api_url);
+    if args.is_present("namespace") {
+        let namespace = args.value_of("namespace").unwrap();
+        query.push_str(&format!("?namespace={}", namespace));
+    }
 
-    let response = ureq::get(&format!("{}/deployments", api_url))
+    let response = ureq::get(&*query)
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .send_json({});
     let response_content = response.unwrap().into_string().unwrap();
