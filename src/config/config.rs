@@ -16,14 +16,14 @@ pub(crate) struct Config {
     pub(crate) current: bool,
     #[serde(skip_deserializing)]
     pub(crate) name: String,
-    pub(crate) ip: String,
+    pub(crate) host: String,
     pub(crate) api: config::api::Api,
     pub(crate) user: config::user::User,
 }
 
 impl Config {
     pub(crate) fn get_api_url(&mut self)-> String {
-        return format!("{}://{}:{}", self.api.scheme, self.ip, self.api.port);
+        return format!("{}://{}:{}", self.api.scheme, self.host, self.api.port);
     }
 }
 
@@ -84,7 +84,7 @@ pub(crate) fn load_config() -> Config {
     return Config {
         current: true,
         name: "default".to_string(),
-        ip: local_ip().unwrap().to_string(),
+        host: local_ip().unwrap().to_string(),
         api: config::api::Api {
             scheme: "http".to_string(),
             port: 3030
