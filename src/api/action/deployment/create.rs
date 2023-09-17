@@ -90,8 +90,8 @@ pub(crate) async fn create(
             replicas: input.replicas,
             instances: [].to_vec(),
             volumes: volumes,
-            labelsjson: "".parse().unwrap(),
-            secretsjson: "".parse().unwrap()
+            labelsjson: String::from("{}"),
+            secretsjson: String::from("{}"),
         };
 
         deployments::create(&guard, &deployment);
