@@ -56,10 +56,10 @@ or
 
 or 
 
-```ring apply -f ring.yaml```
+```ring apply -f examples/ring.yaml```
 
 3. Using http endpoint
 
 With httpie 
 
-```http bearer -A bearer -a <your_token> POST localhost:3030/deployments < example.json``` 
+```http bearer -A bearer -a <your_token> POST localhost:3030/deployments < examples/nginx.json``` 
