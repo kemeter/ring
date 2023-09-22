@@ -65,11 +65,11 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let configs = &docs[0]["deployments"][deployment_name].as_hash().unwrap();
 
-        let mut namespace: &str = "";
-        let mut runtime: &str = "";
-        let mut kind: &str = "worker";
-        let mut image= String::new();
-        let mut name: &str = "";
+        let mut namespace = String::new();
+        let mut runtime: String = String::new();
+        let mut kind: String = String::from("worker");
+        let mut image: String = String::new();
+        let mut name:String = String::new();
         let mut replicas = 0;
         let mut labels = HashMap::new();
         let mut secrets = HashMap::new();
@@ -86,20 +86,19 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }
 
             if "namespace" == label {
-                namespace = value.as_str().unwrap();
+                namespace = env_resolver(value.as_str().unwrap());
             }
 
             if "name" == label {
-                name = value.as_str().unwrap();
+                name = env_resolver(value.as_str().unwrap());
             }
 
             if "runtime" == label {
-                runtime = value.as_str().unwrap();
+                runtime = env_resolver(value.as_str().unwrap());
             }
 
             if "image" == label {
-                let v = value.as_str().unwrap();
-                image = env_resolver(v.to_string());
+                image = env_resolver(value.as_str().unwrap());
             }
 
             if "replicas" == label {
@@ -107,7 +106,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             }
 
             if "kind" == label {
-                kind = value.as_str().unwrap();
+                kind = env_resolver(value.as_str().unwrap());
             }
 
             if "volumes" == label {
@@ -195,12 +194,12 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     }
 }
 
-fn env_resolver(text: String) -> String {
+fn env_resolver(text: &str) -> String {
     let tag_regex: Regex = Regex::new(
             r"\$[a-zA-Z][0-9a-zA-Z_]*"
         ).unwrap();
-    let list: HashSet<&str> = tag_regex.find_iter(text.as_str()).map(|mat| mat.as_str()).collect();
-    let mut content = text.clone();
+    let list: HashSet<&str> = tag_regex.find_iter(text).map(|mat| mat.as_str()).collect();
+    let mut content = String::from(text.clone());
 
     for variable in list.into_iter() {
         let key = variable.replace("$", "");
@@ -212,7 +211,7 @@ fn env_resolver(text: String) -> String {
         content = content.replace(variable, value.as_str());
     }
 
-    return String::from(content);
+    return content;
 }
 
 #[cfg(test)]
@@ -224,11 +223,11 @@ mod tests {
     fn test_env_resolver() {
         env::set_var("APP_VERSION", "v1");
 
-        let result = env_resolver(String::from("registry.hub.docker.com/busybox:$APP_VERSION"));
+        let result = env_resolver("registry.hub.docker.com/busybox:$APP_VERSION");
         assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
 
         env::set_var("REGISTRY", "hub.docker.com");
-        let result = env_resolver(String::from("registry.$REGISTRY/busybox:$APP_VERSION"));
+        let result = env_resolver("registry.$REGISTRY/busybox:$APP_VERSION");
         assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
     }
 }
