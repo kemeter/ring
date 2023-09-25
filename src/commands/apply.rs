@@ -29,6 +29,14 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("env-file")
+                .required(false)
+                .help("Use a .env file to set environment variables")
+                .long("env-file")
+                .short("e")
+                .takes_value(true)
+        )
+        .arg(
             Arg::with_name("dry-run")
                 .long("dry-run")
                 .short("d")
@@ -56,6 +64,15 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
     if !Path::new(&auth_config_file).exists() {
         return println!("Account not found. Login first");
+    }
+
+    let env_file = args.value_of("env-file").unwrap_or("");
+    if env_file != "" {
+        let env_file_content = fs::read_to_string(env_file).unwrap();
+        for variable in env_file_content.lines() {
+            let variable_split: Vec<&str> = variable.split("=").collect();
+            env::set_var(variable_split[0], variable_split[1]);
+        };
     }
 
     let auth_config = load_auth_config(configuration.name.clone());
