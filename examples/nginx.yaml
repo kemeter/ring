@@ -7,6 +7,10 @@ deployments:
         ports: []
         replicas: 3
         labels: []
+        config:
+            image_pull_policy: "IfNotPresent"
+            username: "username"
+            password: "password"
         secrets:
             DATABASE_URL: postgres://postgres:postgres@postgres:5432
             SECRET_ENV: "$SECRET_ENV"

@@ -8,6 +8,7 @@ CREATE TABLE deployment (
      kind varchar(255) NOT NULL,
      name varchar(255),
      image text,
+     config JSON,
      replicas int,
      ports text,
      labels JSON,

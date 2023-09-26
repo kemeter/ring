@@ -8,16 +8,18 @@ use axum::{
     Json
 };
 
-use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize, Serializer};
 use std::collections::HashMap;
 use axum::extract::Query;
 
 use crate::api::server::Db;
 use crate::models::deployments;
 use crate::api::dto::deployment::hydrate_deployment_output;
+use crate::models::deployments::DeploymentConfig;
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
+
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct DeploymentInput {
@@ -25,6 +27,7 @@ pub(crate) struct DeploymentInput {
     runtime: String,
     namespace: String,
     image: String,
+    config: Option<DeploymentConfig>,
     #[serde(default = "default_replicas")]
     replicas: u32,
     #[serde(default)]
@@ -34,7 +37,6 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     volumes: Vec<HashMap<String, String>>,
 }
-
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct QueryParameters {
@@ -90,6 +92,7 @@ pub(crate) async fn create(
             namespace: input.namespace.clone(),
             kind: String::from("worker"),
             image: input.image.clone(),
+            config: input.config.clone(),
             status: "running".to_string(),
             created_at: utc.to_string(),
             labels: input.labels,
@@ -99,6 +102,7 @@ pub(crate) async fn create(
             volumes: volumes,
             labelsjson: String::from("{}"),
             secretsjson: String::from("{}"),
+            configjson: String::from("{}"),
         };
 
         deployments::create(&guard, &deployment);

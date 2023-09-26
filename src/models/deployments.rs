@@ -1,10 +1,25 @@
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, ToSql, Result};
 use rusqlite::named_params;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
+use rusqlite::types::{ToSqlOutput, Value as TypeValue};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct DeploymentConfig {
+    pub(crate) image_pull_policy: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
+}
+
+impl ToSql for DeploymentConfig {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
+        let json_string = serde_json::to_string(self).unwrap();
+        Ok(ToSqlOutput::Owned(TypeValue::Text(json_string)))
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
@@ -14,6 +29,7 @@ pub(crate) struct Deployment {
     pub(crate) namespace: String,
     pub(crate) name: String,
     pub(crate) image: String,
+    pub(crate) config: Option<DeploymentConfig>,
     pub(crate) runtime: String,
     pub(crate) kind: String,
     pub(crate) replicas: u32,
@@ -23,6 +39,7 @@ pub(crate) struct Deployment {
     pub(crate) labels: HashMap<String, String>,
     #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
+    pub(crate) configjson: String,
     pub(crate) secretsjson: String,
     pub(crate) volumes: String,
     pub(crate) labelsjson: String
@@ -50,6 +67,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 namespace,
                 name,
                 image,
+                config as configjson,
                 runtime,
                 kind,
                 replicas,
@@ -82,6 +100,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
             None => { break; },
             Some(deployment) => {
                 let mut deployment = deployment.expect("Could not deserialize Deployment item");
+                deployment.config = serde_json::from_str(&deployment.configjson).unwrap();
                 deployment.labels = Deployment::deserialize_labels(&deployment.labelsjson);
                 deployment.secrets = Deployment::deserialize_labels(&deployment.secretsjson);
                 deployments.push(deployment);
@@ -96,7 +115,29 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
 
     debug!("find_one_by_filters {:?}", filters);
 
-    let mut statement = connection.prepare("SELECT *, labels AS labelsjson, secrets AS secretsjson FROM deployment WHERE namespace = :namespace AND name = :name AND status = :status").unwrap();
+    let mut statement = connection.prepare("
+            SELECT
+                id,
+                created_at,
+                status,
+                namespace,
+                name,
+                image,
+                runtime,
+                kind,
+                replicas,
+                labels,
+                labels as labelsjson,
+                secrets,
+                secrets as secretsjson,
+                volumes
+            FROM deployment
+            WHERE
+                namespace = :namespace
+                AND name = :name
+                AND status = :status
+            "
+    ).expect("Could not fetch deployment");
     let mut rows = statement.query(named_params!{
         ":namespace": filters[0],
         ":name": filters[1],
@@ -119,6 +160,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 namespace,
                 name,
                 image,
+                config,
                 runtime,
                 kind,
                 replicas,
@@ -155,6 +197,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 namespace,
                 name,
                 image,
+                config,
                 runtime,
                 kind,
                 replicas,
@@ -168,6 +211,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :namespace,
                 :name,
                 :image,
+                :config,
                 :runtime,
                 :kind,
                 :replicas,
@@ -177,20 +221,23 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
             )"
     ).expect("Could not create deployment");
 
-    statement.execute(named_params!{
+    let params = named_params!{
         ":id": deployment.id,
         ":created_at": deployment.created_at,
         ":status": "running",
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
+        ":config": deployment.config,
         ":runtime": deployment.runtime,
         ":kind": deployment.kind,
         ":labels": labels,
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
-    }).expect("Could not create deployment");
+    };
+
+    statement.execute(params).expect("Could not create deployment");
 
     return deployment.clone();
 }
