@@ -1,4 +1,4 @@
-use shiplift::{ContainerOptions, Docker, PullOptions, NetworkCreateOptions, ContainerConnectionOptions};
+use shiplift::{ContainerOptions, Docker, PullOptions, NetworkCreateOptions, ContainerConnectionOptions, RegistryAuth};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,6 +7,12 @@ use uuid::Uuid;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::iter::FromIterator;
+
+struct DockerImage {
+    name: String,
+    tag: String,
+    auth: Option<(String, String)>,
+}
 
 pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     let docker = Docker::new();
@@ -43,21 +49,29 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     return config;
 }
 
-async fn pull_image(docker: Docker, path: String) {
-    info!("pull docker image: {}", path);
+async fn pull_image(docker: Docker, image_config: DockerImage) {
+    let image = image_config.name.clone();
+    info!("pull docker image: {}", image.clone());
 
-    let image_path = path.clone();
-
-    let split: Vec<&str> = image_path.split(':').collect();
-    let image = split[0];
-    let tag = split[1];
-
-    match docker.images().get(path).inspect().await {
+    match docker.images().get(image.clone()).inspect().await {
         Ok(_) => { },
         Err(_) => {
+            let mut builder = PullOptions::builder();
+            builder.image(image).tag(image_config.tag.clone());
+
+            if image_config.auth.is_some() {
+                let (username, password) = image_config.auth.unwrap();
+                let auth = RegistryAuth::builder()
+                    .username(username)
+                    .password(password)
+                    .build();
+
+                builder.auth(auth);
+            }
+
             let mut stream = docker
                 .images()
-                .pull(&PullOptions::builder().image(image).tag(tag).build());
+                .pull(&builder.build());
 
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
@@ -71,7 +85,24 @@ async fn pull_image(docker: Docker, path: String) {
 
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     debug!("create container for : {}", &deployment.id);
-    pull_image(docker.clone(), deployment.image.to_string()).await;
+    let image_name = deployment.image.clone();
+    let split: Vec<&str> = image_name.split(':').collect();
+    let image = split[0];
+    let tag = split[1];
+
+    let image = match &deployment.config {
+        Some(config) => DockerImage {
+            name: image.parse().unwrap(),
+            tag: tag.parse().unwrap(),
+            auth: Some((config.username.clone(), config.password.clone())),
+        },
+        None => DockerImage {
+            name: image.parse().unwrap(),
+            tag: tag.parse().unwrap(),
+            auth: None,
+        },
+    };
+    pull_image(docker.clone(), image).await;
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
     create_network(docker.clone(), network_name.clone()).await;
