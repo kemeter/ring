@@ -67,7 +67,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
             }
         }
         Err(_err) => {
-            println!("Unable to login");
+            println!("Wrong credentials");
         }
     }
 }

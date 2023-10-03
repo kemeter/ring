@@ -21,6 +21,14 @@ run
 
 ```cargo build```
 
+## concepts
+
+Ring lets you manage "deployments". 
+A deployment is a description of a service requirement
+
+In other words Ring tries to launch services from the requirements
+If ring fails it will regularly retry.
+
 
 ## usage 
 
@@ -34,7 +42,7 @@ or
 
 2. Start deamon
 
-```cargo run ring server:start```
+```cargo run server:start```
 
 or
 
@@ -47,19 +55,34 @@ or
 
 or 
 
-```cargo run ring login --username admin --password changeme```
+```cargo run login --username admin --password changeme```
 
 
-3. Deploy containers (using yaml)
+3. Launch deployment (using yaml)
 
-```cargo run ring apply -f ring.yaml```
+```cargo run apply -f examples/nginx.yaml```
 
 or 
 
-```ring apply -f examples/ring.yaml```
+```ring apply -f examples/nginx.yaml```
 
-3. Using http endpoint
+3. Launch deployment Using http endpoint
 
 With httpie 
 
-```http bearer -A bearer -a <your_token> POST localhost:3030/deployments < examples/nginx.json``` 
+```http POST localhost:3030/deployments bearer -A bearer -a <your_token> < examples/nginx.json``` 
+
+4. Display deployments
+
+```cargo run deployment:list```
+
+or
+
+```ring deployment:list```
+
+5. Inspect deployment
+
+```cargo run deployment:inspect <deployment_id>```
+
+
+```ring deployment:inspect <deployment_id>```
