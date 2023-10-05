@@ -14,22 +14,22 @@ env_logger = "0.8.3"
 shiplift = { git = "https://github.com/softprops/shiplift" }
 yaml-rust = "0.4"
 clap = "2.33.3"
-clokwerk = "0.3.5"
+clokwerk = "0.4.0"
 chrono = "0.4"
-uuid = { version = "0.8" , features = ["v4"] }
+uuid = { version = "1.4.1", features = ["v4"] }
 serde_rusqlite = "0.33.1"
 rusqlite = { version = "0.29.0", features = [ ] }
 ureq = { version = "2.3.0", features = ["json"]}
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.5.8"
-local-ip-address = "0.4.4"
+toml = "0.8.1"
+local-ip-address = "0.5.5"
 cli-table = "0.4"
 axum = { version = "0.5.9", features = ["headers"] }
 axum-debug = "0.3.3"
 tower = { version = "0.4", features = ["util", "timeout"] }
 tower-http = { version = "0.3.0", features = ["add-extension", "trace"] }
 axum-macros = "0.2.2"
-rust-argon2 = "1.0"
+rust-argon2 = "2.0.0"
 refinery = { version = "0.8", features = [ "rusqlite-bundled" ] }
 regex = "1.6.0"
