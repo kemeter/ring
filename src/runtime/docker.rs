@@ -94,7 +94,10 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
         Some(config) => DockerImage {
             name: image.parse().unwrap(),
             tag: tag.parse().unwrap(),
-            auth: Some((config.username.clone(), config.password.clone())),
+            auth: Some((
+                config.username.clone().unwrap_or_else(|| "default_user".to_string()),
+                config.password.clone().unwrap_or_else(|| "default_password".to_string())
+            ))
         },
         None => DockerImage {
             name: image.parse().unwrap(),

@@ -91,6 +91,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         let mut labels = HashMap::new();
         let mut secrets = HashMap::new();
         let mut volumes: Vec<DeploymentVolume> = Vec::new();
+        let mut config = HashMap::new();
 
         for key in configs.iter() {
 
@@ -167,6 +168,14 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
                     secrets.insert(v.0.as_str().unwrap(), value_format);
                 }
             }
+
+            if "config" == label {
+                let config_vec = value.as_hash().unwrap();
+
+                for c in config_vec.iter() {
+                    config.insert(c.0.as_str().unwrap(), c.1.as_str().unwrap());
+                }
+            }
         }
 
         let api_url = configuration.get_api_url();
@@ -182,7 +191,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
             "replicas": replicas,
             "labels": labels,
             "secrets": secrets,
-            "volumes": volumes
+            "volumes": volumes,
+            "config": config
         });
 
         if args.is_present("dry-run") {

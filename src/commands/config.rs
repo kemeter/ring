@@ -14,7 +14,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 }
 
 pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
-    let parameter = args.value_of("parameter").unwrap();
+    let parameter = args.value_of("parameter").unwrap_or("");
 
     if parameter == "current-context" {
         print!("{:?}", configuration);

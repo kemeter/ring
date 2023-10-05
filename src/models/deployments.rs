@@ -5,13 +5,18 @@ use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
-use rusqlite::types::{ToSqlOutput, Value as TypeValue};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct DeploymentConfig {
+    #[serde(default = "default_image_pull_policy")]
     pub(crate) image_pull_policy: String,
-    pub(crate) username: String,
-    pub(crate) password: String,
+    pub(crate) username: Option<String>,
+    pub(crate) password: Option<String>,
+}
+
+fn default_image_pull_policy() -> String {
+    "Always".to_string()
 }
 
 impl ToSql for DeploymentConfig {
@@ -20,6 +25,23 @@ impl ToSql for DeploymentConfig {
         Ok(ToSqlOutput::Owned(TypeValue::Text(json_string)))
     }
 }
+
+impl FromSql for DeploymentConfig {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Blob(b) => {
+                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                serde_json::from_str(s).map_err(|e| FromSqlError::Other(Box::new(e)))
+            },
+            ValueRef::Text(b) => {
+                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                serde_json::from_str(s).map_err(|e| FromSqlError::Other(Box::new(e)))
+            },
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
@@ -100,7 +122,10 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
             None => { break; },
             Some(deployment) => {
                 let mut deployment = deployment.expect("Could not deserialize Deployment item");
-                deployment.config = serde_json::from_str(&deployment.configjson).unwrap();
+                if "{}" != &deployment.configjson {
+                    deployment.config = serde_json::from_str(&deployment.configjson).unwrap();
+                }
+
                 deployment.labels = Deployment::deserialize_labels(&deployment.labelsjson);
                 deployment.secrets = Deployment::deserialize_labels(&deployment.secretsjson);
                 deployments.push(deployment);
@@ -189,6 +214,11 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
     let labels = serde_json::to_string(&deployment.labels).unwrap();
     let secrets = serde_json::to_string(&deployment.secrets).unwrap();
 
+    let config_json = match &deployment.config {
+        Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
+        None => "{}".to_string(),
+    };
+
     let mut statement = connection.prepare("
             INSERT INTO deployment (
                 id,
@@ -228,7 +258,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
-        ":config": deployment.config,
+        ":config": config_json,
         ":runtime": deployment.runtime,
         ":kind": deployment.kind,
         ":labels": labels,
