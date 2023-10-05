@@ -85,10 +85,10 @@ async fn pull_image(docker: Docker, image_config: DockerImage) {
 
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     debug!("create container for : {}", &deployment.id);
-    let image_name = deployment.image.clone();
-    let split: Vec<&str> = image_name.split(':').collect();
-    let image = split[0];
-    let tag = split[1];
+    let (image, tag) = match deployment.image.split_once(':') {
+        Some((image, tag)) => (image.to_string(), tag.to_string()),
+        None => (deployment.image.clone(), "latest".to_string()),
+    };
 
     let image = match &deployment.config {
         Some(config) => DockerImage {
