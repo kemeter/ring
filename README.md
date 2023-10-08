@@ -63,7 +63,7 @@ or
 
 3. Launch deployment Using http endpoint
 
-Get your token at '~/.config/kemeter/ring'
+Get your token with ``` ring config user-token ```
 
 ```http POST localhost:3030/deployments bearer -A bearer -a <your_token> < examples/nginx.json``` 
 
