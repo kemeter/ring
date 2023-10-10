@@ -1,4 +1,3 @@
-
 use serde::{Serialize, Deserialize, Serializer};
 use std::collections::HashMap;
 use serde::ser::SerializeStruct;
@@ -47,6 +46,7 @@ pub(crate) struct DeploymentOutput {
     pub(crate) id: String,
     pub(crate) created_at: String,
     pub(crate) status: String,
+    pub(crate) restart_count: u32,
     pub(crate) name: String,
     pub(crate) runtime: String,
     pub(crate) kind: String,
@@ -59,7 +59,8 @@ pub(crate) struct DeploymentOutput {
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
     pub(crate) secrets: HashMap<String, String>,
-    pub(crate) volumes: Vec<DeploymentVolume>
+    pub(crate) volumes: Vec<DeploymentVolume>,
+    pub(crate) logs: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -70,16 +71,16 @@ pub(crate) struct DeploymentVolume {
     pub(crate) permission: String
 }
 
-    pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOutput {
+pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOutput {
     let labels: HashMap<String, String> = deployment.labels;
     let secrets: HashMap<String, String> = deployment.secrets;
-
     let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
 
     return DeploymentOutput {
         id: deployment.id,
         created_at: deployment.created_at,
         status: deployment.status,
+        restart_count: deployment.restart_count,
         name: deployment.name,
         namespace: deployment.namespace,
         runtime: deployment.runtime,
@@ -91,6 +92,7 @@ pub(crate) struct DeploymentVolume {
         labels: labels,
         secrets: secrets,
         volumes: volumes,
-        instances: [].to_vec()
+        instances: [].to_vec(),
+        logs: deployment.logs
     };
 }

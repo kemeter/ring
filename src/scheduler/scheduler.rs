@@ -22,15 +22,23 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
         for deployment in list_deployments.into_iter() {
             if "docker" == deployment.runtime {
                 let config = docker::apply(deployment.clone()).await;
+                dbg!(config.clone());
 
                 if "deleted" == config.status && config.instances.len() == 0 {
-                    deleted.push(config.id);
+                    deleted.push(config.id.clone());
+                }
+
+                {
+                    let guard = storage.lock().await;
+                    deployments::update(&guard, &config);
                 }
             }
         }
 
-        let guard = storage.lock().await;
-        deployments::delete_batch(&guard, deleted);
+        {
+            let guard = storage.lock().await;
+            deployments::delete_batch(&guard, deleted);
+        }
 
         sleep(duration).await;
     }
