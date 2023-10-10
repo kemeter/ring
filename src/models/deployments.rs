@@ -1,8 +1,6 @@
 use rusqlite::{Connection, ToSql, Result, Row};
 use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
-use serde_rusqlite::from_rows;
-use serde_rusqlite::from_rows_ref;
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
@@ -49,6 +47,7 @@ pub(crate) struct Deployment {
     pub(crate) id: String,
     pub(crate) created_at: String,
     pub(crate) status: String,
+    pub(crate) restart_count: u32,
     pub(crate) namespace: String,
     pub(crate) name: String,
     pub(crate) image: String,
@@ -63,6 +62,8 @@ pub(crate) struct Deployment {
     #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) logs: Vec<String>
 }
 
 impl Deployment {
@@ -81,6 +82,7 @@ impl Deployment {
             id: row.get("id")?,
             created_at: row.get("created_at")?,
             status: row.get("status")?,
+            restart_count: row.get("restart_count")?,
             namespace: row.get("namespace")?,
             name: row.get("name")?,
             image: row.get("image")?,
@@ -94,7 +96,8 @@ impl Deployment {
             instances: vec![],
             labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
             secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
-            volumes: row.get("volumes")?
+            volumes: row.get("volumes")?,
+            logs: serde_json::from_str(&row.get::<_, String>("logs")?).unwrap_or_default(),
         })
     }
 }
@@ -105,6 +108,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -114,7 +118,8 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                logs
             FROM deployment
     ");
 
@@ -167,6 +172,7 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -174,10 +180,9 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
                 kind,
                 replicas,
                 labels,
-                labels as labelsjson,
                 secrets,
-                secrets as secretsjson,
-                volumes
+                volumes,
+                logs
             FROM deployment
             WHERE
                 namespace = :namespace
@@ -207,6 +212,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -215,10 +221,9 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 kind,
                 replicas,
                 labels,
-                labels as labelsjson,
                 secrets,
-                secrets as secretsjson,
-                volumes
+                volumes,
+                logs
             FROM deployment
             WHERE id = :id
             "
@@ -239,6 +244,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
 
     let labels = serde_json::to_string(&deployment.labels).unwrap();
     let secrets = serde_json::to_string(&deployment.secrets).unwrap();
+    let logs = serde_json::to_string(&deployment.logs).unwrap();
 
     let config_json = match &deployment.config {
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
@@ -250,6 +256,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -259,11 +266,13 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                logs
             ) VALUES (
                 :id,
                 :created_at,
                 :status,
+                :restart_count,
                 :namespace,
                 :name,
                 :image,
@@ -273,7 +282,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :replicas,
                 :labels,
                 :secrets,
-                :volumes
+                :volumes,
+                :logs
             )"
     ).expect("Could not create deployment");
 
@@ -281,6 +291,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":id": deployment.id,
         ":created_at": deployment.created_at,
         ":status": "running",
+        ":restart_count": deployment.restart_count,
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
@@ -291,6 +302,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
+        ":logs": logs,
     };
 
     statement.execute(params).expect("Could not create deployment");
@@ -299,17 +311,23 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
 }
 
 pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deployment) {
+    let logs = serde_json::to_string(&deployment.logs).unwrap();
+
     let mut statement = connection.prepare("
             UPDATE deployment
             SET
-                status = :status
+                status = :status,
+                restart_count = :restart_count,
+                logs = :logs
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
 
     statement.execute(named_params!{
         ":id": deployment.id,
-        ":status": deployment.status
+        ":status": deployment.status,
+        ":restart_count": deployment.restart_count,
+        ":logs": logs
     }).expect("Could not update deployment");
 }
 
@@ -327,16 +345,9 @@ pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) {
 }
 
 pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {
+    //@todo: use transaction
     for id in deleted {
-        let mut statement = connection.prepare("
-            DELETE FROM deployment
-            WHERE
-                id = :id"
-        ).expect("Could not delete deployment");
-
-        statement.execute(named_params!{
-            ":id": id
-        }).expect("Could not delete deployment");
+        delete(connection, id);
     }
 }
 

@@ -19,7 +19,18 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
 
     info!("docker runtime search");
 
+    config.restart_count += 1;
+
+    if config.restart_count > 5 {
+        config.status = "CrashLoopBackOff".to_string();
+        return config;
+    }
+
     config.instances = list_instances(config.id.to_string()).await;
+
+    if config.status == "CrashLoopBackOff" {
+        return config;
+    }
 
     if config.status == "deleted" {
         debug!("{} mark as delete. Remove all instance", config.id.to_string());
@@ -179,7 +190,10 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 
             let _ = docker.containers().get(container.id).start().await;
         },
-        Err(e) => eprintln!("Error: {}", e),
+        Err(e) => {
+            deployment.logs.push(format!("Error: {}", e));
+            eprintln!("docker create container error: {}", e);
+        },
     }
 }
 
@@ -217,7 +231,7 @@ async fn create_network(docker: Docker, network_name: String) {
                 .await
             {
                 Ok(info) => println!("{:?}", info),
-                Err(_e) => eprintln!("Error: {}", e),
+                Err(_e) => eprintln!("Docker network create error: {}", e),
             }
         },
     }

@@ -54,7 +54,7 @@ pub(crate) async fn create(
 
     let guard = connexion.lock().await;
     let option = deployments::find_one_by_filters(&guard, filters);
-    let config = option.as_ref().unwrap();
+    let config = option.unwrap();
 
     // deployment found
     if config.is_some() {
@@ -93,15 +93,16 @@ pub(crate) async fn create(
             kind: String::from("worker"),
             image: input.image.clone(),
             config: input.config.clone(),
-            status: "running".to_string(),
+            status: "creating".to_string(),
             created_at: utc.to_string(),
             labels: input.labels,
             secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
-            volumes: volumes
+            volumes: volumes,
+            restart_count: 0,
+            logs: vec![],
         };
-
         deployments::create(&guard, &deployment);
 
         let deployment_output = hydrate_deployment_output(deployment);

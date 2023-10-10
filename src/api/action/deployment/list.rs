@@ -24,6 +24,7 @@ pub(crate) async fn list(
     _user: User
 ) -> impl IntoResponse {
 
+
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
 
     let list_deployments = {
