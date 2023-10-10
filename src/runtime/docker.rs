@@ -11,7 +11,7 @@ use std::iter::FromIterator;
 struct DockerImage {
     name: String,
     tag: String,
-    auth: Option<(String, String)>,
+    auth: Option<(String, String, String)>,
 }
 
 pub(crate) async fn apply(mut config: Deployment) -> Deployment {
@@ -51,7 +51,8 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
 
 async fn pull_image(docker: Docker, image_config: DockerImage) {
     let image = image_config.name.clone();
-    info!("pull docker image: {}", image.clone());
+    let tag = image_config.tag.clone();
+    info!("pull docker image: {}:{}", image.clone(), tag);
 
     match docker.images().get(image.clone()).inspect().await {
         Ok(_) => { },
@@ -60,8 +61,9 @@ async fn pull_image(docker: Docker, image_config: DockerImage) {
             builder.image(image).tag(image_config.tag.clone());
 
             if image_config.auth.is_some() {
-                let (username, password) = image_config.auth.unwrap();
+                let (server, username, password) = image_config.auth.unwrap();
                 let auth = RegistryAuth::builder()
+                    .server_address(server)
                     .username(username)
                     .password(password)
                     .build();
@@ -76,7 +78,7 @@ async fn pull_image(docker: Docker, image_config: DockerImage) {
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
                     Ok(_output) => { },
-                    Err(e) => eprintln!("Error: {}", e),
+                    Err(e) => eprintln!("Docker image pull error : {}", e),
                 }
             }
         },
@@ -84,28 +86,39 @@ async fn pull_image(docker: Docker, image_config: DockerImage) {
 }
 
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
-    debug!("create container for : {}", &deployment.id);
+    debug!("create container for deployment id : {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
         Some((image, tag)) => (image.to_string(), tag.to_string()),
         None => (deployment.image.clone(), "latest".to_string()),
     };
 
-    let image = match &deployment.config {
-        Some(config) => DockerImage {
-            name: image.parse().unwrap(),
-            tag: tag.parse().unwrap(),
-            auth: Some((
-                config.username.clone().unwrap_or_else(|| "default_user".to_string()),
-                config.password.clone().unwrap_or_else(|| "default_password".to_string())
-            ))
+    let mut image_config = DockerImage {
+        name: image,
+        tag: tag,
+        auth: None,
+    };
+
+    let image_config = match &deployment.config {
+        Some(config) =>  {
+            match (&config.server, &config.username, &config.password) {
+                (Some(server), Some(username), Some(password)) => {
+                    image_config.auth = Some((server.clone(), username.clone(), password.clone()));
+                },
+                _ => {}
+            }
+
+            image_config
         },
-        None => DockerImage {
-            name: image.parse().unwrap(),
-            tag: tag.parse().unwrap(),
-            auth: None,
+        None =>  {
+            image_config
         },
     };
-    pull_image(docker.clone(), image).await;
+
+    if let Some(config) = &deployment.config {
+        if config.image_pull_policy == "Always" || config.image_pull_policy == "IfNotPresent" {
+            pull_image(docker.clone(), image_config).await;
+        }
+    }
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
     create_network(docker.clone(), network_name.clone()).await;
@@ -119,7 +132,6 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 
     labels.insert("ring_deployment", deployment.id.as_str());
 
-    //let labels_format = Deployment::deserialize_labels(&deployment.labels);
     let labels_format = &deployment.labels;
 
     for (key, value) in labels_format.iter() {
@@ -143,7 +155,6 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
         let format: String = format!("{}:{}:{}", volume.source, volume.destination, volume.permission);
         volumes.push(format);
     }
-
 
     let v = Vec::from_iter(volumes.iter().map(String::as_str));
     container_options.volumes(v);

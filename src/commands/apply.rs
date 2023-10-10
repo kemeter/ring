@@ -210,7 +210,6 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
             match request {
                 Ok(_response) => {
-                    dbg!(_response);
                     println!("deployment {} created", name);
                 }
                 Err(error) => {

@@ -11,6 +11,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value a
 pub(crate) struct DeploymentConfig {
     #[serde(default = "default_image_pull_policy")]
     pub(crate) image_pull_policy: String,
+    pub(crate) server: Option<String>,
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
 }
@@ -152,8 +153,6 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
             Err(e) => eprintln!("Error processing row: {}", e),
         }
     }
-
-    dbg!(&deployments);
 
     deployments
 }
