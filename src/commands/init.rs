@@ -10,7 +10,7 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
         .name("init")
 }
 
-pub(crate) fn init(_args: &ArgMatches, connection: Connection) {
+pub(crate) fn init(_args: &ArgMatches, _connection: Connection) {
 
     fs::create_dir_all(get_config_dir()).expect("Unable to create config directory");
     fs::write(format!("{}/auth.json", get_config_dir()), "{}").expect("Unable to create auth.json");

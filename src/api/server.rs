@@ -37,7 +37,6 @@ use crate::models::users as users_model;
 use crate::database::get_database_connection;
 
 pub(crate) type Db = Arc<Mutex<Connection>>;
-pub(crate) type ArcConfig = Config;
 
 #[async_trait]
 impl<B> FromRequest<B> for User

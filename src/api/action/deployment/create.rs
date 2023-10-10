@@ -8,7 +8,7 @@ use axum::{
     Json
 };
 
-use serde::{Serialize, Deserialize, Serializer};
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use axum::extract::Query;
 

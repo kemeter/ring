@@ -226,7 +226,7 @@ fn env_resolver(text: &str) -> String {
             r"\$[a-zA-Z][0-9a-zA-Z_]*"
         ).unwrap();
     let list: HashSet<&str> = tag_regex.find_iter(text).map(|mat| mat.as_str()).collect();
-    let mut content = String::from(text.clone());
+    let mut content = String::from(text);
 
     for variable in list.into_iter() {
         let key = variable.replace("$", "");

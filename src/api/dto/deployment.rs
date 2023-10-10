@@ -14,7 +14,7 @@ fn serialize_option_deployment_config<S>(
     match opt {
         Some(config) => config.serialize(serializer),
         None => {
-            let mut s = serializer.serialize_struct("DeploymentConfig", 0)?;
+            let s = serializer.serialize_struct("DeploymentConfig", 0)?;
             s.end()
         }
     }

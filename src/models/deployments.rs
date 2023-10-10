@@ -1,6 +1,6 @@
 use rusqlite::{Connection, ToSql, Result};
 use rusqlite::named_params;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
 use tokio::sync::MutexGuard;

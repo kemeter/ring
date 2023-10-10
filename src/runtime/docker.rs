@@ -43,7 +43,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
             remove_container(docker.clone(), first_container_id.to_string()).await;
         }
 
-        debug!("docker runtime apply {:?}", config);
+        debug!("docker runtime apply {:?}", config.id.to_string());
     }
 
     return config;
