@@ -1,4 +1,4 @@
-use rusqlite::{Connection, ToSql, Result};
+use rusqlite::{Connection, ToSql, Result, Row};
 use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
 use serde_rusqlite::from_rows;
@@ -61,10 +61,7 @@ pub(crate) struct Deployment {
     pub(crate) labels: HashMap<String, String>,
     #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
-    pub(crate) configjson: String,
-    pub(crate) secretsjson: String,
     pub(crate) volumes: String,
-    pub(crate) labelsjson: String
 }
 
 impl Deployment {
@@ -78,6 +75,27 @@ impl Deployment {
 
         labels
     }
+    fn from_row(row: &Row) -> rusqlite::Result<Deployment> {
+        Ok(Deployment {
+            id: row.get("id")?,
+            created_at: row.get("created_at")?,
+            status: row.get("status")?,
+            namespace: row.get("namespace")?,
+            name: row.get("name")?,
+            image: row.get("image")?,
+            config: match row.get::<_, Option<String>>("config") {
+                Ok(Some(c)) => serde_json::from_str(&c).ok(),
+                _ => None,
+            },
+            runtime: row.get("runtime")?,
+            kind: row.get("kind")?,
+            replicas: row.get("replicas")?,
+            instances: vec![],
+            labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
+            secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
+            volumes: row.get("volumes")?
+        })
+    }
 }
 
 pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, String>) -> Vec<Deployment> {
@@ -89,17 +107,15 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 namespace,
                 name,
                 image,
-                config as configjson,
+                config,
                 runtime,
                 kind,
                 replicas,
                 labels,
-                labels as labelsjson,
                 secrets,
-                secrets as secretsjson,
                 volumes
             FROM deployment
-   ");
+    ");
 
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
@@ -111,32 +127,39 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
     }
 
     let values: Vec<&dyn rusqlite::ToSql> = filters.values().map(|v| v as &dyn rusqlite::ToSql).collect();
-    let mut statement = connection.prepare(&query).unwrap();
-    let rows = statement.query(&values[..]).unwrap();
+    let mut statement = match connection.prepare(&query) {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            eprintln!("Could not prepare SQL statement: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let deployment_iter = match statement.query_map(&values[..], |row| {
+        Deployment::from_row(row)
+    }) {
+        Ok(iter) => iter,
+        Err(e) => {
+            eprintln!("Could not execute SQL query: {}", e);
+            return Vec::new();
+        }
+    };
 
     let mut deployments: Vec<Deployment> = Vec::new();
-    let mut rows_iter = from_rows::<Deployment>(rows);
-
-    loop {
-        match rows_iter.next() {
-            None => { break; },
-            Some(deployment) => {
-                let mut deployment = deployment.expect("Could not deserialize Deployment item");
-                if "{}" != &deployment.configjson {
-                    deployment.config = serde_json::from_str(&deployment.configjson).unwrap();
-                }
-
-                deployment.labels = Deployment::deserialize_labels(&deployment.labelsjson);
-                deployment.secrets = Deployment::deserialize_labels(&deployment.secretsjson);
-                deployments.push(deployment);
-            }
+    for deployment in deployment_iter {
+        match deployment {
+            Ok(d) => deployments.push(d),
+            Err(e) => eprintln!("Error processing row: {}", e),
         }
     }
 
-    return deployments;
+    dbg!(&deployments);
+
+    deployments
 }
 
-pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Deployment>, serde_rusqlite::Error> {
+
+pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Deployment>, rusqlite::Error> {
 
     debug!("find_one_by_filters {:?}", filters);
 
@@ -163,17 +186,20 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
                 AND status = :status
             "
     ).expect("Could not fetch deployment");
-    let mut rows = statement.query(named_params!{
-        ":namespace": filters[0],
-        ":name": filters[1],
+
+    let mut rows = statement.query_map(named_params!{
+        ":namespace": filters.get(0).unwrap_or(&String::from("")),
+        ":name": filters.get(1).unwrap_or(&String::from("")),
         ":status": "running"
-    }).unwrap();
+    }, |row| {
+        Deployment::from_row(row)
+    })?;
 
-
-    let mut ref_rows = from_rows_ref::<Deployment>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
+    match rows.next() {
+        Some(Ok(deployment)) => Ok(Some(deployment)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
 }
 
 pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {
@@ -199,14 +225,15 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
             "
     ).expect("Could not fetch deployment");
 
-    let mut rows = statement.query(named_params!{
-        ":id": id,
-    }).unwrap();
+    let mut deployments = statement.query_map(named_params!{":id": id}, |row| {
+        Deployment::from_row(row)
+    })?;
 
-    let mut ref_rows = from_rows_ref::<Deployment>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
+    if let Some(deployment) = deployments.next() {
+        Ok(Some(deployment?))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {

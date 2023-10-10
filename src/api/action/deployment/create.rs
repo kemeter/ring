@@ -99,10 +99,7 @@ pub(crate) async fn create(
             secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
-            volumes: volumes,
-            labelsjson: String::from("{}"),
-            secretsjson: String::from("{}"),
-            configjson: String::from("{}"),
+            volumes: volumes
         };
 
         deployments::create(&guard, &deployment);

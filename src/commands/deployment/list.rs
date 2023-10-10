@@ -35,7 +35,7 @@ struct DeploymentTableItem {
     runtime: String,
     #[table(title = "Kind")]
     kind: String,
-    #[table(title = "Kind")]
+    #[table(title = "Replicas")]
     replicas: String,
     #[table(title = "Status")]
     status: String
