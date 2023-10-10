@@ -7,8 +7,8 @@ use crate::config;
 use toml::de::Error as TomlError;
 
 #[derive(Deserialize, Debug, Clone)]
-struct Contexts {
-    contexts: HashMap<String, Config>,
+pub(crate) struct Contexts {
+    pub(crate) contexts: HashMap<String, Config>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
