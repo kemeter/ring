@@ -59,15 +59,25 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
                 .long("force")
                 .help("Force update configuration")
         )
+        .arg(
+            Arg::with_name("verbose")
+                .long("verbose")
+                .help("Verbose output")
+        )
         .about("Apply a configuration file")
 }
 
 pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
-    info!("Apply configuration");
+    debug!("Apply configuration");
 
     let file = args.value_of("file").unwrap_or("ring.yaml");
-
-    let contents = fs::read_to_string(file).unwrap();
+    let contents = match fs::read_to_string(file) {
+        Ok(contents) => contents,
+        Err(e) => {
+            eprintln!("Error: Failed to read file '{}': {}", file, e);
+            std::process::exit(1);
+        }
+    };
 
     let docs = serde_yaml::from_str::<Value>(&contents).unwrap();
     let deployments = docs["deployments"].as_mapping().unwrap();
@@ -170,9 +180,11 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let json = json!(deployment);
 
-        if args.is_present("dry-run") {
+        if args.is_present("verbose") {
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
-        } else {
+        }
+
+        if !args.is_present("dry-run") {
             let mut url = format!("{}/deployments", api_url);
 
             if args.is_present("force") {
