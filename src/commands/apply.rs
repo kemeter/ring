@@ -89,17 +89,11 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     }
 
     let env_file = args.value_of("env-file").unwrap_or("");
-    if env_file != "" {
-        let env_file_content = fs::read_to_string(env_file).unwrap();
-        for variable in env_file_content.lines() {
-            let variable_split: Vec<&str> = variable.split("=").collect();
-            env::set_var(variable_split[0], variable_split[1]);
-        };
-    }
+    parse_env_file(env_file);
 
     let auth_config = load_auth_config(configuration.name.clone());
 
-    for (deployment_name, deployment_data) in deployments.iter() {
+    for (_, deployment_data) in deployments.iter() {
         let deployment_data = deployment_data.as_mapping().unwrap();
 
         let mut deployment = Deployment {
@@ -207,20 +201,71 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     }
 }
 
+fn parse_env_file(env_file: &str) {
+    if env_file != "" {
+        let env_file_content = fs::read_to_string(env_file).unwrap();
+        for variable in env_file_content.lines() {
+            let variable_split: Vec<&str> = variable.splitn(2, "=").collect();
+
+            if variable_split.len() == 2 {
+                let key = variable_split[0];
+                let value = variable_split[1];
+
+                if env::var(key).is_ok() {
+                    continue;
+                }
+
+                env::set_var(key, value);
+            }
+        }
+    }
+}
+
 fn env_resolver(text: &str) -> String {
     let tag_regex: Regex = Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap();
-    let list: HashSet<&str> = tag_regex.find_iter(text).map(|mat| mat.as_str()).collect();
     let mut content = String::from(text);
 
-    for variable in list.into_iter() {
-        let key = variable.replace("$", "");
+    for variable in tag_regex.find_iter(text) {
+        let variable_str = variable.as_str();
+        let key = variable_str[1..].to_string();
 
-        let value = match env::var(key) {
-            Ok(val) => String::from(val),
-            Err(_) => String::from(variable),
+        let value = match env::var(&key) {
+            Ok(val) => val,
+            Err(_) => variable_str.to_string(),
         };
-        content = content.replace(variable, &value);
+        content = content.replace(variable_str, &value);
     }
 
     content
+}
+
+#[test]
+fn test_parse_env_file_with_different_types() {
+    // Create a temporary .env file for the test
+    let temp_dir = tempdir::TempDir::new("test_env_file").unwrap();
+    let env_file_path = temp_dir.path().join(".env");
+    let mut env_file = fs::File::create(&env_file_path).unwrap();
+    env_file
+        .write_all(b"DATABASE_URL=postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8\n")
+        .unwrap();
+    env_file.write_all(b"INT_VAR=42\n").unwrap();
+    env_file.write_all(b"BOOL_VAR=true\n").unwrap();
+    let env_file_content = env_file_path.to_str().unwrap();
+
+    // Call the function to parse the .env file
+    parse_env_file(env_file_content);
+
+    // Verify that environment variables have been set correctly
+    let expected_url =
+        "postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8";
+    assert_eq!(env::var("DATABASE_URL").unwrap(), expected_url);
+
+    let int_var: i32 = env::var("INT_VAR").unwrap().parse().unwrap();
+    assert_eq!(int_var, 42);
+
+    let bool_var: bool = env::var("BOOL_VAR").unwrap().parse().unwrap();
+    assert_eq!(bool_var, true);
+
+    // Clean up the temporary file after the test
+    temp_dir.close().unwrap();
 }
