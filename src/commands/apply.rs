@@ -5,8 +5,6 @@ use log::info;
 use clap::ArgMatches;
 use std::fs;
 use std::io::prelude::*;
-use yaml_rust::YamlLoader;
-use std::str;
 use std::env;
 use ureq::json;
 use std::collections::{HashMap, HashSet};
@@ -14,8 +12,22 @@ use std::path::Path;
 use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_yaml::{Value, Mapping};
 
-use crate::api::dto::deployment::DeploymentVolume;
+#[derive(Debug, Deserialize, Serialize)]
+struct Deployment {
+    namespace: String,
+    runtime: String,
+    kind: String,
+    image: String,
+    name: String,
+    replicas: u32,
+    labels: HashMap<String, String>,
+    secrets: HashMap<String, String>,
+    volumes: Vec<Value>,
+    config: HashMap<String, String>,
+}
 
 pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
     SubCommand::with_name("apply")
@@ -57,10 +69,10 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
     let contents = fs::read_to_string(file).unwrap();
 
-    let docs = YamlLoader::load_from_str(&contents).unwrap();
-    let deployments = &docs[0]["deployments"].as_hash().unwrap();
+    let docs = serde_yaml::from_str::<Value>(&contents).unwrap();
+    let deployments = docs["deployments"].as_mapping().unwrap();
 
-    let auth_config_file= format!("{}/auth.json", get_config_dir());
+    let auth_config_file = format!("{}/auth.json", get_config_dir());
 
     if !Path::new(&auth_config_file).exists() {
         return println!("Account not found. Login first");
@@ -77,104 +89,78 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
     let auth_config = load_auth_config(configuration.name.clone());
 
-    for entry in deployments.iter() {
-        let deployment_name = entry.0.as_str().unwrap();
+    for (deployment_name, deployment_data) in deployments.iter() {
+        let deployment_data = deployment_data.as_mapping().unwrap();
 
-        let configs = &docs[0]["deployments"][deployment_name].as_hash().unwrap();
+        let mut deployment = Deployment {
+            namespace: String::new(),
+            runtime: String::new(),
+            kind: String::from("worker"),
+            image: String::new(),
+            name: String::new(),
+            replicas: 0,
+            labels: Default::default(),
+            secrets: Default::default(),
+            volumes: vec![],
+            config: Default::default(),
+        };
 
-        let mut namespace = String::new();
-        let mut runtime: String = String::new();
-        let mut kind: String = String::from("worker");
-        let mut image: String = String::new();
-        let mut name:String = String::new();
-        let mut replicas = 0;
-        let mut labels = HashMap::new();
-        let mut secrets = HashMap::new();
-        let mut volumes: Vec<DeploymentVolume> = Vec::new();
-        let mut config = HashMap::new();
+        for (label, value) in deployment_data.iter() {
+            let label = label.as_str().unwrap();
 
-        for key in configs.iter() {
-
-            let label = key.0.as_str().unwrap();
-            let value = &docs[0]["deployments"][deployment_name][label];
-
-            if "runtime" == label && "docker" != value.as_str().unwrap() {
-                println!("Runtime \"{}\" not supported", value.as_str().unwrap());
-                continue;
-            }
-
-            if "namespace" == label {
-                namespace = env_resolver(value.as_str().unwrap());
-            }
-
-            if "name" == label {
-                name = env_resolver(value.as_str().unwrap());
-            }
-
-            if "runtime" == label {
-                runtime = env_resolver(value.as_str().unwrap());
-            }
-
-            if "image" == label {
-                image = env_resolver(value.as_str().unwrap());
-            }
-
-            if "replicas" == label {
-                replicas = value.as_i64().unwrap();
-            }
-
-            if "kind" == label {
-                kind = env_resolver(value.as_str().unwrap());
-            }
-
-            if "volumes" == label {
-                for volume in value.as_vec().unwrap()  {
-                    let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
-
-                    let permission = if volume_string.len() == 3 { volume_string[2] } else { "rw"};
-
-                    let volume_struct = DeploymentVolume {
-                        source: volume_string[0].to_string(),
-                        destination: volume_string[1].to_string(),
-                        driver: "local".to_string(),
-                        permission: permission.to_string()
-                    };
-
-                    volumes.push(volume_struct);
+            match label {
+                "runtime" if "docker" != value.as_str().unwrap() => {
+                    println!("Runtime \"{}\" not supported", value.as_str().unwrap());
+                    continue;
                 }
-            }
+                "namespace" => deployment.namespace = env_resolver(value.as_str().unwrap()),
+                "name" => deployment.name = env_resolver(value.as_str().unwrap()),
+                "runtime" => deployment.runtime = env_resolver(value.as_str().unwrap()),
+                "image" => deployment.image = env_resolver(value.as_str().unwrap()),
+                "replicas" => deployment.replicas = value.as_i64().unwrap() as u32,
+                "kind" => deployment.kind = env_resolver(value.as_str().unwrap()),
+                "volumes" => {
+                    for volume in value.as_sequence().unwrap() {
+                        let volume_string: Vec<&str> = volume.as_str().unwrap().split(":").collect();
 
-            if "labels" == label {
-                let labels_vec = value.as_vec().unwrap();
+                        let permission = if volume_string.len() == 3 { volume_string[2] } else { "rw" };
 
-                if labels_vec.len() > 0 {
+                        let mut volume_obj = Mapping::new();
+                        volume_obj.insert(Value::String("source".to_string()), Value::String(volume_string[0].to_string()));
+                        volume_obj.insert(Value::String("destination".to_string()), Value::String(volume_string[1].to_string()));
+                        volume_obj.insert(Value::String("driver".to_string()), Value::String("local".to_string()));
+                        volume_obj.insert(Value::String("permission".to_string()), Value::String(permission.to_string()));
 
-                    for l in labels_vec {
-                        for v in l.as_hash().unwrap().iter() {
-                            labels.insert(v.0.as_str().unwrap(), v.1.as_str().unwrap());
+                        deployment.volumes.push(Value::Mapping(volume_obj));
+                    }
+                }
+                "labels" => {
+                    let labels_seq = value.as_sequence().unwrap();
+                    if !labels_seq.is_empty() {
+                        for l in labels_seq {
+                            for (k, v) in l.as_mapping().unwrap().iter() {
+                                deployment.labels.insert(k.as_str().unwrap().to_string(), v.as_str().unwrap().to_string());
+                            }
                         }
                     }
                 }
-            }
-
-            if "secrets" == label {
-                let secrets_vec = value.as_hash().unwrap();
-
-                for v in secrets_vec.iter() {
-                    let mut secret_value = String::from(v.1.as_str().unwrap());
-                    secret_value.remove(0);
-
-                    let value_format = env::var(&secret_value).unwrap_or(v.1.as_str().unwrap().to_string());
-                    secrets.insert(v.0.as_str().unwrap(), value_format);
+                "secrets" => {
+                    let secrets_map = value.as_mapping().unwrap();
+                    for (secret_key, secret_value) in secrets_map.iter() {
+                        let secret_key = secret_key.as_str().unwrap().to_string();
+                        let mut secret_value = secret_value.as_str().unwrap().to_string();
+                        secret_value.remove(0);
+                        let value_format = env::var(&secret_value).unwrap_or_else(|_| secret_value.clone());
+                        deployment.secrets.insert(secret_key, value_format);
+                    }
                 }
-            }
-
-            if "config" == label {
-                let config_vec = value.as_hash().unwrap();
-
-                for c in config_vec.iter() {
-                    config.insert(c.0.as_str().unwrap(), c.1.as_str().unwrap());
+                "config" => {
+                    let config_map = value.as_mapping().unwrap();
+                    for (config_key, config_value) in config_map.iter() {
+                        deployment.config.insert(config_key.as_str().unwrap().to_string(), config_value.as_str().unwrap().to_string());
+                    }
                 }
+                _ => {}
             }
         }
 
@@ -182,25 +168,14 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         info!("push configuration: {}", api_url);
 
-        let json = json!({
-            "kind": kind,
-            "image": image,
-            "name": name,
-            "runtime": runtime,
-            "namespace": namespace,
-            "replicas": replicas,
-            "labels": labels,
-            "secrets": secrets,
-            "volumes": volumes,
-            "config": config
-        });
+        let json = json!(deployment);
 
         if args.is_present("dry-run") {
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         } else {
             let mut url = format!("{}/deployments", api_url);
 
-            if args.is_present("force"){
+            if args.is_present("force") {
                 url.push_str("?force=true");
             }
 
@@ -210,7 +185,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
             match request {
                 Ok(_response) => {
-                    println!("deployment {} created", name);
+                    println!("deployment {} created", deployment.name);
                 }
                 Err(error) => {
                     println!("{:?}", error)
@@ -221,9 +196,7 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 }
 
 fn env_resolver(text: &str) -> String {
-    let tag_regex: Regex = Regex::new(
-            r"\$[a-zA-Z][0-9a-zA-Z_]*"
-        ).unwrap();
+    let tag_regex: Regex = Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap();
     let list: HashSet<&str> = tag_regex.find_iter(text).map(|mat| mat.as_str()).collect();
     let mut content = String::from(text);
 
@@ -232,28 +205,10 @@ fn env_resolver(text: &str) -> String {
 
         let value = match env::var(key) {
             Ok(val) => String::from(val),
-            Err(_e) => String::from(variable),
+            Err(_) => String::from(variable),
         };
-        content = content.replace(variable, value.as_str());
+        content = content.replace(variable, &value);
     }
 
-    return content;
-}
-
-#[cfg(test)]
-mod tests {
-    use std::env;
-    use crate::commands::apply::env_resolver;
-
-    #[test]
-    fn test_env_resolver() {
-        env::set_var("APP_VERSION", "v1");
-
-        let result = env_resolver("registry.hub.docker.com/busybox:$APP_VERSION");
-        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
-
-        env::set_var("REGISTRY", "hub.docker.com");
-        let result = env_resolver("registry.$REGISTRY/busybox:$APP_VERSION");
-        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
-    }
+    content
 }

@@ -33,3 +33,4 @@ axum-macros = "0.2.2"
 rust-argon2 = "2.0.0"
 refinery = { version = "0.8", features = [ "rusqlite-bundled" ] }
 regex = "1.6.0"
+serde_yaml = "0.9.25"
