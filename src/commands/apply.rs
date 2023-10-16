@@ -7,7 +7,7 @@ use std::fs;
 use std::io::prelude::*;
 use std::env;
 use ureq::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use crate::config::config::{Config, get_config_dir};
 use crate::config::config::load_auth_config;
@@ -239,33 +239,52 @@ fn env_resolver(text: &str) -> String {
     content
 }
 
-#[test]
-fn test_parse_env_file_with_different_types() {
-    // Create a temporary .env file for the test
-    let temp_dir = tempdir::TempDir::new("test_env_file").unwrap();
-    let env_file_path = temp_dir.path().join(".env");
-    let mut env_file = fs::File::create(&env_file_path).unwrap();
-    env_file
-        .write_all(b"DATABASE_URL=postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8\n")
-        .unwrap();
-    env_file.write_all(b"INT_VAR=42\n").unwrap();
-    env_file.write_all(b"BOOL_VAR=true\n").unwrap();
-    let env_file_content = env_file_path.to_str().unwrap();
+#[cfg(test)]
+mod tests {
+    use std::{env, fs};
+    use std::io::Write;
+    use crate::commands::apply::{env_resolver, parse_env_file};
 
-    // Call the function to parse the .env file
-    parse_env_file(env_file_content);
+    #[test]
+    fn test_env_resolver() {
+        env::set_var("APP_VERSION", "v1");
 
-    // Verify that environment variables have been set correctly
-    let expected_url =
-        "postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8";
-    assert_eq!(env::var("DATABASE_URL").unwrap(), expected_url);
+        let result = env_resolver("registry.hub.docker.com/busybox:$APP_VERSION");
+        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
 
-    let int_var: i32 = env::var("INT_VAR").unwrap().parse().unwrap();
-    assert_eq!(int_var, 42);
+        env::set_var("REGISTRY", "hub.docker.com");
+        let result = env_resolver("registry.$REGISTRY/busybox:$APP_VERSION");
+        assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
+    }
 
-    let bool_var: bool = env::var("BOOL_VAR").unwrap().parse().unwrap();
-    assert_eq!(bool_var, true);
+    #[test]
+    fn test_parse_env_file_with_different_types() {
+        // Create a temporary .env file for the test
+        let temp_dir = tempdir::TempDir::new("test_env_file").unwrap();
+        let env_file_path = temp_dir.path().join(".env");
+        let mut env_file = fs::File::create(&env_file_path).unwrap();
+        env_file
+            .write_all(b"DATABASE_URL=postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8\n")
+            .unwrap();
+        env_file.write_all(b"INT_VAR=42\n").unwrap();
+        env_file.write_all(b"BOOL_VAR=true\n").unwrap();
+        let env_file_content = env_file_path.to_str().unwrap();
 
-    // Clean up the temporary file after the test
-    temp_dir.close().unwrap();
+        // Call the function to parse the .env file
+        parse_env_file(env_file_content);
+
+        // Verify that environment variables have been set correctly
+        let expected_url =
+            "postgres://test:J4OqcB7jPTGYx@127.0.0.1/alpacode?serverVersion=14&charset=utf8";
+        assert_eq!(env::var("DATABASE_URL").unwrap(), expected_url);
+
+        let int_var: i32 = env::var("INT_VAR").unwrap().parse().unwrap();
+        assert_eq!(int_var, 42);
+
+        let bool_var: bool = env::var("BOOL_VAR").unwrap().parse().unwrap();
+        assert_eq!(bool_var, true);
+
+        // Clean up the temporary file after the test
+        temp_dir.close().unwrap();
+    }
 }
