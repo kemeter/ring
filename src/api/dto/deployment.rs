@@ -62,35 +62,37 @@ pub(crate) struct DeploymentOutput {
     pub(crate) volumes: Vec<DeploymentVolume>
 }
 
+impl DeploymentOutput {
+    pub(crate) fn from_to_model(deployment: Deployment) -> DeploymentOutput {
+        let labels: HashMap<String, String> = deployment.labels;
+        let secrets: HashMap<String, String> = deployment.secrets;
+
+        let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
+
+        return DeploymentOutput {
+            id: deployment.id,
+            created_at: deployment.created_at,
+            status: deployment.status,
+            name: deployment.name,
+            namespace: deployment.namespace,
+            runtime: deployment.runtime,
+            kind: deployment.kind,
+            image: deployment.image,
+            config: deployment.config,
+            replicas: deployment.replicas,
+            ports: [].to_vec(),
+            labels: labels,
+            secrets: secrets,
+            volumes: volumes,
+            instances: [].to_vec()
+        };
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct DeploymentVolume {
     pub(crate) source: String,
     pub(crate) destination: String,
     pub(crate) driver: String,
     pub(crate) permission: String
-}
-
-    pub(crate) fn hydrate_deployment_output(deployment: Deployment) -> DeploymentOutput {
-    let labels: HashMap<String, String> = deployment.labels;
-    let secrets: HashMap<String, String> = deployment.secrets;
-
-    let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
-
-    return DeploymentOutput {
-        id: deployment.id,
-        created_at: deployment.created_at,
-        status: deployment.status,
-        name: deployment.name,
-        namespace: deployment.namespace,
-        runtime: deployment.runtime,
-        kind: deployment.kind,
-        image: deployment.image,
-        config: deployment.config,
-        replicas: deployment.replicas,
-        ports: [].to_vec(),
-        labels: labels,
-        secrets: secrets,
-        volumes: volumes,
-        instances: [].to_vec()
-    };
 }

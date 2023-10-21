@@ -11,7 +11,6 @@ use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments;
 use crate::runtime::docker;
 use crate::models::users::User;
-use crate::api::dto::deployment::hydrate_deployment_output;
 
 #[derive(Deserialize, Debug)]
 pub(crate) struct QueryParameters {
@@ -38,10 +37,9 @@ pub(crate) async fn list(
     };
 
     for deployment in list_deployments.into_iter() {
-        let d = deployment.clone();
 
-        let mut output = hydrate_deployment_output(deployment);
-        let instances = docker::list_instances(d.id.to_string()).await;
+        let mut output = DeploymentOutput::from_to_model(deployment.clone());
+        let instances = docker::list_instances(deployment.id.to_string()).await;
         output.instances = instances;
 
         deployments.push(output);

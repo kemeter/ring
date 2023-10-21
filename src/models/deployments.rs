@@ -66,16 +66,6 @@ pub(crate) struct Deployment {
 }
 
 impl Deployment {
-    pub fn deserialize_labels(serialized: &str) -> HashMap<String, String> {
-        let deserialized: HashMap<String, String> = serde_json::from_str(&serialized).unwrap();
-        let mut labels = HashMap::new();
-
-        for (key, value) in deserialized.iter() {
-            labels.insert(key.clone(), value.clone());
-        }
-
-        labels
-    }
     fn from_row(row: &Row) -> rusqlite::Result<Deployment> {
         Ok(Deployment {
             id: row.get("id")?,

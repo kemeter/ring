@@ -14,7 +14,7 @@ use axum::extract::Query;
 
 use crate::api::server::Db;
 use crate::models::deployments;
-use crate::api::dto::deployment::hydrate_deployment_output;
+use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
 use crate::models::users::User;
 
@@ -75,7 +75,7 @@ pub(crate) async fn create(
             deployments::create(&guard, &deployment);
         }
 
-        let deployment_output = hydrate_deployment_output(deployment);
+        let deployment_output = DeploymentOutput::from_to_model(deployment);
 
         (StatusCode::CREATED, Json(deployment_output))
 
@@ -104,7 +104,7 @@ pub(crate) async fn create(
 
         deployments::create(&guard, &deployment);
 
-        let deployment_output = hydrate_deployment_output(deployment);
+        let deployment_output = DeploymentOutput::from_to_model(deployment);
 
         return (StatusCode::CREATED, Json(deployment_output));
     }
