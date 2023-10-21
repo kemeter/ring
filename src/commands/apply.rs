@@ -4,7 +4,6 @@ use clap::SubCommand;
 use log::info;
 use clap::ArgMatches;
 use std::fs;
-use std::io::prelude::*;
 use std::env;
 use ureq::json;
 use std::collections::HashMap;
@@ -152,9 +151,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
                     let secrets_map = value.as_mapping().unwrap();
                     for (secret_key, secret_value) in secrets_map.iter() {
                         let secret_key = secret_key.as_str().unwrap().to_string();
-                        let mut secret_value = secret_value.as_str().unwrap().to_string();
-                        secret_value.remove(0);
-                        let value_format = env::var(&secret_value).unwrap_or_else(|_| secret_value.clone());
+                        let secret_value = secret_value.as_str().unwrap().to_string();
+                        let value_format = env_resolver(&secret_value);
                         deployment.secrets.insert(secret_key, value_format);
                     }
                 }
@@ -209,7 +207,7 @@ fn parse_env_file(env_file: &str) {
 
             if variable_split.len() == 2 {
                 let key = variable_split[0];
-                let value = variable_split[1];
+                let value = variable_split[1].trim_matches('"');
 
                 if env::var(key).is_ok() {
                     continue;
@@ -220,6 +218,7 @@ fn parse_env_file(env_file: &str) {
         }
     }
 }
+
 
 fn env_resolver(text: &str) -> String {
     let tag_regex: Regex = Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap();
@@ -255,6 +254,9 @@ mod tests {
         env::set_var("REGISTRY", "hub.docker.com");
         let result = env_resolver("registry.$REGISTRY/busybox:$APP_VERSION");
         assert_eq!(result, String::from("registry.hub.docker.com/busybox:v1"));
+
+        let result = env_resolver("APP$TEST");
+        assert_eq!(result, String::from("APP$TEST"));
     }
 
     #[test]
