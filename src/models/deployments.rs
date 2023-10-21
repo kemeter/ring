@@ -1,8 +1,6 @@
 use rusqlite::{Connection, ToSql, Result, Row};
 use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
-use serde_rusqlite::from_rows;
-use serde_rusqlite::from_rows_ref;
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
@@ -303,33 +301,17 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
     }).expect("Could not update deployment");
 }
 
+pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {
+    let ids_string: Vec<String> = deleted.iter().map(|id| id.to_string()).collect();
+    let ids = ids_string.join(",");
 
-pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) {
     let mut statement = connection.prepare("
             DELETE FROM deployment
             WHERE
-                id = :id"
+                id IN(:id)"
     ).expect("Could not update deployment");
 
     statement.execute(named_params!{
-        ":id": id
+        ":id": ids
     }).expect("Could not delete deployment");
 }
-
-pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {
-    for id in deleted {
-        let mut statement = connection.prepare("
-            DELETE FROM deployment
-            WHERE
-                id = :id"
-        ).expect("Could not delete deployment");
-
-        statement.execute(named_params!{
-            ":id": id
-        }).expect("Could not delete deployment");
-    }
-}
-
-
-
-
