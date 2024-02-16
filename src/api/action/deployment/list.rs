@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use axum::{
-    extract::{Extension, Query},
+    extract::{Query},
     response::IntoResponse,
     Json,
 };
+use axum::extract::State;
 use serde::Deserialize;
 
 use crate::api::server::Db;
@@ -19,7 +20,7 @@ pub(crate) struct QueryParameters {
 
 pub(crate) async fn list(
     query_parameters: Query<QueryParameters>,
-    Extension(connexion): Extension<Db>,
+    State(connexion): State<Db>,
     _user: User
 ) -> impl IntoResponse {
 

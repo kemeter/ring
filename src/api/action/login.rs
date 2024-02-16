@@ -1,15 +1,18 @@
 use axum::{
-    Extension,
     http::StatusCode,
     response::IntoResponse,
     Json
 };
+use axum::extract::State;
 use serde::{Serialize, Deserialize};
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use uuid::Uuid;
 
-pub(crate) async fn login(Json(input): Json<LoginInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn login(
+    State(connexion): State<Db>,
+    Json(input): Json<LoginInput>
+) -> impl IntoResponse {
     debug!("Login with {:?}", input.username);
     let guard = connexion.lock().await;
 
@@ -59,15 +62,10 @@ pub(crate) async fn login(Json(input): Json<LoginInput>, Extension(connexion): E
             return (StatusCode::BAD_REQUEST, Json(output));
         }
     }
-
-
-
-
-
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-struct HttpResponse {
+pub(crate) struct HttpResponse {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     errors: Vec<String>,
 

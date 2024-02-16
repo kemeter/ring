@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use axum::{
-    extract::{Extension},
+    extract::{Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json
@@ -10,7 +10,6 @@ use axum::{
 
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use axum::extract::Query;
 
 use crate::api::server::Db;
 use crate::models::deployments;
@@ -19,7 +18,6 @@ use crate::models::deployments::DeploymentConfig;
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
-
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct DeploymentInput {
@@ -45,8 +43,8 @@ pub(crate) struct QueryParameters {
 
 pub(crate) async fn create(
     query_parameters: Query<QueryParameters>,
+    State(connexion): State<Db>,
     Json(input): Json<DeploymentInput>,
-    Extension(connexion): Extension<Db>, _user: User
 ) -> impl IntoResponse {
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());

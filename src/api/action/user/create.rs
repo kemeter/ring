@@ -1,5 +1,5 @@
 use axum::{
-    extract::Extension,
+    extract::{State},
     http::StatusCode,
     response::IntoResponse,
     Json
@@ -11,7 +11,10 @@ use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
 use crate::config::config::load_config;
 
-pub(crate) async fn create(Json(input): Json<UserInput>, Extension(connexion): Extension<Db>) -> impl IntoResponse {
+pub(crate) async fn create(
+    State(connexion): State<Db>,
+    Json(input): Json<UserInput>,
+) -> impl IntoResponse {
     let guard = connexion.lock().await;
     let argon2_config = Argon2Config::default();
 

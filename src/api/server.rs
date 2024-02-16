@@ -1,18 +1,14 @@
 use rusqlite::Connection;
 use log::info;
 use std::sync::Arc;
-use std::{net::SocketAddr, time::Duration};
-use axum::{
-    async_trait,
-    error_handling::HandleErrorLayer,
-    extract::{FromRequest, Extension, RequestParts, TypedHeader},
+use std::{time::Duration};
+use axum::{async_trait, error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, response::{IntoResponse, Response}, Json, RequestPartsExt};
+use axum_extra::{
     headers::{authorization::Bearer, Authorization},
-    http::StatusCode,
-    routing::{get, post, put, delete},
-    Router,
-    response::{IntoResponse, Response},
-    Json
+    TypedHeader,
 };
+use axum::http::request::Parts;
+use axum_macros::FromRef;
 use serde_json::json;
 
 use tower::{BoxError, ServiceBuilder};
@@ -39,17 +35,17 @@ use crate::database::get_database_connection;
 pub(crate) type Db = Arc<Mutex<Connection>>;
 
 #[async_trait]
-impl<B> FromRequest<B> for User
+impl<S> FromRequestParts<S> for User
     where
-        B: Send,
+       S: Send + Sync,
 {
     type Rejection = AuthError;
 
-    async fn from_request(req: &mut RequestParts<B>) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(bearer)) =
-            TypedHeader::<Authorization<Bearer>>::from_request(req)
-                .await
-                .map_err(|_| AuthError::InvalidToken)?;
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let TypedHeader(Authorization(bearer)) = parts
+            .extract::<TypedHeader<Authorization<Bearer>>>()
+            .await
+            .map_err(|_| AuthError::InvalidToken)?;
 
         let storage = get_database_connection();
         let token = bearer.token();
@@ -90,14 +86,23 @@ impl IntoResponse for AuthError {
     }
 }
 
+#[derive(Clone, FromRef)]
+struct AppState {
+    connexion: Arc<Mutex<Connection>>,
+    config: Arc<Mutex<Config>>,
+}
+
 pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
 {
     info!("Starting server on {}", configuration.get_api_url());
 
     let connexion = Arc::clone(&storage);
-    let c = configuration.clone();
+    let config = Arc::new(Mutex::new(configuration.clone()));
 
-    let config = Arc::new(Mutex::new(c.clone()));
+    let state = AppState {
+        connexion,
+        config,
+    };
 
     let app = Router::new()
         .route("/login", post(login))
@@ -108,6 +113,7 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .route("/users/:id", delete(user_delete))
         .route("/users/me", get(user_current))
 
+        .with_state(state)
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|error: BoxError| async move {
@@ -121,15 +127,11 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
                     }
                 }))
                 .timeout(Duration::from_secs(10))
-                .layer(Extension(connexion))
-                .layer(Extension(config))
                 .into_inner(),
         );
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], configuration.api.port));
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3030").await.unwrap();
+    axum::serve(listener, app)
         .await
         .unwrap();
-
 }

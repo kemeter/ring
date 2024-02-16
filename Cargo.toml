@@ -25,13 +25,16 @@ serde_json = "1.0"
 toml = "0.8.1"
 local-ip-address = "0.5.5"
 cli-table = "0.4"
-axum = { version = "0.5.9", features = ["headers"] }
-axum-debug = "0.3.3"
+axum = { version = "0.7.4" }
+axum-extra = { version = "0.9.2", features = ["typed-header"] }
 tower = { version = "0.4", features = ["util", "timeout"] }
-tower-http = { version = "0.3.0", features = ["add-extension", "trace"] }
-axum-macros = "0.2.2"
+tower-http = { version = "0.5.1", features = ["add-extension", "trace"] }
+axum-macros = "0.4.1"
 rust-argon2 = "2.0.0"
 refinery = { version = "0.8", features = [ "rusqlite-bundled" ] }
 regex = "1.6.0"
 serde_yaml = "0.9.25"
 tempdir = "0.3.7"
+
+[dev-dependencies]
+axum-debug = "0.3.3"

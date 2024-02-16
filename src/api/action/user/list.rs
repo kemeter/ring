@@ -1,15 +1,16 @@
 use axum::{
-    extract::{Extension},
     response::IntoResponse,
     Json,
 };
+use axum::extract::State;
 
 use crate::api::server::Db;
-use crate::models::users::User;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
 
-pub(crate) async fn list(Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
+pub(crate) async fn list(
+    State(connexion): State<Db>,
+) -> impl IntoResponse {
 
     let mut users: Vec<UserOutput> = Vec::new();
     let guard = connexion.lock().await;
