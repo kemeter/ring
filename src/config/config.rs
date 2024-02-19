@@ -27,6 +27,24 @@ impl Config {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            current: true,
+            name: "default".to_string(),
+            host: local_ip().unwrap().to_string(),
+            api: config::api::Api {
+                scheme: "http".to_string(),
+                port: 3030
+            },
+            user: config::user::User {
+                salt: "changeme".to_string()
+            }
+        }
+    }
+}
+
+
 #[derive(Serialize, Deserialize, Debug)]
 pub(crate) struct AuthConfig {
     pub(crate) token: String
@@ -81,18 +99,7 @@ pub(crate) fn load_config() -> Config {
 
     debug!("Switch to default configuration");
 
-    return Config {
-        current: true,
-        name: "default".to_string(),
-        host: local_ip().unwrap().to_string(),
-        api: config::api::Api {
-            scheme: "http".to_string(),
-            port: 3030
-        },
-        user: config::user::User {
-            salt: "changeme".to_string()
-        }
-    }
+    return Config::default();
 }
 
 fn get_current_context() -> String {

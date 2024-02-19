@@ -87,24 +87,13 @@ impl IntoResponse for AuthError {
 }
 
 #[derive(Clone, FromRef)]
-struct AppState {
-    connexion: Arc<Mutex<Connection>>,
-    config: Arc<Mutex<Config>>,
+pub(crate) struct AppState {
+    pub(crate) connexion: Arc<Mutex<Connection>>,
+    pub(crate) configuration: Config,
 }
 
-pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
-{
-    info!("Starting server on {}", configuration.get_api_url());
-
-    let connexion = Arc::clone(&storage);
-    let config = Arc::new(Mutex::new(configuration.clone()));
-
-    let state = AppState {
-        connexion,
-        config,
-    };
-
-    let app = Router::new()
+pub(crate) fn router(state: AppState) -> Router {
+    Router::new()
         .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
@@ -128,10 +117,52 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
                 }))
                 .timeout(Duration::from_secs(10))
                 .into_inner(),
-        );
+        )
+}
+
+pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
+{
+    info!("Starting server on {}", configuration.get_api_url());
+
+    let connexion = Arc::clone(&storage);
+    let state = AppState {
+        connexion,
+        configuration,
+    };
+
+    let app = router(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3030").await.unwrap();
     axum::serve(listener, app)
         .await
         .unwrap();
+}
+
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::sync::Arc;
+    use axum::Router;
+    use serde::Deserialize;
+    use tokio::sync::Mutex;
+    use crate::api::server::{AppState, router};
+    use crate::config::config::Config;
+    use crate::database::get_database_connection;
+
+    #[derive(Debug, Deserialize)]
+    pub(crate) struct ErrorResponse {
+        pub errors: Vec<String>
+    }
+
+    pub(crate) fn new_test_app() -> Router {
+        let configuration = Config::default();
+        let connection = get_database_connection();
+
+        let state = AppState {
+            connexion: Arc::new(Mutex::new(connection)),
+            configuration,
+        };
+
+        return router(state);
+    }
 }

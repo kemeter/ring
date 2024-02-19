@@ -78,3 +78,51 @@ pub(crate) struct LoginInput {
     username: String,
     password: String
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::api::server::tests::new_test_app;
+    use crate::api::server::tests::ErrorResponse;
+    use axum_test::{TestResponse, TestServer};
+    use serde::Deserialize;
+    use serde_json::json;
+
+    #[derive(Debug, Deserialize)]
+    struct ResponseBody {
+        token: String,
+    }
+
+    #[tokio::test]
+    async fn login_success() {
+        let server = TestServer::new(new_test_app()).unwrap();
+
+        // Get the request.
+        let response: TestResponse = server
+            .post(&"/login")
+            .json(&json!({
+                "username": "admin",
+                "password": "changeme",
+            }))
+            .await;
+
+        let response_body: ResponseBody = response.json::<ResponseBody>();
+        assert!(!response_body.token.is_empty(), "Token key is missing in the response");
+    }
+
+    #[tokio::test]
+    async fn login_fail() {
+        let server = TestServer::new(new_test_app()).unwrap();
+
+        // Get the request.
+        let response: TestResponse = server
+            .post(&"/login")
+            .json(&json!({
+                "username": "coucou",
+                "password": "changeme",
+            }))
+            .await;
+
+        let response_body: ErrorResponse = response.json::<ErrorResponse>();
+        assert!(response_body.errors.contains(&"Bad identifiers".to_string()));
+    }
+}

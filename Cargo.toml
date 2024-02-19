@@ -39,6 +39,9 @@ refinery = { version = "0.8", features = [ "rusqlite-bundled" ] }
 regex = "1.6.0"
 serde_yaml = "0.9.25"
 tempdir = "0.3.7"
+http = "1.0.0"
+mime = "0.3.17"
 
 [dev-dependencies]
 axum-debug = "0.3.3"
+axum-test = "14.3.0"

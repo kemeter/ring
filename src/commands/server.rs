@@ -21,17 +21,8 @@ pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, mut s
         .expect("Could not execute database migrations.");
 
     let connection = Arc::new(Mutex::new(storage));
-
-    let arc = Arc::clone(&connection);
-    let arc2 = Arc::clone(&connection);
-
-    let api_server_handler = task::spawn(async move {
-        ApiServer::start(arc, configuration).await;
-    });
-
-    let scheduler_handler = task::spawn(async move {
-        schedule(arc2).await;
-    });
+    let api_server_handler = task::spawn(ApiServer::start(Arc::clone(&connection), configuration));
+    let scheduler_handler = task::spawn(schedule(Arc::clone(&connection)));
 
     let _ = api_server_handler.await;
     let _ = scheduler_handler.await;
