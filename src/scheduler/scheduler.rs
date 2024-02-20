@@ -29,8 +29,11 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             }
         }
 
-        let guard = storage.lock().await;
-        deployments::delete_batch(&guard, deleted);
+        {
+            let guard = storage.lock().await;
+            deployments::delete_batch(&guard, deleted);
+        }
+
 
         sleep(duration).await;
     }
