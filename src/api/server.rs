@@ -166,7 +166,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn new_test_app() -> Router {
-        fs::remove_file("ring_test.db").expect("Could not remove test ring_test.db");
+        let _ = fs::remove_file("ring_test.db");
         env::set_var("RING_DATABASE_PATH", "ring_test.db");
         let configuration = Config::default();
         let mut connection = get_database_connection();
