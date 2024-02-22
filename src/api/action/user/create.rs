@@ -46,3 +46,29 @@ pub(crate) struct UserInput {
     username: String,
     password: String
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::{TestResponse, TestServer};
+    use http::StatusCode;
+    use serde_json::json;
+    use crate::api::server::tests::{login, new_test_app};
+
+    #[tokio::test]
+    async fn create() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/users")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "username": "ring",
+                "password": "ring"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+}
