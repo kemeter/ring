@@ -1,15 +1,17 @@
 use axum::{
-    extract::{Extension, Path},
+    extract::{Path},
     http::StatusCode,
     response::IntoResponse
 };
+use axum::extract::State;
 
 use crate::api::server::Db;
 use crate::models::deployments;
 
-use crate::models::users::User;
-
-pub(crate) async fn delete(Path(id): Path<String>, Extension(connexion): Extension<Db>, _user: User) -> impl IntoResponse {
+pub(crate) async fn delete(
+    Path(id): Path<String>,
+    State(connexion): State<Db>,
+) -> impl IntoResponse {
     let guard = connexion.lock().await;
     let option = deployments::find(&guard, id);
 
