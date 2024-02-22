@@ -141,22 +141,39 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::{env, fs};
     use std::sync::Arc;
     use axum::Router;
+    use axum_test::{TestResponse, TestServer};
     use serde::Deserialize;
+    use serde_json::json;
     use tokio::sync::Mutex;
     use crate::api::server::{AppState, router};
     use crate::config::config::Config;
     use crate::database::get_database_connection;
 
     #[derive(Debug, Deserialize)]
+    struct ResponseBody {
+        token: String,
+    }
+
+    #[derive(Debug, Deserialize)]
     pub(crate) struct ErrorResponse {
         pub errors: Vec<String>
     }
+    mod embedded {
+        refinery::embed_migrations!("src/migrations");
+    }
 
     pub(crate) fn new_test_app() -> Router {
+        fs::remove_file("ring_test.db").expect("Could not remove test ring_test.db");
+        env::set_var("RING_DATABASE_PATH", "ring_test.db");
         let configuration = Config::default();
-        let connection = get_database_connection();
+        let mut connection = get_database_connection();
+
+        embedded::migrations::runner()
+            .run(&mut connection)
+            .expect("Could not execute database migrations.");
 
         let state = AppState {
             connexion: Arc::new(Mutex::new(connection)),
@@ -164,5 +181,18 @@ pub(crate) mod tests {
         };
 
         return router(state);
+    }
+
+    pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .post(&"/login")
+            .json(&json!({
+                "username": username,
+                "password": password
+            }))
+            .await;
+
+        return response.json::<ResponseBody>().token;
     }
 }

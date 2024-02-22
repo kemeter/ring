@@ -107,3 +107,31 @@ pub(crate) async fn create(
         return (StatusCode::CREATED, Json(deployment_output));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum_test::{TestResponse, TestServer};
+    use serde_json::json;
+    use crate::api::server::tests::{login, new_test_app};
+
+    #[tokio::test]
+    async fn create() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+}

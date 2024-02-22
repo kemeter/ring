@@ -48,3 +48,24 @@ pub(crate) async fn list(
 
     Json(deployments)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use axum::http::StatusCode;
+    use crate::api::server::tests::new_test_app;
+    use crate::api::server::tests::login;
+
+    #[tokio::test]
+    async fn list() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+}
