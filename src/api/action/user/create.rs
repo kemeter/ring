@@ -9,19 +9,30 @@ use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
-use crate::config::config::load_config;
+use crate::config::config::{Config};
 
 pub(crate) async fn create(
     State(connexion): State<Db>,
+    State(configuration): State<Config>,
     Json(input): Json<UserInput>,
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;
-    let argon2_config = Argon2Config::default();
+    let argon2_config = Argon2Config {
+        variant: argon2::Variant::Argon2id,
+        version: argon2::Version::Version13,
+        mem_cost: 65536,
+        time_cost: 2,
+        lanes: 4,
+        secret: &[],
+        ad: &[],
+        hash_length: 32,
+    };
 
-    //@todo: use axum extension
-    let config = load_config();
-
-    let password_hash = argon2::hash_encoded(input.password.as_bytes(), config.user.salt.as_bytes(), &argon2_config).unwrap();
+    let password_hash = argon2::hash_encoded(
+        input.password.as_bytes(),
+        configuration.user.salt.as_bytes(),
+        &argon2_config
+    ).unwrap();
 
     users_model::create(&guard, &input.username, &password_hash);
     let option = users_model::find_by_username(&guard, &input.username);

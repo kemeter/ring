@@ -10,18 +10,16 @@ use axum::extract::State;
 use crate::api::server::Db;
 use crate::models::users as users_model;
 
-use crate::config::config::load_config;
+use crate::config::config::{Config};
 
 pub(crate) async fn update(
     State(connexion): State<Db>,
+    State(configuration): State<Config>,
     Path(id): Path<String>,
     Json(input): Json<UserInput>,
 ) -> impl IntoResponse {
-    let config = load_config();
 
-
-    // Lock the connection only when needed
-    let mut user = {
+    let user = {
         let guard = connexion.lock().await;
         users_model::find(&guard, id).ok().flatten()
     };
@@ -43,7 +41,11 @@ pub(crate) async fn update(
                 hash_length: 32,
             };
 
-            let password_hash = argon2::hash_encoded(password.as_bytes(), config.user.salt.as_bytes(), &argon2_config).unwrap();
+            let password_hash = argon2::hash_encoded(
+                password.as_bytes(),
+                configuration.user.salt.as_bytes(),
+                &argon2_config
+            ).unwrap();
 
             user.password = password_hash;
         }

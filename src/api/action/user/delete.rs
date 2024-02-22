@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Path},
+    extract::{Path},
     http::StatusCode,
     response::IntoResponse
 };
@@ -7,7 +7,6 @@ use axum::extract::State;
 
 use crate::api::server::Db;
 use crate::models::users;
-use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
