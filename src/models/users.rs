@@ -144,7 +144,8 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
             UPDATE user
             SET
                 username = :username,
-                password = :password
+                password = :password,
+                updated_at = date('now')
             WHERE
                 id = :id"
     ).expect("Could not update deployment");

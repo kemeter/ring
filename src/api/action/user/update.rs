@@ -17,34 +17,39 @@ pub(crate) async fn update(
     Path(id): Path<String>,
     Json(input): Json<UserInput>,
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-    let argon2_config = Argon2Config::default();
-
-    let option = users_model::find(&guard, id);
-    //@todo: use axum extension
     let config = load_config();
 
-    match option {
-        Ok(Some(mut user)) => {
 
-            if input.username.is_some() {
-                let username = input.username.unwrap();
-                user.username = username;
-            }
+    // Lock the connection only when needed
+    let mut user = {
+        let guard = connexion.lock().await;
+        users_model::find(&guard, id).ok().flatten()
+    };
 
-            if input.password.is_some() {
-                let password = input.password.unwrap();
-
-                let password_hash = argon2::hash_encoded(password.as_bytes(), config.user.salt.as_bytes(), &argon2_config).unwrap();
-                user.password = password_hash;
-            }
-
-            users_model::update(&guard, &user);
+    if let Some(mut user) = user {
+        if let Some(username) = input.username {
+            user.username = username;
         }
-        Ok(None) => {
 
+        if let Some(password) = input.password {
+            let argon2_config = Argon2Config {
+                variant: argon2::Variant::Argon2id,
+                version: argon2::Version::Version13,
+                mem_cost: 65536,
+                time_cost: 2,
+                lanes: 4,
+                secret: &[],
+                ad: &[],
+                hash_length: 32,
+            };
+
+            let password_hash = argon2::hash_encoded(password.as_bytes(), config.user.salt.as_bytes(), &argon2_config).unwrap();
+
+            user.password = password_hash;
         }
-        _ => {}
+
+        let guard = connexion.lock().await;
+        users_model::update(&guard, &user);
     }
 }
 
