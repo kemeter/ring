@@ -1,16 +1,15 @@
 use std::fs;
-use clap::{App, Arg};
-use clap::SubCommand;
+use clap::{ Arg, Command};
 use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
 use toml::de::Error as TomlError;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("config")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("config")
         .name("config")
         .arg(
-            Arg::with_name("parameter")
+            Arg::new("parameter")
                 .required(false)
                 .help("show specific parameter")
         )
@@ -25,7 +24,8 @@ struct ConfigTableItem {
 }
 
 pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
-    let parameter = args.value_of("parameter").unwrap_or("configs");
+    let binding = "configs".to_string();
+    let parameter = args.get_one::<String>("parameter").unwrap_or(&binding);
 
     if parameter == "current-context" {
         println!("{:?}", configuration);

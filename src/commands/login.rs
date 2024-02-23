@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use clap::App;
+use clap::{Command};
 use clap::Arg;
-use clap::SubCommand;
 use clap::ArgMatches;
 use std::fs;
 use ureq::json;
@@ -11,31 +10,28 @@ use crate::config::config::AuthToken;
 use crate::config::config::get_config_dir;
 use std::string::String;
 
-
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("login")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("login")
         .about("Login to your account")
         .arg(
-            Arg::with_name("username")
-                .short("u")
+            Arg::new("username")
+                .short('u')
                 .long("username")
                 .help("Your username")
-                .takes_value(true)
                 .required(true)
         )
         .arg(
-            Arg::with_name("password")
-                .short("p")
+            Arg::new("password")
+                .short('p')
                 .long("password")
                 .help("Your password")
-                .takes_value(true)
                 .required(true)
         )
 }
 
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
-    let username = args.value_of("username").unwrap();
-    let password = args.value_of("password").unwrap();
+    let username = args.get_one::<String>("username").unwrap();
+    let password = args.get_one::<String>("password").unwrap();
 
     let config_directory = get_config_dir();
     let config_file = format!("{}/auth.json", config_directory);

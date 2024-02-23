@@ -1,6 +1,6 @@
-use std::process::Command;
+use std::process::Command as BaseCommand;
 use std::env;
-use clap::{App, Arg};
+use clap::{Command, Arg};
 
 #[macro_use]
 extern crate log;
@@ -47,109 +47,109 @@ async fn main() {
     env_logger::init();
 
     let commands = vec![
-        crate::commands::config::command_config(),
-        crate::commands::init::command_config(),
-        crate::commands::server::command_config(),
-        crate::commands::apply::command_config(),
-        crate::commands::login::command_config(),
-        crate::commands::deployment::list::command_config(),
-        crate::commands::deployment::inspect::command_config(),
-        crate::commands::deployment::delete::command_config(),
-        crate::commands::user::list::command_config(),
-        crate::commands::user::create::command_config(),
-        crate::commands::user::update::command_config(),
-        crate::commands::user::delete::command_config(),
+        commands::config::command_config(),
+        commands::init::command_config(),
+        commands::server::command_config(),
+        commands::apply::command_config(),
+        commands::login::command_config(),
+        commands::deployment::list::command_config(),
+        commands::deployment::inspect::command_config(),
+        commands::deployment::delete::command_config(),
+        commands::user::list::command_config(),
+        commands::user::create::command_config(),
+        commands::user::update::command_config(),
+        commands::user::delete::command_config(),
     ];
 
-    let app = App::new("ring")
-      .version("0.1.0")
-      .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
-      .about("The ring to rule them all")
-      .arg(
-          Arg::with_name("context")
-              .required(false)
-              .help("Sets the context to use")
-              .long("context")
-              .short("c")
-      )
+    let app = Command::new("ring")
+        .version("0.1.0")
+        .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
+        .about("The ring to rule them all")
+        .arg(
+            Arg::new("context")
+                .required(false)
+                .help("Sets the context to use")
+                .long("context")
+                .short('c')
+        )
       .subcommands(commands);
 
     let matches = app.get_matches();
-    let subcommand_name = matches.subcommand_name();
+    let subcommand_name = matches.subcommand();
     let storage = get_database_connection();
     let config = config::config::load_config();
 
     match subcommand_name {
-        Some("config") => {
-            crate::commands::config::execute(
-                matches.subcommand_matches("config").unwrap(),
+        Some(("config", sub_matches)) => {
+            commands::config::execute(
+                sub_matches,
                 config,
             );
         }
-        Some("init") => {
-            crate::commands::init::init(
-                matches.subcommand_matches("init").unwrap(),
+        Some(("init", sub_matches)) => {
+            commands::init::init(
+                sub_matches,
                 storage
             );
         }
-        Some("server:start") => {
-            crate::commands::server::execute(
-                matches.subcommand_matches("server:start").unwrap(),
+        Some(("server:start", sub_matches)) => {
+            commands::server::execute(
+                sub_matches,
                 config,
                 storage
             ).await
         }
-        Some("apply") => {
-          crate::commands::apply::apply(
-              matches.subcommand_matches("apply").unwrap(),
+        Some(("apply", sub_matches)) => {
+          commands::apply::apply(
+              sub_matches,
               config,
           );
         }
-        Some("deployment:list") => {
-            crate::commands::deployment::list::execute(
-                matches.subcommand_matches("deployment:list").unwrap(),
+        Some(("deployment:list", sub_matches)) => {
+            commands::deployment::list::execute(
+                sub_matches,
                 config,
             );
         }
-        Some("deployment:inspect") => {
-            crate::commands::deployment::inspect::execute(
-                matches.subcommand_matches("deployment:inspect").unwrap(),
+        Some(("deployment:inspect", sub_matches)) => {
+            commands::deployment::inspect::execute(
+                sub_matches,
                 config
             ).await
         }
-        Some("deployment:delete") => {
-            crate::commands::deployment::delete::execute(
-                matches.subcommand_matches("deployment:delete").unwrap(),
+        Some(("deployment:delete", sub_matches)) => {
+            commands::deployment::delete::execute(
+                sub_matches,
                 config
             ).await
         }
-        Some("login") => {
-            crate::commands::login::execute(
-                matches.subcommand_matches("login").unwrap(),
+        Some(("login", sub_matches)) => {
+            commands::login::execute(
+                sub_matches,
                 config,
             );
         }
-        Some("user:list") => {
-            crate::commands::user::list::execute(
-                matches.subcommand_matches("user:list").unwrap(),
+        Some(("user:list", sub_matches)) => {
+            commands::user::list::execute(
+                sub_matches,
                 config
             );
         }
-        Some("user:create") => {
-            crate::commands::user::create::execute(
-                matches.subcommand_matches("user:create").unwrap(),
+        Some(("user:create", sub_matches)) => {
+            commands::user::create::execute(
+                sub_matches,
                 config
             );
         }
-        Some("user:update") => {
-            crate::commands::user::update::execute(
-                matches.subcommand_matches("user:update").unwrap(),
+        Some(("user:update", sub_matches)) => {
+            commands::user::update::execute(
+                sub_matches,
                 config
             );
         }
-        Some("user:delete") => {
-            crate::commands::user::delete::execute(
-                matches.subcommand_matches("user:delete").unwrap(),
+        Some(("user:delete", sub_matches)) => {
+            commands::user::delete::execute(
+                sub_matches,
                 config
             );
         }
@@ -157,7 +157,7 @@ async fn main() {
             let process_args: Vec<String> = env::args().collect();
             let process_name = process_args[0].as_str().to_owned();
 
-            let mut subprocess = Command::new(process_name.as_str())
+            let mut subprocess = BaseCommand::new(process_name.as_str())
                 .arg("--help")
                 .spawn()
                 .expect("failed to execute process");

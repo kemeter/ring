@@ -1,6 +1,5 @@
-use clap::App;
+use clap::{ArgAction, Command};
 use clap::Arg;
-use clap::SubCommand;
 use log::info;
 use clap::ArgMatches;
 use std::fs;
@@ -28,40 +27,44 @@ struct Deployment {
     config: HashMap<String, String>,
 }
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("apply")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("apply")
         .name("apply")
         .arg(
-            Arg::with_name("file")
-                .short("f")
+            Arg::new("file")
+                .short('f')
                 .long("file")
                 .value_name("FILE")
                 .help("Sets a custom config file")
-                .takes_value(true),
+                // .takes_value(),
         )
         .arg(
-            Arg::with_name("env-file")
+            Arg::new("env-file")
                 .required(false)
                 .help("Use a .env file to set environment variables")
                 .long("env-file")
-                .short("e")
-                .takes_value(true)
+                .short('e')
+                // .takes_value()
         )
         .arg(
-            Arg::with_name("dry-run")
+            Arg::new("dry-run")
+                .required(false)
                 .long("dry-run")
-                .short("d")
+                .short('d')
+                .action(ArgAction::SetTrue)
                 .help("previews the object that would be sent to your cluster, without actually sending it.")
         )
         .arg(
-            Arg::with_name("force")
+            Arg::new("force")
                 .long("force")
                 .help("Force update configuration")
+                .action(ArgAction::SetTrue)
         )
         .arg(
-            Arg::with_name("verbose")
+            Arg::new("verbose")
                 .long("verbose")
                 .help("Verbose output")
+                .action(ArgAction::SetTrue)
         )
         .about("Apply a configuration file")
 }
@@ -69,7 +72,8 @@ pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
 pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
     debug!("Apply configuration");
 
-    let file = args.value_of("file").unwrap_or("ring.yaml");
+    let binding = String::from("ring.yaml");
+    let file = args.get_one::<String>("file").unwrap_or(&binding);
     let contents = match fs::read_to_string(file) {
         Ok(contents) => contents,
         Err(e) => {
@@ -87,7 +91,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         return println!("Account not found. Login first");
     }
 
-    let env_file = args.value_of("env-file").unwrap_or("");
+    let binding = String::from("");
+    let env_file = args.get_one::<String>("env-file").unwrap_or(&binding);
     parse_env_file(env_file);
 
     let auth_config = load_auth_config(configuration.name.clone());
@@ -172,14 +177,14 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
 
         let json = json!(deployment);
 
-        if args.is_present("verbose") {
+        if args.contains_id("verbose") {
             println!("{}", serde_json::to_string_pretty(&json).unwrap());
         }
 
-        if !args.is_present("dry-run") {
+        if args.contains_id("dry-run") {
             let mut url = format!("{}/deployments", api_url);
 
-            if args.is_present("force") {
+            if args.contains_id("force") {
                 url.push_str("?force=true");
             }
 
@@ -218,7 +223,6 @@ fn parse_env_file(env_file: &str) {
         }
     }
 }
-
 
 fn env_resolver(text: &str) -> String {
     let tag_regex: Regex = Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap();

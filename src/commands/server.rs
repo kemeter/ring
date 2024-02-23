@@ -1,5 +1,4 @@
-use clap::App;
-use clap::SubCommand;
+use clap::{Command};
 use clap::ArgMatches;
 use rusqlite::Connection;
 use crate::api::server as ApiServer;
@@ -10,12 +9,12 @@ use tokio::task;
 use crate::scheduler::scheduler::schedule;
 use crate::config::config::Config;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("server:start")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("server:start")
         .name("server:start")
 }
 
-pub(crate) async fn execute(_args: &ArgMatches<'_>, configuration: Config, mut storage: Connection) {
+pub(crate) async fn execute(_args: &ArgMatches, configuration: Config, mut storage: Connection) {
     embedded::migrations::runner()
         .run(&mut storage)
         .expect("Could not execute database migrations.");
