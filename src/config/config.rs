@@ -45,12 +45,12 @@ impl Default for Config {
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct AuthConfig {
     pub(crate) token: String
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct AuthToken {
     token: String,
 }
@@ -103,18 +103,11 @@ pub(crate) fn load_config() -> Config {
 }
 
 fn get_current_context() -> String {
-    let args: Vec<_> = std::env::args().collect();
-    let mut context_current = String::new();
+    let context_current: String = env::args()
+        .filter(|arg| arg.starts_with("--c") || arg.starts_with("--context"))
+        .map(|arg| arg.replace("--context", "").replace("--c", "").replace("=", ""))
+        .collect();
 
-    for arg in args {
-        let path = arg.clone().to_string();
-        if path.starts_with("--c") || path.starts_with("--context") {
-            context_current = arg
-                .replace("--context", "")
-                .replace("--c", "")
-                .replace("=", "");
-        }
-    }
     context_current
 }
 

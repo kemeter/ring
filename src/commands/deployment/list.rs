@@ -1,6 +1,5 @@
-use clap::App;
+use clap::{Command};
 use clap::Arg;
-use clap::SubCommand;
 use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
@@ -8,14 +7,13 @@ use crate::config::config::Config;
 use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("deployment:list")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("deployment:list")
         .arg(
-            Arg::with_name("namespace")
-                .short("n")
+            Arg::new("namespace")
+                .short('n')
                 .long("namespace")
                 .help("restrict only namespace")
-                .takes_value(true)
         )
 }
 
@@ -46,8 +44,9 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut query = format!("{}/deployments", api_url);
-    if args.is_present("namespace") {
-        let namespace = args.value_of("namespace").unwrap();
+
+    if args.contains_id("namespace"){
+        let namespace = args.get_one::<String>("namespace").unwrap();
         query.push_str(&format!("?namespace={}", namespace));
     }
 
@@ -60,13 +59,6 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let deployments_list = value.unwrap();
 
     for deployment in deployments_list {
-        if args.is_present("namespace") {
-            let namespace = args.value_of("namespace").unwrap();
-
-            if namespace != deployment.namespace {
-                continue;
-            }
-        }
 
         deployments.push(
             DeploymentTableItem {

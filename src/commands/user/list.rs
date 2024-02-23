@@ -1,5 +1,4 @@
-use clap::App;
-use clap::SubCommand;
+use clap::{Command};
 use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
@@ -7,8 +6,8 @@ use serde::{Serialize, Deserialize};
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("user:list")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("user:list")
 }
 
 #[derive(Table)]

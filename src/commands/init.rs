@@ -1,12 +1,11 @@
-use clap::App;
-use clap::SubCommand;
+use clap::{Command};
 use clap::ArgMatches;
 use std::fs;
 use rusqlite::Connection;
 use crate::config::config::get_config_dir;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("init")
+pub(crate) fn command_config() -> Command {
+    Command::new("init")
         .name("init")
 }
 

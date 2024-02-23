@@ -1,36 +1,33 @@
-use clap::App;
+use clap::{Command};
 use clap::Arg;
-use clap::SubCommand;
 use clap::ArgMatches;
 use ureq::json;
 
 use crate::config::config::{Config, load_auth_config};
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("user:create")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("user:create")
         .about("create user")
         .arg(
-            Arg::with_name("username")
-                .short("u")
+            Arg::new("username")
+                .short('u')
                 .long("username")
                 .help("Your username")
-                .takes_value(true)
                 .required(true)
         )
         .arg(
-            Arg::with_name("password")
-                .short("p")
+            Arg::new("password")
+                .short('p')
                 .long("password")
                 .help("Your password")
-                .takes_value(true)
                 .required(true)
         )
 }
 
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
-    let username = args.value_of("username");
-    let password = args.value_of("username");
+    let username = args.get_one::<String>("username");
+    let password = args.get_one::<String>("username");
 
     let auth_config = load_auth_config(configuration.name.clone());
 

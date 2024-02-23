@@ -1,21 +1,20 @@
-use clap::App;
+use clap::{Command};
 use clap::Arg;
-use clap::SubCommand;
 use clap::ArgMatches;
 use serde_json::Result;
 use crate::config::config::Config;
 use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
 
-pub(crate) fn command_config<'a, 'b>() -> App<'a, 'b> {
-    SubCommand::with_name("deployment:inspect")
+pub(crate) fn command_config<'a, 'b>() -> Command {
+    Command::new("deployment:inspect")
         .arg(
-            Arg::with_name("id")
+            Arg::new("id")
         )
 }
 
-pub(crate) async fn execute(args: &ArgMatches<'_>, mut configuration: Config) {
-    let id = args.value_of("id").unwrap();
+pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
+    let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 

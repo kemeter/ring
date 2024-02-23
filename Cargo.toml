@@ -17,7 +17,7 @@ log = "0.4.0"
 env_logger = "0.11.2"
 shiplift = { git = "https://github.com/softprops/shiplift" }
 yaml-rust = "0.4"
-clap = "2.33.3"
+clap = "4.5.1"
 clokwerk = "0.4.0"
 chrono = "0.4"
 uuid = { version = "1.4.1", features = ["v4"] }
