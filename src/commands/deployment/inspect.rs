@@ -7,7 +7,8 @@ use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("deployment:inspect")
+    Command::new("inspect")
+        .about("Show information on a deployment")
         .arg(
             Arg::new("id")
         )

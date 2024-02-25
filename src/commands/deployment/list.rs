@@ -8,7 +8,8 @@ use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("deployment:list")
+    Command::new("list")
+        .about("List deployments")
         .arg(
             Arg::new("namespace")
                 .short('n')

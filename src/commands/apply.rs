@@ -30,6 +30,7 @@ struct Deployment {
 pub(crate) fn command_config<'a, 'b>() -> Command {
     Command::new("apply")
         .name("apply")
+        .about("Apply a configuration file")
         .arg(
             Arg::new("file")
                 .short('f')

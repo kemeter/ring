@@ -6,7 +6,7 @@ use crate::config::config::get_config_dir;
 
 pub(crate) fn command_config() -> Command {
     Command::new("init")
-        .name("init")
+        .about("Initialize configuration")
 }
 
 pub(crate) fn init(_args: &ArgMatches, _connection: Connection) {

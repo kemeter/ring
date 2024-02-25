@@ -5,7 +5,7 @@ use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("user:delete")
+    Command::new("delete")
         .about("Delete user")
         .arg(
             Arg::new("id")

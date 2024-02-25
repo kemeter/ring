@@ -6,7 +6,7 @@ use ureq::json;
 use crate::config::config::{Config, load_auth_config};
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("user:create")
+    Command::new("create")
         .about("create user")
         .arg(
             Arg::new("username")

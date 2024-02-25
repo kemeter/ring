@@ -39,11 +39,11 @@ or
 
 2. Start deamon
 
-```cargo run server:start```
+```cargo run server start```
 
 or
 
-```ring server:start```
+```ring server start```
 
 2. Login
 
@@ -70,7 +70,7 @@ Get your token with ``` ring config user-token ```
 
 4. Display deployments
 
-```cargo run deployment:list```
+```cargo run deployment list```
 
 or
 
@@ -78,8 +78,8 @@ or
 
 5. Inspect deployment
 
-```cargo run deployment:inspect <deployment_id>```
+```cargo run deployment inspect <deployment_id>```
 
 or
 
-```ring deployment:inspect <deployment_id>```
+```ring deployment inspect <deployment_id>```

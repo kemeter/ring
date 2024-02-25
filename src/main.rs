@@ -42,24 +42,10 @@ mod database;
 
 use crate::database::get_database_connection;
 
+
 #[tokio::main]
 async fn main() {
     env_logger::init();
-
-    let commands = vec![
-        commands::config::command_config(),
-        commands::init::command_config(),
-        commands::server::command_config(),
-        commands::apply::command_config(),
-        commands::login::command_config(),
-        commands::deployment::list::command_config(),
-        commands::deployment::inspect::command_config(),
-        commands::deployment::delete::command_config(),
-        commands::user::list::command_config(),
-        commands::user::create::command_config(),
-        commands::user::update::command_config(),
-        commands::user::delete::command_config(),
-    ];
 
     let app = Command::new("ring")
         .version("0.1.0")
@@ -72,12 +58,64 @@ async fn main() {
                 .long("context")
                 .short('c')
         )
-      .subcommands(commands);
+        .subcommand(
+            commands::config::command_config(),
+        )
+        .subcommand(
+            commands::init::command_config(),
+        )
+        .subcommand(
+            Command::new("server")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::server::command_config(),
+                )
+        )
+        .subcommand(
+            commands::apply::command_config(),
+        )
+        .subcommand(
+            commands::login::command_config(),
+        )
+        .subcommand(
+            Command::new("deployment")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                // .args(push_args())
+                .subcommand(
+                    commands::deployment::list::command_config(),
+                )
+                .subcommand(
+                    commands::deployment::inspect::command_config(),
+                )
+                .subcommand(
+                    commands::deployment::delete::command_config(),
+                )
+        )
+        .subcommand(
+            Command::new("user")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::user::list::command_config(),
+                )
+                .subcommand(
+                    commands::user::create::command_config(),
+                )
+                .subcommand(
+                    commands::user::update::command_config(),
+                )
+                .subcommand(
+                    commands::user::delete::command_config(),
+                )
+        );
 
     let matches = app.get_matches();
     let subcommand_name = matches.subcommand();
     let storage = get_database_connection();
     let config = config::config::load_config();
+
 
     match subcommand_name {
         Some(("config", sub_matches)) => {
@@ -92,12 +130,18 @@ async fn main() {
                 storage
             );
         }
-        Some(("server:start", sub_matches)) => {
-            commands::server::execute(
-                sub_matches,
-                config,
-                storage
-            ).await
+        Some(("server", sub_matches)) => {
+            let server_command = sub_matches.subcommand().unwrap_or(("start", sub_matches));
+            match server_command {
+                ("start", sub_matches) => {
+                    commands::server::execute(
+                        sub_matches,
+                        config,
+                        storage
+                    ).await
+                }
+                _ => {}
+            }
         }
         Some(("apply", sub_matches)) => {
           commands::apply::apply(
@@ -105,23 +149,29 @@ async fn main() {
               config,
           );
         }
-        Some(("deployment:list", sub_matches)) => {
-            commands::deployment::list::execute(
-                sub_matches,
-                config,
-            );
-        }
-        Some(("deployment:inspect", sub_matches)) => {
-            commands::deployment::inspect::execute(
-                sub_matches,
-                config
-            ).await
-        }
-        Some(("deployment:delete", sub_matches)) => {
-            commands::deployment::delete::execute(
-                sub_matches,
-                config
-            ).await
+        Some(("deployment", sub_matches)) => {
+            let deployment_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match deployment_command {
+                ("list", sub_matches) => {
+                    commands::deployment::list::execute(
+                        sub_matches,
+                        config,
+                    );
+                }
+                ("inspect", sub_matches) => {
+                    commands::deployment::inspect::execute(
+                        sub_matches,
+                        config
+                    ).await
+                }
+                ("delete", sub_matches) => {
+                    commands::deployment::delete::execute(
+                        sub_matches,
+                        config
+                    ).await
+                }
+                _ => {}
+            }
         }
         Some(("login", sub_matches)) => {
             commands::login::execute(
@@ -129,30 +179,37 @@ async fn main() {
                 config,
             );
         }
-        Some(("user:list", sub_matches)) => {
-            commands::user::list::execute(
-                sub_matches,
-                config
-            );
+        Some(("user", sub_matches)) => {
+            let user_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match user_command {
+                ("list", sub_matches) => {
+                    commands::user::list::execute(
+                        sub_matches,
+                        config
+                    );
+                }
+                ("create", sub_matches) => {
+                    commands::user::create::execute(
+                        sub_matches,
+                        config
+                    );
+                }
+                ("update", sub_matches) => {
+                    commands::user::update::execute(
+                        sub_matches,
+                        config
+                    );
+                }
+                ("delete", sub_matches) => {
+                    commands::user::delete::execute(
+                        sub_matches,
+                        config
+                    );
+                }
+                _ => {}
+            }
         }
-        Some(("user:create", sub_matches)) => {
-            commands::user::create::execute(
-                sub_matches,
-                config
-            );
-        }
-        Some(("user:update", sub_matches)) => {
-            commands::user::update::execute(
-                sub_matches,
-                config
-            );
-        }
-        Some(("user:delete", sub_matches)) => {
-            commands::user::delete::execute(
-                sub_matches,
-                config
-            );
-        }
+
         _ => {
             let process_args: Vec<String> = env::args().collect();
             let process_name = process_args[0].as_str().to_owned();

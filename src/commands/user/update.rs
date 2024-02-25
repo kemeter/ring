@@ -9,8 +9,8 @@ use crate::config::config::load_auth_config;
 use crate::api::dto::user::UserOutput;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("user:update")
-        .about("create user")
+    Command::new("update")
+        .about("update user")
         .arg(
             Arg::new("username")
                 .short('u')

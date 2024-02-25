@@ -8,6 +8,7 @@ use toml::de::Error as TomlError;
 pub(crate) fn command_config<'a, 'b>() -> Command {
     Command::new("config")
         .name("config")
+        .about("Print configuration")
         .arg(
             Arg::new("parameter")
                 .required(false)

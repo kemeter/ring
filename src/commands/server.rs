@@ -10,8 +10,7 @@ use crate::scheduler::scheduler::schedule;
 use crate::config::config::Config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("server:start")
-        .name("server:start")
+    Command::new("start")
 }
 
 pub(crate) async fn execute(_args: &ArgMatches, configuration: Config, mut storage: Connection) {
