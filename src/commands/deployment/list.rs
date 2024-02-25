@@ -53,7 +53,8 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
     let response = ureq::get(&*query)
         .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .send_json({});
+        .set("Content-Type", "application/json")
+        .call();
     let response_content = response.unwrap().into_string().unwrap();
 
     let value: Result<Vec<DeploymentDTO>> = serde_json::from_str(&response_content);

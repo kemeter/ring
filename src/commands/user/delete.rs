@@ -20,7 +20,8 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
     let request = ureq::delete(&format!("{}/users/{}", api_url, id))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .send_json({});
+        .set("Content-Type", "application/json")
+        .call();
 
     match request {
         Ok(response) => {

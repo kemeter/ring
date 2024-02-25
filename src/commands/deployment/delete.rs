@@ -23,7 +23,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     for deployment in deployments {
         let request = ureq::delete(&format!("{}/deployments/{}", api_url, deployment))
             .set("Authorization", &format!("Bearer {}", auth_config.token))
-            .send_json({});
+            .set("Content-Type", "application/json")
+            .call();
 
         match request {
             Ok(response) => {

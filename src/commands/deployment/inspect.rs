@@ -21,7 +21,8 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
 
     let response = ureq::get(&format!("{}/deployments/{}", api_url, id))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .send_json({});
+        .set("Content-Type", "application/json")
+        .call();
     let response_content = response.unwrap().into_string().unwrap();
     let value: Result<DeploymentDTO> = serde_json::from_str(&response_content);
     let deployment = value.unwrap();
