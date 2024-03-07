@@ -15,6 +15,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
+use crate::models::deployments::DeploymentPort;
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
@@ -34,6 +35,8 @@ pub(crate) struct DeploymentInput {
     secrets: HashMap<String, String>,
     #[serde(default)]
     volumes: Vec<HashMap<String, String>>,
+    #[serde(default)]
+    ports: Vec<DeploymentPort>
 }
 
 #[derive(Deserialize, Debug)]
@@ -97,7 +100,8 @@ pub(crate) async fn create(
             secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
-            volumes: volumes
+            volumes: volumes,
+            ports: input.ports,
         };
 
         deployments::create(&guard, &deployment);
@@ -128,7 +132,11 @@ mod tests {
                 "runtime": "docker",
                 "name": "nginx",
                 "namespace": "ring",
-                "image": "nginx:latest"
+                "image": "nginx:latest",
+                "ports": [{
+                    "published": 80,
+                    "target": 3030
+                }]
             }))
             .await;
 

@@ -14,6 +14,12 @@ pub(crate) struct DeploymentConfig {
     pub(crate) password: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct DeploymentPort {
+    pub(crate) published: u32,
+    pub(crate) target: u32,
+}
+
 fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
@@ -41,7 +47,6 @@ impl FromSql for DeploymentConfig {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
     pub(crate) id: String,
@@ -61,6 +66,7 @@ pub(crate) struct Deployment {
     #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: String,
+    pub(crate) ports: Vec<DeploymentPort>,
 }
 
 impl Deployment {
@@ -82,7 +88,11 @@ impl Deployment {
             instances: vec![],
             labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
             secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
-            volumes: row.get("volumes")?
+            volumes: row.get("volumes")?,
+            ports: match row.get::<_, Option<String>>("ports") {
+                Ok(Some(p)) => serde_json::from_str(&p).unwrap_or_default(),
+                _ => Vec::new(),
+            },
         })
     }
 }
@@ -102,7 +112,8 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                ports
             FROM deployment
     ");
 
@@ -165,7 +176,8 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
                 labels as labelsjson,
                 secrets,
                 secrets as secretsjson,
-                volumes
+                volumes,
+                ports
             FROM deployment
             WHERE
                 namespace = :namespace
@@ -206,7 +218,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 labels as labelsjson,
                 secrets,
                 secrets as secretsjson,
-                volumes
+                volumes,
+                ports
             FROM deployment
             WHERE id = :id
             "
@@ -232,6 +245,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
         None => "{}".to_string(),
     };
+    let ports = serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
 
     let mut statement = connection.prepare("
             INSERT INTO deployment (
@@ -247,7 +261,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                ports
             ) VALUES (
                 :id,
                 :created_at,
@@ -261,7 +276,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :replicas,
                 :labels,
                 :secrets,
-                :volumes
+                :volumes,
+                :ports
             )"
     ).expect("Could not create deployment");
 
@@ -279,6 +295,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
+        ":ports": ports,
     };
 
     statement.execute(params).expect("Could not create deployment");
