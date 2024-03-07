@@ -2,7 +2,7 @@
 use serde::{Serialize, Deserialize, Serializer};
 use std::collections::HashMap;
 use serde::ser::SerializeStruct;
-use crate::models::deployments::{Deployment, DeploymentConfig};
+use crate::models::deployments::{Deployment, DeploymentConfig, DeploymentPort};
 
 fn serialize_option_deployment_config<S>(
     opt: &Option<DeploymentConfig>,
@@ -33,7 +33,7 @@ pub(crate) struct DeploymentDTO {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) config: Option<DeploymentConfig>,
     pub(crate) replicas: u32,
-    pub(crate) ports: Vec<String>,
+    pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) secrets: HashMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -55,7 +55,7 @@ pub(crate) struct DeploymentOutput {
     #[serde(serialize_with = "serialize_option_deployment_config")]
     pub(crate) config: Option<DeploymentConfig>,
     pub(crate) replicas: u32,
-    pub(crate) ports: Vec<String>,
+    pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
     pub(crate) secrets: HashMap<String, String>,
@@ -80,7 +80,7 @@ impl DeploymentOutput {
             image: deployment.image,
             config: deployment.config,
             replicas: deployment.replicas,
-            ports: [].to_vec(),
+            ports: deployment.ports,
             labels: labels,
             secrets: secrets,
             volumes: volumes,

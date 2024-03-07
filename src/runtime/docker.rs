@@ -159,6 +159,10 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     let v = Vec::from_iter(volumes.iter().map(String::as_str));
     container_options.volumes(v);
 
+    for port in &deployment.ports {
+        container_options.expose(port.target, "tcp", port.published);
+    }
+
     match docker
         .containers()
         .create(&container_options.build())
