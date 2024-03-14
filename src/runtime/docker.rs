@@ -30,15 +30,17 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
         }
     } else {
         let number_instances: usize = config.instances.len();
+        let replicas_expected: usize = config.replicas.try_into().unwrap();
 
-        if number_instances < config.replicas.try_into().unwrap() {
+        if number_instances < replicas_expected {
             info!("create container {}", config.image.clone());
 
             create_container(&mut config, &docker).await
         }
 
-        if number_instances > config.replicas.try_into().unwrap() {
+        if number_instances > replicas_expected {
             let first_container_id = &config.instances[0];
+            info!("remove container {}", first_container_id.clone());
 
             remove_container(docker.clone(), first_container_id.to_string()).await;
         }
