@@ -302,16 +302,15 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
 }
 
 pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {
-    let ids_string: Vec<String> = deleted.iter().map(|id| id.to_string()).collect();
-    let ids = ids_string.join(",");
-
-    let mut statement = connection.prepare("
+    for id in deleted {
+        let mut statement = connection.prepare("
             DELETE FROM deployment
             WHERE
-                id IN(:id)"
-    ).expect("Could not update deployment");
+                id = :id"
+        ).expect("Could not delete deployment");
 
-    statement.execute(named_params!{
-        ":id": ids
-    }).expect("Could not delete deployment");
+        statement.execute(named_params!{
+            ":id": id
+        }).expect("Could not delete deployment");
+    }
 }
