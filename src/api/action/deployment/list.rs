@@ -1,25 +1,60 @@
 use std::collections::HashMap;
-use axum::{
-    extract::{Query},
-    response::IntoResponse,
-    Json,
-};
-use axum::extract::State;
+use axum::{extract::{Query}, response::IntoResponse, Json, async_trait, Error, RequestPartsExt};
+use axum::extract::{FromRequestParts, State};
+use url::Url;
+use http::request::Parts;
+use serde::de::{DeserializeOwned, Expected};
 use serde::Deserialize;
+use toml::to_string;
+use url::form_urlencoded::parse;
 
-use crate::api::server::Db;
+use crate::api::server::{AuthError, Db};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments;
 use crate::runtime::docker;
 use crate::models::users::User;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct QueryParameters {
-    namespace: Option<String>
+    #[serde(default)]
+    namespaces: Vec<String>,
+    #[serde(default)]
+    status: Vec<String>,
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for QueryParameters
+    where
+        S: Send + Sync,
+{
+    type Rejection = AuthError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let request_uri = parts.uri.clone();
+
+        let query = request_uri.query().unwrap_or("");
+        let parsed: Vec<(String, String)> = parse(query.as_bytes()).into_owned().collect();
+
+        let mut status = Vec::new();
+        let mut namespaces = Vec::new();
+
+        for (key, value) in parsed {
+            match key.as_str() {
+                "namespace[]" => namespaces.push(value),
+                "status[]" => status.push(value),
+                _ => {}
+            }
+        }
+
+        Ok(QueryParameters{
+            namespaces,
+            status
+        })
+    }
 }
 
 pub(crate) async fn list(
-    query_parameters: Query<QueryParameters>,
+    query_parameters: QueryParameters,
     State(connexion): State<Db>,
     _user: User
 ) -> impl IntoResponse {
@@ -28,10 +63,14 @@ pub(crate) async fn list(
 
     let list_deployments = {
         let guard = connexion.lock().await;
-        let mut filters = HashMap::new();
+        let mut filters: HashMap<String, Vec<String>> = HashMap::new();
 
-        if query_parameters.namespace.is_some() {
-            filters.insert(String::from("namespace"), query_parameters.namespace.clone().unwrap().to_string());
+        if !query_parameters.namespaces.is_empty() {
+            filters.insert(String::from("namespace"), query_parameters.namespaces);
+        }
+
+        if !query_parameters.status.is_empty() {
+            filters.insert(String::from("status"), query_parameters.status);
         }
 
         deployments::find_all(&guard, filters)

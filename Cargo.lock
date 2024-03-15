@@ -230,6 +230,9 @@ dependencies = [
  "mime",
  "pin-project-lite",
  "serde",
+ "serde_html_form",
+ "serde_json",
+ "serde_path_to_error",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1640,6 +1643,7 @@ dependencies = [
  "tower",
  "tower-http",
  "ureq",
+ "url",
  "uuid",
  "yaml-rust",
 ]
@@ -1778,6 +1782,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.48",
+]
+
+[[package]]
+name = "serde_html_form"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50437e6a58912eecc08865e35ea2e8d365fbb2db0debb1c8bb43bf1faf055f25"
+dependencies = [
+ "form_urlencoded",
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
 ]
 
 [[package]]

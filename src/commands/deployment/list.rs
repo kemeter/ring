@@ -1,4 +1,4 @@
-use clap::{Command};
+use clap::{ArgAction, Command};
 use clap::Arg;
 use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
@@ -15,6 +15,13 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
                 .short('n')
                 .long("namespace")
                 .help("restrict only namespace")
+        )
+        .arg(
+            Arg::new("status")
+                .action(ArgAction::Append)
+                .short('s')
+                .long("status")
+                .help("Filter by status")
         )
 }
 
@@ -45,10 +52,26 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut query = format!("{}/deployments", api_url);
+    let mut params: Vec<String> = Vec::new();
 
     if args.contains_id("namespace"){
-        let namespace = args.get_one::<String>("namespace").unwrap();
-        query.push_str(&format!("?namespace={}", namespace));
+        let namespace = args.get_many::<String>("namespace").unwrap();
+
+        for namespace in namespace {
+            params.push(format!("namespace[]={}", namespace));
+        }
+    }
+
+    if args.contains_id("status"){
+        let statuses = args.get_many::<String>("status").unwrap();
+        for status in statuses {
+            params.push(format!("status[]={}", status));
+        }
+    }
+
+    if !params.is_empty() {
+        query.push('?');
+        query.push_str(&params.join("&"));
     }
 
     let response = ureq::get(&*query)

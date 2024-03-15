@@ -87,7 +87,7 @@ impl Deployment {
     }
 }
 
-pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, String>) -> Vec<Deployment> {
+pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, Vec<String>>) -> Vec<Deployment> {
     let mut query = String::from("
             SELECT
                 id,
@@ -108,14 +108,23 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
-            .keys()
-            .map(|column| format!("{} = ?", column))
+            .iter()
+            .filter(|(_, v)| !v.is_empty()) // Exclure les filtres vides
+            .map(|(column, _)| format!("{} IN(?)", column))
             .collect();
-        query.push_str(" WHERE ");
-        query.push_str(&conditions.join(" AND "));
+
+        if !conditions.is_empty() {
+            query += &format!(" WHERE {}", conditions.join(" AND "));
+        }
     }
 
-    let values: Vec<&dyn rusqlite::ToSql> = filters.values().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let joined_values: Vec<String> = filters
+        .values()
+        .filter(|v| !v.is_empty()) // Exclure les valeurs vides
+        .map(|v| v.join(","))
+        .collect();
+    let values: Vec<&dyn rusqlite::ToSql> = joined_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+
     let mut statement = match connection.prepare(&query) {
         Ok(stmt) => stmt,
         Err(e) => {
