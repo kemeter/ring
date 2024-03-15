@@ -138,19 +138,17 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
         .unwrap();
 }
 
-
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::{env, fs};
     use std::sync::Arc;
     use axum::Router;
     use axum_test::{TestServer};
+    use rusqlite::Connection;
     use serde::Deserialize;
     use serde_json::json;
     use tokio::sync::Mutex;
     use crate::api::server::{AppState, router};
     use crate::config::config::Config;
-    use crate::database::get_database_connection;
 
     #[derive(Debug, Deserialize)]
     struct ResponseBody {
@@ -166,10 +164,8 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn new_test_app() -> Router {
-        let _ = fs::remove_file("ring_test.db");
-        env::set_var("RING_DATABASE_PATH", "ring_test.db");
         let configuration = Config::default();
-        let mut connection = get_database_connection();
+        let mut connection = Connection::open_in_memory().unwrap();
 
         embedded::migrations::runner()
             .run(&mut connection)
