@@ -15,7 +15,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
-use crate::models::users::User;
+
 
 fn default_replicas() -> u32 { 1 }
 

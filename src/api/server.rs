@@ -144,7 +144,7 @@ pub(crate) mod tests {
     use std::{env, fs};
     use std::sync::Arc;
     use axum::Router;
-    use axum_test::{TestResponse, TestServer};
+    use axum_test::{TestServer};
     use serde::Deserialize;
     use serde_json::json;
     use tokio::sync::Mutex;

@@ -11,10 +11,7 @@ pub(crate) fn get_database_connection() -> Connection {
     db_flags.insert(OpenFlags::SQLITE_OPEN_NOFOLLOW);
     db_flags.insert(OpenFlags::SQLITE_OPEN_PRIVATE_CACHE);
 
-    let database_file_path = match env::var_os("RING_DATABASE_PATH") {
-        Some(variable) => variable.into_string().unwrap(),
-        None => String::from("ring.db")
-    };
+    let database_file_path = env::var_os("RING_DATABASE_PATH").unwrap_or_else(|| "ring.db".into());
 
     Connection::open_with_flags(database_file_path, db_flags).expect("Could not test: DB not created")
 }
