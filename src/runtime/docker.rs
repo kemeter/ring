@@ -19,7 +19,16 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
 
     info!("docker runtime search");
 
+    if config.restart_count > 5 && config.status != "deleted" {
+        config.status = "CrashLoopBackOff".to_string();
+        return config;
+    }
+
     config.instances = list_instances(config.id.to_string()).await;
+
+    if config.status == "CrashLoopBackOff" {
+        return config;
+    }
 
     if config.status == "deleted" {
         debug!("{} mark as delete. Remove all instance", config.id.to_string());
@@ -181,7 +190,12 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 
             let _ = docker.containers().get(container.id).start().await;
         },
-        Err(e) => eprintln!("Error: {}", e),
+        Err(e) => {
+            if deployment.status == "pending" {
+                deployment.restart_count += 1;
+            }
+            eprintln!("Error: {}", e)
+        },
     }
 }
 

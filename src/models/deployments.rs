@@ -47,6 +47,7 @@ pub(crate) struct Deployment {
     pub(crate) id: String,
     pub(crate) created_at: String,
     pub(crate) status: String,
+    pub(crate) restart_count: u32,
     pub(crate) namespace: String,
     pub(crate) name: String,
     pub(crate) image: String,
@@ -69,6 +70,7 @@ impl Deployment {
             id: row.get("id")?,
             created_at: row.get("created_at")?,
             status: row.get("status")?,
+            restart_count: row.get("restart_count")?,
             namespace: row.get("namespace")?,
             name: row.get("name")?,
             image: row.get("image")?,
@@ -93,6 +95,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -164,6 +167,7 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -204,6 +208,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -247,6 +252,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 id,
                 created_at,
                 status,
+                restart_count,
                 namespace,
                 name,
                 image,
@@ -261,6 +267,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :id,
                 :created_at,
                 :status,
+                :restart_count,
                 :namespace,
                 :name,
                 :image,
@@ -278,6 +285,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":id": deployment.id,
         ":created_at": deployment.created_at,
         ":status": "running",
+        ":restart_count": deployment.restart_count,
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
@@ -299,14 +307,16 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
     let mut statement = connection.prepare("
             UPDATE deployment
             SET
-                status = :status
+                status = :status,
+                restart_count = :restart_count
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
 
     statement.execute(named_params!{
         ":id": deployment.id,
-        ":status": deployment.status
+        ":status": deployment.status,
+        ":restart_count": deployment.restart_count
     }).expect("Could not update deployment");
 }
 

@@ -16,7 +16,6 @@ use crate::models::deployments;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
 
-
 fn default_replicas() -> u32 { 1 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -70,6 +69,8 @@ pub(crate) async fn create(
             deployment.id = Uuid::new_v4().to_string();
             deployment.labels = input.labels;
             deployment.secrets = input.secrets;
+            deployment.restart_count = 0;
+            deployment.status = "pending".to_string();
             deployments::create(&guard, &deployment);
         }
 
@@ -97,6 +98,7 @@ pub(crate) async fn create(
             secrets: input.secrets,
             replicas: input.replicas,
             instances: [].to_vec(),
+            restart_count: 0,
             volumes: volumes
         };
 
