@@ -113,7 +113,6 @@ async fn main() {
 
     let matches = app.get_matches();
     let subcommand_name = matches.subcommand();
-    let storage = get_database_connection();
     let config = config::config::load_config();
 
 
@@ -125,12 +124,10 @@ async fn main() {
             );
         }
         Some(("init", sub_matches)) => {
-            commands::init::init(
-                sub_matches,
-                storage
-            );
+            commands::init::init(sub_matches);
         }
         Some(("server", sub_matches)) => {
+            let storage = get_database_connection();
             let server_command = sub_matches.subcommand().unwrap_or(("start", sub_matches));
             match server_command {
                 ("start", sub_matches) => {
