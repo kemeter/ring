@@ -1628,6 +1628,7 @@ dependencies = [
 name = "ring-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-debug",
  "axum-extra",

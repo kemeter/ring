@@ -23,6 +23,7 @@ mod scheduler {
 
 mod runtime {
   pub(crate) mod docker;
+  pub(crate) mod runtime;
 }
 
 mod models {

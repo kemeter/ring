@@ -1,4 +1,4 @@
-use shiplift::{ContainerOptions, Docker, PullOptions, NetworkCreateOptions, ContainerConnectionOptions, RegistryAuth};
+use shiplift::{ContainerOptions, Docker, PullOptions, NetworkCreateOptions, ContainerConnectionOptions, RegistryAuth, LogsOptions};
 use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,6 +7,7 @@ use uuid::Uuid;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::iter::FromIterator;
+use shiplift::tty::TtyChunk;
 
 struct DockerImage {
     name: String,
@@ -239,7 +240,7 @@ async fn create_network(docker: Docker, network_name: String) {
     }
 }
 
-pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
+pub(crate) async fn list_instances(id: String) -> Vec<String> {
     let docker = Docker::new();
     let mut instances: Vec<String> = Vec::new();
 
@@ -261,6 +262,37 @@ pub(crate) async fn list_instances(id: String) -> Vec<std::string::String> {
     }
 
     return instances;
+}
+
+pub(crate) async fn logs(deployment: String) -> Vec<String> {
+    let docker = Docker::new();
+
+    let mut logs_stream = docker
+        .containers()
+        .get(&deployment)
+        .logs(&LogsOptions::builder().stdout(true).stderr(true).build());
+
+    let mut logs = vec![];
+
+    while let Some(log_result) = logs_stream.next().await {
+        match log_result {
+            Ok(chunk) => {
+                logs.push(print_chunk(chunk).replace("\n", ""))
+            },
+            Err(e) => eprintln!("Error: {}", e),
+        }
+    }
+
+    return logs;
+}
+
+
+fn print_chunk(chunk: TtyChunk) -> String {
+    match chunk {
+        TtyChunk::StdOut(bytes) => format!("{}", std::str::from_utf8(&bytes).unwrap()),
+        TtyChunk::StdErr(bytes) => format!("{}", std::str::from_utf8(&bytes).unwrap()),
+        TtyChunk::StdIn(_) => unreachable!(),
+    }
 }
 
 fn tiny_id()-> String {
