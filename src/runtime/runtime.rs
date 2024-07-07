@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::models::deployments::Deployment;
 use crate::runtime::docker;
 use async_trait::async_trait;
