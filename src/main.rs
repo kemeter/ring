@@ -93,6 +93,9 @@ async fn main() {
                 .subcommand(
                     commands::deployment::delete::command_config(),
                 )
+                .subcommand(
+                    commands::deployment::logs::command_config(),
+                )
         )
         .subcommand(
             Command::new("user")
@@ -164,6 +167,13 @@ async fn main() {
                 }
                 ("delete", sub_matches) => {
                     commands::deployment::delete::execute(
+                        sub_matches,
+                        config
+                    ).await
+                }
+
+                ("logs", sub_matches) => {
+                    commands::deployment::logs::execute(
                         sub_matches,
                         config
                     ).await

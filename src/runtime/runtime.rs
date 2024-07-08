@@ -25,10 +25,10 @@ impl Runtime {
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub(crate) struct Log {
-    instance: String,
-    message: String,
-    level: String,
-    timestamp: Option<String>
+    pub(crate) instance: String,
+    pub(crate) message: String,
+    pub(crate) level: String,
+    pub(crate) timestamp: Option<String>
 }
 
 fn classify_log(log: String) -> String {
