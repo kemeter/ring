@@ -5,7 +5,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub struct Runtime {
-    deployment: Deployment,
 }
 
 #[async_trait]

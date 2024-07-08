@@ -203,10 +203,10 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
 async fn remove_container(docker: Docker, container_id: String) {
     match docker.containers().get(&container_id).stop(Some(Duration::from_millis(10))).await {
         Ok(_info) => {
-            println!("{:?}", _info);
+            debug!("{:?}", _info);
         },
         Err(_e) => {
-            println!("{:?}", _e);
+            debug!("{:?}", _e);
         },
     };
 
@@ -233,8 +233,8 @@ async fn create_network(docker: Docker, network_name: String) {
                 )
                 .await
             {
-                Ok(info) => println!("{:?}", info),
-                Err(_e) => eprintln!("Error: {}", e),
+                Ok(info) => debug!("{:?}", info),
+                Err(_e) => debug!("Error: {}", e),
             }
         },
     }
@@ -258,7 +258,7 @@ pub(crate) async fn list_instances(id: String) -> Vec<String> {
                 }
             }
         }
-        Err(e) => eprintln!("Error: {}", e),
+        Err(e) => debug!("Error: {}", e),
     }
 
     return instances;
@@ -279,7 +279,7 @@ pub(crate) async fn logs(deployment: String) -> Vec<String> {
             Ok(chunk) => {
                 logs.push(print_chunk(chunk).replace("\n", ""))
             },
-            Err(e) => eprintln!("Error: {}", e),
+            Err(e) => debug!("Error: {}", e),
         }
     }
 
