@@ -33,6 +33,7 @@ pub(crate) struct DeploymentDTO {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) config: Option<DeploymentConfig>,
     pub(crate) replicas: u32,
+    pub(crate) restart_count: u32,
     pub(crate) ports: Vec<String>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) secrets: HashMap<String, String>,

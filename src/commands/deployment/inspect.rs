@@ -32,6 +32,7 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
     println!("Kind: {}", deployment.kind);
     println!("Image: {}", deployment.image);
     println!("Replicas: {}", deployment.replicas);
+    println!("Restart count: {}", deployment.restart_count);
     println!("Created AT: {}", deployment.created_at);
 
     println!("Labels:");

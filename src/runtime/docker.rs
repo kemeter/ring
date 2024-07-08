@@ -20,7 +20,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
 
     info!("docker runtime search");
 
-    if config.restart_count > 5 && config.status != "deleted" {
+    if config.restart_count >= 5 && config.status != "deleted" {
         config.status = "CrashLoopBackOff".to_string();
         return config;
     }
@@ -43,7 +43,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
         let replicas_expected: usize = config.replicas.try_into().unwrap();
 
         if number_instances < replicas_expected {
-            info!("create container {}", config.image.clone());
+            debug!("Starting creating container process {}", config.image.clone());
 
             create_container(&mut config, &docker).await
         }
@@ -90,7 +90,7 @@ async fn pull_image(docker: Docker, image_config: DockerImage) {
             while let Some(pull_result) = stream.next().await {
                 match pull_result {
                     Ok(_output) => { },
-                    Err(e) => eprintln!("Docker image pull error : {}", e),
+                    Err(e) => error!("Docker image pull error : {}", e),
                 }
             }
         },
@@ -192,7 +192,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
             let _ = docker.containers().get(container.id).start().await;
         },
         Err(e) => {
-            if deployment.status == "pending" {
+            if deployment.status == "pending" || deployment.status == "creating" {
                 deployment.restart_count += 1;
             }
             eprintln!("Error: {}", e)

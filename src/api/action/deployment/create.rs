@@ -70,7 +70,7 @@ pub(crate) async fn create(
             deployment.labels = input.labels;
             deployment.secrets = input.secrets;
             deployment.restart_count = 0;
-            deployment.status = "pending".to_string();
+            deployment.status = "creating".to_string();
             deployments::create(&guard, &deployment);
         }
 
@@ -92,7 +92,7 @@ pub(crate) async fn create(
             kind: String::from("worker"),
             image: input.image.clone(),
             config: input.config.clone(),
-            status: "running".to_string(),
+            status: "creating".to_string(),
             created_at: utc.to_string(),
             labels: input.labels,
             secrets: input.secrets,

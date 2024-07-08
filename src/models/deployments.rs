@@ -284,7 +284,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
     let params = named_params!{
         ":id": deployment.id,
         ":created_at": deployment.created_at,
-        ":status": "running",
+        ":status": deployment.status,
         ":restart_count": deployment.restart_count,
         ":namespace": deployment.namespace,
         ":name": deployment.name,
