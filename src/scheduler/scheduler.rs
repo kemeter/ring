@@ -14,6 +14,11 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     loop {
         let list_deployments =  {
             let guard = storage.lock().await;
+            let mut filters = HashMap::new();
+            filters.insert(String::from("status"), vec![
+                String::from("creating"),
+                String::from("running")
+            ]);
             deployments::find_all(&guard, HashMap::new())
         };
 
