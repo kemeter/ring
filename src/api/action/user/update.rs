@@ -9,6 +9,7 @@ use axum::extract::State;
 
 use crate::api::server::Db;
 use crate::models::users as users_model;
+use crate::models::users::User;
 
 use crate::config::config::{Config};
 
@@ -16,6 +17,7 @@ pub(crate) async fn update(
     State(connexion): State<Db>,
     State(configuration): State<Config>,
     Path(id): Path<String>,
+    _user: User,
     Json(input): Json<UserInput>,
 ) -> impl IntoResponse {
 

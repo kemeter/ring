@@ -9,9 +9,11 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::runtime::runtime::Runtime;
+use crate::models::users::User;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
+    _user: User,
     State(connexion): State<Db>,
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;

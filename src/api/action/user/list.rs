@@ -7,9 +7,11 @@ use axum::extract::State;
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use crate::api::dto::user::UserOutput;
+use crate::models::users::User;
 
 pub(crate) async fn list(
     State(connexion): State<Db>,
+    _user: User
 ) -> impl IntoResponse {
 
     let mut users: Vec<UserOutput> = Vec::new();

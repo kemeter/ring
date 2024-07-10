@@ -15,6 +15,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
+use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
 
@@ -43,6 +44,7 @@ pub(crate) struct QueryParameters {
 pub(crate) async fn create(
     query_parameters: Query<QueryParameters>,
     State(connexion): State<Db>,
+    _user: User,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
     let mut filters = Vec::new();

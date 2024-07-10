@@ -8,12 +8,14 @@ use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
 use crate::models::users as users_model;
+use crate::models::users::User;
 use crate::api::dto::user::UserOutput;
 use crate::config::config::{Config};
 
 pub(crate) async fn create(
     State(connexion): State<Db>,
     State(configuration): State<Config>,
+    _user: User,
     Json(input): Json<UserInput>,
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;
