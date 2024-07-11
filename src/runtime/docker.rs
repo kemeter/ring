@@ -18,8 +18,6 @@ struct DockerImage {
 pub(crate) async fn apply(mut config: Deployment) -> Deployment {
     let docker = Docker::new();
 
-    info!("docker runtime search");
-
     if config.restart_count >= 5 && config.status != "deleted" {
         config.status = "CrashLoopBackOff".to_string();
         return config;
