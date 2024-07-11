@@ -10,6 +10,7 @@ use axum::{
 
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
+use validator::{Validate, ValidationError};
 
 use crate::api::server::Db;
 use crate::models::deployments;
@@ -19,9 +20,17 @@ use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
+    match runtime {
+        "docker"  => Ok(()),
+        _ => Err(ValidationError::new("invalid runtime values use [docker]")),
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct DeploymentInput {
     name: String,
+    #[validate(custom = "validate_runtime")]
     runtime: String,
     namespace: String,
     image: String,
@@ -41,6 +50,11 @@ pub(crate) struct QueryParameters {
     force: Option<bool>
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Message {
+    message: String
+}
+
 pub(crate) async fn create(
     query_parameters: Query<QueryParameters>,
     State(connexion): State<Db>,
@@ -55,61 +69,70 @@ pub(crate) async fn create(
     let option = deployments::find_one_by_filters(&guard, filters);
     let config = option.as_ref().unwrap();
 
-    // deployment found
-    if config.is_some() {
-        info!("Found deployment");
-        let mut deployment = config.clone().unwrap();
+    match input.validate() {
+        Ok(()) => {
+            // deployment found
+            if config.is_some() {
+                info!("Found deployment");
+                let mut deployment = config.clone().unwrap();
 
-        //@todo: implement reel deployment diff
-        if input.image.to_string() != deployment.image || query_parameters.force.is_some() {
-            info!("force update");
+                //@todo: implement reel deployment diff
+                if input.image.to_string() != deployment.image || query_parameters.force.is_some() {
+                    info!("force update");
 
-            deployment.status = "deleted".to_string();
-            deployments::update(&guard, &deployment);
+                    deployment.status = "deleted".to_string();
+                    deployments::update(&guard, &deployment);
 
-            deployment.image = input.image.clone();
-            deployment.id = Uuid::new_v4().to_string();
-            deployment.labels = input.labels;
-            deployment.secrets = input.secrets;
-            deployment.restart_count = 0;
-            deployment.status = "creating".to_string();
-            deployments::create(&guard, &deployment);
+                    deployment.image = input.image.clone();
+                    deployment.id = Uuid::new_v4().to_string();
+                    deployment.labels = input.labels;
+                    deployment.secrets = input.secrets;
+                    deployment.restart_count = 0;
+                    deployment.status = "creating".to_string();
+                    deployments::create(&guard, &deployment);
+                }
+
+                let deployment_output = DeploymentOutput::from_to_model(deployment);
+
+                (StatusCode::CREATED, Json(deployment_output)).into_response()
+
+            }  else {
+                info!("Deployment not found, create a new one");
+
+                let utc: DateTime<Utc> = Utc::now();
+                let volumes = serde_json::to_string(&input.volumes).unwrap();
+
+                let deployment = deployments::Deployment {
+                    id: Uuid::new_v4().to_string(),
+                    name: input.name.clone(),
+                    runtime: input.runtime.clone(),
+                    namespace: input.namespace.clone(),
+                    kind: String::from("worker"),
+                    image: input.image.clone(),
+                    config: input.config.clone(),
+                    status: "creating".to_string(),
+                    created_at: utc.to_string(),
+                    labels: input.labels,
+                    secrets: input.secrets,
+                    replicas: input.replicas,
+                    instances: [].to_vec(),
+                    restart_count: 0,
+                    volumes: volumes
+                };
+
+                deployments::create(&guard, &deployment);
+
+                let deployment_output = DeploymentOutput::from_to_model(deployment);
+
+                (StatusCode::CREATED, Json(deployment_output)).into_response()
+            }
         }
-
-        let deployment_output = DeploymentOutput::from_to_model(deployment);
-
-        (StatusCode::CREATED, Json(deployment_output))
-
-    }  else {
-        info!("Deployment not found, create a new one");
-
-        let utc: DateTime<Utc> = Utc::now();
-        let volumes = serde_json::to_string(&input.volumes).unwrap();
-
-        let deployment = deployments::Deployment {
-            id: Uuid::new_v4().to_string(),
-            name: input.name.clone(),
-            runtime: input.runtime.clone(),
-            namespace: input.namespace.clone(),
-            kind: String::from("worker"),
-            image: input.image.clone(),
-            config: input.config.clone(),
-            status: "creating".to_string(),
-            created_at: utc.to_string(),
-            labels: input.labels,
-            secrets: input.secrets,
-            replicas: input.replicas,
-            instances: [].to_vec(),
-            restart_count: 0,
-            volumes: volumes
-        };
-
-        deployments::create(&guard, &deployment);
-
-        let deployment_output = DeploymentOutput::from_to_model(deployment);
-
-        return (StatusCode::CREATED, Json(deployment_output));
+        Err(e) => {
+            let message = Message { message: e.to_string() };
+            (StatusCode::BAD_REQUEST, Json(message)).into_response()
+        }
     }
+
 }
 
 #[cfg(test)]
@@ -118,6 +141,44 @@ mod tests {
     use axum_test::{TestResponse, TestServer};
     use serde_json::json;
     use crate::api::server::tests::{login, new_test_app};
+
+    #[tokio::test]
+    async fn create_with_invalid_runtime() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "runtime": "null",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_with_without_auth() {
+        let app = new_test_app();
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .json(&json!({
+                "runtime": "docker",
+                "name": "coucou",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
 
     #[tokio::test]
     async fn create() {
