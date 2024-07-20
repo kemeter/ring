@@ -183,14 +183,12 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
             WHERE
                 namespace = :namespace
                 AND name = :name
-                AND status = :status
             "
     ).expect("Could not fetch deployment");
 
     let mut rows = statement.query_map(named_params!{
         ":namespace": filters.get(0).unwrap_or(&String::from("")),
         ":name": filters.get(1).unwrap_or(&String::from("")),
-        ":status": "running"
     }, |row| {
         Deployment::from_row(row)
     })?;
