@@ -29,6 +29,8 @@ use crate::api::action::user::me::me as user_current;
 use crate::api::action::user::update::update as user_update;
 use crate::api::action::user::delete::delete as user_delete;
 
+use crate::api::action::healthz::healthz;
+
 use crate::models::users::User;
 use crate::models::users as users_model;
 use crate::database::get_database_connection;
@@ -103,6 +105,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/users/:id", put(user_update))
         .route("/users/:id", delete(user_delete))
         .route("/users/me", get(user_current))
+        .route("/healthz", get(healthz))
 
         .with_state(state)
         .layer(
