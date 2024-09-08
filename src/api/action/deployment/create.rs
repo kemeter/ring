@@ -112,6 +112,7 @@ pub(crate) async fn create(
                     config: input.config.clone(),
                     status: "creating".to_string(),
                     created_at: utc.to_string(),
+                    updated_at: Option::None,
                     labels: input.labels,
                     secrets: input.secrets,
                     replicas: input.replicas,

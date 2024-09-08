@@ -176,6 +176,8 @@ pub(crate) mod tests {
             .run(&mut connection)
             .expect("Could not execute database migrations.");
 
+        load_fixtures(&mut connection);
+
         let state = AppState {
             connexion: Arc::new(Mutex::new(connection)),
             configuration,
@@ -194,6 +196,11 @@ pub(crate) mod tests {
             }))
             .await;
 
-        return response.json::<ResponseBody>().token;
+        response.json::<ResponseBody>().token
+    }
+
+    fn load_fixtures(connexion: &mut Connection) {
+        connexion.execute("INSERT INTO user (id, created_at, status, username, password, token) VALUES ('5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47', 'now()', 'active', 'admin', 'admin', 'token')", []).unwrap();
+        connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('658c0199-85a2-49da-86d6-1ecd2e427118', 'now()', 'active', 'default', 'nginx', 'nginx', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
     }
 }

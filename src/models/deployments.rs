@@ -46,6 +46,7 @@ impl FromSql for DeploymentConfig {
 pub(crate) struct Deployment {
     pub(crate) id: String,
     pub(crate) created_at: String,
+    pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
     pub(crate) restart_count: u32,
     pub(crate) namespace: String,
@@ -69,6 +70,7 @@ impl Deployment {
         Ok(Deployment {
             id: row.get("id")?,
             created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
             status: row.get("status")?,
             restart_count: row.get("restart_count")?,
             namespace: row.get("namespace")?,
@@ -94,6 +96,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
             SELECT
                 id,
                 created_at,
+                updated_at,
                 status,
                 restart_count,
                 namespace,
@@ -166,6 +169,7 @@ pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>)
             SELECT
                 id,
                 created_at,
+                updated_at,
                 status,
                 restart_count,
                 namespace,
@@ -205,6 +209,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
             SELECT
                 id,
                 created_at,
+                updated_at,
                 status,
                 restart_count,
                 namespace,

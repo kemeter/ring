@@ -47,6 +47,7 @@ pub(crate) struct DeploymentDTO {
 pub(crate) struct DeploymentOutput {
     pub(crate) id: String,
     pub(crate) created_at: String,
+    pub(crate) updated_at: String,
     pub(crate) status: String,
     pub(crate) restart_count: u32,
     pub(crate) name: String,
@@ -74,6 +75,7 @@ impl DeploymentOutput {
         return DeploymentOutput {
             id: deployment.id,
             created_at: deployment.created_at,
+            updated_at: deployment.updated_at.unwrap_or("".to_string()),
             status: deployment.status,
             restart_count: deployment.restart_count,
             name: deployment.name,

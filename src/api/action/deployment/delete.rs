@@ -33,3 +33,35 @@ pub(crate) async fn delete(
         }
     }
 }
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use axum_test::{TestResponse, TestServer};
+    use crate::api::server::tests::{login, new_test_app};
+
+    #[tokio::test]
+    async fn delete() {
+        let app = new_test_app();
+
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .delete(&"/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+
+        let response: TestResponse = server
+            .get(&"/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let deployment = response.json::<serde_json::Value>();
+
+        assert_eq!(deployment["status"], "deleted");
+    }
+}

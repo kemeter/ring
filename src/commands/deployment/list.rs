@@ -4,7 +4,7 @@ use clap::ArgMatches;
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use serde_json::Result;
 use crate::config::config::Config;
-use crate::api::dto::deployment::DeploymentDTO;
+use crate::api::dto::deployment::{DeploymentOutput};
 use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
@@ -31,6 +31,8 @@ struct DeploymentTableItem {
     id: String,
     #[table(title = "Created at")]
     created_at: String,
+    #[table(title = "Updated at")]
+    updated_at: String,
     #[table(title = "Namespace")]
     namespace: String,
     #[table(title = "Name")]
@@ -80,7 +82,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         .call();
     let response_content = response.unwrap().into_string().unwrap();
 
-    let value: Result<Vec<DeploymentDTO>> = serde_json::from_str(&response_content);
+    let value: Result<Vec<DeploymentOutput>> = serde_json::from_str(&response_content);
     let deployments_list = value.unwrap();
 
     for deployment in deployments_list {
@@ -89,6 +91,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
             DeploymentTableItem {
                 id: deployment.id,
                 created_at: deployment.created_at,
+                updated_at: deployment.updated_at,
                 namespace: deployment.namespace,
                 name: deployment.name,
                 image: deployment.image,
