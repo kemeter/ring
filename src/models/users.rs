@@ -17,7 +17,6 @@ pub(crate) struct User {
     pub(crate) password: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) token: String,
-    #[serde(skip_deserializing)]
     #[serde(skip_serializing)]
     pub(crate) login_at: String
 }
