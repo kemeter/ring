@@ -13,21 +13,25 @@ pub(crate) async fn login(
     State(connexion): State<Db>,
     Json(input): Json<LoginInput>
 ) -> impl IntoResponse {
-    debug!("Login with {:?}", input.username);
-    let guard = connexion.lock().await;
+    debug!("Login attempt");
 
-    let option = users_model::find_by_username(&guard, &input.username);
+    let option = {
+        let guard = connexion.lock().await;
+        users_model::find_by_username(&guard, &input.username)
+    };
 
     match option {
         Ok(Some(mut user)) => {
-            let matches = argon2::verify_encoded(&user.password, input.password.as_bytes()).unwrap();
-            if !matches {
-                let output = HttpResponse {
-                    errors: vec!["Bad identifiers".to_string()],
-                    token: "".to_string()
-                };
+            let matches = match argon2::verify_encoded(&user.password, input.password.as_bytes()) {
+                Ok(m) => m,
+                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(HttpResponse {
+                    errors: vec!["Internal server error".to_string()],
+                    token: "".to_string(),
+                })),
+            };
 
-                return (StatusCode::BAD_REQUEST, Json(output));
+            if !matches {
+                return error_response("Invalid credentials");
             }
 
             if user.token.is_empty() {
@@ -36,32 +40,27 @@ pub(crate) async fn login(
 
             let output = HttpResponse {
                 errors: vec![],
-                token: user.token.to_string()
+                token: user.token.clone(),
             };
 
-            users_model::login(&guard, user);
+            {
+                let guard = connexion.lock().await;
+                users_model::login(&guard, user);
+            }
 
             (StatusCode::OK, Json(output))
         }
-        Ok(None) => {
-            let output = HttpResponse {
-                errors: vec!["Bad identifiers".to_string()],
-                token: "".to_string()
-            };
-
-            return (StatusCode::BAD_REQUEST, Json(output));
-        }
-        Err(_) => {
-
-            //@todo fix me
-            let output = HttpResponse {
-                errors: vec!["Bad identifiers".to_string()],
-                token: "".to_string()
-            };
-
-            return (StatusCode::BAD_REQUEST, Json(output));
-        }
+        Ok(None) => error_response("Invalid credentials"),
+        Err(_) => error_response("Internal server error"),
     }
+}
+
+fn error_response(message: &str) -> (StatusCode, Json<HttpResponse>) {
+    let output = HttpResponse {
+        errors: vec![message.to_string()],
+        token: "".to_string(),
+    };
+    (StatusCode::BAD_REQUEST, Json(output))
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -123,6 +122,6 @@ mod tests {
             .await;
 
         let response_body: ErrorResponse = response.json::<ErrorResponse>();
-        assert!(response_body.errors.contains(&"Bad identifiers".to_string()));
+        assert!(response_body.errors.contains(&"Invalid credentials".to_string()));
     }
 }
