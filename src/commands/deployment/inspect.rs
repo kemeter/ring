@@ -1,6 +1,7 @@
 use clap::{Command};
 use clap::Arg;
 use clap::ArgMatches;
+use cli_table::{print_stdout, Table, WithTitle};
 use serde_json::Result;
 use crate::config::config::Config;
 use crate::api::dto::deployment::DeploymentDTO;
@@ -12,6 +13,14 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         .arg(
             Arg::new("id")
         )
+}
+
+#[derive(Table)]
+struct VolumeTable {
+    source: String,
+    destination: String,
+    driver: String,
+    permission: String,
 }
 
 pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
@@ -49,4 +58,18 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
     for secret in deployment.secrets {
         println!("  {:?}: {:?}", secret.0, secret.1)
     }
+
+    let mut volumes = vec![];
+
+    for volume in deployment.volumes {
+        volumes.push(VolumeTable {
+            source: volume.source,
+            destination: volume.destination,
+            driver: volume.driver,
+            permission: volume.permission,
+        });
+
+    }
+
+    print_stdout(volumes.with_title()).expect("");
 }

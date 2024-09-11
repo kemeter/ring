@@ -200,4 +200,39 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
+
+    #[tokio::test]
+    async fn create_with_volumes() {
+        let app = new_test_app();
+        let token = login(app.clone(), "john.doe", "john.doe").await;
+        dbg!(token.clone());
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    },
+                    {
+                        "source": "toto",
+                        "destination": "/opt/toto",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
 }
