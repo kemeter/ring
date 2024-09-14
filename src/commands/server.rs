@@ -14,9 +14,9 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
 }
 
 pub(crate) async fn execute(_args: &ArgMatches, configuration: Config, mut storage: Connection) {
-    embedded::migrations::runner()
+/*    embedded::migrations::runner()
         .run(&mut storage)
-        .expect("Could not execute database migrations.");
+        .expect("Could not execute database migrations.");*/
 
     let connection = Arc::new(Mutex::new(storage));
     let api_server_handler = task::spawn(ApiServer::start(Arc::clone(&connection), configuration));
@@ -26,6 +26,6 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config, mut stora
     let _ = scheduler_handler.await;
 }
 
-mod embedded {
+/*mod embedded {
     refinery::embed_migrations!("src/migrations");
-}
+}*/

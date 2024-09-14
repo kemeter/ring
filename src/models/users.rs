@@ -4,9 +4,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::MutexGuard;
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
+use sqlx::{Pool, Sqlite};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(sqlx::FromRow)]
 pub(crate) struct User {
     pub(crate) id: String,
     pub(crate) created_at: String,
@@ -63,17 +65,13 @@ pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) {
     }).expect("Could not update user");
 }
 
-pub(crate) fn find_by_token(connection: &Connection, token: &str) -> Result<Option<User>, serde_rusqlite::Error> {
+pub(crate) async fn find_by_token(pool: Pool<Sqlite>, token: &str) -> Result<User, sqlx::Error> {
+    let recs = sqlx::query_as::<_, User>("SELECT * FROM user WHERE token = ?")
+        .bind(token)
+        .fetch_one(&pool)
+        .await;
 
-    let mut statement = connection.prepare("SELECT * FROM user WHERE token = :token").unwrap();
-    let mut rows = statement.query(named_params!{
-        ":token": token
-    }).unwrap();
-
-    let mut ref_rows = from_rows_ref::<User>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
+    recs
 }
 
 pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {

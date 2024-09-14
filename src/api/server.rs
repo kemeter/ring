@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::Connection as RusqliteConnection;
 use log::info;
 use std::sync::Arc;
 use std::{time::Duration};
@@ -33,9 +33,11 @@ use crate::api::action::healthz::healthz;
 
 use crate::models::users::User;
 use crate::models::users as users_model;
-use crate::database::get_database_connection;
+use crate::database::{get_database_connection, init_database_connection};
 
-pub(crate) type Db = Arc<Mutex<Connection>>;
+use sqlx::{Connection, SqlitePool};
+
+pub(crate) type Db = Arc<Mutex<RusqliteConnection>>;
 
 #[async_trait]
 impl<S> FromRequestParts<S> for User
@@ -50,18 +52,17 @@ impl<S> FromRequestParts<S> for User
             .await
             .map_err(|_| AuthError::InvalidToken)?;
 
-        let storage = get_database_connection();
+        let storage = init_database_connection().await;
         let token = bearer.token();
 
-        let option = users_model::find_by_token(&storage, token);
-        let config = option.as_ref().unwrap();
-
-        if config.is_some() {
-            let user = config.as_ref().unwrap();
-            Ok(user.clone())
-        }
-        else {
-            Err(AuthError::InvalidToken)
+        let user= users_model::find_by_token(storage, token);
+        match user.await {
+            Ok(user) => {
+                Ok(user)
+            },
+            Err(_) => {
+                Err(AuthError::InvalidToken)
+            }
         }
     }
 }
@@ -91,7 +92,7 @@ impl IntoResponse for AuthError {
 
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
-    pub(crate) connexion: Arc<Mutex<Connection>>,
+    pub(crate) connexion: Arc<Mutex<RusqliteConnection>>,
     pub(crate) configuration: Config,
 }
 
@@ -125,7 +126,7 @@ pub(crate) fn router(state: AppState) -> Router {
         )
 }
 
-pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
+pub(crate) async fn start(storage: Arc<Mutex<RusqliteConnection>>, mut configuration: Config)
 {
     info!("Starting server on {}", configuration.get_api_url());
 
@@ -164,18 +165,18 @@ pub(crate) mod tests {
     pub(crate) struct ErrorResponse {
         pub errors: Vec<String>
     }
-    mod embedded {
+/*    mod embedded {
         refinery::embed_migrations!("src/migrations");
-    }
+    }*/
 
     pub(crate) fn new_test_app() -> Router {
         let configuration = Config::default();
         let mut connection = Connection::open_in_memory().unwrap();
 
-        embedded::migrations::runner()
+/*        embedded::migrations::runner()
             .run(&mut connection)
             .expect("Could not execute database migrations.");
-
+*/
         load_fixtures(&mut connection);
 
         let state = AppState {
