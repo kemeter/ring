@@ -54,7 +54,7 @@ pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) {
         UPDATE user
         SET
             token = :token,
-            login_at = date('now')
+            login_at = datetime()
         WHERE
             id = :id"
     ).expect("Could not update user");
@@ -138,18 +138,14 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
                 status,
                 username,
                 password,
-                token,
-                updated_at,
-                login_at
+                token
             ) VALUES (
                 :id,
-                date('now'),
+                datetime(),
                 :status,
                 :username,
                 :password,
-                :token,
-                date('now'),
-                date('now')
+                :token
             )"
     ).expect("Could not create deployment");
 
@@ -168,7 +164,7 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
             SET
                 username = :username,
                 password = :password,
-                updated_at = date('now')
+                updated_at = datetime()
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
