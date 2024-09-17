@@ -40,9 +40,9 @@ mod config {
 }
 
 mod database;
+mod serializer;
 
 use crate::database::get_database_connection;
-
 
 #[tokio::main]
 async fn main() {

@@ -6,19 +6,21 @@ use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
 use uuid::Uuid;
 
+use crate::serializer::deserialize_null_default;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct User {
     pub(crate) id: String,
     pub(crate) created_at: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) updated_at: String,
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
     pub(crate) username: String,
     pub(crate) password: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) token: String,
     #[serde(skip_serializing)]
-    pub(crate) login_at: String
+    pub(crate) login_at: Option<String>,
 }
 
 pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<User>, serde_rusqlite::Error> {
@@ -63,17 +65,39 @@ pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) {
     }).expect("Could not update user");
 }
 
-pub(crate) fn find_by_token(connection: &Connection, token: &str) -> Result<Option<User>, serde_rusqlite::Error> {
+pub(crate) fn find_by_token(connection: &Connection, token: &str) -> rusqlite::Result<User> {
+    let query ="
+        SELECT
+            id,
+            created_at,
+            updated_at,
+            status,
+            username,
+            password,
+            login_at,
+            token
+        FROM user
+        WHERE
+            token = :token";
 
-    let mut statement = connection.prepare("SELECT * FROM user WHERE token = :token").unwrap();
-    let mut rows = statement.query(named_params!{
-        ":token": token
-    }).unwrap();
+    let user = connection.query_row(
+        query,
+        &[(":token", &token)],
+        |row| {
+            Ok(User {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                updated_at: row.get(2)?,
+                status: row.get(3)?,
+                username: row.get(4)?,
+                token: row.get(5)?,
+                password: row.get(6)?,
+                login_at: row.get(7)?,
+            })
+        },
+    );
 
-    let mut ref_rows = from_rows_ref::<User>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
+    return user;
 }
 
 pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {

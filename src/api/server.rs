@@ -3,6 +3,7 @@ use log::info;
 use std::sync::Arc;
 use std::{time::Duration};
 use axum::{async_trait, error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, response::{IntoResponse, Response}, Json, RequestPartsExt};
+use axum::extract::FromRef;
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
     TypedHeader,
@@ -33,32 +34,31 @@ use crate::api::action::healthz::healthz;
 
 use crate::models::users::User;
 use crate::models::users as users_model;
-use crate::database::get_database_connection;
 
 pub(crate) type Db = Arc<Mutex<Connection>>;
 
 #[async_trait]
 impl<S> FromRequestParts<S> for User
     where
-       S: Send + Sync,
+        AppState: FromRef<S>,
+        S: Send + Sync,
 {
     type Rejection = AuthError;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
             .map_err(|_| AuthError::InvalidToken)?;
 
-        let storage = get_database_connection();
         let token = bearer.token();
+        let app_state = AppState::from_ref(state);
+        let storage = app_state.connexion.lock().await;
 
-        let option = users_model::find_by_token(&storage, token);
-        let config = option.as_ref().unwrap();
-
-        if config.is_some() {
-            let user = config.as_ref().unwrap();
-            Ok(user.clone())
+        let user = users_model::find_by_token(&storage, token);
+        if user.is_ok() {
+            let user = user.unwrap();
+            Ok(user)
         }
         else {
             Err(AuthError::InvalidToken)
@@ -89,7 +89,7 @@ impl IntoResponse for AuthError {
     }
 }
 
-#[derive(Clone, FromRef)]
+#[derive(Clone, FromRef, Debug)]
 pub(crate) struct AppState {
     pub(crate) connexion: Arc<Mutex<Connection>>,
     pub(crate) configuration: Config,
@@ -200,7 +200,7 @@ pub(crate) mod tests {
     }
 
     fn load_fixtures(connexion: &mut Connection) {
-        connexion.execute("INSERT INTO user (id, created_at, status, username, password, token) VALUES ('5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47', 'now()', 'active', 'admin', 'admin', 'token')", []).unwrap();
+        connexion.execute("INSERT INTO user (id, created_at, status, username, password, token) VALUES ('5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47', datetime(), 'active', 'john.doe', '$argon2id$v=19$m=65536,t=2,p=4$Y2hhbmdlbWU$NtAhPV3e8INMg6E1LnAE5wIHd/YszYoEyZeF0+1zT8E', 'johndoetoken')", []).unwrap();
         connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('658c0199-85a2-49da-86d6-1ecd2e427118', 'now()', 'active', 'default', 'nginx', 'nginx', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
     }
 }

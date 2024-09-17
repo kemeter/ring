@@ -48,7 +48,7 @@ pub(crate) async fn create(
         created_at: member.created_at,
         updated_at: member.updated_at,
         status: member.status,
-        login_at: member.login_at
+        login_at: member.login_at,
     };
 
     (StatusCode::CREATED, Json(output))
