@@ -205,7 +205,6 @@ mod tests {
     async fn create_with_volumes() {
         let app = new_test_app();
         let token = login(app.clone(), "john.doe", "john.doe").await;
-        dbg!(token.clone());
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
