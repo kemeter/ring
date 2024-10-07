@@ -234,4 +234,42 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
+
+    #[tokio::test]
+    async fn create_without_duplication()  {
+        let app = new_test_app();
+        let token = login(app.clone(), "john.doe", "john.doe").await;
+        let server = TestServer::new(app).unwrap();
+
+        server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "runtime": "docker",
+                "name": "duplicate",
+                "namespace": "ring",
+                "image": "nginx:latest",
+            }))
+            .await;
+
+        server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+                "runtime": "docker",
+                "name": "duplicate",
+                "namespace": "ring",
+                "image": "nginx:1.12",
+            }))
+            .await;
+
+        let response = server
+            .get("/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .await;
+
+        let deployments = response.json::<Vec<DeploymentInput>>();
+
+        assert_eq!(2, deployments.len());
+    }
 }
