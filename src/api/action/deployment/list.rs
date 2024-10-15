@@ -41,7 +41,9 @@ impl<S> FromRequestParts<S> for QueryParameters
         for (key, value) in parsed {
             match key.as_str() {
                 "namespace[]" => namespaces.push(value),
+                "namespace" => namespaces.push(value),
                 "status[]" => status.push(value),
+                "status" => status.push(value),
                 _ => {}
             }
         }
@@ -92,6 +94,7 @@ pub(crate) async fn list(
 mod tests {
     use axum_test::TestServer;
     use axum::http::StatusCode;
+    use crate::api::dto::deployment::DeploymentOutput;
     use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
 
@@ -101,10 +104,13 @@ mod tests {
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
-            .get("/deployments")
+            .get("/deployments?status=running")
             .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
+
+        let deployments = response.json::<Vec<DeploymentOutput>>();
+        assert_eq!(1, deployments.len());
     }
 }
