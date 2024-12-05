@@ -1,85 +1,95 @@
 # Ring
 
-A simple container orchestrator with declarative service deployment using containers 
+A simple container orchestrator with declarative service deployment using containers.
 
-Because K8S is bloated and docker swarm is dead.
+## Why Ring?
 
-## Features 
+Ring was created as a lightweight alternative to Kubernetes and Docker Swarm, providing only the essential features needed for container orchestration.
 
-Ring let you specify "deployments" with service requirements
+## Key Features
 
-Ring will compute the diff between what you need and what is already deployed (a la terraform).
-Then it will try to close the gap and retry upon failures
+- **Declarative Deployments**: Specify your service requirements through configuration files
+- **Smart State Management**: Automatically compute differences between desired and current state (similar to Terraform)
+- **High Availability**: Automatic container restart and replication
+- **RESTful HTTP API**: Easy integration with your existing tools
+- **Docker Engine Backend**: Leveraging proven Docker technology
 
-- http API
-- container restarting
-- container replication
-- docker engine backend
+*Note*: Ring does not handle load balancing, as it's not within its scope.
 
-No load balancing, it is not the goal
+## Prerequisites
 
-## Installation 
+- Rust (for building)
+- OpenSSL (v0.9.90):
+    - **Ubuntu/Debian**: `sudo apt install librust-openssl-sys-dev`
+    - **Fedora**: `sudo dnf install openssl-devel`
+    - **Arch Linux**: `sudo pacman -S openssl`
+    - **macOS**: `brew install openssl`
+    - **Windows**: Download and install OpenSSL from [https://slproweb.com/products/Win32OpenSSL.html](https://slproweb.com/products/Win32OpenSSL.html)
 
-### requirements
+## Installation
 
-- rust (to build)
-- openssl-sys v0.9.90 (sudo apt install librust-openssl-sys-dev)
+```bash
+cargo build
+```
 
-```cargo build```
+## Getting Started
 
-## Usage 
+### 1. Initialize
 
-1. Init the setup
+```bash
+ring init
+# or
+cargo run init
+```
 
-```cargo run init```
+### 2. Start Server
 
-or 
+```bash
+ring server start
+# or
+cargo run server start
+```
 
-```ring init```
+### 3. Login
 
-2. Start deamon
+```bash
+ring login --username admin --password changeme
+# or
+cargo run login --username admin --password changeme
+```
 
-```cargo run server start```
+### 4. Deploy
 
-or
+#### Using YAML
+```bash
+ring apply -f examples/nginx.yaml
+# or
+cargo run apply -f examples/nginx.yaml
+```
 
-```ring server start```
+#### Using HTTP API
+1. Get your token:
+```bash
+ring config user-token
+```
 
-2. Login
+2. Make the request:
+```bash
+http POST localhost:3030/deployments bearer -A bearer -a <your_token> < examples/nginx.json
+```
 
-```ring login --username admin --password changeme```
+### 5. Manage Deployments
 
-or 
+#### List Deployments
+```bash
+ring deployment:list
+# or
+cargo run deployment list
+```
 
-```cargo run login --username admin --password changeme```
-
-3. Launch deployment (using yaml)
-
-```cargo run apply -f examples/nginx.yaml```
-
-or 
-
-```ring apply -f examples/nginx.yaml```
-
-3. Launch deployment Using http endpoint
-
-Get your token with ``` ring config user-token ```
-
-```http POST localhost:3030/deployments bearer -A bearer -a <your_token> < examples/nginx.json``` 
-
-
-4. Display deployments
-
-```cargo run deployment list```
-
-or
-
-```ring deployment:list```
-
-5. Inspect deployment
-
-```cargo run deployment inspect <deployment_id>```
-
-or
-
-```ring deployment inspect <deployment_id>```
+#### Inspect Deployment
+```bash
+ring deployment inspect <deployment_id>
+# or
+cargo run deployment inspect <deployment_id>
+```
