@@ -71,20 +71,22 @@ pub(crate) async fn create(
 
     match input.validate() {
         Ok(()) => {
+
             // deployment found
             if config.is_some() {
                 info!("Found deployment");
                 let mut deployment = config.clone().unwrap();
 
                 //@todo: implement reel deployment diff
-                if input.image.to_string() != deployment.image || query_parameters.force.is_some() {
+                if input.image.to_string() != deployment.image && input.replicas != deployment.replicas || query_parameters.force.is_some() {
                     info!("force update");
 
                     deployment.status = "deleted".to_string();
                     deployments::update(&guard, &deployment);
 
-                    deployment.image = input.image.clone();
                     deployment.id = Uuid::new_v4().to_string();
+                    deployment.replicas = input.replicas;
+                    deployment.image = input.image.clone();
                     deployment.labels = input.labels;
                     deployment.secrets = input.secrets;
                     deployment.restart_count = 0;
@@ -112,7 +114,7 @@ pub(crate) async fn create(
                     config: input.config.clone(),
                     status: "creating".to_string(),
                     created_at: utc.to_string(),
-                    updated_at: Option::None,
+                    updated_at: None,
                     labels: input.labels,
                     secrets: input.secrets,
                     replicas: input.replicas,
