@@ -27,6 +27,31 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     }
 }
 
+
+#[derive(Serialize, Deserialize, Debug, Clone, Validate)]
+pub struct Volume {
+    pub source: String,
+    pub destination: String,
+    #[validate(custom = "validate_driver")]
+    pub driver: String,
+    #[validate(custom = "validate_permission")]
+    pub permission: String,
+}
+
+fn validate_driver(driver: &str) -> Result<(), ValidationError> {
+    match driver {
+        "local" | "nfs" => Ok(()),
+        _ => Err(ValidationError::new("invalid driver, use [local, nfs]")),
+    }
+}
+
+fn validate_permission(permission: &str) -> Result<(), ValidationError> {
+    match permission {
+        "ro" | "rw" => Ok(()),
+        _ => Err(ValidationError::new("invalid permission, use [ro, rw]")),
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct DeploymentInput {
     name: String,
@@ -42,7 +67,8 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     secrets: HashMap<String, String>,
     #[serde(default)]
-    volumes: Vec<HashMap<String, String>>,
+    #[validate]
+    volumes: Vec<Volume>
 }
 
 #[derive(Deserialize, Debug)]
@@ -236,5 +262,67 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_with_invalid_volume_permission() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "source": "/var/run/docker.sock",
+                    "destination": "/var/run/docker.sock",
+                    "driver": "local",
+                    "permission": "invalid_permission"  // Permission invalide
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("invalid permission"));
+    }
+
+    #[tokio::test]
+    async fn create_with_invalid_volume_driver() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "source": "/var/run/docker.sock",
+                    "destination": "/var/run/docker.sock",
+                    "driver": "invalid_driver",  // Driver invalide
+                    "permission": "ro"
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("invalid driver"));
     }
 }
