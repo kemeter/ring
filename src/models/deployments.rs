@@ -161,46 +161,50 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 }
 
 
-pub(crate) fn find_one_by_filters(connection: &Connection, filters: Vec<String>) -> Result<Option<Deployment>, rusqlite::Error> {
+pub(crate) fn find_one_by_filters(
+    connection: &Connection,
+    filters: Vec<String>
+) -> Result<Option<Deployment>, rusqlite::Error> {
+    let sql = "
+        SELECT
+            id,
+            created_at,
+            updated_at,
+            status,
+            restart_count,
+            namespace,
+            name,
+            image,
+            runtime,
+            kind,
+            replicas,
+            labels,
+            labels as labelsjson,
+            secrets,
+            secrets as secretsjson,
+            volumes
+        FROM deployment
+        WHERE
+            namespace = :namespace
+            AND name = :name
+            AND status != 'deleted'
+        ORDER BY created_at DESC
+        LIMIT 1
+    ";
 
-    debug!("find_one_by_filters {:?}", filters);
+    let result = connection.query_row(
+        sql,
+        named_params! {
+            ":namespace": filters.get(0).unwrap_or(&String::from("")),
+            ":name": filters.get(1).unwrap_or(&String::from(""))
+        },
+        Deployment::from_row,
+    );
 
-    let mut statement = connection.prepare("
-            SELECT
-                id,
-                created_at,
-                updated_at,
-                status,
-                restart_count,
-                namespace,
-                name,
-                image,
-                runtime,
-                kind,
-                replicas,
-                labels,
-                labels as labelsjson,
-                secrets,
-                secrets as secretsjson,
-                volumes
-            FROM deployment
-            WHERE
-                namespace = :namespace
-                AND name = :name
-            "
-    ).expect("Could not fetch deployment");
-
-    let mut rows = statement.query_map(named_params!{
-        ":namespace": filters.get(0).unwrap_or(&String::from("")),
-        ":name": filters.get(1).unwrap_or(&String::from("")),
-    }, |row| {
-        Deployment::from_row(row)
-    })?;
-
-    match rows.next() {
-        Some(Ok(deployment)) => Ok(Some(deployment)),
-        Some(Err(e)) => Err(e),
-        None => Ok(None),
+    match result {
+        Ok(deployment) => Ok(Some(deployment)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
     }
 }
 

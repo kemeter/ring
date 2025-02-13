@@ -104,13 +104,14 @@ pub(crate) async fn create(
                 let mut deployment = config.clone().unwrap();
 
                 //@todo: implement reel deployment diff
-                if input.image.to_string() != deployment.image && input.replicas != deployment.replicas || query_parameters.force.is_some() {
+                if input.image.to_string() != deployment.image || input.replicas != deployment.replicas || query_parameters.force.is_some() {
                     info!("force update");
 
                     deployment.status = "deleted".to_string();
                     deployments::update(&guard, &deployment);
 
                     deployment.id = Uuid::new_v4().to_string();
+
                     deployment.replicas = input.replicas;
                     deployment.image = input.image.clone();
                     deployment.labels = input.labels;
