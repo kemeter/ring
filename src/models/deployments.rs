@@ -311,6 +311,7 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
             UPDATE deployment
             SET
                 status = :status,
+                updated_at = datetime('now'),
                 restart_count = :restart_count
             WHERE
                 id = :id"
