@@ -6,13 +6,14 @@ use clap::{Command, Arg};
 extern crate log;
 extern crate env_logger;
 extern crate ureq;
-
 mod commands {
   pub(crate) mod config;
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
   pub(crate) mod deployment;
+
+  pub(crate) mod namespace;
   pub(crate) mod login;
   pub(crate) mod user;
 }
@@ -98,6 +99,14 @@ async fn main() {
                 )
         )
         .subcommand(
+            Command::new("namespace")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::namespace::prune::command_config(),
+                )
+        )
+        .subcommand(
             Command::new("user")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
@@ -174,6 +183,18 @@ async fn main() {
 
                 ("logs", sub_matches) => {
                     commands::deployment::logs::execute(
+                        sub_matches,
+                        config
+                    ).await
+                }
+                _ => {}
+            }
+        }
+        Some(("namespace", sub_matches)) => {
+            let namespace_command = sub_matches.subcommand().unwrap_or(("prune", sub_matches));
+            match namespace_command {
+                ("prune", sub_matches) => {
+                    commands::namespace::prune::execute(
                         sub_matches,
                         config
                     ).await
