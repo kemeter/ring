@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 futures = "0.3.1"
-tokio = { version = "1.20", features = ["full"] }
+tokio = { version = "1.38", features = ["full"] }
 log = "0.4.0"
 env_logger = "0.11.2"
 shiplift = { git = "https://github.com/softprops/shiplift" }
