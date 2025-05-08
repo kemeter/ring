@@ -118,7 +118,13 @@ pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
 
     let context_auth: HashMap<String, AuthToken> = serde_json::from_str(&auth_file_content).unwrap();
 
-    return AuthConfig {
-        token: context_auth.get(&context_name).unwrap().token.clone()
-    };
+    match context_auth.get(&context_name) {
+        Some(auth_token) => AuthConfig {
+            token: auth_token.token.clone()
+        },
+        None => {
+            eprintln!("Error: Context '{}' does not exist in configuration file", context_name);
+            std::process::exit(1);
+        }
+    }
 }
