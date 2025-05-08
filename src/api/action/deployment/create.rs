@@ -93,19 +93,18 @@ pub(crate) async fn create(
 
     let guard = connexion.lock().await;
     let option = deployments::find_one_by_filters(&guard, filters);
-    let config = option.as_ref().unwrap();
 
     match input.validate() {
         Ok(()) => {
 
             // deployment found
-            if config.is_some() {
-                info!("Found deployment");
-                let mut deployment = config.clone().unwrap();
+            if let Ok(Some(existing_deployment)) = option {
+                debug!("Found deployment");
+                let mut deployment = existing_deployment.clone();
 
                 //@todo: implement reel deployment diff
                 if input.image.to_string() != deployment.image || input.replicas != deployment.replicas || query_parameters.force.is_some() {
-                    info!("force update");
+                    debug!("force update");
 
                     deployment.status = "deleted".to_string();
                     deployments::update(&guard, &deployment);
