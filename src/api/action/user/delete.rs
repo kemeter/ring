@@ -32,3 +32,24 @@ pub(crate) async fn delete(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use axum::http::StatusCode;
+    use crate::api::server::tests::new_test_app;
+    use crate::api::server::tests::login;
+
+    #[tokio::test]
+    async fn delete() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .delete("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+}

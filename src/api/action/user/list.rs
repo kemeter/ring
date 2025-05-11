@@ -34,3 +34,26 @@ pub(crate) async fn list(
 
     Json(users)
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::{TestResponse, TestServer};
+    use http::StatusCode;
+    use crate::api::server::tests::{login, new_test_app};
+
+    #[tokio::test]
+    async fn create() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .get(&"/users")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let users = response.json::<Vec<serde_json::Value>>();
+        assert_eq!(users.len(), 2);
+    }
+}
