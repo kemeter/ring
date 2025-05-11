@@ -180,7 +180,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/deployments")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "null",
                 "name": "nginx",
@@ -218,7 +218,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/deployments")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
                 "name": "nginx",
@@ -239,7 +239,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/deployments")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
                 "name": "nginx",
@@ -273,7 +273,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/deployments")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
             "runtime": "docker",
             "name": "nginx",
@@ -304,7 +304,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/deployments")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
             "runtime": "docker",
             "name": "nginx",

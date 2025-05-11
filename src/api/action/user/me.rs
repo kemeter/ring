@@ -29,7 +29,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
         let response = server
             .get("/users/me")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);

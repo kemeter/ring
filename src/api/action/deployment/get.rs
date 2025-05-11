@@ -47,7 +47,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
         let response = server
             .get("/deployments/1")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
@@ -60,7 +60,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);

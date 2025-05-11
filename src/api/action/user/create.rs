@@ -75,7 +75,7 @@ mod tests {
 
         let response: TestResponse = server
             .post(&"/users")
-            .add_header("Authorization".parse().unwrap(), format!("Bearer {}", token).parse().unwrap())
+            .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "ring",
                 "password": "ring"
