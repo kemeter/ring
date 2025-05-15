@@ -5,6 +5,7 @@ use axum::{
 };
 use axum::extract::State;
 use serde::{Serialize, Deserialize};
+use serde_json::json;
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use uuid::Uuid;
@@ -24,43 +25,44 @@ pub(crate) async fn login(
         Ok(Some(mut user)) => {
             let matches = match argon2::verify_encoded(&user.password, input.password.as_bytes()) {
                 Ok(m) => m,
-                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(HttpResponse {
-                    errors: vec!["Internal server error".to_string()],
-                    token: "".to_string(),
-                })),
+                Err(_) => return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "errors": ["Internal server error"] }))
+                ),
             };
 
             if !matches {
-                return error_response("Invalid credentials");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "errors": ["Invalid credentials"] }))
+                );
             }
 
             if user.token.is_empty() {
                 user.token = Uuid::new_v4().to_string();
             }
 
-            let output = HttpResponse {
-                errors: vec![],
-                token: user.token.clone(),
-            };
+            let token: String = user.token.clone();
 
             {
                 let guard = connexion.lock().await;
                 users_model::login(&guard, user);
             }
 
-            (StatusCode::OK, Json(output))
+            (
+                StatusCode::OK,
+                Json(json!({ "token": token }))
+            )
         }
-        Ok(None) => error_response("Invalid credentials"),
-        Err(_) => error_response("Internal server error"),
+        Ok(None) => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "errors": ["Invalid credentials"] }))
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Internal server error"] }))
+        ),
     }
-}
-
-fn error_response(message: &str) -> (StatusCode, Json<HttpResponse>) {
-    let output = HttpResponse {
-        errors: vec![message.to_string()],
-        token: "".to_string(),
-    };
-    (StatusCode::BAD_REQUEST, Json(output))
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
