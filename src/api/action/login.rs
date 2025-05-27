@@ -8,7 +8,9 @@ use serde::{Serialize, Deserialize};
 use serde_json::json;
 use crate::api::server::Db;
 use crate::models::users as users_model;
-use uuid::Uuid;
+use rand::Rng;
+use rand::rng;
+use rand::distr::Alphanumeric;
 
 pub(crate) async fn login(
     State(connexion): State<Db>,
@@ -39,7 +41,7 @@ pub(crate) async fn login(
             }
 
             if user.token.is_empty() {
-                user.token = Uuid::new_v4().to_string();
+                user.token = generate_token();
             }
 
             let token: String = user.token.clone();
@@ -63,6 +65,18 @@ pub(crate) async fn login(
             Json(json!({ "errors": ["Internal server error"] }))
         ),
     }
+}
+
+fn generate_token() -> String {
+    format!(
+        "tk_{}_{}",
+        chrono::Utc::now().timestamp(),
+        rng()
+            .sample_iter(&Alphanumeric)
+            .take(24)
+            .map(char::from)
+            .collect::<String>()
+    )
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
