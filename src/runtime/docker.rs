@@ -3,7 +3,6 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::time::Duration;
 use crate::models::deployments::Deployment;
-use uuid::Uuid;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::iter::FromIterator;
@@ -15,87 +14,180 @@ struct DockerImage {
     auth: Option<(String, String, String)>,
 }
 
-pub(crate) async fn apply(mut config: Deployment) -> Deployment {
-    let docker = Docker::new();
-
-    if config.restart_count >= 5 && config.status != "deleted" {
-        config.status = "CrashLoopBackOff".to_string();
-        return config;
-    }
-
-    config.instances = list_instances(config.id.to_string(), "running").await;
-
-    if config.status == "CrashLoopBackOff" {
-        return config;
-    }
-
-    if config.status == "deleted" {
-        debug!("{} mark as delete. Remove all instance", config.id.to_string());
-        for instance in config.instances.iter_mut() {
-            remove_container(docker.clone(), instance.to_string()).await;
-
-            info!("container {} delete", instance);
-        }
-    } else {
-        let number_instances: usize = config.instances.len();
-        let replicas_expected: usize = config.replicas.try_into().unwrap();
-
-        if number_instances < replicas_expected {
-            debug!("Starting creating container process {}", config.image.clone());
-
-            create_container(&mut config, &docker).await
-        }
-
-        if number_instances > replicas_expected {
-            let first_container_id = &config.instances[0];
-            info!("remove container {}", first_container_id.clone());
-
-            remove_container(docker.clone(), first_container_id.to_string()).await;
-        }
-
-        debug!("docker runtime apply {:?}", config.id.to_string());
-    }
-
-    return config;
+#[derive(Debug)]
+pub enum DockerError {
+    ImageNotFound(String),
+    ImagePullFailed(String),
+    ContainerCreationFailed(String),
+    Other(String),
 }
 
-async fn pull_image(docker: Docker, image_config: DockerImage) {
+impl From<shiplift::Error> for DockerError {
+    fn from(err: shiplift::Error) -> Self {
+        let err_msg = err.to_string();
+        if err_msg.contains("404") || err_msg.contains("not found") || err_msg.contains("manifest unknown") {
+            DockerError::ImageNotFound(err_msg)
+        } else {
+            DockerError::Other(err_msg)
+        }
+    }
+}
+
+pub(crate) async fn apply(mut deployment: Deployment) -> Deployment {
+    let docker = Docker::new();
+
+    if deployment.restart_count >= 5 && deployment.status != "deleted" {
+        deployment.status = "CrashLoopBackOff".to_string();
+        return deployment;
+    }
+
+    deployment.instances = list_instances(deployment.id.to_string(), "running").await;
+
+    if deployment.status == "CrashLoopBackOff" {
+        return deployment;
+    }
+
+    if deployment.status == "deleted" {
+        debug!("{} mark as delete. Remove all instance", deployment.id.to_string());
+        for instance in deployment.instances.iter_mut() {
+            remove_container(docker.clone(), instance.to_string()).await;
+            info!("docker container {} delete", instance);
+        }
+    } else {
+        // Calculate difference and act accordingly
+        let current_count: usize = deployment.instances.len();
+        let target_count: usize = deployment.replicas.try_into().unwrap();
+
+        debug!("Current instances: {}, Target instances: {}", current_count, target_count);
+
+        match current_count.cmp(&target_count) {
+            std::cmp::Ordering::Less => {
+                debug!("Scaling up: {} -> {} (creating 1 container)", current_count, target_count);
+
+                // Attempt to create container with error handling
+                match create_container(&mut deployment, &docker).await {
+                    Ok(_) => {
+                        // Container created successfully
+                        if deployment.status == "pending" || deployment.status == "creating" {
+                            deployment.status = "running".to_string();
+                        }
+                    }
+                    Err(DockerError::ImageNotFound(msg)) => {
+                        error!("Image not found for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "ImagePullBackOff".to_string();
+                        deployment.restart_count += 1;
+                    }
+                    Err(DockerError::ImagePullFailed(msg)) => {
+                        error!("Image pull failed for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "ImagePullBackOff".to_string();
+                        deployment.restart_count += 1;
+                    }
+                    Err(DockerError::ContainerCreationFailed(msg)) => {
+                        error!("docker dontainer creation failed for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "CreateContainerError".to_string();
+                        deployment.restart_count += 1;
+                    }
+                    Err(DockerError::Other(msg)) => {
+                        error!("Unknown error for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "Error".to_string();
+                        deployment.restart_count += 1;
+                    }
+                }
+            }
+            std::cmp::Ordering::Greater => {
+                debug!("Scaling down: {} -> {} (removing 1 container)", current_count, target_count);
+                if let Some(container_id) = deployment.instances.first().cloned() {
+                    remove_container(docker.clone(), container_id.clone()).await;
+                    // Synchronize local state with deletion
+                    deployment.instances.remove(0);
+                    info!("Container {} removed from deployment {}", container_id, deployment.id);
+                }
+            }
+            std::cmp::Ordering::Equal => {
+                debug!("Replicas count matches target: {} instances", current_count);
+            }
+        }
+
+        debug!("docker runtime apply {:?}", deployment.id.to_string());
+    }
+
+    return deployment;
+}
+
+async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), DockerError> {
     let image = image_config.name.clone();
     let tag = image_config.tag.clone();
     info!("pull docker image: {}:{}", image.clone(), tag);
 
+    // Check if image already exists locally
     match docker.images().get(image.clone()).inspect().await {
-        Ok(_) => { },
+        Ok(_) => {
+            debug!("Docker image {}:{} already exists locally", image, tag);
+            return Ok(());
+        }
         Err(_) => {
-            let mut builder = PullOptions::builder();
-            builder.image(image).tag(image_config.tag.clone());
+            debug!("Docker image {}:{} not found locally, pulling...", image, tag);
+        }
+    }
 
-            if image_config.auth.is_some() {
-                let (server, username, password) = image_config.auth.unwrap();
-                let auth = RegistryAuth::builder()
-                    .server_address(server)
-                    .username(username)
-                    .password(password)
-                    .build();
+    let mut builder = PullOptions::builder();
+    builder.image(image.clone()).tag(image_config.tag.clone());
 
-                builder.auth(auth);
+    if image_config.auth.is_some() {
+        let (server, username, password) = image_config.auth.unwrap();
+        let auth = RegistryAuth::builder()
+            .server_address(server)
+            .username(username)
+            .password(password)
+            .build();
+
+        builder.auth(auth);
+    }
+
+    let mut stream = docker
+        .images()
+        .pull(&builder.build());
+
+    let mut has_error = false;
+    let mut last_error = String::new();
+
+    while let Some(pull_result) = stream.next().await {
+        match pull_result {
+            Ok(_output) => {
+                // Log success if needed
             }
+            Err(e) => {
+                let error_msg = e.to_string();
+                error!("Docker image pull error: {}", error_msg);
+                has_error = true;
+                last_error = error_msg.clone();
 
-            let mut stream = docker
-                .images()
-                .pull(&builder.build());
-
-            while let Some(pull_result) = stream.next().await {
-                match pull_result {
-                    Ok(_output) => { },
-                    Err(e) => error!("Docker image pull error : {}", e),
+                // If 404 or "not found" error, stop immediately
+                if error_msg.contains("404") || error_msg.contains("not found") || error_msg.contains("manifest unknown") {
+                    return Err(DockerError::ImageNotFound(last_error));
                 }
             }
-        },
+        }
+    }
+
+    if has_error {
+        return Err(DockerError::ImagePullFailed(last_error));
+    }
+
+    // Check one last time that the image is available after pull
+    match docker.images().get(image.clone()).inspect().await {
+        Ok(_) => {
+            info!("Docker successfully pulled image {}:{}", image, tag);
+            Ok(())
+        }
+        Err(e) => {
+            error!("Docker image {}:{} still not available after pull: {}", image, tag, e);
+            Err(DockerError::ImageNotFound(format!("Image {}:{} not available after pull", image, tag)))
+        }
     }
 }
 
-async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
+async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) -> Result<(), DockerError> {
     debug!("create container for deployment id : {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
         Some((image, tag)) => (image.to_string(), tag.to_string()),
@@ -109,25 +201,29 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
     };
 
     let image_config = match &deployment.config {
-        Some(config) =>  {
+        Some(config) => {
             match (&config.server, &config.username, &config.password) {
                 (Some(server), Some(username), Some(password)) => {
                     image_config.auth = Some((server.clone(), username.clone(), password.clone()));
-                },
+                }
                 _ => {}
             }
 
             image_config
-        },
-        None =>  {
+        }
+        None => {
             image_config
-        },
+        }
     };
 
+    // Always try to pull image if policy requires it 
     if let Some(config) = &deployment.config {
         if config.image_pull_policy == "Always" || config.image_pull_policy == "IfNotPresent" {
-            pull_image(docker.clone(), image_config).await;
+            pull_image(docker.clone(), image_config).await?;
         }
+    } else {
+        // Try to pull image by default
+        pull_image(docker.clone(), image_config).await?;
     }
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
@@ -175,7 +271,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
         .await
     {
         Ok(container) => {
-            debug!("create container {:?}", container.id);
+            debug!("Docker create container {:?}", container.id);
             deployment.instances.push(container.id.to_string());
 
             let networks = docker.networks();
@@ -185,16 +281,22 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) {
             networks
                 .get(&network_name)
                 .connect(&builder.build())
-                .await.expect("Cannot create network");
+                .await
+                .map_err(|e| DockerError::ContainerCreationFailed(format!("Docker failed to connect to network: {}", e)))?;
 
-            let _ = docker.containers().get(container.id).start().await;
-        },
+            docker.containers()
+                .get(container.id)
+                .start()
+                .await
+                .map_err(|e| DockerError::ContainerCreationFailed(format!("Docker failed to start container: {}", e)))?;
+
+            info!("Docker container {} created and started successfully", container_name);
+            Ok(())
+        }
         Err(e) => {
-            if deployment.status == "pending" || deployment.status == "creating" {
-                deployment.restart_count += 1;
-            }
-            eprintln!("Error: {}", e)
-        },
+            error!("Docker Failed to create container: {}", e);
+            Err(DockerError::from(e))
+        }
     }
 }
 
@@ -202,25 +304,24 @@ async fn remove_container(docker: Docker, container_id: String) {
     match docker.containers().get(&container_id).stop(Some(Duration::from_millis(10))).await {
         Ok(_info) => {
             debug!("{:?}", _info);
-        },
+        }
         Err(_e) => {
             debug!("{:?}", _e);
-        },
+        }
     };
 
     info!("remove container: {}", &container_id);
 }
 
 async fn create_network(docker: Docker, network_name: String) {
-
-    debug!("create network: {}", network_name);
+    debug!("start Docker create network: {}", network_name);
 
     match docker.networks().get(&network_name).inspect().await {
         Ok(_network_info) => {
-            debug!("network {:?} already exist", network_name);
-        },
+            debug!("Docker network {:?} already exist", network_name);
+        }
         Err(e) => {
-            info!("create network: {}", network_name);
+            info!("Docker create network: {}", network_name);
 
             match docker
                 .networks()
@@ -232,9 +333,9 @@ async fn create_network(docker: Docker, network_name: String) {
                 .await
             {
                 Ok(info) => debug!("{:?}", info),
-                Err(_e) => debug!("Error: {}", e),
+                Err(_e) => debug!("Docker network create error: {}", e),
             }
-        },
+        }
     }
 }
 
@@ -256,18 +357,18 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
                 }
             }
         }
-        Err(e) => debug!("Error: {}", e),
+        Err(e) => debug!("docker list instances error: {}", e),
     }
 
     return instances;
 }
 
-pub(crate) async fn logs(deployment: String) -> Vec<String> {
+pub(crate) async fn logs(container_id: String) -> Vec<String> {
     let docker = Docker::new();
 
     let mut logs_stream = docker
         .containers()
-        .get(&deployment)
+        .get(&container_id)
         .logs(&LogsOptions::builder().stdout(true).stderr(true).build());
 
     let mut logs = vec![];
@@ -276,14 +377,13 @@ pub(crate) async fn logs(deployment: String) -> Vec<String> {
         match log_result {
             Ok(chunk) => {
                 logs.push(print_chunk(chunk).replace("\n", ""))
-            },
-            Err(e) => debug!("Error: {}", e),
+            }
+            Err(e) => debug!("Docker get logs errors: {}", e),
         }
     }
 
     return logs;
 }
-
 
 fn print_chunk(chunk: TtyChunk) -> String {
     match chunk {
@@ -293,10 +393,9 @@ fn print_chunk(chunk: TtyChunk) -> String {
     }
 }
 
-fn tiny_id()-> String {
-    let id = Uuid::new_v4().to_string();
+fn tiny_id() -> String {
+    use rand::Rng;
 
-    let (_, name) = id.rsplit_once('-').unwrap();
-
-    return String::from(name);
+    let mut rng = rand::rng();
+    format!("{:08x}", rng.random::<u32>())
 }
