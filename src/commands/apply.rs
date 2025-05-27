@@ -183,6 +183,8 @@ pub(crate) fn apply(args: &ArgMatches, mut configuration: Config) {
         }
 
         if args.contains_id("dry-run") {
+            println!("DRY RUN - would create deployment: {}", deployment.name);
+        } else {
             let mut url = format!("{}/deployments", api_url);
 
             if args.contains_id("force") {
