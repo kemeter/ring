@@ -1,6 +1,6 @@
 use std::process::Command as BaseCommand;
 use std::env;
-use clap::{Command, Arg};
+use clap::{Command, Arg, ArgMatches};
 
 #[macro_use]
 extern crate log;
@@ -14,6 +14,7 @@ mod commands {
   pub(crate) mod deployment;
 
   pub(crate) mod namespace;
+  pub(crate) mod node;
   pub(crate) mod login;
   pub(crate) mod user;
 }
@@ -107,6 +108,14 @@ async fn main() {
                 )
         )
         .subcommand(
+            Command::new("node")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::node::get::command_config()
+                )
+        )
+        .subcommand(
             Command::new("user")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
@@ -197,6 +206,18 @@ async fn main() {
                     commands::namespace::prune::execute(
                         sub_matches,
                         config
+                    ).await
+                }
+                _ => {}
+            }
+        }
+        Some(("node", sub_matches)) => {
+            let node_command = sub_matches.subcommand().unwrap_or(("get", sub_matches));
+            match node_command {
+                ("get", sub_matches) => {
+                    commands::node::get::execute(
+                        sub_matches,
+                        config,   
                     ).await
                 }
                 _ => {}

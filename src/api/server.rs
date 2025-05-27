@@ -24,6 +24,8 @@ use crate::api::action::deployment::create as deployment_create;
 use crate::api::action::deployment::delete as deployment_delete;
 use crate::api::action::deployment::logs as deployment_logs;
 
+use crate::api::action::node::get as node_get;
+
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
 use crate::api::action::user::me::me as user_current;
@@ -101,6 +103,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
         .route("/deployments/:id/logs", get(deployment_logs))
+        .route("/node/get", get(node_get))
         .route("/users", get(user_list).post(user_create))
         .route("/users/:id", put(user_update))
         .route("/users/:id", delete(user_delete))
