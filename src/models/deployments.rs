@@ -161,10 +161,11 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 }
 
 
-pub(crate) fn find_one_by_filters(
+pub(crate) fn find_active_by_namespace_name(
     connection: &Connection,
-    filters: Vec<String>
-) -> Result<Option<Deployment>, rusqlite::Error> {
+    namespace: String,
+    name: String
+) -> Result<Vec<Deployment>, rusqlite::Error> {
     let sql = "
         SELECT
             id,
@@ -187,25 +188,26 @@ pub(crate) fn find_one_by_filters(
         WHERE
             namespace = :namespace
             AND name = :name
-            AND status != 'deleted'
+            AND status <> 'deleted'
         ORDER BY created_at DESC
-        LIMIT 1
     ";
 
-    let result = connection.query_row(
-        sql,
+    let mut stmt = connection.prepare(sql)?;
+
+    let deployment_iter = stmt.query_map(
         named_params! {
-            ":namespace": filters.get(0).unwrap_or(&String::from("")),
-            ":name": filters.get(1).unwrap_or(&String::from(""))
+            ":namespace": namespace,
+            ":name": name
         },
         Deployment::from_row,
-    );
+    )?;
 
-    match result {
-        Ok(deployment) => Ok(Some(deployment)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
+    let mut deployments = Vec::new();
+    for deployment_result in deployment_iter {
+        deployments.push(deployment_result?);
     }
+
+    Ok(deployments)
 }
 
 pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {

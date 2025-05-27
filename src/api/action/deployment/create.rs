@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
     response::IntoResponse,
     Json
@@ -71,18 +71,12 @@ pub(crate) struct DeploymentInput {
     volumes: Vec<Volume>
 }
 
-#[derive(Deserialize, Debug)]
-pub(crate) struct QueryParameters {
-    force: Option<bool>
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 struct Message {
     message: String
 }
 
 pub(crate) async fn create(
-    query_parameters: Query<QueryParameters>,
     State(connexion): State<Db>,
     _user: User,
     Json(input): Json<DeploymentInput>,
@@ -92,76 +86,67 @@ pub(crate) async fn create(
     filters.push(input.name.clone());
 
     let guard = connexion.lock().await;
-    let option = deployments::find_one_by_filters(&guard, filters);
 
     match input.validate() {
         Ok(()) => {
+            let active_deployments = deployments::find_active_by_namespace_name(
+                &guard,
+                input.namespace.clone(),
+                input.name.clone()
+            );
 
-            // deployment found
-            if let Ok(Some(existing_deployment)) = option {
-                debug!("Found deployment");
-                let mut deployment = existing_deployment.clone();
+            match active_deployments {
+                Ok(deployments_list) => {
+                    if !deployments_list.is_empty() {
+                        info!("Found {} active deployments with the same namespace and name", deployments_list.len());
 
-                //@todo: implement reel deployment diff
-                if input.image.to_string() != deployment.image || input.replicas != deployment.replicas || query_parameters.force.is_some() {
-                    debug!("force update");
-
-                    deployment.status = "deleted".to_string();
-                    deployments::update(&guard, &deployment);
-
-                    deployment.id = Uuid::new_v4().to_string();
-
-                    deployment.replicas = input.replicas;
-                    deployment.image = input.image.clone();
-                    deployment.labels = input.labels;
-                    deployment.secrets = input.secrets;
-                    deployment.restart_count = 0;
-                    deployment.status = "creating".to_string();
-                    deployments::create(&guard, &deployment);
+                        for mut deployment in deployments_list {
+                            deployment.status = "deleted".to_string();
+                            deployment.updated_at = Some(Utc::now().to_string());
+                            deployments::update(&guard, &deployment);
+                        }
+                    }
+                },
+                Err(e) => {
+                    let message = Message { message: format!("Database error: {}", e.to_string()) };
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
-
-                let deployment_output = DeploymentOutput::from_to_model(deployment);
-
-                (StatusCode::CREATED, Json(deployment_output)).into_response()
-
-            }  else {
-                info!("Deployment not found, create a new one");
-
-                let utc: DateTime<Utc> = Utc::now();
-                let volumes = serde_json::to_string(&input.volumes).unwrap();
-
-                let deployment = deployments::Deployment {
-                    id: Uuid::new_v4().to_string(),
-                    name: input.name.clone(),
-                    runtime: input.runtime.clone(),
-                    namespace: input.namespace.clone(),
-                    kind: String::from("worker"),
-                    image: input.image.clone(),
-                    config: input.config.clone(),
-                    status: "creating".to_string(),
-                    created_at: utc.to_string(),
-                    updated_at: None,
-                    labels: input.labels,
-                    secrets: input.secrets,
-                    replicas: input.replicas,
-                    instances: [].to_vec(),
-                    restart_count: 0,
-                    volumes: volumes
-                };
-
-                deployments::create(&guard, &deployment);
-
-                let deployment_output = DeploymentOutput::from_to_model(deployment);
-
-                (StatusCode::CREATED, Json(deployment_output)).into_response()
             }
-        }
+
+            // Créer le nouveau déploiement
+            let utc: DateTime<Utc> = Utc::now();
+            let volumes = serde_json::to_string(&input.volumes).unwrap();
+
+            let deployment = deployments::Deployment {
+                id: Uuid::new_v4().to_string(),
+                name: input.name.clone(),
+                runtime: input.runtime.clone(),
+                namespace: input.namespace.clone(),
+                kind: String::from("worker"),
+                image: input.image.clone(),
+                config: input.config.clone(),
+                status: "creating".to_string(),
+                created_at: utc.to_string(),
+                updated_at: None,
+                labels: input.labels,
+                secrets: input.secrets,
+                replicas: input.replicas,
+                instances: [].to_vec(),
+                restart_count: 0,
+                volumes: volumes
+            };
+
+            deployments::create(&guard, &deployment);
+
+            let deployment_output = DeploymentOutput::from_to_model(deployment);
+
+            (StatusCode::CREATED, Json(deployment_output)).into_response()
+        },
         Err(e) => {
             let message = Message { message: e.to_string() };
             (StatusCode::BAD_REQUEST, Json(message)).into_response()
         }
     }
-
 }
 
 #[cfg(test)]
