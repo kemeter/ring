@@ -1894,6 +1894,7 @@ dependencies = [
  "local-ip-address",
  "log",
  "mime",
+ "once_cell",
  "refinery",
  "regex",
  "rusqlite",
@@ -1904,6 +1905,7 @@ dependencies = [
  "serde_yaml",
  "shiplift",
  "tempdir",
+ "tempfile",
  "tokio",
  "toml",
  "tower 0.4.13",
@@ -2302,6 +2304,19 @@ checksum = "15f2b5fb00ccdf689e0149d1b1b3c03fead81c2b37735d812fa8bddbbf41b6d8"
 dependencies = [
  "rand 0.4.6",
  "remove_dir_all",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
+dependencies = [
+ "fastrand",
+ "getrandom 0.3.3",
+ "once_cell",
+ "rustix",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
