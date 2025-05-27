@@ -23,7 +23,7 @@ pub(crate) async fn apply(mut config: Deployment) -> Deployment {
         return config;
     }
 
-    config.instances = list_instances(config.id.to_string()).await;
+    config.instances = list_instances(config.id.to_string(), "running").await;
 
     if config.status == "CrashLoopBackOff" {
         return config;
@@ -238,14 +238,14 @@ async fn create_network(docker: Docker, network_name: String) {
     }
 }
 
-pub(crate) async fn list_instances(id: String) -> Vec<String> {
+pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
     let docker = Docker::new();
     let mut instances: Vec<String> = Vec::new();
 
     match docker.containers().list(&Default::default()).await {
         Ok(containers) => {
             for container in containers {
-                if container.state == "running" {
+                if status == "all" || container.state == status {
                     let container_id = &container.id;
 
                     for (label, value) in container.labels.into_iter() {

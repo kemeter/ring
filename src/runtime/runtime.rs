@@ -57,7 +57,7 @@ fn extract_date(log: String) -> Option<String> {
 #[async_trait]
 impl RuntimeInterface for DockerRuntime {
     async fn list_instances(&self) -> Vec<String> {
-        docker::list_instances(self.deployment.clone().id).await
+        docker::list_instances(self.deployment.clone().id, "all").await
     }
 
     async fn get_logs(&self) -> Vec<Log> {
