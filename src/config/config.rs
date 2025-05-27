@@ -62,11 +62,9 @@ pub(crate) fn get_config_dir() -> String {
     };
 }
 
-pub(crate) fn load_config() -> Config {
+pub(crate) fn load_config(context_current: &str) -> Config {
     let home_dir = get_config_dir();
-
-    let context_current = get_current_context();
-
+    
     let file = format!("{}/config.toml", home_dir);
 
     debug!("load config file {}", file);
@@ -100,15 +98,6 @@ pub(crate) fn load_config() -> Config {
     debug!("Switch to default configuration");
 
     return Config::default();
-}
-
-fn get_current_context() -> String {
-    let context_current: String = env::args()
-        .filter(|arg| arg.starts_with("--c") || arg.starts_with("--context"))
-        .map(|arg| arg.replace("--context", "").replace("--c", "").replace("=", ""))
-        .collect();
-
-    context_current
 }
 
 pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {

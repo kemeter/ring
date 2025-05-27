@@ -1,6 +1,6 @@
 use std::process::Command as BaseCommand;
 use std::env;
-use clap::{Command, Arg, ArgMatches};
+use clap::{Command, Arg};
 
 #[macro_use]
 extern crate log;
@@ -57,7 +57,7 @@ async fn main() {
         .arg(
             Arg::new("context")
                 .required(false)
-                .help("Sets the context to use")
+                .help("Sets the context to use (e.g., development, staging, production)")
                 .long("context")
                 .short('c')
         )
@@ -134,9 +134,12 @@ async fn main() {
         );
 
     let matches = app.get_matches();
-    let subcommand_name = matches.subcommand();
-    let config = config::config::load_config();
+    let context = matches.get_one::<String>("context")
+        .map(|s| s.as_str())
+        .unwrap_or("default");
 
+    let subcommand_name = matches.subcommand();
+    let config = config::config::load_config(context);
 
     match subcommand_name {
         Some(("config", sub_matches)) => {
