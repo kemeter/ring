@@ -258,7 +258,12 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker) -> R
 
     let mut volumes: Vec<String> = vec![];
     for volume in volumes_collection {
-        let format: String = format!("{}:{}:{}", volume.source, volume.destination, volume.permission);
+        let source = match volume.r#type.as_str() {
+            "bind" => volume.source.unwrap_or_default(),
+            _ => String::new()
+        };
+
+        let format: String = format!("{}:{}:{}", source, volume.destination, volume.permission);
         volumes.push(format);
     }
 
