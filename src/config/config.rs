@@ -64,7 +64,7 @@ pub(crate) fn get_config_dir() -> String {
 
 pub(crate) fn load_config(context_current: &str) -> Config {
     let home_dir = get_config_dir();
-    
+
     let file = format!("{}/config.toml", home_dir);
 
     debug!("load config file {}", file);

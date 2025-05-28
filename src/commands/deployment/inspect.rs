@@ -11,18 +11,36 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         .about("Show information on a deployment")
         .arg(
             Arg::new("id")
+                .help("Deployment ID")
+                .required(true)
         )
 }
 
 #[derive(Table)]
 struct VolumeTable {
+    #[table(title = "Type")]
+    r#type: String,
+
+    #[table(title = "Source")]
     source: String,
+
+    #[table(title = "Destination")]
     destination: String,
+
+    #[table(title = "From",)]
+    from: String,
+
+    #[table(title = "Key",)]
+    key: String,
+
+    #[table(title = "Driver")]
     driver: String,
+
+    #[table(title = "Permission")]
     permission: String,
 }
 
-pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
@@ -40,43 +58,55 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
 
             let deployment = response.body_mut().read_json::<DeploymentDTO>().unwrap();
 
-            println!("Name: {}", deployment.name);
-            println!("Namespace: {}", deployment.namespace);
-            println!("Kind: {}", deployment.kind);
-            println!("Image: {}", deployment.image);
-            println!("Replicas: {}", deployment.replicas);
-            println!("Restart count: {}", deployment.restart_count);
-            println!("Created AT: {}", deployment.created_at);
+            // Main section
+            println!("DEPLOYMENT DETAILS");
+            println!("==================");
+            println!("Name          : {}", deployment.name);
+            println!("Namespace     : {}", deployment.namespace);
+            println!("Kind          : {}", deployment.kind);
+            println!("Image         : {}", deployment.image);
+            println!("Replicas      : {}", deployment.replicas);
+            println!("Restart count : {}", deployment.restart_count);
+            println!("Created at    : {}", deployment.created_at);
+            println!("Updated at    : {}", deployment.updated_at);
+            println!();
 
-            println!("Labels:");
-            for label in deployment.labels {
-                println!("  {:?} = {:?}", label.0, label.1)
+            // Labels
+            if !deployment.labels.is_empty() {
+                println!("LABELS");
+                println!("------");
+                for (key, value) in deployment.labels {
+                    println!("  {} = {}", key, value);
+                }
+                println!();
             }
 
-            println!("Instances:");
-            for instance in deployment.instances {
-                println!("  {:?}", instance)
-            }
-
-            println!("Environment:");
-            for secret in deployment.secrets {
-                println!("  {:?}: {:?}", secret.0, secret.1)
+            // Instances
+            if !deployment.instances.is_empty() {
+                println!("INSTANCES");
+                println!("---------");
+                for instance in deployment.instances {
+                    println!("  {}", instance);
+                }
+                println!();
             }
 
             let mut volumes = vec![];
 
             for volume in deployment.volumes {
                 volumes.push(VolumeTable {
-                    source: volume.source,
+                    r#type: if volume.source.is_some() { String::from("bind") } else { volume.r#type }, //fallback
+                    source: volume.source.unwrap_or_default(),
                     destination: volume.destination,
+                    from: volume.from.unwrap_or_default(),
+                    key: volume.key.unwrap_or_default(),
                     driver: volume.driver,
                     permission: volume.permission,
                 });
-
             }
 
             print_stdout(volumes.with_title()).expect("");
-        },
+        }
         Err(_) => {
             eprintln!("Error from server (NotFound)");
         }
