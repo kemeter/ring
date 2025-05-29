@@ -7,7 +7,7 @@ extern crate log;
 extern crate env_logger;
 extern crate ureq;
 mod commands {
-  pub(crate) mod config;
+  pub(crate) mod context;
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
@@ -62,7 +62,7 @@ async fn main() {
                 .short('c')
         )
         .subcommand(
-            commands::config::command_config(),
+            commands::context::command_config(),
         )
         .subcommand(
             commands::init::command_config(),
@@ -142,8 +142,8 @@ async fn main() {
     let config = config::config::load_config(context);
 
     match subcommand_name {
-        Some(("config", sub_matches)) => {
-            commands::config::execute(
+        Some(("context", sub_matches)) => {
+            commands::context::execute(
                 sub_matches,
                 config,
             );
