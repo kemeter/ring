@@ -6,9 +6,9 @@ use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
 use toml::de::Error as TomlError;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("config")
-        .name("config")
-        .about("Print configuration")
+    Command::new("context")
+        .name("context")
+        .about("Print contexts configuration")
         .arg(
             Arg::new("parameter")
                 .required(false)

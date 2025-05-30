@@ -7,7 +7,7 @@ extern crate log;
 extern crate env_logger;
 extern crate ureq;
 mod commands {
-  pub(crate) mod config;
+  pub(crate) mod context;
   pub(crate) mod init;
   pub(crate) mod server;
   pub(crate) mod apply;
@@ -17,6 +17,7 @@ mod commands {
   pub(crate) mod node;
   pub(crate) mod login;
   pub(crate) mod user;
+  pub(crate) mod config;
 }
 
 mod scheduler {
@@ -31,6 +32,7 @@ mod runtime {
 mod models {
   pub(crate) mod deployments;
   pub(crate) mod users;
+  pub(crate) mod config;
 }
 
 mod api;
@@ -62,7 +64,7 @@ async fn main() {
                 .short('c')
         )
         .subcommand(
-            commands::config::command_config(),
+            commands::context::command_config(),
         )
         .subcommand(
             commands::init::command_config(),
@@ -116,6 +118,17 @@ async fn main() {
                 )
         )
         .subcommand(
+            Command::new("config")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::config::list::command_config(),
+                )
+                .subcommand(
+                    commands::config::inspect::command_config(),
+                )
+        )
+        .subcommand(
             Command::new("user")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
@@ -142,8 +155,8 @@ async fn main() {
     let config = config::config::load_config(context);
 
     match subcommand_name {
-        Some(("config", sub_matches)) => {
-            commands::config::execute(
+        Some(("context", sub_matches)) => {
+            commands::context::execute(
                 sub_matches,
                 config,
             );
@@ -222,6 +235,24 @@ async fn main() {
                         sub_matches,
                         config,   
                     ).await
+                }
+                _ => {}
+            }
+        }
+        Some(("config", sub_matches)) => {
+            let config_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match config_command {
+                ("list", sub_matches) => {
+                    commands::config::list::execute(
+                        sub_matches,
+                        config
+                    );
+                }
+                ("inspect", sub_matches) => {
+                    commands::config::inspect::execute(
+                        sub_matches,
+                        config
+                    );
                 }
                 _ => {}
             }
