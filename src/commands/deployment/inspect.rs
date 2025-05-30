@@ -1,4 +1,4 @@
-use crate::api::dto::deployment::DeploymentDTO;
+use crate::api::dto::deployment::DeploymentOutput;
 use crate::config::config::load_auth_config;
 use crate::config::config::Config;
 use clap::Arg;
@@ -56,7 +56,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 return eprintln!("Unable to fetch deployment: {}", response.status());
             }
 
-            let deployment = response.body_mut().read_json::<DeploymentDTO>().unwrap();
+            let deployment = response.body_mut().read_json::<DeploymentOutput>().unwrap();
 
             // Main section
             println!("DEPLOYMENT DETAILS");
