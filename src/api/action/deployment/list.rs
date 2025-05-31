@@ -113,4 +113,21 @@ mod tests {
         let deployments = response.json::<Vec<DeploymentOutput>>();
         assert_eq!(1, deployments.len());
     }
+
+
+    #[tokio::test]
+    async fn list_by_namespace() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/deployments?namespace=kemeter")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let deployments = response.json::<Vec<DeploymentOutput>>();
+        assert_eq!(1, deployments.len());
+    }
 }
