@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use axum::{response::IntoResponse, Json, async_trait};
+use axum::{response::IntoResponse, Json};
 use axum::extract::{FromRequestParts, State};
 
 use http::request::Parts;
@@ -22,7 +22,6 @@ pub(crate) struct QueryParameters {
     status: Vec<String>,
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for QueryParameters
     where
         S: Send + Sync,

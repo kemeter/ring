@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use log::info;
 use std::sync::Arc;
 use std::{time::Duration};
-use axum::{async_trait, error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, response::{IntoResponse, Response}, Json, RequestPartsExt};
+use axum::{error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, response::{IntoResponse, Response}, Json, RequestPartsExt};
 use axum::extract::FromRef;
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
@@ -39,7 +39,6 @@ use crate::models::users as users_model;
 
 pub(crate) type Db = Arc<Mutex<Connection>>;
 
-#[async_trait]
 impl<S> FromRequestParts<S> for User
     where
         AppState: FromRef<S>,
@@ -101,12 +100,12 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
-        .route("/deployments/:id", get(deployment_get).delete(deployment_delete))
-        .route("/deployments/:id/logs", get(deployment_logs))
+        .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
+        .route("/deployments/{id}/logs", get(deployment_logs))
         .route("/node/get", get(node_get))
         .route("/users", get(user_list).post(user_create))
-        .route("/users/:id", put(user_update))
-        .route("/users/:id", delete(user_delete))
+        .route("/users/{id}", put(user_update))
+        .route("/users/{id}", delete(user_delete))
         .route("/users/me", get(user_current))
         .route("/healthz", get(healthz))
 
