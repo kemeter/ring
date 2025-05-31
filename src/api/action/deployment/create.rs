@@ -32,9 +32,9 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
 pub struct Volume {
     pub source: String,
     pub destination: String,
-    #[validate(custom = "validate_driver")]
+    #[validate(custom(function = "validate_driver"))]
     pub driver: String,
-    #[validate(custom = "validate_permission")]
+    #[validate(custom(function = "validate_permission"))]
     pub permission: String,
 }
 
@@ -55,7 +55,7 @@ fn validate_permission(permission: &str) -> Result<(), ValidationError> {
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct DeploymentInput {
     name: String,
-    #[validate(custom = "validate_runtime")]
+    #[validate(custom(function = "validate_runtime"))]
     runtime: String,
     namespace: String,
     image: String,
@@ -67,7 +67,7 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     secrets: HashMap<String, String>,
     #[serde(default)]
-    #[validate]
+    #[validate(nested)]
     volumes: Vec<Volume>
 }
 
