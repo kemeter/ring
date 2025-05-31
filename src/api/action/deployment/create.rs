@@ -85,10 +85,9 @@ pub(crate) async fn create(
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
 
-    let guard = connexion.lock().await;
-
     match input.validate() {
         Ok(()) => {
+            let guard = connexion.lock().await;
             let active_deployments = deployments::find_active_by_namespace_name(
                 &guard,
                 input.namespace.clone(),
@@ -113,7 +112,6 @@ pub(crate) async fn create(
                 }
             }
 
-            // Créer le nouveau déploiement
             let utc: DateTime<Utc> = Utc::now();
             let volumes = serde_json::to_string(&input.volumes).unwrap();
 

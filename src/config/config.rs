@@ -112,7 +112,7 @@ pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
             token: auth_token.token.clone()
         },
         None => {
-            eprintln!("Error: Context '{}' does not exist in configuration file", context_name);
+            eprintln!("Error: Context '{}' does not exist in a configuration file", context_name);
             std::process::exit(1);
         }
     }
