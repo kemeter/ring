@@ -13,12 +13,12 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
     let query = format!("{}/node/get", api_url);
 
     let response = ureq::get(&query)
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Content-Type", "application/json")
         .call();
 
     let response_content = match response {
-        Ok(res) => res.into_string().unwrap_or_else(|_| "Invalid response body".to_string()),
+        Ok(mut res) => res.body_mut().read_json().unwrap_or_else(|_| "Invalid response body".to_string()),
         Err(err) => {
             eprintln!("Failed to fetch node info: {}", err);
             return;

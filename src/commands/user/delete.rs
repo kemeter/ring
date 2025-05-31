@@ -19,8 +19,8 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let id = args.get_one::<String>("id").unwrap();
 
     let request = ureq::delete(&format!("{}/users/{}", api_url, id))
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Content-Type", "application/json")
         .call();
 
     match request {

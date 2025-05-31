@@ -22,8 +22,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
 
     for deployment in deployments {
         let request = ureq::delete(&format!("{}/deployments/{}", api_url, deployment))
-            .set("Authorization", &format!("Bearer {}", auth_config.token))
-            .set("Content-Type", "application/json")
+            .header("Authorization", &format!("Bearer {}", auth_config.token))
+            .header("Content-Type", "application/json")
             .call();
 
         match request {

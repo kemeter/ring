@@ -271,7 +271,7 @@ fn deploy_to_server(
     let json = json!(deployment);
 
     let response = ureq::post(&url)
-        .set("Authorization", &format!("Bearer {}", auth_token))
+        .header("Authorization", &format!("Bearer {}", auth_token))
         .send_json(json)
         .map_err(|e| ApplyError::Http(Box::new(e)))?;
 

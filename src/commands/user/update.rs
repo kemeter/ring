@@ -30,12 +30,12 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
 
     let user_request = ureq::get(&format!("{}/users/me", configuration.get_api_url()))
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
         .call();
 
     match user_request {
-        Ok(user_response ) => {
-            let user: UserOutput = user_response.into_json::<UserOutput>().unwrap();
+        Ok(mut user_response) => {
+            let user: UserOutput = user_response.body_mut().read_json::<UserOutput>().unwrap();
 
             let api_url = format!("{}/users/{}", configuration.get_api_url(), user.id);
 
@@ -50,7 +50,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
             };
 
             let request = ureq::put(&api_url)
-                 .set("Authorization", &format!("Bearer {}", auth_config.token))
+                 .header("Authorization", &format!("Bearer {}", auth_config.token))
                  .send_json(values);
 
             match request {

@@ -18,23 +18,23 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
     let query = format!("{}/deployments", api_url);
 
     let request = ureq::get(&*query)
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Content-Type", "application/json")
         .call();
 
     match request {
-        Ok(response) => {
+        Ok(mut response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch deployments: {}", response.status());
             }
 
-            let deployments_list: Vec<DeploymentOutput> = response.into_json::<Vec<DeploymentOutput>>().unwrap_or(vec![]);
+            let deployments_list: Vec<DeploymentOutput> = response.body_mut().read_json::<Vec<DeploymentOutput>>().unwrap_or(vec![]);
 
             for deployment in deployments_list {
                 let id = deployment.id;
                 let request = ureq::delete(&format!("{}/deployments/{}", api_url, id))
-                    .set("Authorization", &format!("Bearer {}", auth_config.token))
-                    .set("Content-Type", "application/json")
+                    .header("Authorization", &format!("Bearer {}", auth_config.token))
+                    .header("Content-Type", "application/json")
                     .call();
 
                 match request {

@@ -28,17 +28,17 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
 
     let request = ureq::get(&format!("{}/deployments/{}", api_url, id))
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .set("Content-Type", "application/json")
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Content-Type", "application/json")
         .call();
 
     match request {
-        Ok(response) => {
+        Ok(mut response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch deployment: {}", response.status());
             }
 
-            let deployment = response.into_json::<DeploymentDTO>().unwrap();
+            let deployment = response.body_mut().read_json::<DeploymentDTO>().unwrap();
 
             println!("Name: {}", deployment.name);
             println!("Namespace: {}", deployment.namespace);

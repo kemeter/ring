@@ -38,16 +38,16 @@ pub(crate) fn execute(_args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
 
     let request = ureq::get(&format!("{}/users", api_url))
-        .set("Authorization", &format!("Bearer {}", auth_config.token))
+        .header("Authorization", &format!("Bearer {}", auth_config.token))
         .call();
 
     match request {
-        Ok(response) => {
+        Ok(mut response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch users: {}", response.status());
             }
 
-            let users_list: Vec<UserDto> = response.into_json::<Vec<UserDto>>().unwrap_or(vec![]);
+            let users_list: Vec<UserDto> = response.body_mut().read_json::<Vec<UserDto>>().unwrap_or(vec![]);
 
             for user in users_list {
                 users.push(

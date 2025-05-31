@@ -44,9 +44,9 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         }));
 
     match request {
-        Ok(response) => {
+        Ok(mut response) => {
             if response.status() == 200 {
-                let content = response.into_string().unwrap();
+                let content = response.body_mut().read_to_string().unwrap();
                 let auth: AuthToken = serde_json::from_str(&content).unwrap();
 
                 let auth_file_content = fs::read_to_string(config_file.clone()).unwrap();
