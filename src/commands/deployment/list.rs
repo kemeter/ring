@@ -1,11 +1,10 @@
-use clap::{ArgAction, Command};
+use crate::api::dto::deployment::DeploymentOutput;
+use crate::config::config::load_auth_config;
+use crate::config::config::Config;
 use clap::Arg;
 use clap::ArgMatches;
+use clap::{ArgAction, Command};
 use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use serde_json::Result;
-use crate::config::config::Config;
-use crate::api::dto::deployment::{DeploymentOutput};
-use crate::config::config::load_auth_config;
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
     Command::new("list")
@@ -76,32 +75,40 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         query.push_str(&params.join("&"));
     }
 
-    let response = ureq::get(&*query)
+    let request = ureq::get(&*query)
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .set("Content-Type", "application/json")
         .call();
-    let response_content = response.unwrap().into_string().unwrap();
 
-    let value: Result<Vec<DeploymentOutput>> = serde_json::from_str(&response_content);
-    let deployments_list = value.unwrap();
+    match request {
+        Ok(response) => {
+            if response.status() != 200 {
+                return eprintln!("Unable to fetch deployments: {}", response.status());
+            }
 
-    for deployment in deployments_list {
+            let deployments_list: Vec<DeploymentOutput> = response.into_json::<Vec<DeploymentOutput>>().unwrap();
 
-        deployments.push(
-            DeploymentTableItem {
-                id: deployment.id,
-                created_at: deployment.created_at,
-                updated_at: deployment.updated_at,
-                namespace: deployment.namespace,
-                name: deployment.name,
-                image: deployment.image,
-                runtime: deployment.runtime,
-                kind: deployment.kind,
-                replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
-                status: deployment.status,
-            },
-        )
+            for deployment in deployments_list {
+                deployments.push(
+                    DeploymentTableItem {
+                        id: deployment.id,
+                        created_at: deployment.created_at,
+                        updated_at: deployment.updated_at,
+                        namespace: deployment.namespace,
+                        name: deployment.name,
+                        image: deployment.image,
+                        runtime: deployment.runtime,
+                        kind: deployment.kind,
+                        replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
+                        status: deployment.status,
+                    },
+                )
+            }
+
+            print_stdout(deployments.with_title()).expect("");
+        },
+        Err(error) => {
+            return eprintln!("Error fetching deployments: {}", error);
+        }
     }
-
-    print_stdout(deployments.with_title()).expect("");
 }

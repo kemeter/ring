@@ -31,9 +31,10 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 if response.status() == 204 {
                     return println!("Deployment {} deleted ", id);
                 }
+
+                println!("Cannot delete deployment config");
             }
-            Err(err) => {
-                debug!("{:?}", err);
+            Err(_) => {
                 println!("Cannot delete deployment config");
             }
         }

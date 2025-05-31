@@ -17,32 +17,40 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/deployments", api_url);
 
-    let response = ureq::get(&*query)
+    let request = ureq::get(&*query)
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .set("Content-Type", "application/json")
         .call();
 
-    let response_content = response.unwrap().into_string().unwrap();
-    let value: serde_json::Result<Vec<DeploymentOutput>> = serde_json::from_str(&response_content);
-    let deployments_list = value.unwrap();
+    match request {
+        Ok(response) => {
+            if response.status() != 200 {
+                return eprintln!("Unable to fetch deployments: {}", response.status());
+            }
 
-    for deployment in deployments_list {
-        let id = deployment.id;
-        let request = ureq::delete(&format!("{}/deployments/{}", api_url, id))
-            .set("Authorization", &format!("Bearer {}", auth_config.token))
-            .set("Content-Type", "application/json")
-            .call();
+            let deployments_list: Vec<DeploymentOutput> = response.into_json::<Vec<DeploymentOutput>>().unwrap_or(vec![]);
 
-        match request {
-            Ok(response) => {
-                if response.status() == 204 {
-                    return println!("Deployment {} deleted ", id);
+            for deployment in deployments_list {
+                let id = deployment.id;
+                let request = ureq::delete(&format!("{}/deployments/{}", api_url, id))
+                    .set("Authorization", &format!("Bearer {}", auth_config.token))
+                    .set("Content-Type", "application/json")
+                    .call();
+
+                match request {
+                    Ok(response) => {
+                        if response.status() == 204 {
+                            return println!("Deployment {} deleted ", id);
+                        }
+                    }
+                    Err(_) => {
+                        println!("Cannot delete deployment config");
+                    }
                 }
             }
-            Err(err) => {
-                debug!("{:?}", err);
-                println!("Cannot delete deployment config");
-            }
+        },
+        Err(_) => {
+            eprintln!("Error fetching deployments")
         }
     }
 }

@@ -1,10 +1,9 @@
-use clap::{Command};
-use clap::ArgMatches;
-use cli_table::{format::Justify, print_stdout, Table, WithTitle};
-use serde_json::Result;
-use serde::{Serialize, Deserialize};
-use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::config::config::Config;
+use clap::ArgMatches;
+use clap::Command;
+use cli_table::{format::Justify, print_stdout, Table, WithTitle};
+use serde::{Deserialize, Serialize};
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
     Command::new("list")
@@ -38,29 +37,37 @@ pub(crate) fn execute(_args: &ArgMatches, mut configuration: Config) {
 
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let response = ureq::get(&format!("{}/users", api_url))
+    let request = ureq::get(&format!("{}/users", api_url))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .send_json({});
+        .call();
 
-    let response_content = response.unwrap().into_string().unwrap();
+    match request {
+        Ok(response) => {
+            if response.status() != 200 {
+                return eprintln!("Unable to fetch users: {}", response.status());
+            }
 
-    let value: Result<Vec<UserDto>> = serde_json::from_str(&response_content);
-    let users_list = value.unwrap();
+            let users_list: Vec<UserDto> = response.into_json::<Vec<UserDto>>().unwrap_or(vec![]);
 
-    for user in users_list {
-        users.push(
-            UserTableItem {
-                id: user.id,
-                created_at: user.created_at,
-                updated_at: user.updated_at,
-                status: user.status,
-                username: user.username,
-                login_at: user.login_at
-            },
-        )
+            for user in users_list {
+                users.push(
+                    UserTableItem {
+                        id: user.id,
+                        created_at: user.created_at,
+                        updated_at: user.updated_at,
+                        status: user.status,
+                        username: user.username,
+                        login_at: user.login_at
+                    },
+                )
+            }
+
+            print_stdout(users.with_title()).expect("");
+        }
+        Err(err) => {
+            eprintln!("Error fetching users: {}", err);
+        }
     }
-
-    print_stdout(users.with_title()).expect("");
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

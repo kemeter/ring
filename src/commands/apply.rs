@@ -9,7 +9,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use ureq::json;
+use serde_json::json;
 
 #[derive(Debug)]
 enum ApplyError {

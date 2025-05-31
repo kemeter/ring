@@ -1,11 +1,10 @@
-use clap::{Command};
-use clap::Arg;
-use clap::ArgMatches;
-use cli_table::{print_stdout, Table, WithTitle};
-use serde_json::Result;
-use crate::config::config::Config;
 use crate::api::dto::deployment::DeploymentDTO;
 use crate::config::config::load_auth_config;
+use crate::config::config::Config;
+use clap::Arg;
+use clap::ArgMatches;
+use clap::Command;
+use cli_table::{print_stdout, Table, WithTitle};
 
 pub(crate) fn command_config<'a, 'b>() -> Command {
     Command::new("inspect")
@@ -28,48 +27,58 @@ pub(crate) async fn execute(args: &ArgMatches<>, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let response = ureq::get(&format!("{}/deployments/{}", api_url, id))
+    let request = ureq::get(&format!("{}/deployments/{}", api_url, id))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .set("Content-Type", "application/json")
         .call();
-    let response_content = response.unwrap().into_string().unwrap();
-    let value: Result<DeploymentDTO> = serde_json::from_str(&response_content);
-    let deployment = value.unwrap();
 
-    println!("Name: {}", deployment.name);
-    println!("Namespace: {}", deployment.namespace);
-    println!("Kind: {}", deployment.kind);
-    println!("Image: {}", deployment.image);
-    println!("Replicas: {}", deployment.replicas);
-    println!("Restart count: {}", deployment.restart_count);
-    println!("Created AT: {}", deployment.created_at);
+    match request {
+        Ok(response) => {
+            if response.status() != 200 {
+                return eprintln!("Unable to fetch deployment: {}", response.status());
+            }
 
-    println!("Labels:");
-    for label in deployment.labels {
-        println!("  {:?} = {:?}", label.0, label.1)
+            let deployment = response.into_json::<DeploymentDTO>().unwrap();
+
+            println!("Name: {}", deployment.name);
+            println!("Namespace: {}", deployment.namespace);
+            println!("Kind: {}", deployment.kind);
+            println!("Image: {}", deployment.image);
+            println!("Replicas: {}", deployment.replicas);
+            println!("Restart count: {}", deployment.restart_count);
+            println!("Created AT: {}", deployment.created_at);
+
+            println!("Labels:");
+            for label in deployment.labels {
+                println!("  {:?} = {:?}", label.0, label.1)
+            }
+
+            println!("Instances:");
+            for instance in deployment.instances {
+                println!("  {:?}", instance)
+            }
+
+            println!("Environment:");
+            for secret in deployment.secrets {
+                println!("  {:?}: {:?}", secret.0, secret.1)
+            }
+
+            let mut volumes = vec![];
+
+            for volume in deployment.volumes {
+                volumes.push(VolumeTable {
+                    source: volume.source,
+                    destination: volume.destination,
+                    driver: volume.driver,
+                    permission: volume.permission,
+                });
+
+            }
+
+            print_stdout(volumes.with_title()).expect("");
+        },
+        Err(_) => {
+            eprintln!("Error from server (NotFound)");
+        }
     }
-
-    println!("Instances:");
-    for instance in deployment.instances {
-        println!("  {:?}", instance)
-    }
-
-    println!("Environment:");
-    for secret in deployment.secrets {
-        println!("  {:?}: {:?}", secret.0, secret.1)
-    }
-
-    let mut volumes = vec![];
-
-    for volume in deployment.volumes {
-        volumes.push(VolumeTable {
-            source: volume.source,
-            destination: volume.destination,
-            driver: volume.driver,
-            permission: volume.permission,
-        });
-
-    }
-
-    print_stdout(volumes.with_title()).expect("");
 }

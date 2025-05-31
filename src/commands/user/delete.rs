@@ -26,11 +26,10 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     match request {
         Ok(response) => {
             if response.status() == 204 {
-                return println!("User {} deleted ", id);
+                println!("User {} deleted ", id)
             }
         }
-        Err(err) => {
-            debug!("{:?}", err);
+        Err(_) => {
             println!("Cannot delete user config");
         }
     }

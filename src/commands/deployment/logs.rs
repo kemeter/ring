@@ -16,17 +16,25 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let response = ureq::get(&format!("{}/deployments/{}/logs", api_url, id))
+    let request = ureq::get(&format!("{}/deployments/{}/logs", api_url, id))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
         .set("Content-Type", "application/json")
         .call();
-    let response_content = response.unwrap().into_string().unwrap();
 
-    let value: serde_json::Result<Vec<Log>> = serde_json::from_str(&response_content);
+    match request {
+        Ok(response) => {
+            if response.status() != 200 {
+                return eprintln!("Unable to fetch deployment logs: {}", response.status());
+            }
 
-    let logs = value.unwrap();
+            let logs: Vec<Log> = response.into_json::<Vec<Log>>().unwrap_or(vec![]);
 
-    for log in logs {
-        println!("{}", log.message);
+            for log in logs {
+                println!("{}", log.message);
+            }
+        },
+        Err(_) => {
+            eprintln!("Error fetching deployment logs");
+        }
     }
 }

@@ -3,7 +3,7 @@ use clap::{Command};
 use clap::Arg;
 use clap::ArgMatches;
 use std::fs;
-use ureq::json;
+use serde_json::json;
 use crate::config::config::Config;
 
 use crate::config::config::AuthToken;

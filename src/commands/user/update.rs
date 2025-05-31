@@ -1,8 +1,7 @@
 use clap::{Command};
 use clap::Arg;
 use clap::ArgMatches;
-use ureq::json;
-use serde_json::Result;
+use serde_json::json;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 
@@ -32,13 +31,11 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
     let user_request = ureq::get(&format!("{}/users/me", configuration.get_api_url()))
         .set("Authorization", &format!("Bearer {}", auth_config.token))
-        .send_json({});
+        .call();
 
     match user_request {
         Ok(user_response ) => {
-            let response_content = user_response.into_string().unwrap();
-            let value: Result<UserOutput> = serde_json::from_str(&response_content);
-            let user = value.unwrap();
+            let user: UserOutput = user_response.into_json::<UserOutput>().unwrap();
 
             let api_url = format!("{}/users/{}", configuration.get_api_url(), user.id);
 
@@ -62,8 +59,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                         println!("user update")
                     }
                 }
-                Err(err) => {
-                    debug!("{}", err);
+                Err(_) => {
                     println!("Unable to update user");
                 }
             }
