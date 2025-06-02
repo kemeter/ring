@@ -164,12 +164,12 @@ pub(crate) async fn create(
     _user: User,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
 
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
 
+    println!("ddd");
     match input.validate() {
         Ok(()) => {
             let guard = connexion.lock().await;

@@ -70,7 +70,12 @@ impl DeploymentOutput {
         let labels: HashMap<String, String> = deployment.labels;
         let secrets: HashMap<String, String> = deployment.secrets;
 
-        let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
+        let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
+            .unwrap_or_else(|e| {
+                eprintln!("🚨 Erreur volumes : {} pour deployment {}", e, deployment.name);
+                Vec::new()
+            });
+
 
         return DeploymentOutput {
             id: deployment.id,

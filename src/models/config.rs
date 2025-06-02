@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_rusqlite::{from_row, from_rows};
@@ -41,6 +40,13 @@ pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) -> Result<
     let mut statement = connection.prepare("DELETE FROM config WHERE id = ?1")?;
     statement.execute([id])?;
     Ok(())
+}
+
+pub(crate) fn find_by_namespace(connection: &MutexGuard<Connection>, namespace: String) -> Result<Vec<Config>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut statement = connection.prepare("SELECT * FROM config WHERE namespace = ?1")?;
+    let rows = statement.query([namespace])?;
+    let configs: Result<Vec<Config>, _> = from_rows::<Config>(rows).collect();
+    configs.map_err(|e| e.into())
 }
 
 pub(crate) fn create(connection: &MutexGuard<Connection>, config: Config) -> Result<(), Box<dyn std::error::Error>> {

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use crate::runtime::docker;
 use crate::models::deployments;
+use crate::models::config;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
+use crate::models::config::Config;
 
 pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     let duration = Duration::from_secs(10);
@@ -26,7 +28,26 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
 
         for deployment in list_deployments.into_iter() {
             if "docker" == deployment.runtime {
-                let mut config = docker::apply(deployment.clone()).await;
+                let configs_vec = {
+                    let guard = storage.lock().await;
+                    config::find_by_namespace(&guard, deployment.namespace.clone())
+                };
+
+                let configs: HashMap<String, Config> = match configs_vec {
+                    Ok(configs_vec) => {
+                        configs_vec
+                            .into_iter()
+                            .map(|config| (config.name.clone(), config))
+                            .collect()
+                    },
+                    Err(e) => {
+                        eprintln!("Erreur : {}", e);
+                        return; // ou gérer l'erreur selon votre contexte
+                    }
+                };
+
+
+                let mut config = docker::apply(deployment.clone(), configs).await;
 
                 if "deleted" == config.status && config.instances.len() == 0 {
                     deleted.push(config.id.clone());

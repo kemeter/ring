@@ -49,7 +49,6 @@ struct DeploymentTableItem {
 }
 
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
-    let mut deployments = vec![];
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut query = format!("{}/deployments", api_url);
@@ -88,6 +87,7 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
 
             let deployments_list: Vec<DeploymentOutput> = response.body_mut().read_json::<Vec<DeploymentOutput>>().unwrap();
 
+            let mut deployments = vec![];
             for deployment in deployments_list {
                 deployments.push(
                     DeploymentTableItem {
