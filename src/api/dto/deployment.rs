@@ -70,7 +70,12 @@ impl DeploymentOutput {
         let labels: HashMap<String, String> = deployment.labels;
         let secrets: HashMap<String, String> = deployment.secrets;
 
-        let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
+        let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
+            .unwrap_or_else(|e| {
+                eprintln!("🚨 Erreur volumes : {} pour deployment {}", e, deployment.name);
+                Vec::new()
+            });
+
 
         return DeploymentOutput {
             id: deployment.id,
@@ -96,7 +101,11 @@ impl DeploymentOutput {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct DeploymentVolume {
-    pub(crate) source: String,
+    #[serde(default)]
+    pub(crate) r#type: String,
+    pub(crate) source: Option<String>,
+    pub(crate) key: Option<String>,
+    pub(crate) from: Option<String>,
     pub(crate) destination: String,
     pub(crate) driver: String,
     pub(crate) permission: String

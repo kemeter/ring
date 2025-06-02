@@ -25,6 +25,10 @@ use crate::api::action::deployment::delete as deployment_delete;
 use crate::api::action::deployment::logs as deployment_logs;
 
 use crate::api::action::node::get as node_get;
+use crate::api::action::config::list as config_list;
+use crate::api::action::config::get as config_get;
+use crate::api::action::config::create as config_create;
+use crate::api::action::config::delete as config_delete;
 
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
@@ -103,6 +107,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
         .route("/deployments/{id}/logs", get(deployment_logs))
         .route("/node/get", get(node_get))
+        .route("/configs", get(config_list).post(config_create))
+        .route("/configs/{id}", get(config_get).delete(config_delete))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))
@@ -206,5 +212,16 @@ pub(crate) mod tests {
         connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('658c0199-85a2-49da-86d6-1ecd2e427118', datetime(), 'pending', 'default', 'nginx', 'nginx', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
         connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('759d1280-95a3-40da-86d6-2fde3f538229', datetime(), 'running', 'default', 'php:8.3', 'php', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
         connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('759d1280-95a3-40da-86d6-2fde3f538229', datetime(), 'pending', 'kemeter', 'php:8.3', 'php', 1, 'kemeter', 'worker', '[]', '[]', '[]')", []).unwrap();
+        connexion.execute(
+            "INSERT INTO config (id, created_at, namespace, name, data, labels) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                "cde7806a-21af-473b-968b-08addc7bf0ba",
+                &chrono::Utc::now().to_rfc3339(),
+                "kemeter",
+                "nginx.conf",
+                r#"{"nginx.conf":"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }"}"#,
+                "{}"
+            ]
+        ).unwrap();
     }
 }
