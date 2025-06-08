@@ -370,10 +370,14 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
 fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, Config>, deployment_id: String) -> Result<Mount, DockerError> {
 
     let mount = if volume.r#type.as_str() == "bind" {
+
+        let volume_source = volume.source.unwrap();
+        let type_mount = if volume_source.starts_with('/') { Some(MountTypeEnum::BIND) } else { Some(MountTypeEnum::VOLUME) };
+
         Mount {
             target: Some(volume.destination),
-            source: Some(volume.source.unwrap_or_default()),
-            typ: Some(MountTypeEnum::BIND),
+            source: Some(volume_source),
+            typ: type_mount,
             read_only: Some(volume.permission == "ro"),
             ..Default::default()
         }
