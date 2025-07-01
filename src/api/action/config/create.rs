@@ -1,6 +1,7 @@
 use axum::extract::State;
 use axum::Json;
 use axum::response::IntoResponse;
+use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -50,9 +51,28 @@ pub(crate) async fn create(
                 labels: input.labels.unwrap_or_default(),
             };
 
-            let _ = config::create(&guard, config);
-
+            match config::create(&guard, config.clone()) {
+                Ok(_) => {
+                    (StatusCode::CREATED, Json(serde_json::to_value(config).unwrap())).into_response()
+                },
+                Err(e) => {
+                    if e.to_string().contains("UNIQUE constraint failed") {
+                        (StatusCode::CONFLICT, Json(serde_json::json!({
+                            "error": "Configuration with this name already exists"
+                        }))).into_response()
+                    } else {
+                        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+                            "error": "Failed to create configuration"
+                        }))).into_response()
+                    }
+                }
+            }
         },
-        Err(_) => (),
+        Err(validation_errors) => {
+            (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Validation failed",
+                "details": validation_errors
+            }))).into_response()
+        }
     }
 }
