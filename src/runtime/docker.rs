@@ -381,8 +381,19 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
             read_only: Some(volume.permission == "ro"),
             ..Default::default()
         }
+    } else if volume.r#type.as_str() == "volume" {
+
+        let volume_name = volume.source.unwrap();
+
+        Mount {
+            target: Some(volume.destination),
+            source: Some(volume_name),
+            typ: Some(MountTypeEnum::VOLUME),
+            read_only: Some(volume.permission == "ro"),
+            ..Default::default()
+        }
     } else {
-        let config_name = volume.from.as_ref().unwrap();
+        let config_name = volume.source.as_ref().unwrap();
 
         // Récupérer la config
         let config = configs.get(config_name)
@@ -580,7 +591,6 @@ mod tests {
             destination: "/container/path".to_string(),
             driver: "local".to_string(),
             permission: "rw".to_string(),
-            from: None,
             key: None,
         };
 
@@ -608,11 +618,10 @@ mod tests {
 
         let volume = DeploymentVolume {
             r#type: "config".to_string(),
-            source: None,
+            source: Some("test-config".to_string()),
             destination: "/app/nginx.conf".to_string(),
             driver: "local".to_string(),
             permission: "ro".to_string(),
-            from: Some("test-config".to_string()),
             key: Some("nginx.conf".to_string()),
         };
 
@@ -639,9 +648,8 @@ mod tests {
 
         let volume = DeploymentVolume {
             r#type: "config".to_string(),
-            source: None,
+            source: Some("test-config".to_string()),
             key: Some("missing_key".to_string()),
-            from: Some("test-config".to_string()),
             destination: "/tmp/toto".to_string(),
             driver: "local".to_string(),
             permission: "ro".to_string(),
@@ -650,5 +658,24 @@ mod tests {
         let result = create_mount_from_volume(volume, configs, "test-deployment".to_string());
 
         assert!(matches!(result, Err(DockerError::ConfigKeyNotFound(_))));
+    }
+
+    #[test]
+    fn test_docker_volume_creation() {
+        let volume = DeploymentVolume {
+            r#type: "volume".to_string(),
+            source: Some("my-docker-volume".to_string()),
+            destination: "/app/data".to_string(),
+            driver: "local".to_string(),
+            permission: "rw".to_string(),
+            key: None,
+        };
+
+        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string()).unwrap();
+
+        assert_eq!(mount.target, Some("/app/data".to_string()));
+        assert_eq!(mount.source, Some("my-docker-volume".to_string()));
+        assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
+        assert_eq!(mount.read_only, Some(false));
     }
 }

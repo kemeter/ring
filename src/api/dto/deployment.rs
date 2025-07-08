@@ -105,7 +105,6 @@ pub(crate) struct DeploymentVolume {
     pub(crate) r#type: String,
     pub(crate) source: Option<String>,
     pub(crate) key: Option<String>,
-    pub(crate) from: Option<String>,
     pub(crate) destination: String,
     pub(crate) driver: String,
     pub(crate) permission: String

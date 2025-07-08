@@ -33,6 +33,7 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
 pub enum VolumeType {
     Bind,
     Config,
+    Volume,
 }
 
 impl Default for VolumeType {
@@ -63,9 +64,6 @@ pub struct Volume {
     pub source: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub from: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub key: Option<String>,
 
     pub destination: String,
@@ -94,9 +92,8 @@ impl Validate for Volume {
                 }
             }
             VolumeType::Config => {
-
                 let fields_to_validate = [
-                    (&self.from, "from", "from"),
+                    (&self.source, "source", "source"),
                     (&self.key, "key", "key"),
                 ];
 
@@ -123,7 +120,17 @@ impl Validate for Volume {
                         _ => {}
                     }
                 }
-
+            }
+            VolumeType::Volume => {
+                match &self.source {
+                    None => {
+                        errors.add("source", ValidationError::new("source is required for named volumes"));
+                    }
+                    Some(source) if source.is_empty() => {
+                        errors.add("source", ValidationError::new("source cannot be empty"));
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -169,7 +176,6 @@ pub(crate) async fn create(
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
 
-    println!("ddd");
     match input.validate() {
         Ok(()) => {
             let guard = connexion.lock().await;
@@ -488,7 +494,7 @@ mod tests {
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
-                    // Missing from and key
+                    // Missing source and key
                 }
             ]
         }))
@@ -496,8 +502,7 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        // Maintenant on vérifie pour 'from' et 'key' au lieu de 'config_reference'
-        assert!(error_body.message.contains("from is required for config volumes") ||
+        assert!(error_body.message.contains("source is required for config volumes") ||
             error_body.message.contains("key is required for config volumes"));
     }
 
@@ -518,7 +523,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "from": "",  // Empty from
+                    "source": "",  // Empty source
                     "key": "",   // Empty key
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
@@ -530,8 +535,7 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        // Maintenant on vérifie pour 'from' et 'key' au lieu de 'config_reference'
-        assert!(error_body.message.contains("from cannot be empty") ||
+        assert!(error_body.message.contains("source cannot be empty") ||
             error_body.message.contains("key cannot be empty"));
     }
 
@@ -644,11 +648,40 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "from": "nginx-config",  // Utilise 'from' au lieu de 'config_reference'
-                    "key": "nginx.conf",     // Ajoute 'key'
+                    "source": "nginx-config",
+                    "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_with_valid_named_volume() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "my-volume",
+                    "destination": "/data",
+                    "driver": "local",
+                    "permission": "rw"
                 }
             ]
         }))
@@ -681,10 +714,17 @@ mod tests {
                 },
                 {
                     "type": "config",
-                    "from": "nginx-config",  // Utilise 'from' au lieu de 'config_reference'
-                    "key": "nginx.conf",     // Ajoute 'key'
+                    "source": "nginx-config",
+                    "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "nfs",
+                    "permission": "rw"
+                },
+                {
+                    "type": "volume",
+                    "source": "data-volume",
+                    "destination": "/data",
+                    "driver": "local",
                     "permission": "rw"
                 }
             ]
@@ -727,9 +767,8 @@ mod tests {
         assert!(message.contains("source") || message.contains("destination"));
     }
 
-    // Tests supplémentaires pour une meilleure couverture
     #[tokio::test]
-    async fn create_with_config_volume_missing_from_only() {
+    async fn create_with_config_volume_missing_source_only() {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -745,7 +784,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "key": "nginx.conf",  // Only key, missing from
+                    "key": "nginx.conf",  // Only key, missing source
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -756,7 +795,7 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("from is required for config volumes"));
+        assert!(error_body.message.contains("source is required for config volumes"));
     }
 
     #[tokio::test]
@@ -776,7 +815,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "from": "nginx-config",  // Only from, missing key
+                    "source": "nginx-config",  // Only source, missing key
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -791,7 +830,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_with_config_volume_empty_from_only() {
+    async fn create_with_config_volume_empty_source_only() {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -807,7 +846,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "from": "",  // Empty from
+                    "source": "",  // Empty source
                     "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
@@ -819,7 +858,7 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("from cannot be empty"));
+        assert!(error_body.message.contains("source cannot be empty"));
     }
 
     #[tokio::test]
@@ -839,7 +878,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "from": "nginx-config",
+                    "source": "nginx-config",
                     "key": "",  // Empty key
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
@@ -852,5 +891,67 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
         assert!(error_body.message.contains("key cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn create_with_named_volume_missing_source() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "type": "volume",
+                    "destination": "/data",
+                    "driver": "local",
+                    "permission": "rw"
+                    // Missing source (volume name)
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("source is required for named volumes"));
+    }
+
+    #[tokio::test]
+    async fn create_with_named_volume_empty_source() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "",  // Empty source
+                    "destination": "/data",
+                    "driver": "local",
+                    "permission": "rw"
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("source cannot be empty"));
     }
 }

@@ -27,9 +27,6 @@ struct VolumeTable {
     #[table(title = "Destination")]
     destination: String,
 
-    #[table(title = "From",)]
-    from: String,
-
     #[table(title = "Key",)]
     key: String,
 
@@ -95,10 +92,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
 
             for volume in deployment.volumes {
                 volumes.push(VolumeTable {
-                    r#type: if volume.source.is_some() { String::from("bind") } else { volume.r#type }, //fallback
-                    source: volume.source.unwrap_or_default(),
+                    r#type: volume.r#type,
+                    source: volume.source.clone().unwrap_or_default(),
                     destination: volume.destination,
-                    from: volume.from.unwrap_or_default(),
                     key: volume.key.unwrap_or_default(),
                     driver: volume.driver,
                     permission: volume.permission,
