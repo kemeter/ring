@@ -38,7 +38,12 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 
 pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) -> Result<(), Box<dyn std::error::Error>> {
     let mut statement = connection.prepare("DELETE FROM config WHERE id = ?1")?;
-    statement.execute([id])?;
+    let rows_affected = statement.execute([id])?;
+
+    if rows_affected == 0 {
+        return Err("Configuration not found".into());
+    }
+
     Ok(())
 }
 

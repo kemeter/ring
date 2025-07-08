@@ -11,11 +11,11 @@ pub(crate) async fn delete(
     State(connexion): State<Db>,
     _user: User,
 ) -> Result<impl IntoResponse, AuthError> {
-
     let guard = connexion.lock().await;
     let result = ConfigModel::delete(&guard, id.clone());
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
+        return Ok(StatusCode::NOT_FOUND)
     }
 
     Ok(StatusCode::NO_CONTENT)

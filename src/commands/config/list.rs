@@ -78,8 +78,6 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                 });
             }
 
-            println!("ddd");
-
             print_stdout(configs.with_title()).expect("");
         }
         Err(error) => {

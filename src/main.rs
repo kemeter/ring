@@ -127,6 +127,9 @@ async fn main() {
                 .subcommand(
                     commands::config::inspect::command_config(),
                 )
+                .subcommand(
+                    commands::config::delete::command_config(),
+                )
         )
         .subcommand(
             Command::new("user")
@@ -253,6 +256,12 @@ async fn main() {
                         sub_matches,
                         config
                     );
+                }
+                ("delete", sub_matches) => {
+                    commands::config::delete::execute(
+                        sub_matches,
+                        config
+                    ).await;
                 }
                 _ => {}
             }
