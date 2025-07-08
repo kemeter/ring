@@ -275,13 +275,12 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
         }
     };
 
-    // Always try to pull image if policy requires it
-    if let Some(config) = &deployment.config {
-        if config.image_pull_policy == "Always" || config.image_pull_policy == "IfNotPresent" {
-            pull_image(docker.clone(), image_config).await?;
-        }
-    } else {
-        // Try to pull image by default
+    let should_pull = deployment.config
+        .as_ref()
+        .map(|config| config.image_pull_policy.as_str() != "Never")
+        .unwrap_or(true);
+
+    if should_pull {
         pull_image(docker.clone(), image_config).await?;
     }
 
