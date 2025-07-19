@@ -28,6 +28,14 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     }
 }
 
+fn validate_kind(kind: &str) -> Result<(), ValidationError> {
+    match kind {
+        "job" => Ok(()),
+        "worker" => Ok(()),
+        _ => Err(ValidationError::new("invalid runtime values use [docker]")),
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum VolumeType {
@@ -142,8 +150,23 @@ impl Validate for Volume {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum DeploymentKind {
+    Worker,
+    Job,
+}
+
+impl Default for DeploymentKind {
+    fn default() -> Self {
+        DeploymentKind::Worker
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct DeploymentInput {
+    #[serde(default)]
+    kind: DeploymentKind,
     name: String,
     #[validate(custom(function = "validate_runtime"))]
     runtime: String,
@@ -158,7 +181,8 @@ pub(crate) struct DeploymentInput {
     secrets: HashMap<String, String>,
     #[serde(default)]
     #[validate(nested)]
-    volumes: Vec<Volume>
+    volumes: Vec<Volume>,
+    command: Option<String>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -219,7 +243,10 @@ pub(crate) async fn create(
                 name: input.name.clone(),
                 runtime: input.runtime.clone(),
                 namespace: input.namespace.clone(),
-                kind: String::from("worker"),
+                kind: match input.kind {
+                    DeploymentKind::Worker => "worker".to_string(),
+                    DeploymentKind::Job => "job".to_string(),
+                },
                 image: input.image.clone(),
                 config: input.config.clone(),
                 status: "creating".to_string(),
@@ -228,6 +255,7 @@ pub(crate) async fn create(
                 labels: input.labels,
                 secrets: input.secrets,
                 replicas: input.replicas,
+                command: input.command,
                 instances: [].to_vec(),
                 restart_count: 0,
                 volumes: volumes,

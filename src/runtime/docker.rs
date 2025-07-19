@@ -10,6 +10,7 @@ use bollard::{
         ListContainersOptionsBuilder,
         RemoveContainerOptionsBuilder,
         InspectNetworkOptionsBuilder,
+        InspectContainerOptions
     },
     network::{CreateNetworkOptions, ConnectNetworkOptions},
     container::LogOutput,
@@ -21,6 +22,7 @@ use crate::models::deployments::Deployment;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::default::Default;
+use bollard::query_parameters::InspectContainerOptionsBuilder;
 use crate::models::config::Config;
 
 struct DockerImage {
@@ -38,6 +40,13 @@ pub enum DockerError {
     ConfigKeyNotFound(String),
     FileSystemError(String),
     Other(String),
+}
+
+#[derive(Debug)]
+enum ContainerStatus {
+    Running,
+    Completed,
+    Failed,
 }
 
 impl From<bollard::errors::Error> for DockerError {
@@ -75,22 +84,105 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
         }
     };
 
+    deployment.instances = list_instances(deployment.id.to_string(), "running").await;
+
+    // Handle the processing based on deployment type
+    if deployment.kind == "job" {
+        return handle_job_deployment(deployment, docker, configs).await;
+    } else {
+        return handle_worker_deployment(deployment, docker, configs).await;
+    }
+}
+
+async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
+    if deployment.status == "deleted" {
+        debug!("{} marked as deleted. Remove all instances", deployment.id);
+        for instance in deployment.instances.iter_mut() {
+            remove_container(docker.clone(), instance.to_string()).await;
+            info!("Docker container {} deleted", instance);
+        }
+        return deployment;
+    }
+
+    // Check all instances for jobs (running + completed/failed)
+    let all_instances = list_instances(deployment.id.to_string(), "all").await;
+
+    if !all_instances.is_empty() {
+        // Check the status of the existing container
+        for instance_id in &all_instances {
+            match check_container_status(docker.clone(), instance_id.clone()).await {
+                ContainerStatus::Running => {
+                    deployment.status = "running".to_string();
+                    break;
+                }
+                ContainerStatus::Completed => {
+                    deployment.status = "completed".to_string();
+                    break;
+                }
+                ContainerStatus::Failed => {
+                    deployment.status = "failed".to_string();
+                    break;
+                }
+            }
+        }
+    } else {
+        // Create the job if it does not exist yet
+        if deployment.status == "creating" || deployment.status == "pending" {
+            match create_container(&mut deployment, &docker, configs).await {
+                Ok(_) => {
+                    deployment.status = "running".to_string();
+                }
+                Err(DockerError::ImageNotFound(msg)) => {
+                    error!("Image not found for job {}: {}", deployment.id, msg);
+                    deployment.status = "ImagePullBackOff".to_string();
+                }
+                Err(DockerError::ImagePullFailed(msg)) => {
+                    error!("Image pull failed for job {}: {}", deployment.id, msg);
+                    deployment.status = "ImagePullBackOff".to_string();
+                }
+                Err(DockerError::ContainerCreationFailed(msg)) => {
+                    error!("Container creation failed for job {}: {}", deployment.id, msg);
+                    deployment.status = "CreateContainerError".to_string();
+                }
+                Err(DockerError::ConfigNotFound(msg)) => {
+                    error!("Config not found for job {}: {}", deployment.id, msg);
+                    deployment.status = "ConfigError".to_string();
+                }
+                Err(DockerError::ConfigKeyNotFound(msg)) => {
+                    error!("Config key not found for job {}: {}", deployment.id, msg);
+                    deployment.status = "ConfigError".to_string();
+                }
+                Err(DockerError::FileSystemError(msg)) => {
+                    error!("File system error for job {}: {}", deployment.id, msg);
+                    deployment.status = "FileSystemError".to_string();
+                }
+                Err(DockerError::Other(msg)) => {
+                    error!("Unknown error for job {}: {}", deployment.id, msg);
+                    deployment.status = "Error".to_string();
+                }
+            }
+        }
+    }
+
+    debug!("Job runtime apply {:?}", deployment.id);
+    deployment
+}
+
+async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
     if deployment.restart_count >= 5 && deployment.status != "deleted" {
         deployment.status = "CrashLoopBackOff".to_string();
         return deployment;
     }
-
-    deployment.instances = list_instances(deployment.id.to_string(), "running").await;
 
     if deployment.status == "CrashLoopBackOff" {
         return deployment;
     }
 
     if deployment.status == "deleted" {
-        debug!("{} mark as delete. Remove all instance", deployment.id.to_string());
+        debug!("{} marked as deleted. Remove all instances", deployment.id);
         for instance in deployment.instances.iter_mut() {
             remove_container(docker.clone(), instance.to_string()).await;
-            info!("docker container {} delete", instance);
+            info!("Docker container {} deleted", instance);
         }
     } else {
         // Calculate difference and act accordingly
@@ -122,7 +214,7 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
                         deployment.restart_count += 1;
                     }
                     Err(DockerError::ContainerCreationFailed(msg)) => {
-                        error!("docker container creation failed for deployment {}: {}", deployment.id, msg);
+                        error!("Docker container creation failed for deployment {}: {}", deployment.id, msg);
                         deployment.status = "CreateContainerError".to_string();
                         deployment.restart_count += 1;
                     }
@@ -161,18 +253,43 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
                 debug!("Replicas count matches target: {} instances", current_count);
             }
         }
-
-        debug!("docker runtime apply {:?}", deployment.id.to_string());
     }
 
-    return deployment;
+    debug!("Worker runtime apply {:?}", deployment.id);
+    deployment
+}
+
+async fn check_container_status(docker: Docker, container_id: String) -> ContainerStatus {
+    let inspect_options = InspectContainerOptions {
+        size: true,
+        ..Default::default()
+    };
+    match docker.inspect_container(&container_id, Some(inspect_options)).await {
+        Ok(info) => {
+            if let Some(state) = info.state {
+                if state.running == Some(true) {
+                    ContainerStatus::Running
+                } else if state.exit_code == Some(0) {
+                    ContainerStatus::Completed
+                } else {
+                    ContainerStatus::Failed
+                }
+            } else {
+                ContainerStatus::Failed
+            }
+        }
+        Err(e) => {
+            debug!("Failed to inspect container {}: {}", container_id, e);
+            ContainerStatus::Failed
+        }
+    }
 }
 
 async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), DockerError> {
     let image = image_config.name.clone();
     let tag = image_config.tag.clone();
     let image_name = format!("{}:{}", image, tag);
-    info!("pull docker image: {}", image_name);
+    info!("Pull docker image: {}", image_name);
 
     // Check if image already exists locally
     match docker.inspect_image(&image_name).await {
@@ -247,7 +364,7 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), Doc
 }
 
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, configs: HashMap<String, Config>) -> Result<(), DockerError> {
-    debug!("create container for deployment id : {}", &deployment.id);
+    debug!("Create container for deployment id: {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
         Some((image, tag)) => (image.to_string(), tag.to_string()),
         None => (deployment.image.clone(), "latest".to_string()),
@@ -309,9 +426,15 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
 
     for volume in volumes_collection {
         let mount = create_mount_from_volume(volume, configs.clone(), deployment.id.to_string())?;
-
         mounts.push(mount);
     }
+
+    let cmd = match &deployment.command {
+        Some(cmd_str) if !cmd_str.is_empty() => {
+            vec![cmd_str.clone()]  // Convert string to vec
+        },
+        _ => Vec::new(),
+    };
 
     let host_config = HostConfig {
         mounts: Some(mounts),
@@ -320,6 +443,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
 
     let config = ContainerCreateBody {
         image: Some(deployment.image.clone()),
+        cmd: Some(cmd),
         env: Some(envs),
         labels: Some(labels),
         host_config: Some(host_config),
@@ -360,7 +484,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
             Ok(())
         }
         Err(e) => {
-            error!("Docker Failed to create container: {}", e);
+            error!("Docker failed to create container: {}", e);
             Err(DockerError::from(e))
         }
     }
@@ -456,12 +580,12 @@ async fn remove_container(docker: Docker, container_id: String) {
 }
 
 async fn create_network(docker: Docker, network_name: String) {
-    debug!("start Docker create network: {}", network_name);
+    debug!("Start Docker create network: {}", network_name);
 
     let inspect_options = InspectNetworkOptionsBuilder::new().build();
     match docker.inspect_network(&network_name, Some(inspect_options)).await {
         Ok(_network_info) => {
-            debug!("Docker network {} already exist", network_name);
+            debug!("Docker network {} already exists", network_name);
         }
         Err(_) => {
             info!("Docker create network: {}", network_name);
@@ -516,7 +640,7 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
                 }
             }
         }
-        Err(e) => debug!("docker list instances error: {}", e),
+        Err(e) => debug!("Docker list instances error: {}", e),
     }
 
     return instances;
