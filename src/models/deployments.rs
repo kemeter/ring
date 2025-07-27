@@ -5,6 +5,13 @@ use tokio::sync::MutexGuard;
 use std::collections::HashMap;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct UserConfig {
+    pub id: Option<u32>,
+    pub group: Option<u32>,
+    pub privileged: Option<bool>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct DeploymentConfig {
     #[serde(default = "default_image_pull_policy")]
@@ -12,6 +19,7 @@ pub(crate) struct DeploymentConfig {
     pub(crate) server: Option<String>,
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
+    pub(crate) user: Option<UserConfig>,
 }
 
 fn default_image_pull_policy() -> String {
@@ -40,7 +48,6 @@ impl FromSql for DeploymentConfig {
         }
     }
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
@@ -118,7 +125,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
             .iter()
-            .filter(|(_, v)| !v.is_empty()) // Exclure les filtres vides
+            .filter(|(_, v)| !v.is_empty())
             .map(|(column, _)| format!("{} IN(?)", column))
             .collect();
 
@@ -129,7 +136,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 
     let joined_values: Vec<String> = filters
         .values()
-        .filter(|v| !v.is_empty()) // Exclure les valeurs vides
+        .filter(|v| !v.is_empty())
         .map(|v| v.join(","))
         .collect();
     let values: Vec<&dyn rusqlite::ToSql> = joined_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
@@ -162,7 +169,6 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
 
     deployments
 }
-
 
 pub(crate) fn find_active_by_namespace_name(
     connection: &Connection,

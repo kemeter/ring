@@ -24,6 +24,14 @@ use crate::api::dto::deployment::DeploymentVolume;
 use std::default::Default;
 use bollard::query_parameters::InspectContainerOptionsBuilder;
 use crate::models::config::Config;
+use serde::{Deserialize, Serialize};
+
+/*#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserConfig {
+    pub id: Option<u32>,
+    pub group: Option<u32>,
+    pub privileged: Option<bool>,
+}*/
 
 struct DockerImage {
     name: String,
@@ -60,14 +68,12 @@ impl From<bollard::errors::Error> for DockerError {
     }
 }
 
-// Add From implementation for serde_json::Error
 impl From<serde_json::Error> for DockerError {
     fn from(err: serde_json::Error) -> Self {
         DockerError::Other(format!("JSON parsing error: {}", err))
     }
 }
 
-// Add From implementation for std::io::Error for file operations
 impl From<std::io::Error> for DockerError {
     fn from(err: std::io::Error) -> Self {
         DockerError::FileSystemError(format!("File system error: {}", err))
@@ -363,6 +369,29 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), Doc
     }
 }
 
+fn build_user_config(deployment_config: &Option<crate::models::deployments::DeploymentConfig>) -> Option<String> {
+    if let Some(config) = deployment_config {
+        if let Some(user_config) = &config.user {
+            match (user_config.id, user_config.group) {
+                (Some(uid), Some(gid)) => Some(format!("{}:{}", uid, gid)),
+                (Some(uid), None) => Some(uid.to_string()),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+fn get_privileged_config(deployment_config: &Option<crate::models::deployments::DeploymentConfig>) -> Option<bool> {
+    deployment_config
+        .as_ref()
+        .and_then(|c| c.user.as_ref())
+        .and_then(|u| u.privileged)
+}
+
 async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, configs: HashMap<String, Config>) -> Result<(), DockerError> {
     debug!("Create container for deployment id: {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
@@ -436,8 +465,12 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
         _ => Vec::new(),
     };
 
+    let user_config = build_user_config(&deployment.config);
+    let privileged_config = get_privileged_config(&deployment.config);
+
     let host_config = HostConfig {
         mounts: Some(mounts),
+        privileged: privileged_config,
         ..Default::default()
     };
 
@@ -447,6 +480,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
         env: Some(envs),
         labels: Some(labels),
         host_config: Some(host_config),
+        user: user_config,
         ..Default::default()
     };
 
@@ -518,22 +552,17 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
     } else {
         let config_name = volume.source.as_ref().unwrap();
 
-        // Récupérer la config
         let config = configs.get(config_name)
             .ok_or_else(|| DockerError::ConfigNotFound(format!("Config '{}' not found", config_name)))?;
 
-        // Parser le JSON du champ data
         let config_data: HashMap<String, String> = serde_json::from_str(&config.data)?;
 
-        // Récupérer la clé
         let key = volume.key.as_ref()
             .ok_or_else(|| DockerError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string()))?;
 
-        // Récupérer la valeur pour la clé
         let content = config_data.get(key)
             .ok_or_else(|| DockerError::ConfigKeyNotFound(format!("Key '{}' not found in config '{}'", key, config_name)))?;
 
-        // Créer un fichier temporaire
         let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
         std::fs::create_dir_all(&temp_dir)?;
 
@@ -705,6 +734,68 @@ mod tests {
     use std::collections::HashMap;
     use crate::models::config::Config;
     use crate::api::dto::deployment::DeploymentVolume;
+    use crate::models::deployments::UserConfig;
+
+    #[test]
+    fn test_build_user_config_with_uid_and_gid() {
+        let config = Some(crate::models::deployments::DeploymentConfig {
+            image_pull_policy: String::from("always"),
+            server: None,
+            username: None,
+            password: None,
+            user: Some(UserConfig {
+                id: Some(1000),
+                group: Some(1000),
+                privileged: Some(false),
+            }),
+        });
+
+        let result = build_user_config(&config);
+        assert_eq!(result, Some("1000:1000".to_string()));
+    }
+
+    #[test]
+    fn test_build_user_config_with_uid_only() {
+        let config = Some(crate::models::deployments::DeploymentConfig {
+            image_pull_policy: String::from("always"),
+            server: None,
+            username: None,
+            password: None,
+            user: Some(UserConfig {
+                id: Some(1000),
+                group: None,
+                privileged: Some(false),
+            }),
+        });
+
+        let result = build_user_config(&config);
+        assert_eq!(result, Some("1000".to_string()));
+    }
+
+    #[test]
+    fn test_build_user_config_none() {
+        let config = None;
+        let result = build_user_config(&config);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_get_privileged_config() {
+        let config = Some(crate::models::deployments::DeploymentConfig {
+            image_pull_policy: String::from("always"),
+            server: None,
+            username: None,
+            password: None,
+            user: Some(UserConfig {
+                id: Some(0),
+                group: Some(0),
+                privileged: Some(true),
+            }),
+        });
+
+        let result = get_privileged_config(&config);
+        assert_eq!(result, Some(true));
+    }
 
     #[test]
     fn test_bind_volume_creation() {
@@ -728,14 +819,14 @@ mod tests {
     #[test]
     fn test_config_volume_creation() {
         let mut configs = HashMap::new();
-        let config_data = r#"{"mykey": "myvalue"}"#;
+        let config_data = r#"{"nginx.conf":"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }"}"#;
         configs.insert("test-config".to_string(), Config {
             id: "9d74dfba-f6ad-4e67-a24d-4041b9b709d4 ".to_string(),
             created_at: "2010-03-15 11:41:00".to_string(),
             updated_at: None,
             namespace: "kemeter".to_string(),
             name: "secret_de_la_mort_qui_tue".to_string(),
-            data: "{\"nginx.conf\":\"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }\"}".to_string(),
+            data: config_data.to_string(),
             labels: "[]".to_string(),
         });
 
