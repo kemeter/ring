@@ -37,7 +37,7 @@ struct ConfigTableItem {
 pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
-    let mut query = format!("{}/configs", api_url);
+    let query = format!("{}/configs", api_url);
     let mut params: Vec<String> = Vec::new();
 
     if args.contains_id("namespace"){
