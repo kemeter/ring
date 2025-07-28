@@ -128,6 +128,15 @@ impl Validate for Volume {
                         _ => {}
                     }
                 }
+
+                if !matches!(self.permission, Permission::Ro) {
+                    let error = ValidationError {
+                        code: Cow::from("invalid_permission"),
+                        message: Some(Cow::from("config volumes must be read-only (ro)")),
+                        params: HashMap::new(),
+                    };
+                    errors.add("permission", error);
+                }
             }
             VolumeType::Volume => {
                 match &self.source {
@@ -746,7 +755,7 @@ mod tests {
                     "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "nfs",
-                    "permission": "rw"
+                    "permission": "ro"
                 },
                 {
                     "type": "volume",
@@ -981,5 +990,37 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
         assert!(error_body.message.contains("source cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn create_with_config_volume_invalid_permission() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "type": "config",
+                    "source": "nginx-config",
+                    "key": "nginx.conf",
+                    "destination": "/etc/nginx/nginx.conf",
+                    "driver": "local",
+                    "permission": "rw"  // INVALID: config volumes must be read-only
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("config volumes must be read-only"));
     }
 }
