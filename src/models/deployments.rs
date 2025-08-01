@@ -63,7 +63,7 @@ pub(crate) struct Deployment {
     pub(crate) runtime: String,
     pub(crate) kind: String,
     pub(crate) replicas: u32,
-    pub(crate) command: Option<String>,
+    pub(crate) command: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
     #[serde(skip_deserializing)]
@@ -91,7 +91,10 @@ impl Deployment {
             runtime: row.get("runtime")?,
             kind: row.get("kind")?,
             replicas: row.get("replicas")?,
-            command: row.get("command")?,
+            command: {
+                let command_str: String = row.get("command")?;
+                serde_json::from_str(&command_str).unwrap_or_default()
+            },
             instances: vec![],
             labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
             secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
@@ -311,7 +314,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
-        ":command": deployment.command,
+        ":command": serde_json::to_string(&deployment.command).unwrap(),
         ":config": config_json,
         ":runtime": deployment.runtime,
         ":kind": deployment.kind,

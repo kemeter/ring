@@ -1,1 +1,1 @@
-ALTER TABLE deployment ADD COLUMN command TEXT DEFAULT NULL;
+ALTER TABLE deployment ADD COLUMN command JSON DEFAULT '{}';

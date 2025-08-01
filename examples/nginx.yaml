@@ -1,9 +1,16 @@
+configs:
+    test2:
+        namespace: ring
+        name: "test-config2"
+        data: '{"test.conf":"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }"}'
+#        labels: []
+
 deployments:
     php:
         runtime: docker
+        namespace: ring
         name: php
         image: "php:7.3-fpm"
-        namespace: ring
         ports: []
         replicas: 3
         labels: []
@@ -14,15 +21,29 @@ deployments:
             SECRET_ENV: "$SECRET_ENV"
     nginx:
         name: nginx
+        namespace: ring
         runtime: docker
         image: "nginx:1.19.5"
-        namespace: ring
         replicas: 1
         volumes:
             - "/tmp/ring:/project/ring"
             - "/tmp/ring:/project2/ring"
+            - type: config
+              source: test-config2
+              key: "test.conf"
+              destination: /var/config/test.conf
+              driver: local
+
         labels:
             - sozune.host: "nginx.localhost"
+
+    ubuntu:
+        name: ubuntu
+        replicas: 1
+        image: ubuntu:25.10
+        namespace: ring
+        command: ["sleep", "infinity"]
+
 #services:
 #    app:
 #        ports: []

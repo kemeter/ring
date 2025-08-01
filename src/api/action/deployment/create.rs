@@ -191,7 +191,8 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     #[validate(nested)]
     volumes: Vec<Volume>,
-    command: Option<String>
+    #[serde(default)]
+    command: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1022,5 +1023,32 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
         assert!(error_body.message.contains("config volumes must be read-only"));
+    }
+
+    #[tokio::test]
+    async fn create_worker_with_json_array_command() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "kind": "worker",
+            "runtime": "docker",
+            "name": "echo-worker",
+            "namespace": "test",
+            "image": "alpine:latest",
+            "command": "[\"sh\", \"-c\", \"while true; do echo 'Worker running'; sleep 30; done\"]",
+            "replicas": 2
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        let deployment: DeploymentOutput = response.json();
+        assert_eq!(deployment.kind, "worker");
+        assert_eq!(deployment.replicas, 2);
     }
 }

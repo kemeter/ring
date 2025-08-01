@@ -458,12 +458,6 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
         mounts.push(mount);
     }
 
-    let cmd = match &deployment.command {
-        Some(cmd_str) if !cmd_str.is_empty() => {
-            vec![cmd_str.clone()]  // Convert string to vec
-        },
-        _ => Vec::new(),
-    };
 
     let user_config = build_user_config(&deployment.config);
     let privileged_config = get_privileged_config(&deployment.config);
@@ -476,7 +470,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
 
     let config = ContainerCreateBody {
         image: Some(deployment.image.clone()),
-        cmd: Some(cmd),
+        cmd: Some(deployment.command.clone()),
         env: Some(envs),
         labels: Some(labels),
         host_config: Some(host_config),

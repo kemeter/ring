@@ -55,7 +55,7 @@ pub(crate) struct DeploymentOutput {
     pub(crate) kind: String,
     pub(crate) namespace: String,
     pub(crate) image: String,
-    pub(crate) command: Option<String>,
+    pub(crate) command: Vec<String>,
     #[serde(serialize_with = "serialize_option_deployment_config")]
     pub(crate) config: Option<DeploymentConfig>,
     pub(crate) replicas: u32,
