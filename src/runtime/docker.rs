@@ -247,7 +247,13 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                 }
             }
             std::cmp::Ordering::Greater => {
-                debug!("Scaling down: {} -> {} (removing 1 container)", current_count, target_count);
+                if target_count == 0 {
+                    info!("Scaling deployment {} down to 0: removing container ({} remaining)", 
+                          deployment.name, current_count - 1);
+                } else {
+                    debug!("Scaling down: {} -> {} (removing 1 container)", current_count, target_count);
+                }
+                
                 if let Some(container_id) = deployment.instances.first().cloned() {
                     remove_container(docker.clone(), container_id.clone()).await;
                     // Synchronize local state with deletion

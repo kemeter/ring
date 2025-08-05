@@ -24,6 +24,7 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             deployments::find_all(&guard, HashMap::new())
         };
 
+        info!("Processing {} deployments", list_deployments.len());
         let mut deleted:Vec<String> = Vec::new();
 
         for deployment in list_deployments.into_iter() {
@@ -41,8 +42,8 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                             .collect()
                     },
                     Err(e) => {
-                        eprintln!("Erreur : {}", e);
-                        return; // ou gérer l'erreur selon votre contexte
+                        error!("Failed to load configs for deployment {}: {}", deployment.id, e);
+                        continue; // Skip this deployment, process others
                     }
                 };
 
@@ -50,11 +51,13 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                 let mut config = docker::apply(deployment.clone(), configs).await;
 
                 if "deleted" == config.status && config.instances.len() == 0 {
+                    info!("Marking deployment {} for cleanup", config.id);
                     deleted.push(config.id.clone());
                 }
 
                 {
                     if config.status == "creating" && config.instances.len() > 0 {
+                        info!("Deployment {} transition: creating -> running", config.id);
                         config.status = "running".to_string();
                     }
 
@@ -64,12 +67,13 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             }
         }
 
-        {
+        if !deleted.is_empty() {
+            info!("Cleaning up {} deployments", deleted.len());
             let guard = storage.lock().await;
             deployments::delete_batch(&guard, deleted);
         }
 
-
+        debug!("Scheduler cycle completed, sleeping for {}s", duration.as_secs());
         sleep(duration).await;
     }
 }
