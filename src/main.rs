@@ -33,6 +33,7 @@ mod models {
   pub(crate) mod deployments;
   pub(crate) mod users;
   pub(crate) mod config;
+  pub(crate) mod deployment_event;
 }
 
 mod api;
@@ -99,6 +100,9 @@ async fn main() {
                 )
                 .subcommand(
                     commands::deployment::logs::command_config(),
+                )
+                .subcommand(
+                    commands::deployment::events::command_config(),
                 )
         )
         .subcommand(
@@ -214,6 +218,12 @@ async fn main() {
                         sub_matches,
                         config
                     ).await
+                }
+                ("events", sub_matches) => {
+                    commands::deployment::events::execute(
+                        sub_matches,
+                        config
+                    )
                 }
                 _ => {}
             }

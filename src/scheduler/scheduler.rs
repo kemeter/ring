@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::runtime::docker;
 use crate::models::deployments;
 use crate::models::config;
+use crate::models::deployment_event;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -43,6 +44,20 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                     },
                     Err(e) => {
                         error!("Failed to load configs for deployment {}: {}", deployment.id, e);
+                        
+                        // Record error event
+                        {
+                            let guard = storage.lock().await;
+                            let _ = deployment_event::log_event(
+                                &guard,
+                                deployment.id.clone(),
+                                "error",
+                                format!("Failed to load configs: {}", e),
+                                "scheduler",
+                                Some("ConfigLoadError")
+                            );
+                        }
+                        
                         continue; // Skip this deployment, process others
                     }
                 };
@@ -52,12 +67,40 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
 
                 if "deleted" == config.status && config.instances.len() == 0 {
                     info!("Marking deployment {} for cleanup", config.id);
+                    
+                    // Record cleanup event
+                    {
+                        let guard = storage.lock().await;
+                        let _ = deployment_event::log_event(
+                            &guard,
+                            config.id.clone(),
+                            "info",
+                            "Deployment marked for cleanup - all containers stopped".to_string(),
+                            "scheduler",
+                            Some("CleanupScheduled")
+                        );
+                    }
+                    
                     deleted.push(config.id.clone());
                 }
 
                 {
                     if config.status == "creating" && config.instances.len() > 0 {
                         info!("Deployment {} transition: creating -> running", config.id);
+                        
+                        // Record state transition event
+                        {
+                            let guard = storage.lock().await;
+                            let _ = deployment_event::log_event(
+                                &guard,
+                                config.id.clone(),
+                                "info",
+                                format!("Status changed from creating to running ({} containers)", config.instances.len()),
+                                "scheduler",
+                                Some("StateTransition")
+                            );
+                        }
+                        
                         config.status = "running".to_string();
                     }
 

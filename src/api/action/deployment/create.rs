@@ -15,6 +15,7 @@ use validator::{Validate, ValidationError};
 
 use crate::api::server::Db;
 use crate::models::deployments;
+use crate::models::deployment_event;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::DeploymentConfig;
 use crate::models::users::User;
@@ -272,6 +273,16 @@ pub(crate) async fn create(
             };
 
             deployments::create(&guard, &deployment);
+
+            // Create deployment creation event
+            let _ = deployment_event::log_event(
+                &guard,
+                deployment.id.clone(),
+                "info",
+                format!("Deployment '{}' created successfully", deployment.name),
+                "api",
+                Some("DeploymentCreated")
+            );
 
             let deployment_output = DeploymentOutput::from_to_model(deployment);
 
