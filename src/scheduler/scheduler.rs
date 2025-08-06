@@ -22,7 +22,7 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                 String::from("creating"),
                 String::from("running")
             ]);
-            deployments::find_all(&guard, HashMap::new())
+            deployments::find_all(&guard, filters)
         };
 
         info!("Processing {} deployments", list_deployments.len());
