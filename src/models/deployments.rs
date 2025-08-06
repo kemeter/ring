@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
+use log::info;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct UserConfig {
@@ -71,6 +72,8 @@ pub(crate) struct Deployment {
     #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: String,
+    pub(crate) predecessor_id: Option<String>,
+    pub(crate) superseded_at: Option<String>,
 }
 
 impl Deployment {
@@ -98,7 +101,9 @@ impl Deployment {
             instances: vec![],
             labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
             secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
-            volumes: row.get("volumes")?
+            volumes: row.get("volumes")?,
+            predecessor_id: row.get("predecessor_id")?,
+            superseded_at: row.get("superseded_at")?
         })
     }
 }
@@ -121,7 +126,9 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                predecessor_id,
+                superseded_at
             FROM deployment
     ");
 
@@ -196,12 +203,14 @@ pub(crate) fn find_active_by_namespace_name(
             labels as labelsjson,
             secrets,
             secrets as secretsjson,
-            volumes
+            volumes,
+            predecessor_id,
+            superseded_at
         FROM deployment
         WHERE
             namespace = :namespace
             AND name = :name
-            AND status <> 'deleted'
+            AND status IN ('creating', 'active', 'failed')
         ORDER BY created_at DESC
     ";
 
@@ -243,7 +252,9 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 labels as labelsjson,
                 secrets,
                 secrets as secretsjson,
-                volumes
+                volumes,
+                predecessor_id,
+                superseded_at
             FROM deployment
             WHERE id = :id
             "
@@ -286,7 +297,9 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                predecessor_id,
+                superseded_at
             ) VALUES (
                 :id,
                 :created_at,
@@ -302,7 +315,9 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :replicas,
                 :labels,
                 :secrets,
-                :volumes
+                :volumes,
+                :predecessor_id,
+                :superseded_at
             )"
     ).expect("Could not create deployment");
 
@@ -322,6 +337,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
+        ":predecessor_id": deployment.predecessor_id,
+        ":superseded_at": deployment.superseded_at,
     };
 
     statement.execute(params).expect("Could not create deployment");
@@ -335,7 +352,8 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
             SET
                 status = :status,
                 updated_at = datetime('now'),
-                restart_count = :restart_count
+                restart_count = :restart_count,
+                superseded_at = :superseded_at
             WHERE
                 id = :id"
     ).expect("Could not update deployment");
@@ -343,8 +361,91 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deploymen
     statement.execute(named_params!{
         ":id": deployment.id,
         ":status": deployment.status,
-        ":restart_count": deployment.restart_count
+        ":restart_count": deployment.restart_count,
+        ":superseded_at": deployment.superseded_at
     }).expect("Could not update deployment");
+}
+
+pub(crate) fn supersede_predecessor(
+    connection: &MutexGuard<Connection>, 
+    new_deployment_id: &str
+) -> Result<(), rusqlite::Error> {
+    // First, get the predecessor ID from the new deployment
+    let predecessor_id = match find(connection, new_deployment_id.to_string()) {
+        Ok(Some(deployment)) => deployment.predecessor_id,
+        Ok(None) => return Ok(()), // New deployment doesn't exist
+        Err(_) => return Ok(()), // Error fetching deployment
+    };
+
+    if let Some(pred_id) = predecessor_id {
+        // Mark the predecessor as superseded
+        let mut statement = connection.prepare("
+            UPDATE deployment
+            SET
+                status = 'superseded',
+                superseded_at = datetime('now')
+            WHERE
+                id = :id
+                AND status IN ('active', 'creating')
+        ").expect("Could not prepare supersede statement");
+
+        statement.execute(named_params!{
+            ":id": pred_id
+        }).expect("Could not supersede predecessor");
+
+        info!("Deployment {} superseded by {}", pred_id, new_deployment_id);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn rollback_to_predecessor(
+    connection: &MutexGuard<Connection>,
+    failed_deployment_id: &str
+) -> Result<Option<String>, rusqlite::Error> {
+    // Get the failed deployment to find its predecessor
+    let failed_deployment = match find(connection, failed_deployment_id.to_string()) {
+        Ok(Some(deployment)) => deployment,
+        Ok(None) => return Ok(None),
+        Err(_) => return Ok(None), // Error fetching deployment
+    };
+
+    if let Some(predecessor_id) = failed_deployment.predecessor_id {
+        // Reactivate the predecessor
+        let mut statement = connection.prepare("
+            UPDATE deployment
+            SET
+                status = 'active',
+                superseded_at = NULL,
+                updated_at = datetime('now')
+            WHERE
+                id = :id
+                AND status = 'superseded'
+        ").expect("Could not prepare rollback statement");
+
+        statement.execute(named_params!{
+            ":id": predecessor_id
+        }).expect("Could not rollback to predecessor");
+
+        // Mark the failed deployment as deleted
+        let mut failed_statement = connection.prepare("
+            UPDATE deployment
+            SET
+                status = 'deleted',
+                updated_at = datetime('now')
+            WHERE
+                id = :id
+        ").expect("Could not prepare delete failed statement");
+
+        failed_statement.execute(named_params!{
+            ":id": failed_deployment_id
+        }).expect("Could not delete failed deployment");
+
+        info!("Rolled back to predecessor {} from failed deployment {}", predecessor_id, failed_deployment_id);
+        return Ok(Some(predecessor_id));
+    }
+
+    Ok(None)
 }
 
 pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {

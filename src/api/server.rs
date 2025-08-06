@@ -24,6 +24,7 @@ use crate::api::action::deployment::create as deployment_create;
 use crate::api::action::deployment::delete as deployment_delete;
 use crate::api::action::deployment::logs as deployment_logs;
 use crate::api::action::deployment::get_deployment_events;
+use crate::api::action::deployment::rollback as deployment_rollback;
 
 use crate::api::action::node::get as node_get;
 use crate::api::action::config::list as config_list;
@@ -92,6 +93,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
         .route("/deployments/{id}/logs", get(deployment_logs))
         .route("/deployments/{id}/events", get(get_deployment_events))
+        .route("/deployments/{id}/rollback", post(deployment_rollback))
         .route("/node/get", get(node_get))
         .route("/configs", get(config_list).post(config_create))
         .route("/configs/{id}", get(config_get).delete(config_delete))
