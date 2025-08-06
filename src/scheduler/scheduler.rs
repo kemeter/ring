@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use crate::models::config::Config;
+use log::{info, debug, error};
 
 pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     let duration = Duration::from_secs(10);
@@ -20,7 +21,9 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             let mut filters = HashMap::new();
             filters.insert(String::from("status"), vec![
                 String::from("creating"),
-                String::from("running")
+                String::from("active"),
+                String::from("superseded"),
+                String::from("deleted")
             ]);
             deployments::find_all(&guard, filters)
         };
@@ -29,6 +32,11 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
         let mut deleted:Vec<String> = Vec::new();
 
         for deployment in list_deployments.into_iter() {
+            // Skip superseded deployments - they should not be actively managed
+            if deployment.status == "superseded" {
+                continue;
+            }
+            
             if "docker" == deployment.runtime {
                 let configs_vec = {
                     let guard = storage.lock().await;
@@ -86,26 +94,89 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
 
                 {
                     if config.status == "creating" && config.instances.len() > 0 {
-                        info!("Deployment {} transition: creating -> running", config.id);
+                        info!("Deployment {} transition: creating -> active", config.id);
                         
-                        // Record state transition event
-                        {
-                            let guard = storage.lock().await;
+                        // Blue/Green transition: Mark as active and supersede predecessor
+                        config.status = "active".to_string();
+                        
+                        let guard = storage.lock().await;
+                        deployments::update(&guard, &config);
+                        
+                        // Supersede the predecessor deployment (Blue/Green switch)
+                        if let Err(e) = deployments::supersede_predecessor(&guard, &config.id) {
+                            error!("Failed to supersede predecessor for deployment {}: {}", config.id, e);
+                            
+                            let _ = deployment_event::log_event(
+                                &guard,
+                                config.id.clone(),
+                                "error",
+                                format!("Failed to supersede predecessor: {}", e),
+                                "scheduler",
+                                Some("SupersedeError")
+                            );
+                        } else {
+                            // Record successful Blue/Green transition
                             let _ = deployment_event::log_event(
                                 &guard,
                                 config.id.clone(),
                                 "info",
-                                format!("Status changed from creating to running ({} containers)", config.instances.len()),
+                                format!("Blue/Green transition completed - deployment is now active ({} containers)", config.instances.len()),
                                 "scheduler",
-                                Some("StateTransition")
+                                Some("BlueGreenTransition")
                             );
                         }
+                    } else if config.status == "creating" && config.instances.len() == 0 {
+                        // Handle deployment failure - rollback if possible
+                        info!("Deployment {} failed to start, attempting rollback", config.id);
                         
-                        config.status = "running".to_string();
+                        let guard = storage.lock().await;
+                        
+                        match deployments::rollback_to_predecessor(&guard, &config.id) {
+                            Ok(Some(predecessor_id)) => {
+                                info!("Rolled back failed deployment {} to predecessor {}", config.id, predecessor_id);
+                                
+                                let _ = deployment_event::log_event(
+                                    &guard,
+                                    predecessor_id.clone(),
+                                    "info",
+                                    format!("Automatic rollback from failed deployment {}", config.id),
+                                    "scheduler",
+                                    Some("AutomaticRollback")
+                                );
+                            }
+                            Ok(None) => {
+                                // No predecessor to rollback to, mark as failed
+                                config.status = "failed".to_string();
+                                deployments::update(&guard, &config);
+                                
+                                let _ = deployment_event::log_event(
+                                    &guard,
+                                    config.id.clone(),
+                                    "error",
+                                    "Deployment failed and no predecessor available for rollback".to_string(),
+                                    "scheduler",
+                                    Some("DeploymentFailed")
+                                );
+                            }
+                            Err(e) => {
+                                error!("Failed to rollback deployment {}: {}", config.id, e);
+                                config.status = "failed".to_string();
+                                deployments::update(&guard, &config);
+                                
+                                let _ = deployment_event::log_event(
+                                    &guard,
+                                    config.id.clone(),
+                                    "error",
+                                    format!("Deployment failed and rollback failed: {}", e),
+                                    "scheduler",
+                                    Some("RollbackFailed")
+                                );
+                            }
+                        }
+                    } else {
+                        let guard = storage.lock().await;
+                        deployments::update(&guard, &config);
                     }
-
-                    let guard = storage.lock().await;
-                    deployments::update(&guard, &config);
                 }
             }
         }
