@@ -19,7 +19,9 @@ pub(crate) async fn delete(
 
     match option {
         Ok(Some(user)) => {
-            users::delete(&guard, &user);
+            if let Err(_) = users::delete(&guard, &user) {
+                return StatusCode::INTERNAL_SERVER_ERROR;
+            }
 
             StatusCode::NO_CONTENT
         }

@@ -48,7 +48,12 @@ pub(crate) async fn login(
 
             {
                 let guard = connexion.lock().await;
-                users_model::login(&guard, user);
+                if let Err(_) = users_model::login(&guard, user) {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "errors": ["Internal server error"] }))
+                    );
+                }
             }
 
             (

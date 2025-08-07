@@ -4,6 +4,7 @@ use axum::{
     response::IntoResponse,
     Json
 };
+use serde_json::json;
 use serde::{Serialize, Deserialize};
 use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
@@ -17,7 +18,7 @@ pub(crate) async fn create(
     State(configuration): State<Config>,
     _user: User,
     Json(input): Json<UserInput>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Json<UserOutput>), (StatusCode, Json<serde_json::Value>)> {
     let guard = connexion.lock().await;
     let argon2_config = Argon2Config {
         variant: argon2::Variant::Argon2id,
@@ -34,24 +35,36 @@ pub(crate) async fn create(
         input.password.as_bytes(),
         configuration.user.salt.as_bytes(),
         &argon2_config
-    ).unwrap();
+    ).map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "errors": ["Password hashing failed"] }))
+    ))?;
 
-    users_model::create(&guard, &input.username, &password_hash);
-    let option = users_model::find_by_username(&guard, &input.username);
-    let user = option.as_ref().unwrap();
+    users_model::create(&guard, &input.username, &password_hash).map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "errors": ["User creation failed"] }))
+    ))?;
 
-    let member = user.clone().unwrap();
+    let user = users_model::find_by_username(&guard, &input.username)
+        .map_err(|_| (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Failed to retrieve created user"] }))
+        ))?
+        .ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Created user not found"] }))
+        ))?;
 
     let output = UserOutput {
-        id: member.id,
-        username: member.username,
-        created_at: member.created_at,
-        updated_at: member.updated_at,
-        status: member.status,
-        login_at: member.login_at,
+        id: user.id,
+        username: user.username,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        status: user.status,
+        login_at: user.login_at,
     };
 
-    (StatusCode::CREATED, Json(output))
+    Ok((StatusCode::CREATED, Json(output)))
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

@@ -1,8 +1,10 @@
 use axum::{
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use axum::extract::State;
+use serde_json::json;
 
 use crate::api::server::Db;
 use crate::models::users as users_model;
@@ -12,12 +14,15 @@ use crate::models::users::User;
 pub(crate) async fn list(
     State(connexion): State<Db>,
     _user: User
-) -> impl IntoResponse {
+) -> Result<Json<Vec<UserOutput>>, (StatusCode, Json<serde_json::Value>)> {
 
     let mut users: Vec<UserOutput> = Vec::new();
     let guard = connexion.lock().await;
 
-    let list_users = users_model::find_all(guard);
+    let list_users = users_model::find_all(guard).map_err(|_| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "errors": ["Internal server error"] }))
+    ))?;
 
     for user in list_users.into_iter() {
         let output = UserOutput {
@@ -32,7 +37,7 @@ pub(crate) async fn list(
         users.push(output);
     }
 
-    Json(users)
+    Ok(Json(users))
 }
 
 #[cfg(test)]

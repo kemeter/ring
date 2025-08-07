@@ -24,11 +24,11 @@ pub(crate) struct User {
 }
 
 pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<User>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("SELECT * FROM user WHERE id = :id").unwrap();
+    let mut statement = connection.prepare("SELECT * FROM user WHERE id = :id")
+        .map_err(serde_rusqlite::Error::from)?;
     let mut rows = statement.query(named_params!{
         ":id": id,
-    }).unwrap();
-
+    }).map_err(serde_rusqlite::Error::from)?;
 
     let mut ref_rows = from_rows_ref::<User>(&mut rows);
     let result = ref_rows.next();
@@ -37,11 +37,11 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
 }
 
 pub(crate) fn find_by_username(connection: &MutexGuard<Connection>, username: &str) -> Result<Option<User>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("SELECT * FROM user WHERE username = :username").unwrap();
+    let mut statement = connection.prepare("SELECT * FROM user WHERE username = :username")
+        .map_err(serde_rusqlite::Error::from)?;
     let mut rows = statement.query(named_params!{
         ":username": username,
-    }).unwrap();
-
+    }).map_err(serde_rusqlite::Error::from)?;
 
     let mut ref_rows = from_rows_ref::<User>(&mut rows);
     let result = ref_rows.next();
@@ -49,7 +49,7 @@ pub(crate) fn find_by_username(connection: &MutexGuard<Connection>, username: &s
     result.transpose()
 }
 
-pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) {
+pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) -> Result<(), rusqlite::Error> {
     let mut statement = connection.prepare("
         UPDATE user
         SET
@@ -57,12 +57,14 @@ pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) {
             login_at = datetime()
         WHERE
             id = :id"
-    ).expect("Could not update user");
+    )?;
 
     statement.execute(named_params!{
         ":token": user.token,
         ":id": user.id,
-    }).expect("Could not update user");
+    })?;
+    
+    Ok(())
 }
 
 pub(crate) fn find_by_token(connection: &Connection, token: &str) -> rusqlite::Result<User> {
@@ -100,7 +102,7 @@ pub(crate) fn find_by_token(connection: &Connection, token: &str) -> rusqlite::R
     return user;
 }
 
-pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {
+pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Result<Vec<User>, serde_rusqlite::Error> {
     let mut statement = connection.prepare("
             SELECT
                 id,
@@ -112,25 +114,25 @@ pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Vec<User> {
                 token,
                 login_at
             FROM user"
-    ).expect("Could not fetch users");
+    ).map_err(serde_rusqlite::Error::from)?;
 
     let mut users: Vec<User> = Vec::new();
-    let mut rows_iter = from_rows::<User>(statement.query([]).unwrap());
+    let mut rows_iter = from_rows::<User>(statement.query([]).map_err(serde_rusqlite::Error::from)?);
 
     loop {
         match rows_iter.next() {
             None => { break; },
             Some(user) => {
-                let user = user.expect("Could not deserialize User item");
+                let user = user?;
                 users.push(user);
             }
         }
     }
 
-    return users;
+    Ok(users)
 }
 
-pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, password: &str) {
+pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, password: &str) -> Result<(), rusqlite::Error> {
     let mut statement = connection.prepare("
             INSERT INTO user (
                 id,
@@ -147,7 +149,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
                 :password,
                 :token
             )"
-    ).expect("Could not create deployment");
+    )?;
 
     statement.execute(named_params!{
         ":id": Uuid::new_v4().to_string(),
@@ -155,10 +157,12 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, passwo
         ":username": username,
         ":password": password,
         ":token": Uuid::new_v4().to_string()
-    }).expect("Could not create user");
+    })?;
+    
+    Ok(())
 }
 
-pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
+pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) -> Result<(), rusqlite::Error> {
     let mut statement = connection.prepare("
             UPDATE user
             SET
@@ -167,23 +171,27 @@ pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) {
                 updated_at = datetime()
             WHERE
                 id = :id"
-    ).expect("Could not update deployment");
+    )?;
 
     statement.execute(named_params!{
         ":id": user.id,
         ":username": user.username,
         ":password": user.password
-    }).expect("Could not update deployment");
+    })?;
+    
+    Ok(())
 }
 
-pub(crate) fn delete(connection: &MutexGuard<Connection>, user: &User) {
+pub(crate) fn delete(connection: &MutexGuard<Connection>, user: &User) -> Result<(), rusqlite::Error> {
     let mut statement = connection.prepare("
             DELETE FROM user
             WHERE
                 id = :id"
-    ).expect("Could not delete deployment");
+    )?;
 
     statement.execute(named_params!{
         ":id": user.id
-    }).expect("Could not delete deployment");
+    })?;
+    
+    Ok(())
 }

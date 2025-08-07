@@ -4,6 +4,7 @@ use axum::{
     Json
 };
 use serde::{Serialize, Deserialize};
+use serde_json::json;
 use argon2::{self, Config as Argon2Config};
 use axum::extract::State;
 use http::StatusCode;
@@ -55,7 +56,12 @@ pub(crate) async fn update(
     }
 
     let guard = connexion.lock().await;
-    users_model::update(&guard, &user);
+    if let Err(_) = users_model::update(&guard, &user) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Failed to update user"] }))
+        ).into_response();
+    }
 
     return StatusCode::OK.into_response();
 }
