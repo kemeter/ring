@@ -1,5 +1,4 @@
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
 use http::StatusCode;
 
 use crate::api::server::Db;

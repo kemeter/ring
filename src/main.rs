@@ -47,6 +47,9 @@ mod config {
 mod database;
 mod serializer;
 
+#[cfg(test)]
+mod fixtures;
+
 use crate::database::get_database_connection;
 
 #[tokio::main]

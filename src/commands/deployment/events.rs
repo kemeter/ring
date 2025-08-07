@@ -7,7 +7,6 @@ use crate::config::config::{Config, load_auth_config};
 #[derive(Deserialize, Debug, Clone)]
 struct EventItem {
     id: String,
-    deployment_id: String,
     timestamp: String,
     level: String,
     message: String,

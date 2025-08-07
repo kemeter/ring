@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use log::info;
 use std::sync::Arc;
 use std::{time::Duration};
-use axum::{error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, response::{IntoResponse, Response}, Json, RequestPartsExt};
+use axum::{error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, Json, RequestPartsExt};
 use axum::extract::FromRef;
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
@@ -195,48 +195,6 @@ pub(crate) mod tests {
     }
 
     fn load_fixtures(connexion: &mut Connection) {
-        connexion.execute("INSERT INTO user (id, created_at, status, username, password, token) VALUES ('5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47', datetime(), 'active', 'john.doe', '$argon2id$v=19$m=65536,t=2,p=4$Y2hhbmdlbWU$NtAhPV3e8INMg6E1LnAE5wIHd/YszYoEyZeF0+1zT8E', 'johndoetoken')", []).unwrap();
-        connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('658c0199-85a2-49da-86d6-1ecd2e427118', datetime(), 'pending', 'default', 'nginx', 'nginx', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
-        connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('759d1280-95a3-40da-86d6-2fde3f538229', datetime(), 'running', 'default', 'php:8.3', 'php', 1, 'docker', 'worker', '[]', '[]', '[]')", []).unwrap();
-        connexion.execute("INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES ('759d1280-95a3-40da-86d6-2fde3f538229', datetime(), 'pending', 'kemeter', 'php:8.3', 'php', 1, 'kemeter', 'worker', '[]', '[]', '[]')", []).unwrap();
-        connexion.execute(
-            "INSERT INTO config (id, created_at, namespace, name, data, labels) VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                "cde7806a-21af-473b-968b-08addc7bf0ba",
-                &chrono::Utc::now().to_rfc3339(),
-                "kemeter",
-                "nginx.conf",
-                r#"{"nginx.conf":"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }"}"#,
-                "{}"
-            ]
-        ).unwrap();
-        
-        // Add test events
-        let now = chrono::Utc::now().to_rfc3339();
-        connexion.execute(
-            "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                "event-1",
-                "658c0199-85a2-49da-86d6-1ecd2e427118",
-                &now,
-                "info",
-                "Deployment created successfully",
-                "api",
-                "DeploymentCreated"
-            ]
-        ).unwrap();
-        
-        connexion.execute(
-            "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [
-                "event-2", 
-                "658c0199-85a2-49da-86d6-1ecd2e427118",
-                &now,
-                "error",
-                "Failed to pull image nginx:latest",
-                "docker",
-                "ImagePullError"
-            ]
-        ).unwrap();
+        crate::fixtures::load_all_fixtures(connexion);
     }
 }

@@ -27,9 +27,46 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
     }
 }
 
-pub(crate) fn find_all(connection: &MutexGuard<Connection>, _filters: HashMap<String, Vec<String>>) -> Vec<Config> {
-    let mut statement = connection.prepare("SELECT * FROM config").unwrap();
-    let rows: Result<Vec<Config>, _> = from_rows::<Config>(statement.query([]).unwrap()).collect();
+pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, Vec<String>>) -> Vec<Config> {
+    let mut query = String::from("
+            SELECT
+                id,
+                created_at,
+                updated_at,
+                namespace,
+                name,
+                data,
+                labels
+            FROM config
+    ");
+
+    let mut all_values: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    
+    if !filters.is_empty() {
+        let conditions: Vec<String> = filters
+            .iter()
+            .filter(|(_, v)| !v.is_empty())
+            .map(|(column, values)| {
+                let placeholders = (0..values.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+                format!("{} IN({})", column, placeholders)
+            })
+            .collect();
+
+        if !conditions.is_empty() {
+            query += &format!(" WHERE {}", conditions.join(" AND "));
+        }
+        
+        // Collect all values for parameter binding
+        for (_, values) in filters.iter().filter(|(_, v)| !v.is_empty()) {
+            for value in values {
+                all_values.push(value as &dyn rusqlite::ToSql);
+            }
+        }
+    }
+
+
+    let mut statement = connection.prepare(&query).unwrap();
+    let rows: Result<Vec<Config>, _> = from_rows::<Config>(statement.query(all_values.as_slice()).unwrap()).collect();
 
     let configs: Vec<Config> = rows.unwrap();
 

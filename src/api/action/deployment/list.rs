@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use axum::{response::IntoResponse, Json};
 use axum::extract::{FromRequestParts, State};
+use axum::{response::IntoResponse, Json};
+use std::collections::HashMap;
 
 use http::request::Parts;
 
@@ -8,13 +8,12 @@ use serde::Deserialize;
 
 use url::form_urlencoded::parse;
 
-use crate::api::server::Db;
-use serde_json::json;
-use http::StatusCode;
 use crate::api::dto::deployment::DeploymentOutput;
+use crate::api::server::Db;
 use crate::models::deployments;
-use crate::runtime::docker;
 use crate::models::users::User;
+use crate::runtime::docker;
+use http::StatusCode;
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct QueryParameters {
@@ -93,11 +92,11 @@ pub(crate) async fn list(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
     use crate::api::dto::deployment::DeploymentOutput;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn list() {

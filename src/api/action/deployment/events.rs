@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize};
 use serde_json::json;
 
 use crate::api::server::Db;

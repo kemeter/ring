@@ -22,16 +22,7 @@ use crate::models::deployments::Deployment;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::default::Default;
-use bollard::query_parameters::InspectContainerOptionsBuilder;
 use crate::models::config::Config;
-use serde::{Deserialize, Serialize};
-
-/*#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserConfig {
-    pub id: Option<u32>,
-    pub group: Option<u32>,
-    pub privileged: Option<bool>,
-}*/
 
 struct DockerImage {
     name: String,

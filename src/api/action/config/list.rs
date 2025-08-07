@@ -1,4 +1,4 @@
-use axum::extract::{FromRequestParts, Query, State};
+use axum::extract::{FromRequestParts, State};
 use axum::{response::IntoResponse, Json};
 use std::collections::HashMap;
 
@@ -8,7 +8,6 @@ use serde::Deserialize;
 
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
-use serde_json::json;
 use http::StatusCode;
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
@@ -49,7 +48,7 @@ where
 }
 
 pub(crate) async fn list(
-    Query(query_parameters): Query<QueryParameters>,
+    query_parameters: QueryParameters,
     State(connexion): State<Db>,
     _user: User
 ) -> impl IntoResponse {
@@ -84,7 +83,7 @@ mod tests {
     use axum_test::TestServer;
 
     #[tokio::test]
-    async fn list() {
+    async fn list_all_configs() {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -96,6 +95,82 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let configs = response.json::<Vec<ConfigOutput>>();
-        assert_eq!(1, configs.len());
+        assert_eq!(4, configs.len()); // Should have 4 configs from fixtures
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_namespace_production() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?namespace=production")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(2, configs.len()); // Should have 2 configs in production namespace
+        
+        // Verify all configs are in production namespace
+        for config in configs {
+            assert_eq!(config.namespace, "production");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_namespace_staging() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?namespace=staging")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(1, configs.len()); // Should have 1 config in staging namespace
+        assert_eq!(configs[0].namespace, "staging");
+        assert_eq!(configs[0].name, "app.properties");
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_multiple_namespaces() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?namespace=kemeter&namespace=staging")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(2, configs.len()); // Should have 2 configs (1 from kemeter + 1 from staging)
+        
+        // Verify configs are from the right namespaces
+        let namespaces: Vec<String> = configs.iter().map(|c| c.namespace.clone()).collect();
+        assert!(namespaces.contains(&"kemeter".to_string()));
+        assert!(namespaces.contains(&"staging".to_string()));
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_nonexistent_namespace() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?namespace=nonexistent")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(0, configs.len()); // Should have no configs
     }
 }
