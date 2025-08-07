@@ -15,12 +15,19 @@ pub(crate) async fn logs(
     State(connexion): State<Db>,
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;
-    let option = deployments::find(&guard, id.clone());
+    let deployment_result = deployments::find(&guard, id.clone());
 
-    let deployment = option.unwrap().unwrap();
-
-    let runtime = Runtime::new(deployment.clone());
-    let logs = runtime.get_logs().await;
-
-    Json(logs)
+    match deployment_result {
+        Ok(Some(deployment)) => {
+            let runtime = Runtime::new(deployment);
+            let logs = runtime.get_logs().await;
+            Json(logs)
+        }
+        Ok(None) => {
+            Json(Vec::<crate::runtime::runtime::Log>::new())
+        }
+        Err(_) => {
+            Json(Vec::<crate::runtime::runtime::Log>::new())
+        }
+    }
 }

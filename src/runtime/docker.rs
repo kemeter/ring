@@ -684,6 +684,17 @@ pub(crate) async fn logs(container_id: String) -> Vec<String> {
         }
     };
 
+    // Check if container exists first
+    match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
+        Ok(_) => {
+            // Container exists, proceed with logs
+        }
+        Err(e) => {
+            debug!("Container {} not found or not accessible: {}", container_id, e);
+            return Vec::new();
+        }
+    }
+
     let options = LogsOptionsBuilder::new()
         .stdout(true)
         .stderr(true)
@@ -695,9 +706,15 @@ pub(crate) async fn logs(container_id: String) -> Vec<String> {
     while let Some(log_result) = logs_stream.next().await {
         match log_result {
             Ok(chunk) => {
-                logs.push(format_log_output(chunk).replace("\n", ""))
+                let log_line = format_log_output(chunk).replace("\n", "");
+                if !log_line.trim().is_empty() {
+                    logs.push(log_line);
+                }
             }
-            Err(e) => debug!("Docker get logs errors: {}", e),
+            Err(e) => {
+                debug!("Docker get logs errors for container {}: {}", container_id, e);
+                break; // Stop on error instead of continuing
+            }
         }
     }
 

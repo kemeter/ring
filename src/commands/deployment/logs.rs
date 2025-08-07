@@ -27,10 +27,19 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 return eprintln!("Unable to fetch deployment logs: {}", response.status());
             }
 
-            let logs: Vec<Log> = response.body_mut().read_json::<Vec<Log>>().unwrap_or(vec![]);
-
-            for log in logs {
-                println!("{}", log.message);
+            match response.body_mut().read_json::<Vec<Log>>() {
+                Ok(logs) => {
+                    if logs.is_empty() {
+                        println!("No logs available for this deployment");
+                    } else {
+                        for log in logs {
+                            println!("{}", log.message);
+                        }
+                    }
+                }
+                Err(_) => {
+                    eprintln!("Error parsing logs response");
+                }
             }
         },
         Err(_) => {
