@@ -5,6 +5,7 @@ use tokio::sync::MutexGuard;
 use serde_rusqlite::from_rows;
 use serde_rusqlite::from_rows_ref;
 use uuid::Uuid;
+use argon2::{self, Config as Argon2Config};
 
 use crate::serializer::deserialize_null_default;
 
@@ -194,4 +195,24 @@ pub(crate) fn delete(connection: &MutexGuard<Connection>, user: &User) -> Result
     })?;
     
     Ok(())
+}
+
+/// Hash a password using Argon2id
+pub(crate) fn hash_password(password: &str, salt: &str) -> Result<String, argon2::Error> {
+    let argon2_config = Argon2Config {
+        variant: argon2::Variant::Argon2id,
+        version: argon2::Version::Version13,
+        mem_cost: 65536,
+        time_cost: 2,
+        lanes: 4,
+        secret: &[],
+        ad: &[],
+        hash_length: 32,
+    };
+
+    argon2::hash_encoded(
+        password.as_bytes(),
+        salt.as_bytes(),
+        &argon2_config
+    )
 }

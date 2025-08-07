@@ -6,7 +6,6 @@ use axum::{
 };
 use serde_json::json;
 use serde::{Serialize, Deserialize};
-use argon2::{self, Config as Argon2Config};
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use crate::models::users::User;
@@ -20,22 +19,8 @@ pub(crate) async fn create(
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, Json<UserOutput>), (StatusCode, Json<serde_json::Value>)> {
     let guard = connexion.lock().await;
-    let argon2_config = Argon2Config {
-        variant: argon2::Variant::Argon2id,
-        version: argon2::Version::Version13,
-        mem_cost: 65536,
-        time_cost: 2,
-        lanes: 4,
-        secret: &[],
-        ad: &[],
-        hash_length: 32,
-    };
-
-    let password_hash = argon2::hash_encoded(
-        input.password.as_bytes(),
-        configuration.user.salt.as_bytes(),
-        &argon2_config
-    ).map_err(|_| (
+    
+    let password_hash = users_model::hash_password(&input.password, &configuration.user.salt).map_err(|_| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "errors": ["Password hashing failed"] }))
     ))?;

@@ -5,7 +5,6 @@ use axum::{
 };
 use serde::{Serialize, Deserialize};
 use serde_json::json;
-use argon2::{self, Config as Argon2Config};
 use axum::extract::State;
 use http::StatusCode;
 use crate::api::server::Db;
@@ -20,14 +19,14 @@ pub(crate) async fn update(
     Path(id): Path<String>,
     _user: User,
     Json(input): Json<UserInput>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, impl IntoResponse> {
 
     let mut user = match {
         let guard = connexion.lock().await;
         users_model::find(&guard, id).ok().flatten()
     } {
         Some(user) => user,
-        None => return (StatusCode::NOT_FOUND, "User not found").into_response(),
+        None => return Err((StatusCode::NOT_FOUND, "User not found").into_response()),
     };
 
     if let Some(username) = input.username {
@@ -35,35 +34,24 @@ pub(crate) async fn update(
     }
 
     if let Some(password) = input.password {
-        let argon2_config = Argon2Config {
-            variant: argon2::Variant::Argon2id,
-            version: argon2::Version::Version13,
-            mem_cost: 65536,
-            time_cost: 2,
-            lanes: 4,
-            secret: &[],
-            ad: &[],
-            hash_length: 32,
-        };
-
-        let password_hash = argon2::hash_encoded(
-            password.as_bytes(),
-            configuration.user.salt.as_bytes(),
-            &argon2_config
-        ).unwrap();
+        let password_hash = users_model::hash_password(&password, &configuration.user.salt)
+            .map_err(|_| (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["Password hashing failed"] }))
+            ).into_response())?;
 
         user.password = password_hash;
     }
 
     let guard = connexion.lock().await;
     if let Err(_) = users_model::update(&guard, &user) {
-        return (
+        return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "errors": ["Failed to update user"] }))
-        ).into_response();
+        ).into_response());
     }
 
-    return StatusCode::OK.into_response();
+    Ok(StatusCode::OK.into_response())
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
