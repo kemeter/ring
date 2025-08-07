@@ -1051,7 +1051,7 @@ mod tests {
             "name": "echo-worker",
             "namespace": "test",
             "image": "alpine:latest",
-            "command": "[\"sh\", \"-c\", \"while true; do echo 'Worker running'; sleep 30; done\"]",
+            "command": ["sh", "-c", "while true; do echo 'Worker running'; sleep 30; done"],
             "replicas": 2
         }))
             .await;

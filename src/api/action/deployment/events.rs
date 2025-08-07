@@ -70,12 +70,12 @@ mod tests {
     use axum::extract::Query;
     use axum_test::TestServer;
     use serde_json::json;
-    use crate::api::server::tests::{new_test_app, login};
+    use crate::api::server::tests::{new_test_app, login, ResponseBody};
 
     #[tokio::test]
     async fn test_get_deployment_events_success() {
         let app = new_test_app();
-        let token = login(app.clone(), "john.doe", "changeme").await;
+        let token = login(app.clone(), "admin", "changeme").await;
         
         let server = TestServer::new(app).unwrap();
         
@@ -95,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_deployment_events_with_level_filter() {
         let app = new_test_app();
-        let token = login(app.clone(), "john.doe", "changeme").await;
+        let token = login(app.clone(), "admin", "changeme").await;
         
         let server = TestServer::new(app).unwrap();
         
@@ -116,7 +116,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_deployment_events_with_limit() {
         let app = new_test_app();
-        let token = login(app.clone(), "john.doe", "changeme").await;
+        let token = login(app.clone(), "admin", "changeme").await;
         
         let server = TestServer::new(app).unwrap();
         

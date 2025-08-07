@@ -158,6 +158,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
     use axum::Router;
     use axum_test::{TestServer};
+    use axum::http::StatusCode;
     use rusqlite::Connection;
     use serde::Deserialize;
     use serde_json::json;
@@ -166,8 +167,8 @@ pub(crate) mod tests {
     use crate::config::config::Config;
 
     #[derive(Debug, Deserialize)]
-    struct ResponseBody {
-        token: String,
+    pub(crate) struct ResponseBody {
+        pub(crate) token: String,
     }
 
     #[derive(Debug, Deserialize)]
