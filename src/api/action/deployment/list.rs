@@ -8,7 +8,9 @@ use serde::Deserialize;
 
 use url::form_urlencoded::parse;
 
-use crate::api::server::{AuthError, Db};
+use crate::api::server::Db;
+use serde_json::json;
+use http::StatusCode;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments;
 use crate::runtime::docker;
@@ -26,7 +28,7 @@ impl<S> FromRequestParts<S> for QueryParameters
     where
         S: Send + Sync,
 {
-    type Rejection = AuthError;
+    type Rejection = (StatusCode, axum::Json<serde_json::Value>);
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let request_uri = parts.uri.clone();

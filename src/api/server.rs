@@ -49,13 +49,16 @@ impl<S> FromRequestParts<S> for User
         AppState: FromRef<S>,
         S: Send + Sync,
 {
-    type Rejection = AuthError;
+    type Rejection = (StatusCode, Json<serde_json::Value>);
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
-            .map_err(|_| AuthError::InvalidToken)?;
+            .map_err(|_| (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid token" }))
+            ))?;
 
         let token = bearer.token();
         let app_state = AppState::from_ref(state);
@@ -67,33 +70,14 @@ impl<S> FromRequestParts<S> for User
             Ok(user)
         }
         else {
-            Err(AuthError::InvalidToken)
+            Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid token" }))
+            ))
         }
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum AuthError {
-    WrongCredentials,
-    MissingCredentials,
-    TokenCreation,
-    InvalidToken,
-}
-
-impl IntoResponse for AuthError {
-    fn into_response(self) -> Response {
-        let (status, error_message) = match self {
-            AuthError::WrongCredentials => (StatusCode::UNAUTHORIZED, "Wrong credentials"),
-            AuthError::MissingCredentials => (StatusCode::BAD_REQUEST, "Missing credentials"),
-            AuthError::TokenCreation => (StatusCode::INTERNAL_SERVER_ERROR, "Token creation error"),
-            AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
-        };
-        let body = Json(json!({
-            "error": error_message,
-        }));
-        (status, body).into_response()
-    }
-}
 
 #[derive(Clone, FromRef, Debug)]
 pub(crate) struct AppState {

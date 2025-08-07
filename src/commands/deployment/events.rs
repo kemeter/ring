@@ -215,25 +215,6 @@ fn display_events(events: &[EventItem]) {
     print_stdout(table_items.with_title()).expect("Failed to print table");
 }
 
-fn display_new_events(events: &[EventItem]) {
-    // Style "tail -f" - one line per event
-    for event in events {
-        let timestamp = format_timestamp(&event.timestamp);
-        let level_color = match event.level.as_str() {
-            "error" => "\x1b[31m", // Red
-            "warning" => "\x1b[33m", // Yellow
-            "info" => "\x1b[32m", // Green
-            _ => "\x1b[0m", // Default
-        };
-        
-        println!("{}[{}]\x1b[0m {} {}: {}", 
-                level_color,
-                event.level.to_uppercase(),
-                timestamp,
-                event.component,
-                event.message);
-    }
-}
 
 fn format_timestamp(timestamp: &str) -> String {
     // Parse ISO timestamp and format it with full date and time

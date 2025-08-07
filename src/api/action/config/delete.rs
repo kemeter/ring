@@ -2,7 +2,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use http::StatusCode;
 
-use crate::api::server::{AuthError, Db};
+use crate::api::server::Db;
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
 
@@ -10,15 +10,15 @@ pub(crate) async fn delete(
     Path(id): Path<String>,
     State(connexion): State<Db>,
     _user: User,
-) -> Result<impl IntoResponse, AuthError> {
+) -> StatusCode {
     let guard = connexion.lock().await;
     let result = ConfigModel::delete(&guard, id.clone());
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
-        return Ok(StatusCode::NOT_FOUND)
+        return StatusCode::NOT_FOUND
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    StatusCode::NO_CONTENT
 }
 
 #[cfg(test)]

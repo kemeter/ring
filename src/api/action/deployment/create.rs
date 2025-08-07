@@ -29,13 +29,6 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     }
 }
 
-fn validate_kind(kind: &str) -> Result<(), ValidationError> {
-    match kind {
-        "job" => Ok(()),
-        "worker" => Ok(()),
-        _ => Err(ValidationError::new("invalid runtime values use [docker]")),
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]

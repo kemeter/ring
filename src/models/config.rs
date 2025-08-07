@@ -27,7 +27,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
     }
 }
 
-pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, Vec<String>>) -> Vec<Config> {
+pub(crate) fn find_all(connection: &MutexGuard<Connection>, _filters: HashMap<String, Vec<String>>) -> Vec<Config> {
     let mut statement = connection.prepare("SELECT * FROM config").unwrap();
     let rows: Result<Vec<Config>, _> = from_rows::<Config>(statement.query([]).unwrap()).collect();
 
