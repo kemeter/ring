@@ -27,7 +27,7 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
 pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
 
     let username = args.get_one::<String>("username");
-    let password = args.get_one::<String>("username");
+    let password = args.get_one::<String>("password");
 
     let auth_config = load_auth_config(configuration.name.clone());
 
