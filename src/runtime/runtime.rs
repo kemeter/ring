@@ -3,6 +3,7 @@ use crate::runtime::docker;
 use async_trait::async_trait;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 
 pub struct Runtime {
 }
@@ -11,6 +12,8 @@ pub struct Runtime {
 pub trait RuntimeInterface {
     async fn list_instances(&self) -> Vec<String>;
     async fn get_logs(&self) -> Vec<Log>;
+    async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>);
+    async fn remove_instance(&self, instance_id: &str);
 }
 
 pub struct DockerRuntime {
@@ -79,6 +82,14 @@ impl RuntimeInterface for DockerRuntime {
         }
 
         logs
+    }
+
+    async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>) {
+        docker::execute_health_check_for_instance(instance_id.to_string(), health_check.clone()).await
+    }
+
+    async fn remove_instance(&self, instance_id: &str) {
+        docker::remove_container_by_id(instance_id.to_string()).await;
     }
 }
 
