@@ -69,6 +69,8 @@ pub(crate) struct Deployment {
     pub(crate) labels: HashMap<String, String>,
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
 }
 
 impl Deployment {
@@ -96,7 +98,15 @@ impl Deployment {
             instances: vec![],
             labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
             secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
-            volumes: row.get("volumes")?
+            volumes: row.get("volumes")?,
+            health_checks: {
+                let health_checks_str: String = row.get("health_checks").unwrap_or_default();
+                if health_checks_str.is_empty() {
+                    vec![]
+                } else {
+                    serde_json::from_str(&health_checks_str).unwrap_or_default()
+                }
+            }
         })
     }
 }
@@ -119,7 +129,8 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                health_checks
             FROM deployment
     ");
 
@@ -193,7 +204,8 @@ pub(crate) fn find_active_by_namespace_name(
             replicas,
             labels,
             secrets,
-            volumes
+            volumes,
+            health_checks
         FROM deployment
         WHERE
             namespace = :namespace
@@ -238,7 +250,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                health_checks
             FROM deployment
             WHERE id = :id
             "
@@ -281,7 +294,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 replicas,
                 labels,
                 secrets,
-                volumes
+                volumes,
+                health_checks
             ) VALUES (
                 :id,
                 :created_at,
@@ -297,7 +311,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :replicas,
                 :labels,
                 :secrets,
-                :volumes
+                :volumes,
+                :health_checks
             )"
     ).expect("Could not create deployment");
 
@@ -317,6 +332,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
+        ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap(),
     };
 
     statement.execute(params).expect("Could not create deployment");

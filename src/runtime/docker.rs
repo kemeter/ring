@@ -15,6 +15,7 @@ use bollard::{
     network::{CreateNetworkOptions, ConnectNetworkOptions},
     container::LogOutput,
     auth::DockerCredentials,
+    exec::{CreateExecOptions, StartExecOptions},
 };
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -573,6 +574,165 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
         }
     };
     Ok(mount)
+}
+
+pub(crate) async fn remove_container_by_id(container_id: String) {
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            error!("Failed to connect to Docker: {}", e);
+            return;
+        }
+    };
+    
+    remove_container(docker, container_id).await;
+}
+
+pub(crate) async fn execute_health_check_for_instance(container_id: String, health_check: crate::models::health_check::HealthCheck) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+    use crate::models::health_check::{HealthCheck, HealthCheckStatus};
+    
+    let container_ip = match health_check {
+        HealthCheck::Command { .. } => None,
+        _ => get_container_ip(&container_id).await
+    };
+    
+    match health_check {
+        HealthCheck::Tcp { port, .. } => {
+            match container_ip {
+                Some(ip) => execute_tcp_check_for_container(&ip, port).await,
+                None => (HealthCheckStatus::Failed, Some(format!("Could not get IP for container {}", container_id)))
+            }
+        },
+        HealthCheck::Http { url, .. } => {
+            match container_ip {
+                Some(ip) => execute_http_check_for_container(&ip, &url).await,
+                None => (HealthCheckStatus::Failed, Some(format!("Could not get IP for container {}", container_id)))
+            }
+        },
+        HealthCheck::Command { command, .. } => {
+            execute_command_check_for_container(&container_id, &command).await
+        }
+    }
+}
+
+async fn get_container_ip(container_id: &str) -> Option<String> {
+    let docker = Docker::connect_with_local_defaults().ok()?;
+    
+    let inspect_result = docker.inspect_container(container_id, None::<InspectContainerOptions>).await.ok()?;
+    
+    if let Some(networks) = inspect_result.network_settings?.networks {
+        if let Some(bridge) = networks.get("bridge") {
+            if let Some(ip) = &bridge.ip_address {
+                if !ip.is_empty() {
+                    return Some(ip.clone());
+                }
+            }
+        }
+        
+        for (_, network) in networks {
+            if let Some(ip) = network.ip_address {
+                if !ip.is_empty() {
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+async fn execute_tcp_check_for_container(container_ip: &str, port: u16) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+    use crate::models::health_check::HealthCheckStatus;
+    use std::net::{TcpStream, SocketAddr};
+    
+    let addr = format!("{}:{}", container_ip, port);
+    
+    match addr.parse::<SocketAddr>() {
+        Ok(socket_addr) => {
+            let addr_for_spawn = addr.clone();
+            match tokio::task::spawn_blocking(move || {
+                TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_secs(5))
+            }).await {
+                Ok(Ok(_)) => (HealthCheckStatus::Success, Some(format!("TCP connection to {} successful", addr_for_spawn))),
+                Ok(Err(e)) => (HealthCheckStatus::Failed, Some(format!("TCP connection failed: {}", e))),
+                Err(e) => (HealthCheckStatus::Failed, Some(format!("TCP task failed: {}", e))),
+            }
+        },
+        Err(e) => (HealthCheckStatus::Failed, Some(format!("Invalid address {}: {}", addr, e))),
+    }
+}
+
+async fn execute_http_check_for_container(container_ip: &str, url: &str) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+    use crate::models::health_check::HealthCheckStatus;
+    
+    let target_url = url.replace("localhost", container_ip);
+    let url_for_spawn = target_url.clone();
+    
+    match tokio::task::spawn_blocking(move || {
+        ureq::get(&url_for_spawn).call()
+    }).await {
+        Ok(Ok(response)) => {
+            let code = response.status();
+            if (200..300).contains(&code) {
+                (HealthCheckStatus::Success, Some(format!("HTTP check successful ({}) for {}", code, target_url)))
+            } else {
+                (HealthCheckStatus::Failed, Some(format!("HTTP check failed with status {} for {}", code, target_url)))
+            }
+        },
+        Ok(Err(e)) => {
+            (HealthCheckStatus::Failed, Some(format!("HTTP request failed for {}: {}", target_url, e)))
+        },
+        Err(e) => {
+            (HealthCheckStatus::Failed, Some(format!("HTTP task failed: {}", e)))
+        }
+    }
+}
+
+async fn execute_command_check_for_container(container_id: &str, command: &str) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+    use crate::models::health_check::HealthCheckStatus;
+    
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            return (HealthCheckStatus::Failed, Some(format!("Failed to connect to Docker: {}", e)));
+        }
+    };
+    
+    // Parse command into parts (simple split by space)
+    let cmd_parts: Vec<&str> = command.split_whitespace().collect();
+    if cmd_parts.is_empty() {
+        return (HealthCheckStatus::Failed, Some("Empty command".to_string()));
+    }
+    
+    // Create exec instance
+    let exec_options = CreateExecOptions {
+        cmd: Some(cmd_parts.iter().map(|s| s.to_string()).collect()),
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        ..Default::default()
+    };
+    
+    let exec_result = match docker.create_exec(container_id, exec_options).await {
+        Ok(result) => result,
+        Err(e) => {
+            return (HealthCheckStatus::Failed, Some(format!("Failed to create exec: {}", e)));
+        }
+    };
+    
+    // Start execution
+    let start_exec_options = StartExecOptions {
+        detach: false,
+        ..Default::default()
+    };
+    
+    match docker.start_exec(&exec_result.id, Some(start_exec_options)).await {
+        Ok(_) => {
+            (HealthCheckStatus::Success, Some("Command executed successfully".to_string()))
+        },
+        Err(e) => {
+            (HealthCheckStatus::Failed, Some(format!("Failed to execute command: {}", e)))
+        }
+    }
 }
 
 async fn remove_container(docker: Docker, container_id: String) {
