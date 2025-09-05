@@ -125,11 +125,17 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
             FROM deployment
     ");
 
+    let mut all_values: Vec<String> = Vec::new();
+
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
             .iter()
             .filter(|(_, v)| !v.is_empty())
-            .map(|(column, _)| format!("{} IN(?)", column))
+            .map(|(column, values)| {
+                let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                all_values.extend(values.clone());
+                format!("{} IN({})", column, placeholders)
+            })
             .collect();
 
         if !conditions.is_empty() {
@@ -137,12 +143,7 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
         }
     }
 
-    let joined_values: Vec<String> = filters
-        .values()
-        .filter(|v| !v.is_empty())
-        .map(|v| v.join(","))
-        .collect();
-    let values: Vec<&dyn rusqlite::ToSql> = joined_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let values: Vec<&dyn rusqlite::ToSql> = all_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
 
     let mut statement = match connection.prepare(&query) {
         Ok(stmt) => stmt,
