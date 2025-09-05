@@ -114,6 +114,14 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
         if !deleted.is_empty() {
             info!("Cleaning up {} deployments", deleted.len());
             let guard = storage.lock().await;
+            
+            // Clean up deployment events before deleting deployments
+            for id in &deleted {
+                if let Ok(count) = deployment_event::delete_by_deployment_id(&guard, id) {
+                    debug!("Deleted {} events for deployment {}", count, id);
+                }
+            }
+            
             deployments::delete_batch(&guard, deleted);
         }
 

@@ -110,6 +110,12 @@ pub fn find_events_by_deployment(
     Ok(events)
 }
 
+pub fn delete_by_deployment_id(connection: &MutexGuard<Connection>, deployment_id: &str) -> Result<usize> {
+    let mut statement = connection.prepare("DELETE FROM deployment_event WHERE deployment_id = ?")?;
+    let deleted_count = statement.execute(&[deployment_id])?;
+    Ok(deleted_count)
+}
+
 pub fn find_events_by_deployment_and_level(
     connection: &MutexGuard<Connection>,
     deployment_id: &str,
