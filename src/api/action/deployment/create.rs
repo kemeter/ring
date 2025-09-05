@@ -213,23 +213,22 @@ pub(crate) async fn create(
                 input.name.clone(),
             );
 
-            match active_deployments {
+            let predecessor_id = match active_deployments {
                 Ok(deployments_list) => {
                     if !deployments_list.is_empty() {
                         info!("Found {} active deployments with the same namespace and name", deployments_list.len());
-
-                        for mut deployment in deployments_list {
-                            deployment.status = "deleted".to_string();
-                            deployment.updated_at = Some(Utc::now().to_string());
-                            deployments::update(&guard, &deployment);
-                        }
+                        
+                        // Get the ID of the current active deployment for linking
+                        deployments_list.first().map(|d| d.id.clone())
+                    } else {
+                        None
                     }
                 }
                 Err(e) => {
                     let message = Message { message: format!("Database error: {}", e.to_string()) };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
-            }
+            };
 
             let utc: DateTime<Utc> = Utc::now();
 
@@ -263,6 +262,8 @@ pub(crate) async fn create(
                 instances: [].to_vec(),
                 restart_count: 0,
                 volumes: volumes,
+                predecessor_id,
+                superseded_at: None,
             };
 
             deployments::create(&guard, &deployment);
