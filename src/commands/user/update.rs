@@ -26,16 +26,18 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let user_request = ureq::get(&format!("{}/users/me", configuration.get_api_url()))
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
-        .call();
+    let user_request = reqwest::Client::new()
+        .get(&format!("{}/users/me", configuration.get_api_url()))
+        .header("Authorization", format!("Bearer {}", auth_config.token))
+        .send()
+        .await;
 
     match user_request {
-        Ok(mut user_response) => {
-            let user: UserOutput = user_response.body_mut().read_json::<UserOutput>().unwrap();
+        Ok(user_response) => {
+            let user: UserOutput = user_response.json::<UserOutput>().await.unwrap();
 
             let api_url = format!("{}/users/{}", configuration.get_api_url(), user.id);
 
@@ -49,9 +51,12 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
                 json!({"username": username, "password": password})
             };
 
-            let request = ureq::put(&api_url)
-                 .header("Authorization", &format!("Bearer {}", auth_config.token))
-                 .send_json(values);
+            let request = reqwest::Client::new()
+                .put(&api_url)
+                .header("Authorization", format!("Bearer {}", auth_config.token))
+                .json(&values)
+                .send()
+                .await;
 
             match request {
                 Ok(response) => {

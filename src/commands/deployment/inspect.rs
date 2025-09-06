@@ -42,18 +42,20 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let request = ureq::get(&format!("{}/deployments/{}", api_url, id))
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .get(&format!("{}/deployments/{}", api_url, id))
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch deployment: {}", response.status());
             }
 
-            let deployment = response.body_mut().read_json::<DeploymentOutput>().unwrap();
+            let deployment = response.json::<DeploymentOutput>().await.unwrap();
 
             // Main section
             println!("DEPLOYMENT DETAILS");

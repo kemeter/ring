@@ -12,23 +12,17 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/node/get", api_url);
 
-    let response = ureq::get(&query)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let response = reqwest::Client::new()
+        .get(&query)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
-    let response_content = match response {
-        Ok(mut res) => res.body_mut().read_json().unwrap_or_else(|_| "Invalid response body".to_string()),
-        Err(err) => {
-            eprintln!("Failed to fetch node info: {}", err);
-            return;
-        }
-    };
-
-    let parsed: serde_json::Result<NodeRootDto> = serde_json::from_str(&response_content);
-
-    match parsed {
-        Ok(data) => {
+    match response {
+        Ok(res) => {
+            match res.json::<NodeRootDto>().await {
+                Ok(data) => {
             println!("\n🖧 Node Info");
             println!("──────────────");
             println!("Hostname         : {}", data.hostname);
@@ -42,10 +36,14 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
                      data.load_average.get(0).unwrap_or(&0.0),
                      data.load_average.get(1).unwrap_or(&0.0),
                      data.load_average.get(2).unwrap_or(&0.0));
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse JSON: {}", e);
+                }
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to parse JSON: {}", e);
-            eprintln!("Raw response: {}", response_content);
+        Err(err) => {
+            eprintln!("Failed to fetch node info: {}", err);
         }
     }
 }

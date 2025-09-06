@@ -16,7 +16,7 @@ enum ApplyError {
     FileRead(std::io::Error),
     YamlParse(serde_yaml::Error),
     Validation(String),
-    Http(Box<ureq::Error>),
+    Http(reqwest::Error),
     Auth(String),
 }
 
@@ -214,7 +214,7 @@ fn preview_deployment(deployment: &Deployment, api_url: &str, force: bool, verbo
     println!("---");
 }
 
-fn deploy_to_server(
+async fn deploy_to_server(
     deployment: &Deployment,
     api_url: &str,
     auth_token: &str,
@@ -228,10 +228,14 @@ fn deploy_to_server(
 
     let json = json!(deployment);
 
-    let response = ureq::post(&url)
-        .header("Authorization", &format!("Bearer {}", auth_token))
-        .send_json(json)
-        .map_err(|e| ApplyError::Http(Box::new(e)))?;
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .json(&json)
+        .send()
+        .await
+        .map_err(ApplyError::Http)?;
 
     info!("Deployment '{}' created successfully (status: {})", deployment.name, response.status());
     println!("Deployment '{}' created", deployment.name);
@@ -239,14 +243,14 @@ fn deploy_to_server(
     Ok(())
 }
 
-pub(crate) fn apply(args: &ArgMatches, configuration: Config) {
-    if let Err(e) = apply_internal(args, configuration) {
+pub(crate) async fn apply(args: &ArgMatches, configuration: Config) {
+    if let Err(e) = apply_internal(args, configuration).await {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
-fn apply_internal(args: &ArgMatches, mut configuration: Config) -> Result<(), ApplyError> {
+async fn apply_internal(args: &ArgMatches, mut configuration: Config) -> Result<(), ApplyError> {
     debug!("Apply configuration");
 
     let binding = "ring.yaml".to_string();
@@ -290,7 +294,7 @@ fn apply_internal(args: &ArgMatches, mut configuration: Config) -> Result<(), Ap
             preview_deployment(&deployment, &api_url, is_force, is_verbose);
             success_count += 1;
         } else {
-            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force) {
+            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force).await {
                 Ok(()) => success_count += 1,
                 Err(e) => {
                     eprintln!("Failed to deploy '{}': {}", deployment_name, e);

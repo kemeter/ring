@@ -12,16 +12,18 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
     let id = args.get_one::<String>("id").unwrap();
 
-    let request = ureq::delete(&format!("{}/users/{}", api_url, id))
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .delete(&format!("{}/users/{}", api_url, id))
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
         Ok(response) => {

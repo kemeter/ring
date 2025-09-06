@@ -22,7 +22,7 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
@@ -37,19 +37,21 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         }
     }
 
-    let request = ureq::get(&*query)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .get(&*query)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             if response.status() != 200 {
                 println!("Error: Failed to retrieve configuration details");
                 return;
             }
 
-            let config: ConfigOutput = response.body_mut().read_json::<ConfigOutput>().unwrap();
+            let config: ConfigOutput = response.json::<ConfigOutput>().await.unwrap();
 
             let data: Value = serde_json::from_str(&config.data)
                 .expect("Failed to parse config data as JSON");

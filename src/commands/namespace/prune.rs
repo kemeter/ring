@@ -17,25 +17,29 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/deployments", api_url);
 
-    let request = ureq::get(&*query)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .get(&*query)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch deployments: {}", response.status());
             }
 
-            let deployments_list: Vec<DeploymentOutput> = response.body_mut().read_json::<Vec<DeploymentOutput>>().unwrap_or(vec![]);
+            let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap_or(vec![]);
 
             for deployment in deployments_list {
                 let id = deployment.id;
-                let request = ureq::delete(&format!("{}/deployments/{}", api_url, id))
-                    .header("Authorization", &format!("Bearer {}", auth_config.token))
+                let request = reqwest::Client::new()
+                    .delete(&format!("{}/deployments/{}", api_url, id))
+                    .header("Authorization", format!("Bearer {}", auth_config.token))
                     .header("Content-Type", "application/json")
-                    .call();
+                    .send()
+                    .await;
 
                 match request {
                     Ok(response) => {

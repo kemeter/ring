@@ -59,16 +59,16 @@ pub(crate) fn command_config() -> Command {
         )
 }
 
-pub(crate) fn execute(sub_matches: &ArgMatches, mut config: Config) {
+pub(crate) async fn execute(sub_matches: &ArgMatches, mut config: Config) {
     let deployment_id = sub_matches.get_one::<String>("deployment_id").unwrap();
     let level = sub_matches.get_one::<String>("level");
     let limit = sub_matches.get_one::<u32>("limit").unwrap();
     let follow = sub_matches.get_flag("follow");
     
     if follow {
-        follow_events(deployment_id, level, *limit, &mut config);
+        follow_events(deployment_id, level, *limit, &mut config).await;
     } else {
-        match fetch_events(deployment_id, level, *limit, &mut config) {
+        match fetch_events(deployment_id, level, *limit, &mut config).await {
             Ok(events) => {
                 if events.is_empty() {
                     println!("No events found for deployment {}", deployment_id);
@@ -83,7 +83,7 @@ pub(crate) fn execute(sub_matches: &ArgMatches, mut config: Config) {
     }
 }
 
-fn fetch_events(deployment_id: &str, level: Option<&String>, limit: u32, config: &mut Config) -> Result<Vec<EventItem>, String> {
+async fn fetch_events(deployment_id: &str, level: Option<&String>, limit: u32, config: &mut Config) -> Result<Vec<EventItem>, String> {
     let mut url = format!("{}/deployments/{}/events?limit={}", 
                          config.get_api_url(), deployment_id, limit);
     
@@ -94,17 +94,16 @@ fn fetch_events(deployment_id: &str, level: Option<&String>, limit: u32, config:
 
     let auth_config = load_auth_config(config.name.clone());
 
-    let response = ureq::get(&url)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let response = reqwest::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match response {
-        Ok(mut response) => {
-            let response_text = response.body_mut().read_to_string()
-                .map_err(|e| format!("Failed to read response: {}", e))?;
-
-            let events: Vec<EventItem> = serde_json::from_str(&response_text)
+        Ok(response) => {
+            let events: Vec<EventItem> = response.json().await
                 .map_err(|e| format!("Failed to parse response as JSON: {}", e))?;
 
             Ok(events)
@@ -121,14 +120,14 @@ fn fetch_events(deployment_id: &str, level: Option<&String>, limit: u32, config:
     }
 }
 
-fn follow_events(deployment_id: &str, level: Option<&String>, limit: u32, config: &mut Config) {
+async fn follow_events(deployment_id: &str, level: Option<&String>, limit: u32, config: &mut Config) {
     println!("Following events for deployment {} (Press Ctrl+C to stop)...", deployment_id);
     
     let mut last_seen_id: Option<String> = None;
     let mut all_events: Vec<EventItem> = Vec::new();
     
     // Show initial events and store them
-    let initial_events = fetch_events(deployment_id, level, limit, config);
+    let initial_events = fetch_events(deployment_id, level, limit, config).await;
     if let Ok(events) = initial_events {
         if !events.is_empty() {
             // Reverse the events to show oldest first (tail -f style)
@@ -145,7 +144,7 @@ fn follow_events(deployment_id: &str, level: Option<&String>, limit: u32, config
 
         std::thread::sleep(std::time::Duration::from_secs(2));
         
-        match fetch_events(deployment_id, level, limit, config) {
+        match fetch_events(deployment_id, level, limit, config).await {
             Ok(events) => {
                 let new_events = filter_new_events(&events, &last_seen_id);
                 

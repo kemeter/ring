@@ -34,7 +34,7 @@ struct ConfigTableItem {
 }
 
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/configs", api_url);
@@ -48,20 +48,22 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         }
     }
 
-    let request = ureq::get(&*query)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .get(&*query)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             println!("{:?}", response);
             if response.status() != 200 {
                 println!("Unable to fetch configurations list: {}", response.status());
                 return;
             }
 
-            let config_list: Vec<ConfigOutput> = response.body_mut().read_json::<Vec<ConfigOutput>>().unwrap();
+            let config_list: Vec<ConfigOutput> = response.json::<Vec<ConfigOutput>>().await.unwrap();
 
             let mut configs = vec![];
 

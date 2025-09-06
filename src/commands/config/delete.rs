@@ -23,10 +23,12 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let deployments: Vec<&str> = id.split(" ").collect();
 
     for deployment in deployments {
-        let request = ureq::delete(&format!("{}/configs/{}", api_url, deployment))
-            .header("Authorization", &format!("Bearer {}", auth_config.token))
+        let request = reqwest::Client::new()
+            .delete(&format!("{}/configs/{}", api_url, deployment))
+            .header("Authorization", format!("Bearer {}", auth_config.token))
             .header("Content-Type", "application/json")
-            .call();
+            .send()
+            .await;
 
         match request {
             Ok(response) => {

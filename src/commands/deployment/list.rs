@@ -48,7 +48,7 @@ struct DeploymentTableItem {
     status: String
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut query = format!("{}/deployments", api_url);
@@ -74,18 +74,20 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
         query.push_str(&params.join("&"));
     }
 
-    let request = ureq::get(&*query)
-        .header("Authorization", &format!("Bearer {}", auth_config.token))
+    let request = reqwest::Client::new()
+        .get(&*query)
+        .header("Authorization", format!("Bearer {}", auth_config.token))
         .header("Content-Type", "application/json")
-        .call();
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             if response.status() != 200 {
                 return eprintln!("Unable to fetch deployments: {}", response.status());
             }
 
-            let deployments_list: Vec<DeploymentOutput> = response.body_mut().read_json::<Vec<DeploymentOutput>>().unwrap();
+            let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap();
 
             let mut deployments = vec![];
             for deployment in deployments_list {

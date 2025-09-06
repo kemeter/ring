@@ -29,7 +29,7 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let username = args.get_one::<String>("username").unwrap();
     let password = args.get_one::<String>("password").unwrap();
 
@@ -37,17 +37,20 @@ pub(crate) fn execute(args: &ArgMatches, mut configuration: Config) {
     let config_file = format!("{}/auth.json", config_directory);
 
     let api_url = format!("{}/login", configuration.get_api_url());
-    let request = ureq::post(&api_url)
-        .send_json(json!({
+    let client = reqwest::Client::new();
+    let request = client
+        .post(&api_url)
+        .json(&json!({
             "username": username,
             "password": password
-        }));
+        }))
+        .send()
+        .await;
 
     match request {
-        Ok(mut response) => {
+        Ok(response) => {
             if response.status() == 200 {
-                let content = response.body_mut().read_to_string().unwrap();
-                let auth: AuthToken = serde_json::from_str(&content).unwrap();
+                let auth: AuthToken = response.json().await.unwrap();
 
                 let auth_file_content = fs::read_to_string(config_file.clone()).unwrap();
 

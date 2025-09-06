@@ -5,7 +5,6 @@ use clap::{Command, Arg};
 #[macro_use]
 extern crate log;
 extern crate env_logger;
-extern crate ureq;
 mod commands {
   pub(crate) mod context;
   pub(crate) mod init;
@@ -193,7 +192,7 @@ async fn main() {
           commands::apply::apply(
               sub_matches,
               config,
-          );
+          ).await;
         }
         Some(("deployment", sub_matches)) => {
             let deployment_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
@@ -202,13 +201,13 @@ async fn main() {
                     commands::deployment::list::execute(
                         sub_matches,
                         config,
-                    );
+                    ).await;
                 }
                 ("inspect", sub_matches) => {
                     commands::deployment::inspect::execute(
                         sub_matches,
                         config
-                    ).await
+                    ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::deployment::delete::execute(
@@ -221,13 +220,13 @@ async fn main() {
                     commands::deployment::logs::execute(
                         sub_matches,
                         config
-                    ).await
+                    ).await;
                 }
                 ("events", sub_matches) => {
                     commands::deployment::events::execute(
                         sub_matches,
                         config
-                    )
+                    ).await;
                 }
                 _ => {}
             }
@@ -239,7 +238,7 @@ async fn main() {
                     commands::namespace::prune::execute(
                         sub_matches,
                         config
-                    ).await
+                    ).await;
                 }
                 _ => {}
             }
@@ -251,7 +250,7 @@ async fn main() {
                     commands::node::get::execute(
                         sub_matches,
                         config,   
-                    ).await
+                    ).await;
                 }
                 _ => {}
             }
@@ -263,13 +262,13 @@ async fn main() {
                     commands::config::list::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 ("inspect", sub_matches) => {
                     commands::config::inspect::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::config::delete::execute(
@@ -284,7 +283,7 @@ async fn main() {
             commands::login::execute(
                 sub_matches,
                 config,
-            );
+            ).await;
         }
         Some(("user", sub_matches)) => {
             let user_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
@@ -293,25 +292,25 @@ async fn main() {
                     commands::user::list::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 ("create", sub_matches) => {
                     commands::user::create::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 ("update", sub_matches) => {
                     commands::user::update::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::user::delete::execute(
                         sub_matches,
                         config
-                    );
+                    ).await;
                 }
                 _ => {}
             }
