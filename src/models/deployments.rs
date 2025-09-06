@@ -66,9 +66,7 @@ pub(crate) struct Deployment {
     pub(crate) command: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
-    #[serde(skip_deserializing)]
     pub(crate) labels: HashMap<String, String>,
-    #[serde(skip_deserializing)]
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: String,
 }
@@ -194,9 +192,7 @@ pub(crate) fn find_active_by_namespace_name(
             kind,
             replicas,
             labels,
-            labels as labelsjson,
             secrets,
-            secrets as secretsjson,
             volumes
         FROM deployment
         WHERE
@@ -241,9 +237,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 kind,
                 replicas,
                 labels,
-                labels as labelsjson,
                 secrets,
-                secrets as secretsjson,
                 volumes
             FROM deployment
             WHERE id = :id

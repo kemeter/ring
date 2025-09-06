@@ -51,7 +51,7 @@ struct Deployment {
     #[serde(default)]
     replicas: u32,
 
-    #[serde(default, deserialize_with = "deserialize_labels")]
+    #[serde(default, deserialize_with = "crate::utils::labels::deserialize_labels")]
     labels: HashMap<String, String>,
 
     #[serde(default)]
@@ -80,48 +80,6 @@ struct ConfigFile {
 fn default_runtime() -> String { "docker".to_string() }
 fn default_kind() -> String { "worker".to_string() }
 
-fn deserialize_labels<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde_yaml::Value;
-    use serde::de::Error;
-
-    let value = Value::deserialize(deserializer)?;
-    let mut labels = HashMap::new();
-
-    match value {
-        Value::Sequence(seq) if seq.is_empty() => {
-            // Empty array returns empty HashMap
-        }
-        Value::Sequence(seq) => {
-            for item in seq {
-                if let Value::Mapping(map) = item {
-                    for (k, v) in map {
-                        if let (Some(key), Some(value)) = (k.as_str(), v.as_str()) {
-                            labels.insert(key.to_string(), value.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        Value::Mapping(map) => {
-            for (k, v) in map {
-                if let (Some(key), Some(value)) = (k.as_str(), v.as_str()) {
-                    labels.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-        Value::Null => {
-            // Null returns empty HashMap
-        }
-        _ => {
-            return Err(D::Error::custom("labels must be an array or object"));
-        }
-    }
-
-    Ok(labels)
-}
 
 fn deserialize_volumes<'de, D>(deserializer: D) -> Result<Vec<Volume>, D::Error>
 where
@@ -540,5 +498,6 @@ deployments:
         let labels3 = &config3.deployments["test3"].labels;
         assert_eq!(labels3.len(), 2);
         assert_eq!(labels3.get("app"), Some(&"my-app".to_string()));
+        assert_eq!(labels3.get("version"), Some(&"1.0".to_string()));
     }
 }

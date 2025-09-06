@@ -46,6 +46,7 @@ mod config {
 
 mod database;
 mod serializer;
+mod utils;
 
 #[cfg(test)]
 mod fixtures;
