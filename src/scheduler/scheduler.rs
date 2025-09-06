@@ -3,6 +3,8 @@ use crate::runtime::docker;
 use crate::models::deployments;
 use crate::models::config;
 use crate::models::deployment_event;
+use crate::models::health_check_logs;
+use crate::scheduler::health_checker::HealthChecker;
 use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -11,6 +13,8 @@ use crate::models::config::Config;
 
 pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
     let duration = Duration::from_secs(10);
+    let health_checker = HealthChecker::new(storage.clone());
+    let mut cleanup_counter = 0;
 
     info!("Starting schedule");
 
@@ -105,8 +109,30 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                         config.status = "running".to_string();
                     }
 
-                    let guard = storage.lock().await;
-                    deployments::update(&guard, &config);
+                    // Execute health checks for running deployments
+                    if config.status == "running" && !config.health_checks.is_empty() {
+                        debug!("Executing health checks for deployment {}", config.id);
+                        health_checker.execute_checks(&config).await;
+                        
+                        // Re-read deployment after health checks to preserve any status changes
+                        let guard = storage.lock().await;
+                        match deployments::find(&guard, config.id.clone()) {
+                            Ok(mut updated_deployment) => {
+                                // Preserve scheduler changes (instances, etc.) but keep health checker status changes
+                                updated_deployment.instances = config.instances;
+                                updated_deployment.restart_count = config.restart_count;
+                                // Keep the status from health checker (could be "deleted" or "failed")
+                                deployments::update(&guard, &updated_deployment);
+                            }
+                            Err(_) => {
+                                // If deployment not found, use the original config
+                                deployments::update(&guard, &config);
+                            }
+                        }
+                    } else {
+                        let guard = storage.lock().await;
+                        deployments::update(&guard, &config);
+                    }
                 }
             }
         }
@@ -115,14 +141,29 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
             info!("Cleaning up {} deployments", deleted.len());
             let guard = storage.lock().await;
             
-            // Clean up deployment events before deleting deployments
+            // Clean up deployment events and health checks before deleting deployments
             for id in &deleted {
                 if let Ok(count) = deployment_event::delete_by_deployment_id(&guard, id) {
                     debug!("Deleted {} events for deployment {}", count, id);
                 }
+                
+                // Clean up health checks
+                if let Ok(count) = health_check_logs::delete_by_deployment_id(&guard, id) {
+                    debug!("Deleted {} health checks for deployment {}", count, id);
+                }
             }
             
             deployments::delete_batch(&guard, deleted);
+        }
+
+        // Cleanup health checks every 30 cycles (5 minutes with 10s intervals)
+        cleanup_counter += 1;
+        if cleanup_counter >= 30 {
+            cleanup_counter = 0;
+            let guard = storage.lock().await;
+            if let Err(e) = health_check_logs::cleanup_old_health_checks(&guard) {
+                error!("Failed to cleanup old health checks: {}", e);
+            }
         }
 
         debug!("Scheduler cycle completed, sleeping for {}s", duration.as_secs());

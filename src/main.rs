@@ -22,6 +22,7 @@ mod commands {
 
 mod scheduler {
   pub(crate) mod scheduler;
+  pub(crate) mod health_checker;
 }
 
 mod runtime {
@@ -34,6 +35,8 @@ mod models {
   pub(crate) mod users;
   pub(crate) mod config;
   pub(crate) mod deployment_event;
+  pub(crate) mod health_check;
+  pub(crate) mod health_check_logs;
 }
 
 mod api;
