@@ -218,7 +218,8 @@ async fn deploy_to_server(
     deployment: &Deployment,
     api_url: &str,
     auth_token: &str,
-    force: bool
+    force: bool,
+    client: &reqwest::Client
 ) -> Result<(), ApplyError> {
     let mut url = format!("{}/deployments", api_url);
 
@@ -228,7 +229,6 @@ async fn deploy_to_server(
 
     let json = json!(deployment);
 
-    let client = reqwest::Client::new();
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", auth_token))
@@ -243,14 +243,14 @@ async fn deploy_to_server(
     Ok(())
 }
 
-pub(crate) async fn apply(args: &ArgMatches, configuration: Config) {
-    if let Err(e) = apply_internal(args, configuration).await {
+pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &reqwest::Client) {
+    if let Err(e) = apply_internal(args, configuration, client).await {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
-async fn apply_internal(args: &ArgMatches, mut configuration: Config) -> Result<(), ApplyError> {
+async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) -> Result<(), ApplyError> {
     debug!("Apply configuration");
 
     let binding = "ring.yaml".to_string();
@@ -294,7 +294,7 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config) -> Result<
             preview_deployment(&deployment, &api_url, is_force, is_verbose);
             success_count += 1;
         } else {
-            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force).await {
+            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force, client).await {
                 Ok(()) => success_count += 1,
                 Err(e) => {
                     eprintln!("Failed to deploy '{}': {}", deployment_name, e);

@@ -163,6 +163,14 @@ async fn main() {
 
     let subcommand_name = matches.subcommand();
     let config = config::config::load_config(context);
+    let client = reqwest::Client::builder()
+        .default_headers({
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("Content-Type", "application/json".parse().unwrap());
+            headers
+        })
+        .build()
+        .expect("Failed to build HTTP client");
 
     match subcommand_name {
         Some(("context", sub_matches)) => {
@@ -192,6 +200,7 @@ async fn main() {
           commands::apply::apply(
               sub_matches,
               config,
+              &client,
           ).await;
         }
         Some(("deployment", sub_matches)) => {
@@ -201,31 +210,36 @@ async fn main() {
                     commands::deployment::list::execute(
                         sub_matches,
                         config,
+                        &client,
                     ).await;
                 }
                 ("inspect", sub_matches) => {
                     commands::deployment::inspect::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::deployment::delete::execute(
                         sub_matches,
-                        config
-                    ).await
+                        config,
+                        &client,
+                    ).await;
                 }
 
                 ("logs", sub_matches) => {
                     commands::deployment::logs::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("events", sub_matches) => {
                     commands::deployment::events::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 _ => {}
@@ -237,7 +251,8 @@ async fn main() {
                 ("prune", sub_matches) => {
                     commands::namespace::prune::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 _ => {}
@@ -249,7 +264,8 @@ async fn main() {
                 ("get", sub_matches) => {
                     commands::node::get::execute(
                         sub_matches,
-                        config,   
+                        config,
+                        &client,
                     ).await;
                 }
                 _ => {}
@@ -261,19 +277,22 @@ async fn main() {
                 ("list", sub_matches) => {
                     commands::config::list::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("inspect", sub_matches) => {
                     commands::config::inspect::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::config::delete::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 _ => {}
@@ -283,6 +302,7 @@ async fn main() {
             commands::login::execute(
                 sub_matches,
                 config,
+                &client,
             ).await;
         }
         Some(("user", sub_matches)) => {
@@ -291,25 +311,29 @@ async fn main() {
                 ("list", sub_matches) => {
                     commands::user::list::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("create", sub_matches) => {
                     commands::user::create::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("update", sub_matches) => {
                     commands::user::update::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 ("delete", sub_matches) => {
                     commands::user::delete::execute(
                         sub_matches,
-                        config
+                        config,
+                        &client,
                     ).await;
                 }
                 _ => {}

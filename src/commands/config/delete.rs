@@ -15,7 +15,7 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
@@ -23,10 +23,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let deployments: Vec<&str> = id.split(" ").collect();
 
     for deployment in deployments {
-        let request = reqwest::Client::new()
+        let request = client
             .delete(&format!("{}/configs/{}", api_url, deployment))
             .header("Authorization", format!("Bearer {}", auth_config.token))
-            .header("Content-Type", "application/json")
             .send()
             .await;
 

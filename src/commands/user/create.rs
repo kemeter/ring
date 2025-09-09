@@ -24,7 +24,7 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
 
     let username = args.get_one::<String>("username");
     let password = args.get_one::<String>("username");
@@ -32,7 +32,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let auth_config = load_auth_config(configuration.name.clone());
 
     let api_url = format!("{}/users", configuration.get_api_url());
-    let request = reqwest::Client::new()
+    let request = client
         .post(&api_url)
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .json(&json!({

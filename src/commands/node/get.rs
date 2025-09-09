@@ -7,15 +7,14 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         .about("Get node information")
 }
 
-pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/node/get", api_url);
 
-    let response = reqwest::Client::new()
+    let response = client
         .get(&query)
         .header("Authorization", format!("Bearer {}", auth_config.token))
-        .header("Content-Type", "application/json")
         .send()
         .await;
 
