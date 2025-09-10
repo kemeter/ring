@@ -29,6 +29,7 @@ use crate::api::action::node::get as node_get;
 use crate::api::action::config::list as config_list;
 use crate::api::action::config::get as config_get;
 use crate::api::action::config::create as config_create;
+use crate::api::action::config::update as config_update;
 use crate::api::action::config::delete as config_delete;
 
 use crate::api::action::user::list::list as user_list;
@@ -94,7 +95,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments/{id}/events", get(get_deployment_events))
         .route("/node/get", get(node_get))
         .route("/configs", get(config_list).post(config_create))
-        .route("/configs/{id}", get(config_get).delete(config_delete))
+        .route("/configs/{id}", get(config_get).put(config_update).delete(config_delete))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))

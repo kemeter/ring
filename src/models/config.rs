@@ -109,3 +109,19 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, config: Config) -> Res
 
     Ok(())
 }
+
+pub(crate) fn update(connection: &MutexGuard<Connection>, config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    let mut statement = connection.prepare(
+        "UPDATE config SET updated_at = ?1, name = ?2, data = ?3, labels = ?4 WHERE id = ?5"
+    )?;
+
+    statement.execute([
+        &config.updated_at.unwrap_or_default(),
+        &config.name,
+        &config.data,
+        &config.labels,
+        &config.id,
+    ])?;
+
+    Ok(())
+}
