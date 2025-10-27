@@ -22,6 +22,12 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
                 .long("status")
                 .help("Filter by status")
         )
+        .arg(
+            Arg::new("type")
+                .long("type")
+                .help("Filter by type (worker or job)")
+                .value_parser(["worker", "job"])
+        )
 }
 
 #[derive(Table)]
@@ -67,6 +73,11 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
         for status in statuses {
             params.push(format!("status[]={}", status));
         }
+    }
+
+    if args.contains_id("type"){
+        let type_filter = args.get_one::<String>("type").unwrap();
+        params.push(format!("kind={}", type_filter));
     }
 
     if !params.is_empty() {
