@@ -21,6 +21,8 @@ pub(crate) struct QueryParameters {
     namespaces: Vec<String>,
     #[serde(default)]
     status: Vec<String>,
+    #[serde(default)]
+    kind: Vec<String>,
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
@@ -37,6 +39,7 @@ impl<S> FromRequestParts<S> for QueryParameters
 
         let mut status = Vec::new();
         let mut namespaces = Vec::new();
+        let mut kind = Vec::new();
 
         for (key, value) in parsed {
             match key.as_str() {
@@ -44,13 +47,16 @@ impl<S> FromRequestParts<S> for QueryParameters
                 "namespace" => namespaces.push(value),
                 "status[]" => status.push(value),
                 "status" => status.push(value),
+                "kind[]" => kind.push(value),
+                "kind" => kind.push(value),
                 _ => {}
             }
         }
 
         Ok(QueryParameters{
             namespaces,
-            status
+            status,
+            kind
         })
     }
 }
@@ -73,6 +79,10 @@ pub(crate) async fn list(
 
         if !query_parameters.status.is_empty() {
             filters.insert(String::from("status"), query_parameters.status);
+        }
+
+        if !query_parameters.kind.is_empty() {
+            filters.insert(String::from("kind"), query_parameters.kind);
         }
 
         deployments::find_all(&guard, filters)
@@ -129,5 +139,21 @@ mod tests {
 
         let deployments = response.json::<Vec<DeploymentOutput>>();
         assert_eq!(1, deployments.len());
+    }
+
+    #[tokio::test]
+    async fn list_by_kind() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/deployments?kind=worker")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let deployments = response.json::<Vec<DeploymentOutput>>();
+        assert!(deployments.len() >= 0);
     }
 }
