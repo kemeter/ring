@@ -26,13 +26,22 @@ deployments:
         image: "nginx:1.19.5"
         replicas: 1
         volumes:
-            - "/tmp/ring:/project/ring"
-            - "/tmp/ring:/project2/ring"
+            - type: bind
+              source: /tmp/ring
+              destination: /project/ring
+              driver: local
+              permission: rw
+            - type: bind
+              source: /tmp/ring
+              destination: /project2/ring
+              driver: local
+              permission: rw
             - type: config
               source: test-config2
               key: "test.conf"
               destination: /var/config/test.conf
               driver: local
+              permission: rw
 
         labels:
             - sozune.host: "nginx.localhost"

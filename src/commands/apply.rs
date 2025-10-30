@@ -57,7 +57,7 @@ struct Deployment {
     #[serde(default)]
     secrets: HashMap<String, String>,
 
-    #[serde(default, deserialize_with = "deserialize_volumes")]
+    #[serde(default)]
     volumes: Vec<Volume>,
 
     #[serde(default)]
@@ -66,11 +66,18 @@ struct Deployment {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Volume {
+    #[serde(rename = "type")]
+    volume_type: String,
     source: String,
     destination: String,
+    #[serde(default = "default_driver")]
     driver: String,
+    #[serde(default = "default_permission")]
     permission: String,
 }
+
+fn default_driver() -> String { "local".to_string() }
+fn default_permission() -> String { "rw".to_string() }
 
 #[derive(Debug, Deserialize)]
 struct ConfigFile {
@@ -81,27 +88,6 @@ fn default_runtime() -> String { "docker".to_string() }
 fn default_kind() -> String { "worker".to_string() }
 
 
-fn deserialize_volumes<'de, D>(deserializer: D) -> Result<Vec<Volume>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let volumes_raw: Vec<String> = Vec::deserialize(deserializer).unwrap_or_default();
-    let mut volumes = Vec::new();
-
-    for volume_str in volumes_raw {
-        let parts: Vec<&str> = volume_str.split(':').collect();
-        if parts.len() >= 2 {
-            volumes.push(Volume {
-                source: parts[0].to_string(),
-                destination: parts[1].to_string(),
-                driver: "local".to_string(),
-                permission: if parts.len() >= 3 { parts[2].to_string() } else { "rw".to_string() },
-            });
-        }
-    }
-
-    Ok(volumes)
-}
 
 impl Deployment {
     fn validate(&self) -> Result<(), ApplyError> {
@@ -440,8 +426,16 @@ deployments:
     runtime: docker
     replicas: 1
     volumes:
-      - "/tmp/ring:/project/ring:ro"
-      - "/another/path:/another/container/path"
+      - type: bind
+        source: /tmp/ring
+        destination: /project/ring
+        driver: local
+        permission: ro
+      - type: bind
+        source: /another/path
+        destination: /another/container/path
+        driver: local
+        permission: rw
     labels:
       - sozune.host: "nginx.localhost"
 "#;
