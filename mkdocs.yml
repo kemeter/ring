@@ -1,0 +1,85 @@
+site_name: Ring - Documentation
+site_description: Simple and declarative container orchestrator
+site_author: Nawo Mbechezi
+site_url: https://your-domain.com/ring
+
+repo_name: kemeter/ring
+repo_url: https://github.com/kemeter/ring
+edit_uri: edit/main/doc/
+
+theme:
+  name: material
+  language: en
+  palette:
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:materialx.emoji.twemoji
+      emoji_generator: !!python/name:materialx.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search:
+      lang: en
+  - minify:
+      minify_html: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kemeter/ring
+  version:
+    provider: mike
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting Started:
+    - getting-started/index.md
+    - getting-started/first-deployment.md
+    - getting-started/managing-deployments.md
+  - User Guide:
+    - examples.md
+  - Reference:
+    - reference.md
+    - api-reference.md
+  - FAQ: faq.md
+
+docs_dir: doc
+site_dir: site
