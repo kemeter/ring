@@ -12,9 +12,11 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
         )
 }
 
-pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
+    let namespace_filter = args.get_one::<String>("name");
+
     let query = format!("{}/deployments", api_url);
 
     let request = client
@@ -31,7 +33,17 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, clien
 
             let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap_or(vec![]);
 
+            let mut deleted_count = 0;
+            let mut error_count = 0;
+
             for deployment in deployments_list {
+                // Filter by namespace if provided
+                if let Some(namespace) = namespace_filter {
+                    if &deployment.namespace != namespace {
+                        continue;
+                    }
+                }
+
                 let id = deployment.id;
                 let request = client
                     .delete(&format!("{}/deployments/{}", api_url, id))
@@ -42,13 +54,24 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, clien
                 match request {
                     Ok(response) => {
                         if response.status() == 204 {
-                            return println!("Deployment {} deleted ", id);
+                            println!("Deployment {} deleted", id);
+                            deleted_count += 1;
+                        } else {
+                            eprintln!("Failed to delete deployment {}: status {}", id, response.status());
+                            error_count += 1;
                         }
                     }
-                    Err(_) => {
-                        println!("Cannot delete deployment config");
+                    Err(e) => {
+                        eprintln!("Cannot delete deployment {}: {}", id, e);
+                        error_count += 1;
                     }
                 }
+            }
+
+            println!("\nSummary:");
+            println!("  Deleted: {}", deleted_count);
+            if error_count > 0 {
+                println!("  Failed: {}", error_count);
             }
         },
         Err(_) => {
