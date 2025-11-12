@@ -223,10 +223,16 @@ async fn deploy_to_server(
         .await
         .map_err(ApplyError::Http)?;
 
-    info!("Deployment '{}' created successfully (status: {})", deployment.name, response.status());
-    println!("Deployment '{}' created", deployment.name);
+    let status = response.status();
 
-    Ok(())
+    if status.is_success() {
+        info!("Deployment '{}' created successfully (status: {})", deployment.name, status);
+        println!("Deployment '{}' created", deployment.name);
+        Ok(())
+    } else {
+        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        Err(ApplyError::Validation(format!("API returned status {}: {}", status, error_body)))
+    }
 }
 
 pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &reqwest::Client) {
