@@ -1,6 +1,6 @@
 [contexts.default]
 current = true
-ip = "127.0.0.1"
+host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3000
@@ -9,7 +9,7 @@ user.salt = "changeme"
 
 [contexts.test]
 current = false
-ip = "127.0.0.1"
+host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3001
