@@ -3,8 +3,9 @@ use serde_json::Value;
 use sysinfo::{System, LoadAvg};
 use std::env::consts;
 use axum::response::IntoResponse;
+use crate::models::users::User;
 
-pub(crate) async fn get() -> impl IntoResponse {
+pub(crate) async fn get(_user: User) -> impl IntoResponse {
     Json(get_node_info()).into_response()
 }
 
@@ -47,5 +48,16 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn get_without_auth() {
+        let app = new_test_app();
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/node/get")
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
 }
