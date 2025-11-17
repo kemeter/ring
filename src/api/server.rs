@@ -24,6 +24,7 @@ use crate::api::action::deployment::create as deployment_create;
 use crate::api::action::deployment::delete as deployment_delete;
 use crate::api::action::deployment::logs as deployment_logs;
 use crate::api::action::deployment::get_deployment_events;
+use crate::api::action::deployment::get_health_checks;
 
 use crate::api::action::node::get as node_get;
 use crate::api::action::config::list as config_list;
@@ -93,6 +94,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
         .route("/deployments/{id}/logs", get(deployment_logs))
         .route("/deployments/{id}/events", get(get_deployment_events))
+        .route("/deployments/{id}/health-checks", get(get_health_checks))
         .route("/node/get", get(node_get))
         .route("/configs", get(config_list).post(config_create))
         .route("/configs/{id}", get(config_get).put(config_update).delete(config_delete))
@@ -197,5 +199,79 @@ pub(crate) mod tests {
 
     fn load_fixtures(connexion: &mut Connection) {
         crate::fixtures::load_all_fixtures(connexion);
+    }
+
+    #[tokio::test]
+    async fn test_health_checks_api_endpoint() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // First create a deployment
+        let create_response = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "test-health",
+                "namespace": "test",
+                "image": "nginx:latest",
+                "health_checks": [
+                    {
+                        "type": "tcp",
+                        "port": 8080,
+                        "interval": "10s",
+                        "timeout": "5s",
+                        "threshold": 2,
+                        "on_failure": "restart"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(create_response.status_code(), StatusCode::CREATED);
+        
+        let deployment: crate::api::dto::deployment::DeploymentOutput = create_response.json();
+        let deployment_id = deployment.id;
+
+        // Test accessing health checks endpoint
+        let health_response = server
+            .get(&format!("/deployments/{}/health-checks", deployment_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(health_response.status_code(), StatusCode::OK);
+        
+        // The response should be an array (empty initially as no checks have run yet)
+        let health_results: Vec<serde_json::Value> = health_response.json();
+        assert!(health_results.is_empty()); // No health check results yet
+    }
+
+    #[tokio::test]
+    async fn test_health_checks_api_unauthorized() {
+        let app = new_test_app();
+        let server = TestServer::new(app).unwrap();
+
+        // Try to access health checks without authentication
+        let response = server
+            .get(&"/deployments/some-id/health-checks")
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_health_checks_api_deployment_not_found() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Try to access health checks for non-existent deployment
+        let response = server
+            .get(&"/deployments/non-existent-id/health-checks")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
     }
 }

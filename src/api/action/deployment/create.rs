@@ -186,7 +186,9 @@ pub(crate) struct DeploymentInput {
     #[validate(nested)]
     volumes: Vec<Volume>,
     #[serde(default)]
-    command: Vec<String>
+    command: Vec<String>,
+    #[serde(default)]
+    health_checks: Option<Vec<crate::models::health_check::HealthCheck>>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -263,6 +265,7 @@ pub(crate) async fn create(
                 instances: [].to_vec(),
                 restart_count: 0,
                 volumes: volumes,
+                health_checks: input.health_checks.unwrap_or_default(),
             };
 
             deployments::create(&guard, &deployment);
@@ -1054,5 +1057,99 @@ mod tests {
         let deployment: DeploymentOutput = response.json();
         assert_eq!(deployment.kind, "worker");
         assert_eq!(deployment.replicas, 2);
+    }
+
+    #[tokio::test]
+    async fn create_with_health_checks() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "web-service",
+                "namespace": "production",
+                "image": "nginx:latest",
+                "health_checks": [
+                    {
+                        "type": "tcp",
+                        "port": 8080,
+                        "interval": "10s",
+                        "timeout": "5s",
+                        "threshold": 3,
+                        "on_failure": "restart"
+                    },
+                    {
+                        "type": "http",
+                        "url": "http://localhost:8080/health",
+                        "interval": "30s",
+                        "timeout": "10s",
+                        "threshold": 2,
+                        "on_failure": "alert"
+                    },
+                    {
+                        "type": "command",
+                        "command": "curl -f http://localhost:8080/ping",
+                        "interval": "20s",
+                        "timeout": "5s",
+                        "threshold": 1,
+                        "on_failure": "stop"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        let deployment: DeploymentOutput = response.json();
+        assert_eq!(deployment.name, "web-service");
+        assert_eq!(deployment.namespace, "production");
+        assert_eq!(deployment.health_checks.len(), 3);
+        
+        // Verify health check types
+        let check_types: Vec<String> = deployment.health_checks
+            .iter()
+            .map(|check| check.check_type().to_string())
+            .collect();
+        assert!(check_types.contains(&"tcp".to_string()));
+        assert!(check_types.contains(&"http".to_string()));
+        assert!(check_types.contains(&"command".to_string()));
+    }
+
+    #[tokio::test]
+    async fn create_with_invalid_health_check_threshold() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "test-service",
+                "namespace": "test",
+                "image": "nginx:latest",
+                "health_checks": [
+                    {
+                        "type": "tcp",
+                        "port": 8080,
+                        "interval": "10s",
+                        "timeout": "5s",
+                        "threshold": -1,  // Invalid negative threshold
+                        "on_failure": "restart"
+                    }
+                ]
+            }))
+            .await;
+
+        assert!(
+            response.status_code() == StatusCode::CREATED ||
+            response.status_code() == StatusCode::BAD_REQUEST ||
+            response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }

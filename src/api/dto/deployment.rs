@@ -40,7 +40,9 @@ pub(crate) struct DeploymentDTO {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) volumes: Vec<DeploymentVolume>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) instances: Vec<String>
+    pub(crate) instances: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -63,7 +65,9 @@ pub(crate) struct DeploymentOutput {
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
     pub(crate) secrets: HashMap<String, String>,
-    pub(crate) volumes: Vec<DeploymentVolume>
+    pub(crate) volumes: Vec<DeploymentVolume>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>
 }
 
 impl DeploymentOutput {
@@ -96,7 +100,8 @@ impl DeploymentOutput {
             labels: labels,
             secrets: secrets,
             volumes: volumes,
-            instances: [].to_vec()
+            instances: [].to_vec(),
+            health_checks: deployment.health_checks
         };
     }
 }
