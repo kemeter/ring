@@ -217,10 +217,14 @@ pub(crate) async fn create(
 
             match active_deployments {
                 Ok(deployments_list) => {
+                    info!("Checking for existing deployments: namespace='{}', name='{}' - found: {}",
+                        input.namespace, input.name, deployments_list.len());
+
                     if !deployments_list.is_empty() {
                         info!("Found {} active deployments with the same namespace and name", deployments_list.len());
 
                         for mut deployment in deployments_list {
+                            info!("Marking deployment {} as deleted", deployment.id);
                             deployment.status = "deleted".to_string();
                             deployment.updated_at = Some(Utc::now().to_string());
                             deployments::update(&guard, &deployment);
