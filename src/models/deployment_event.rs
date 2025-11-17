@@ -82,23 +82,21 @@ pub fn find_events_by_deployment(
     deployment_id: &str,
     limit: Option<u32>
 ) -> Result<Vec<DeploymentEvent>> {
-    let limit_clause = match limit {
-        Some(l) => format!("LIMIT {}", l),
-        None => String::new(),
-    };
+    let safe_limit = limit.unwrap_or(100).min(1000);
 
-    let query = format!(
-        "SELECT id, deployment_id, timestamp, level, message, component, reason
+    let query = "SELECT id, deployment_id, timestamp, level, message, component, reason
          FROM deployment_event
          WHERE deployment_id = :deployment_id
-         ORDER BY timestamp DESC {}",
-        limit_clause
-    );
+         ORDER BY timestamp DESC
+         LIMIT :limit";
 
-    let mut statement = connection.prepare(&query)?;
-    
+    let mut statement = connection.prepare(query)?;
+
     let event_iter = statement.query_map(
-        named_params! { ":deployment_id": deployment_id },
+        named_params! {
+            ":deployment_id": deployment_id,
+            ":limit": safe_limit
+        },
         DeploymentEvent::from_row
     )?;
 
@@ -122,25 +120,21 @@ pub fn find_events_by_deployment_and_level(
     level: &str,
     limit: Option<u32>
 ) -> Result<Vec<DeploymentEvent>> {
-    let limit_clause = match limit {
-        Some(l) => format!("LIMIT {}", l),
-        None => String::new(),
-    };
+    let safe_limit = limit.unwrap_or(100).min(1000);
 
-    let query = format!(
-        "SELECT id, deployment_id, timestamp, level, message, component, reason
+    let query = "SELECT id, deployment_id, timestamp, level, message, component, reason
          FROM deployment_event
          WHERE deployment_id = :deployment_id AND level = :level
-         ORDER BY timestamp DESC {}",
-        limit_clause
-    );
+         ORDER BY timestamp DESC
+         LIMIT :limit";
 
-    let mut statement = connection.prepare(&query)?;
-    
+    let mut statement = connection.prepare(query)?;
+
     let event_iter = statement.query_map(
-        named_params! { 
+        named_params! {
             ":deployment_id": deployment_id,
-            ":level": level
+            ":level": level,
+            ":limit": safe_limit
         },
         DeploymentEvent::from_row
     )?;
