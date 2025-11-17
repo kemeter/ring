@@ -179,13 +179,12 @@ impl HealthChecker {
                 // Remove the failing instance using runtime - scheduler will recreate it automatically
                 runtime.remove_instance(instance_id).await;
                 
-                // Update deployment instance list in database  
+                // Update deployment instance list in database
                 let guard = self.storage.lock().await;
-                if let Ok(deployment) = deployments::find(&guard, deployment.id.clone()) {
-                    let mut updated_deployment = deployment;
+                if let Ok(Some(mut updated_deployment)) = deployments::find(&guard, deployment.id.clone()) {
                     updated_deployment.instances.retain(|id| id != instance_id);
                     deployments::update(&guard, &updated_deployment);
-                    info!("Updated deployment {} instances list (removed {})", deployment.id, instance_id);
+                    info!("Updated deployment {} instances list (removed {})", updated_deployment.id, instance_id);
                 }
             },
             FailureAction::Stop => {

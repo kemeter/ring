@@ -117,14 +117,14 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
                         // Re-read deployment after health checks to preserve any status changes
                         let guard = storage.lock().await;
                         match deployments::find(&guard, config.id.clone()) {
-                            Ok(mut updated_deployment) => {
+                            Ok(Some(mut updated_deployment)) => {
                                 // Preserve scheduler changes (instances, etc.) but keep health checker status changes
                                 updated_deployment.instances = config.instances;
                                 updated_deployment.restart_count = config.restart_count;
                                 // Keep the status from health checker (could be "deleted" or "failed")
                                 deployments::update(&guard, &updated_deployment);
                             }
-                            Err(_) => {
+                            _ => {
                                 // If deployment not found, use the original config
                                 deployments::update(&guard, &config);
                             }

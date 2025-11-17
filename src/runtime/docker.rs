@@ -643,47 +643,40 @@ async fn get_container_ip(container_id: &str) -> Option<String> {
 
 async fn execute_tcp_check_for_container(container_ip: &str, port: u16) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
     use crate::models::health_check::HealthCheckStatus;
-    use std::net::{TcpStream, SocketAddr};
-    
+    use tokio::net::TcpStream;
+    use std::time::Duration;
+
     let addr = format!("{}:{}", container_ip, port);
-    
-    match addr.parse::<SocketAddr>() {
-        Ok(socket_addr) => {
-            let addr_for_spawn = addr.clone();
-            match tokio::task::spawn_blocking(move || {
-                TcpStream::connect_timeout(&socket_addr, std::time::Duration::from_secs(5))
-            }).await {
-                Ok(Ok(_)) => (HealthCheckStatus::Success, Some(format!("TCP connection to {} successful", addr_for_spawn))),
-                Ok(Err(e)) => (HealthCheckStatus::Failed, Some(format!("TCP connection failed: {}", e))),
-                Err(e) => (HealthCheckStatus::Failed, Some(format!("TCP task failed: {}", e))),
-            }
+
+    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+        Ok(Ok(_stream)) => {
+            (HealthCheckStatus::Success, Some(format!("TCP connection to {} successful", addr)))
         },
-        Err(e) => (HealthCheckStatus::Failed, Some(format!("Invalid address {}: {}", addr, e))),
+        Ok(Err(e)) => {
+            (HealthCheckStatus::Failed, Some(format!("TCP connection failed: {}", e)))
+        },
+        Err(_) => {
+            (HealthCheckStatus::Failed, Some(format!("TCP connection timed out for {}", addr)))
+        }
     }
 }
 
 async fn execute_http_check_for_container(container_ip: &str, url: &str) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
     use crate::models::health_check::HealthCheckStatus;
-    
+
     let target_url = url.replace("localhost", container_ip);
-    let url_for_spawn = target_url.clone();
-    
-    match tokio::task::spawn_blocking(move || {
-        ureq::get(&url_for_spawn).call()
-    }).await {
-        Ok(Ok(response)) => {
-            let code = response.status();
+
+    match reqwest::get(&target_url).await {
+        Ok(response) => {
+            let code = response.status().as_u16();
             if (200..300).contains(&code) {
                 (HealthCheckStatus::Success, Some(format!("HTTP check successful ({}) for {}", code, target_url)))
             } else {
                 (HealthCheckStatus::Failed, Some(format!("HTTP check failed with status {} for {}", code, target_url)))
             }
         },
-        Ok(Err(e)) => {
-            (HealthCheckStatus::Failed, Some(format!("HTTP request failed for {}: {}", target_url, e)))
-        },
         Err(e) => {
-            (HealthCheckStatus::Failed, Some(format!("HTTP task failed: {}", e)))
+            (HealthCheckStatus::Failed, Some(format!("HTTP request failed for {}: {}", target_url, e)))
         }
     }
 }

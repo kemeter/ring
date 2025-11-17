@@ -67,16 +67,16 @@ pub(crate) enum HealthCheckStatus {
 
 impl HealthCheck {
     pub(crate) fn parse_duration(duration_str: &str) -> Result<Duration, String> {
-        if duration_str.ends_with('s') {
-            let seconds = duration_str[..duration_str.len() - 1]
-                .parse::<u64>()
-                .map_err(|_| format!("Invalid duration format: {}", duration_str))?;
-            Ok(Duration::from_secs(seconds))
-        } else if duration_str.ends_with("ms") {
+        if duration_str.ends_with("ms") {
             let millis = duration_str[..duration_str.len() - 2]
                 .parse::<u64>()
                 .map_err(|_| format!("Invalid duration format: {}", duration_str))?;
             Ok(Duration::from_millis(millis))
+        } else if duration_str.ends_with('s') {
+            let seconds = duration_str[..duration_str.len() - 1]
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid duration format: {}", duration_str))?;
+            Ok(Duration::from_secs(seconds))
         } else {
             Err(format!("Invalid duration format: {}", duration_str))
         }
@@ -125,5 +125,33 @@ impl Default for HealthCheck {
             threshold: 3,
             on_failure: FailureAction::Restart,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        let result = HealthCheck::parse_duration("30s");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_secs(), 30);
+    }
+
+    #[test]
+    fn test_parse_duration_milliseconds() {
+        let result = HealthCheck::parse_duration("500ms");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_millis(), 500);
+    }
+
+    #[test]
+    fn test_parse_duration_invalid() {
+        let result = HealthCheck::parse_duration("30");
+        assert!(result.is_err());
+
+        let result = HealthCheck::parse_duration("abc");
+        assert!(result.is_err());
     }
 }

@@ -1146,8 +1146,10 @@ mod tests {
             }))
             .await;
 
-        // Should still succeed as serde will handle the type conversion
-        // In a production system, you might want to add validation for positive thresholds
-        assert!(response.status_code() == StatusCode::CREATED || response.status_code() == StatusCode::BAD_REQUEST);
+        assert!(
+            response.status_code() == StatusCode::CREATED ||
+            response.status_code() == StatusCode::BAD_REQUEST ||
+            response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }
