@@ -7,6 +7,8 @@ api.port = 3000
 
 user.salt = "changeme"
 
+scheduler.interval = 10
+
 [contexts.test]
 current = false
 host = "127.0.0.1"
@@ -15,3 +17,5 @@ api.scheme = "http"
 api.port = 3001
 
 user.salt = "changeme"
+
+scheduler.interval = 10

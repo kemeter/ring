@@ -12,6 +12,22 @@ pub(crate) struct Contexts {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+pub(crate) struct Scheduler {
+    #[serde(default = "default_scheduler_interval")]
+    pub(crate) interval: u64,
+}
+
+fn default_scheduler_interval() -> u64 {
+    10
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Scheduler { interval: 10 }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) current: bool,
     #[serde(skip_deserializing)]
@@ -19,6 +35,8 @@ pub(crate) struct Config {
     pub(crate) host: String,
     pub(crate) api: config::api::Api,
     pub(crate) user: config::user::User,
+    #[serde(default)]
+    pub(crate) scheduler: Scheduler,
 }
 
 impl Config {
@@ -39,7 +57,8 @@ impl Default for Config {
             },
             user: config::user::User {
                 salt: "changeme".to_string()
-            }
+            },
+            scheduler: Scheduler::default()
         }
     }
 }

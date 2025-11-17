@@ -7,16 +7,22 @@ use crate::models::health_check_logs;
 use crate::scheduler::health_checker::HealthChecker;
 use rusqlite::Connection;
 use std::sync::Arc;
+use std::env;
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration};
 use crate::models::config::Config;
 
-pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>) {
-    let duration = Duration::from_secs(10);
+pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>, config: crate::config::config::Config) {
+    let interval_seconds = env::var("SCHEDULER_INTERVAL")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(config.scheduler.interval);
+
+    let duration = Duration::from_secs(interval_seconds);
     let health_checker = HealthChecker::new(storage.clone());
     let mut cleanup_counter = 0;
 
-    info!("Starting schedule");
+    info!("Starting scheduler with interval: {}s", interval_seconds);
 
     loop {
         let list_deployments =  {
