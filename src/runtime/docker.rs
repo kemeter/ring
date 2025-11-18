@@ -1,9 +1,6 @@
 use bollard::{
     Docker,
-    models::{
-        HostConfig, Mount, MountTypeEnum, EndpointSettings, ContainerCreateBody,
-        NetworkConnectRequest, NetworkCreateRequest,
-    },
+    models::{HostConfig, Mount, MountTypeEnum, EndpointSettings, ContainerCreateBody, NetworkCreateRequest, NetworkConnectRequest},
     query_parameters::{
         CreateImageOptionsBuilder,
         CreateContainerOptionsBuilder,
@@ -630,17 +627,18 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
             deployment.instances.push(container.id.to_string());
 
             // Connect to network
-            let connect_options = NetworkConnectRequest {
-                container: Some(container.id.clone()),
-                endpoint_config: Some(EndpointSettings {
-                    aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
-                    ..Default::default()
-                }),
+            let endpoint_config = EndpointSettings {
+                aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
                 ..Default::default()
             };
 
+            let connect_request = NetworkConnectRequest {
+                container: Some(container.id.clone()),
+                endpoint_config: Some(endpoint_config),
+            };
+
             docker
-                .connect_network(&network_name, connect_options)
+                .connect_network(&network_name, connect_request)
                 .await
                 .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Docker failed to connect to network: {}", e)))?;
 
@@ -916,12 +914,12 @@ async fn create_network(docker: Docker, network_name: String) {
         Err(_) => {
             info!("Docker create network: {}", network_name);
 
-            let config = NetworkCreateRequest {
+            let create_request = NetworkCreateRequest {
                 name: network_name,
                 ..Default::default()
             };
 
-            match docker.create_network(config).await {
+            match docker.create_network(create_request).await {
                 Ok(info) => debug!("Network created: {:?}", info),
                 Err(e) => debug!("Docker network create error: {}", e),
             }
