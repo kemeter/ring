@@ -146,6 +146,17 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("InstanceCreationFailed")
                     ));
                 }
+                Err(RuntimeError::NetworkCreationFailed(msg)) => {
+                    error!("Network creation failed for job {}: {}", deployment.id, msg);
+                    deployment.status = "NetworkError".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Network creation failed: {}", msg),
+                        "docker",
+                        Some("NetworkCreationFailed")
+                    ));
+                }
                 Err(RuntimeError::ConfigNotFound(msg)) => {
                     error!("Config not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ConfigError".to_string();
@@ -306,6 +317,18 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             format!("Container creation failed: {}", msg),
                             "docker",
                             Some("InstanceCreationFailed")
+                        ));
+                    }
+                    Err(RuntimeError::NetworkCreationFailed(msg)) => {
+                        error!("Network creation failed for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "NetworkError".to_string();
+                        deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Network creation failed: {}", msg),
+                            "docker",
+                            Some("NetworkCreationFailed")
                         ));
                     }
                     Err(RuntimeError::ConfigNotFound(msg)) => {
@@ -569,7 +592,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
     }
 
     let network_name = format!("ring_{}", deployment.namespace.clone());
-    create_network(docker.clone(), network_name.clone()).await;
+    create_network(docker.clone(), network_name.clone()).await?;
 
     let temporary_id = tiny_id();
     let container_name = format!("{}_{}_{}", &deployment.namespace, &deployment.name, temporary_id);
@@ -903,25 +926,32 @@ async fn remove_container(docker: Docker, container_id: String) {
     }
 }
 
-async fn create_network(docker: Docker, network_name: String) {
+async fn create_network(docker: Docker, network_name: String) -> Result<(), RuntimeError> {
     debug!("Start Docker create network: {}", network_name);
 
     let inspect_options = InspectNetworkOptionsBuilder::new().build();
     match docker.inspect_network(&network_name, Some(inspect_options)).await {
         Ok(_network_info) => {
             debug!("Docker network {} already exists", network_name);
+            Ok(())
         }
         Err(_) => {
             info!("Docker create network: {}", network_name);
 
             let create_request = NetworkCreateRequest {
-                name: network_name,
+                name: network_name.clone(),
                 ..Default::default()
             };
 
             match docker.create_network(create_request).await {
-                Ok(info) => debug!("Network created: {:?}", info),
-                Err(e) => debug!("Docker network create error: {}", e),
+                Ok(info) => {
+                    debug!("Network created: {:?}", info);
+                    Ok(())
+                },
+                Err(e) => {
+                    error!("Docker network create error: {}", e);
+                    Err(RuntimeError::NetworkCreationFailed(format!("Failed to create network {}: {}", network_name, e)))
+                }
             }
         }
     }
