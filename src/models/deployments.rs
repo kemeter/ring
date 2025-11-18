@@ -73,10 +73,22 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) events: Vec<crate::models::deployment_event::DeploymentEvent>,
+    #[serde(skip_deserializing)]
+    pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
 }
 
 impl Deployment {
+    pub fn emit_event(&mut self, level: &str, message: String, component: &str, reason: Option<&str>) {
+        let event = crate::models::deployment_event::DeploymentEvent::new(
+            self.id.clone(),
+            level,
+            message,
+            component,
+            reason
+        );
+        self.pending_events.push(event);
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<Deployment> {
         Ok(Deployment {
             id: row.get("id")?,
@@ -110,7 +122,7 @@ impl Deployment {
                     serde_json::from_str(&health_checks_str).unwrap_or_default()
                 }
             },
-            events: vec![],
+            pending_events: vec![],
         })
     }
 }
