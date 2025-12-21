@@ -1,6 +1,9 @@
 use bollard::{
     Docker,
-    models::{HostConfig, Mount, MountTypeEnum, EndpointSettings, ContainerCreateBody},
+    models::{
+        HostConfig, Mount, MountTypeEnum, EndpointSettings, ContainerCreateBody,
+        NetworkConnectRequest, NetworkCreateRequest,
+    },
     query_parameters::{
         CreateImageOptionsBuilder,
         CreateContainerOptionsBuilder,
@@ -12,7 +15,6 @@ use bollard::{
         InspectNetworkOptionsBuilder,
         InspectContainerOptions
     },
-    network::{CreateNetworkOptions, ConnectNetworkOptions},
     container::LogOutput,
     auth::DockerCredentials,
     exec::{CreateExecOptions, StartExecOptions},
@@ -486,12 +488,13 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
             deployment.instances.push(container.id.to_string());
 
             // Connect to network
-            let connect_options = ConnectNetworkOptions {
-                container: container.id.clone(),
-                endpoint_config: EndpointSettings {
+            let connect_options = NetworkConnectRequest {
+                container: Some(container.id.clone()),
+                endpoint_config: Some(EndpointSettings {
                     aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
                     ..Default::default()
-                },
+                }),
+                ..Default::default()
             };
 
             docker
@@ -763,7 +766,7 @@ async fn create_network(docker: Docker, network_name: String) {
         Err(_) => {
             info!("Docker create network: {}", network_name);
 
-            let config = CreateNetworkOptions {
+            let config = NetworkCreateRequest {
                 name: network_name,
                 ..Default::default()
             };
