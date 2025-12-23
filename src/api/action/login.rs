@@ -85,15 +85,6 @@ fn generate_token() -> String {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct HttpResponse {
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    errors: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    token: String
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct LoginInput {
     username: String,
     password: String

@@ -21,31 +21,6 @@ fn serialize_option_deployment_config<S>(
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(crate) struct DeploymentDTO {
-    pub(crate) id: String,
-    pub(crate) created_at: String,
-    pub(crate) status: String,
-    pub(crate) name: String,
-    pub(crate) runtime: String,
-    pub(crate) kind: String,
-    pub(crate) namespace: String,
-    pub(crate) image: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) config: Option<DeploymentConfig>,
-    pub(crate) replicas: u32,
-    pub(crate) restart_count: u32,
-    pub(crate) ports: Vec<String>,
-    pub(crate) labels: HashMap<String, String>,
-    pub(crate) secrets: HashMap<String, String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) volumes: Vec<DeploymentVolume>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) instances: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>
-}
-
-#[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct DeploymentOutput {
     pub(crate) id: String,
     pub(crate) created_at: String,
