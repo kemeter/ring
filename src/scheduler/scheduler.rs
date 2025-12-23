@@ -76,6 +76,14 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>, config: crate::con
 
                 let mut config = docker::apply(deployment.clone(), configs).await;
 
+                // Write events from docker runtime to database
+                if !config.events.is_empty() {
+                    let guard = storage.lock().await;
+                    for event in &config.events {
+                        let _ = deployment_event::create_event(&guard, event);
+                    }
+                }
+
                 if "deleted" == config.status && config.instances.len() == 0 {
                     info!("Marking deployment {} for cleanup", config.id);
                     

@@ -270,6 +270,7 @@ pub(crate) async fn create(
                 restart_count: 0,
                 volumes: volumes,
                 health_checks: input.health_checks.unwrap_or_default(),
+                events: vec![],
             };
 
             deployments::create(&guard, &deployment);

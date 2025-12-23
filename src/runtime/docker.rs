@@ -101,6 +101,17 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
             remove_container(docker.clone(), instance.to_string()).await;
             info!("Docker container {} deleted", instance);
         }
+
+        if instance_count > 0 {
+            deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                deployment.id.clone(),
+                "info",
+                format!("Deleted {} container(s) for job marked as deleted", instance_count),
+                "docker",
+                Some("ContainerDeletion")
+            ));
+        }
+
         return deployment;
     }
 
@@ -184,6 +195,16 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
             remove_container(docker.clone(), instance.to_string()).await;
             info!("Docker container {} deleted", instance);
         }
+
+        if instance_count > 0 {
+            deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                deployment.id.clone(),
+                "info",
+                format!("Deleted {} container(s) for worker marked as deleted", instance_count),
+                "docker",
+                Some("ContainerDeletion")
+            ));
+        }
     } else {
         // Calculate difference and act accordingly
         let current_count: usize = deployment.instances.len();
@@ -199,6 +220,15 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                 match create_container(&mut deployment, &docker, configs).await {
                     Ok(_) => {
                         // Container created successfully
+
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "info",
+                            format!("Scaled up from {} to {} replicas", current_count, current_count + 1),
+                            "docker",
+                            Some("ScaleUp")
+                        ));
+
                         if deployment.status == "pending" || deployment.status == "creating" {
                             deployment.status = "running".to_string();
                         }
@@ -253,6 +283,14 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                     // Synchronize local state with deletion
                     deployment.instances.remove(0);
                     info!("Container {} removed from deployment {}", container_id, deployment.id);
+
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "info",
+                        format!("Scaled down from {} to {} replicas (removed container {})", current_count, current_count - 1, container_id),
+                        "docker",
+                        Some("ScaleDown")
+                    ));
                 }
             }
             std::cmp::Ordering::Equal => {

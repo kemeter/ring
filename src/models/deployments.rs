@@ -71,6 +71,8 @@ pub(crate) struct Deployment {
     pub(crate) volumes: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) events: Vec<crate::models::deployment_event::DeploymentEvent>,
 }
 
 impl Deployment {
@@ -106,7 +108,8 @@ impl Deployment {
                 } else {
                     serde_json::from_str(&health_checks_str).unwrap_or_default()
                 }
-            }
+            },
+            events: vec![],
         })
     }
 }
