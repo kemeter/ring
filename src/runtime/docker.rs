@@ -84,7 +84,7 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
         }
     };
 
-    deployment.instances = list_instances(deployment.id.to_string(), "running").await;
+    deployment.instances = list_instances(deployment.id.to_string(), "active").await;
 
     // Handle the processing based on deployment type
     if deployment.kind == "job" {
@@ -97,6 +97,7 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
 async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
     if deployment.status == "deleted" {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
+        let instance_count = deployment.instances.len();
         for instance in deployment.instances.iter_mut() {
             remove_container(docker.clone(), instance.to_string()).await;
             info!("Docker container {} deleted", instance);
@@ -191,6 +192,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
 
     if deployment.status == "deleted" {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
+        let instance_count = deployment.instances.len();
         for instance in deployment.instances.iter_mut() {
             remove_container(docker.clone(), instance.to_string()).await;
             info!("Docker container {} deleted", instance);
@@ -220,6 +222,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                 match create_container(&mut deployment, &docker, configs).await {
                     Ok(_) => {
                         // Container created successfully
+                        deployment.restart_count += 1;
 
                         deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
                             deployment.id.clone(),
@@ -828,12 +831,25 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
 
     let mut instances: Vec<String> = Vec::new();
 
-    let filters = HashMap::from([("status".to_string(), vec![status.to_string()])]);
     let options = if status == "all" {
         ListContainersOptionsBuilder::new()
             .all(true)
             .build()
+    } else if status == "active" {
+        // "active" = running + created + restarting (prevents race conditions)
+        let filters = HashMap::from([
+            ("status".to_string(), vec![
+                "running".to_string(),
+                "created".to_string(),
+                "restarting".to_string(),
+            ])
+        ]);
+        ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build()
     } else {
+        let filters = HashMap::from([("status".to_string(), vec![status.to_string()])]);
         ListContainersOptionsBuilder::new()
             .all(false)
             .filters(&filters)
