@@ -12,12 +12,25 @@ use crate::models::users::User;
 #[derive(Deserialize, Debug, Validate)]
 pub(crate) struct UpdateConfigRequest {
     #[validate(length(min = 1, max = 255))]
-    pub name: Option<String>,
-    
-    pub data: Option<String>,
-    
+    pub name: String,
+
+    pub data: String,
+
     #[validate(length(max = 1000))]
+    #[serde(default)]
     pub labels: Option<String>,
+}
+
+impl UpdateConfigRequest {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        let errors = validator::ValidationErrors::new();
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
 }
 
 pub(crate) async fn update(
@@ -37,34 +50,23 @@ pub(crate) async fn update(
         ).into_response();
     }
 
-    // Validate JSON data if provided
-    if let Some(ref data) = request.data {
-        if serde_json::from_str::<serde_json::Value>(data).is_err() {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid JSON format in data field"}))
-            ).into_response();
-        }
+    // Validate JSON data
+    if serde_json::from_str::<serde_json::Value>(&request.data).is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid JSON format in data field"}))
+        ).into_response();
     }
 
     let guard = connexion.lock().await;
-    
+
     // Find existing config
     match ConfigModel::find(&guard, id.clone()) {
         Ok(Some(mut config)) => {
-            // Update fields if provided
-            if let Some(name) = request.name {
-                config.name = name;
-            }
-            
-            if let Some(data) = request.data {
-                config.data = data;
-            }
-            
-            if let Some(labels) = request.labels {
-                config.labels = labels;
-            }
-            
+            // PUT behavior: Full replacement (like create but keeping id, created_at, namespace)
+            config.name = request.name;
+            config.data = request.data;
+            config.labels = request.labels.unwrap_or_default();
             config.updated_at = Some(chrono::Utc::now().to_rfc3339());
             
             match ConfigModel::update(&guard, config.clone()) {
@@ -110,19 +112,21 @@ mod tests {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
-        
+
         let response = server
             .put("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "name": "updated-config-name"
+                "name": "updated-config-name",
+                "data": "{\"key\": \"value\"}"
             }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
-        
+
         let config = response.json::<ConfigOutput>();
         assert_eq!(config.name, "updated-config-name");
+        assert_eq!(config.data, "{\"key\": \"value\"}");
         assert!(config.updated_at.is_some());
     }
 
@@ -131,18 +135,20 @@ mod tests {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
-        
+
         let response = server
             .put("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
+                "name": "my-config",
                 "data": "{\"updated\": true}"
             }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
-        
+
         let config = response.json::<ConfigOutput>();
+        assert_eq!(config.name, "my-config");
         assert_eq!(config.data, "{\"updated\": true}");
     }
 
@@ -151,11 +157,12 @@ mod tests {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
-        
+
         let response = server
             .put("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
+                "name": "my-config",
                 "data": "invalid json"
             }))
             .await;
@@ -168,12 +175,13 @@ mod tests {
         let app = new_test_app();
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
-        
+
         let response = server
             .put("/configs/nonexistent")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "name": "new-name"
+                "name": "new-name",
+                "data": "{\"test\": true}"
             }))
             .await;
 
