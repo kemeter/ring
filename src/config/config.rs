@@ -50,7 +50,10 @@ impl Default for Config {
         Config {
             current: true,
             name: "default".to_string(),
-            host: local_ip().unwrap().to_string(),
+            host: local_ip().unwrap_or_else(|_| {
+                warn!("Failed to get local IP, using localhost");
+                "127.0.0.1".parse().unwrap()
+            }).to_string(),
             api: config::api::Api {
                 scheme: "http".to_string(),
                 port: 3030
@@ -76,8 +79,11 @@ pub(crate) struct AuthToken {
 
 pub(crate) fn get_config_dir() -> String {
     return match env::var_os("RING_CONFIG_DIR") {
-        Some(variable) => variable.into_string().unwrap(),
-        None => format!("{}/.config/kemeter/ring", env::var("HOME").unwrap())
+        Some(variable) => variable.into_string().unwrap_or_else(|_| {
+            error!("RING_CONFIG_DIR contains invalid Unicode");
+            format!("{}/.config/kemeter/ring", env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+        }),
+        None => format!("{}/.config/kemeter/ring", env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
     };
 }
 
@@ -89,7 +95,13 @@ pub(crate) fn load_config(context_current: &str) -> Config {
     debug!("load config file {}", file);
 
     if fs::metadata(file.clone()).is_ok() {
-        let contents = fs::read_to_string(file).unwrap();
+        let contents = match fs::read_to_string(file) {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to read config file: {}", e);
+                return Config::default();
+            }
+        };
         let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
 
         match contexts {
@@ -122,9 +134,25 @@ pub(crate) fn load_config(context_current: &str) -> Config {
 pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
     let home_dir = get_config_dir();
     let file = format!("{}/auth.json", home_dir);
-    let auth_file_content = fs::read_to_string(file).unwrap();
+    let auth_file_content = match fs::read_to_string(file) {
+        Ok(content) => content,
+        Err(e) => {
+            error!("Failed to read auth file: {}", e);
+            return AuthConfig {
+                token: String::new()
+            };
+        }
+    };
 
-    let context_auth: HashMap<String, AuthToken> = serde_json::from_str(&auth_file_content).unwrap();
+    let context_auth: HashMap<String, AuthToken> = match serde_json::from_str(&auth_file_content) {
+        Ok(auth) => auth,
+        Err(e) => {
+            error!("Failed to parse auth file: {}", e);
+            return AuthConfig {
+                token: String::new()
+            };
+        }
+    };
 
     match context_auth.get(&context_name) {
         Some(auth_token) => AuthConfig {

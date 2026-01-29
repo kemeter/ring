@@ -37,7 +37,13 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
 
     match user_request {
         Ok(user_response) => {
-            let user: UserOutput = user_response.json::<UserOutput>().await.unwrap();
+            let user: UserOutput = match user_response.json::<UserOutput>().await {
+                Ok(u) => u,
+                Err(e) => {
+                    println!("Failed to parse user data: {}", e);
+                    return;
+                }
+            };
 
             let api_url = format!("{}/users/{}", configuration.get_api_url(), user.id);
 

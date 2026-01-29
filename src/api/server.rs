@@ -67,12 +67,9 @@ impl<S> FromRequestParts<S> for User
         let storage = app_state.connexion.lock().await;
 
         let user = users_model::find_by_token(&storage, token);
-        if user.is_ok() {
-            let user = user.unwrap();
-            Ok(user)
-        }
-        else {
-            Err((
+        match user {
+            Ok(user) => Ok(user),
+            Err(_) => Err((
                 StatusCode::UNAUTHORIZED,
                 Json(json!({ "error": "Invalid token" }))
             ))

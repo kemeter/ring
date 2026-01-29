@@ -44,10 +44,22 @@ pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
         let mut configs = vec![];
 
         if fs::metadata(file.clone()).is_ok() {
-            let contents = fs::read_to_string(file).unwrap();
+            let contents = match fs::read_to_string(file) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to read config file: {}", e);
+                    return;
+                }
+            };
             let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
 
-           for (key, value) in contexts.unwrap().contexts {
+           for (key, value) in match contexts {
+               Ok(c) => c.contexts,
+               Err(e) => {
+                   eprintln!("Failed to parse config file: {}", e);
+                   return;
+               }
+           } {
                configs.push(ConfigTableItem {
                    name: key,
                    host: value.host,

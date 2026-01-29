@@ -97,7 +97,12 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return eprintln!("Unable to fetch deployments: {}", response.status());
             }
 
-            let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap();
+            let deployments_list: Vec<DeploymentOutput> = match response.json::<Vec<DeploymentOutput>>().await {
+                Ok(list) => list,
+                Err(e) => {
+                    return eprintln!("Failed to parse deployment list: {}", e);
+                }
+            };
 
             let mut deployments = vec![];
             for deployment in deployments_list {

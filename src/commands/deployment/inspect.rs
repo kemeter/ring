@@ -54,7 +54,12 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return eprintln!("Unable to fetch deployment: {}", response.status());
             }
 
-            let deployment = response.json::<DeploymentOutput>().await.unwrap();
+            let deployment = match response.json::<DeploymentOutput>().await {
+                Ok(d) => d,
+                Err(e) => {
+                    return eprintln!("Failed to parse deployment: {}", e);
+                }
+            };
 
             // Main section
             println!("DEPLOYMENT DETAILS");

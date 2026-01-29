@@ -210,7 +210,14 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
     } else {
         // Calculate difference and act accordingly
         let current_count: usize = deployment.instances.len();
-        let target_count: usize = deployment.replicas.try_into().unwrap();
+        let target_count: usize = match deployment.replicas.try_into() {
+            Ok(count) => count,
+            Err(_) => {
+                error!("Invalid replicas count for deployment {}: {}", deployment.id, deployment.replicas);
+                deployment.status = "Failed".to_string();
+                return deployment;
+            }
+        };
 
         debug!("Current instances: {}, Target instances: {}", current_count, target_count);
 
@@ -491,7 +498,8 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
         envs.push(format!("{}={}", key, value))
     }
 
-    let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes).unwrap();
+    let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
+        .map_err(|e| DockerError::ContainerCreationFailed(format!("Failed to parse volumes: {}", e)))?;
     let mut mounts: Vec<Mount> = vec![];
 
     for volume in volumes_collection {
@@ -564,7 +572,8 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
 
     let mount = if volume.r#type.as_str() == "bind" {
 
-        let volume_source = volume.source.unwrap();
+        let volume_source = volume.source.ok_or_else(||
+            DockerError::ContainerCreationFailed("Bind volume requires a source".to_string()))?;
         let type_mount = if volume_source.starts_with('/') { Some(MountTypeEnum::BIND) } else { Some(MountTypeEnum::VOLUME) };
 
         Mount {
@@ -576,7 +585,8 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
         }
     } else if volume.r#type.as_str() == "volume" {
 
-        let volume_name = volume.source.unwrap();
+        let volume_name = volume.source.ok_or_else(||
+            DockerError::ContainerCreationFailed("Named volume requires a source".to_string()))?;
 
         Mount {
             target: Some(volume.destination),
@@ -586,7 +596,8 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
             ..Default::default()
         }
     } else {
-        let config_name = volume.source.as_ref().unwrap();
+        let config_name = volume.source.as_ref().ok_or_else(||
+            DockerError::ContainerCreationFailed("Config volume requires a source".to_string()))?;
 
         let config = configs.get(config_name)
             .ok_or_else(|| DockerError::ConfigNotFound(format!("Config '{}' not found", config_name)))?;

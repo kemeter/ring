@@ -19,17 +19,18 @@ pub(crate) async fn get(
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;
 
-    let option = deployments::find(&guard, id.clone());
-    if let Some(deployment) = option.unwrap() {
-        let runtime = Runtime::new(deployment.clone());
-        let instances = runtime.list_instances().await;
+    match deployments::find(&guard, id.clone()) {
+        Ok(Some(deployment)) => {
+            let runtime = Runtime::new(deployment.clone());
+            let instances = runtime.list_instances().await;
 
-        let mut output = DeploymentOutput::from_to_model(deployment);
-        output.instances = instances;
+            let mut output = DeploymentOutput::from_to_model(deployment);
+            output.instances = instances;
 
-        Json(output).into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
+            Json(output).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }
 

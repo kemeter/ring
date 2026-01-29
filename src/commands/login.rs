@@ -49,18 +49,37 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
     match request {
         Ok(response) => {
             if response.status() == 200 {
-                let auth: AuthToken = response.json().await.unwrap();
+                let auth = match response.json::<AuthToken>().await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        println!("Failed to parse authentication response: {}", e);
+                        return;
+                    }
+                };
 
-                let auth_file_content = fs::read_to_string(config_file.clone()).unwrap();
+                let auth_file_content = fs::read_to_string(config_file.clone()).unwrap_or_else(|_| "{}".to_string());
 
-                let mut context_auth: HashMap<String, AuthToken> = serde_json::from_str(&auth_file_content).unwrap();
+                let mut context_auth: HashMap<String, AuthToken> = serde_json::from_str(&auth_file_content).unwrap_or_default();
 
                 context_auth.insert(configuration.name, auth);
 
-                let serialized_data = serde_json::to_string(&context_auth).unwrap();
+                let serialized_data = match serde_json::to_string(&context_auth) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        println!("Failed to serialize auth data: {}", e);
+                        return;
+                    }
+                };
 
-                fs::create_dir_all(&config_directory).unwrap();
-                fs::write(config_file, serialized_data).expect("Unable to write file");
+                if let Err(e) = fs::create_dir_all(&config_directory) {
+                    println!("Failed to create config directory: {}", e);
+                    return;
+                }
+
+                if let Err(e) = fs::write(config_file, serialized_data) {
+                    println!("Failed to write auth file: {}", e);
+                    return;
+                }
                 return println!("Logging in as {}", username);
             }
         }

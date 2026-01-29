@@ -28,7 +28,8 @@ fn default_image_pull_policy() -> String {
 
 impl ToSql for DeploymentConfig {
     fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
-        let json_string = serde_json::to_string(self).unwrap();
+        let json_string = serde_json::to_string(self)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         Ok(ToSqlOutput::Owned(TypeValue::Text(json_string)))
     }
 }
@@ -273,8 +274,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
 
 pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
 
-    let labels = serde_json::to_string(&deployment.labels).unwrap();
-    let secrets = serde_json::to_string(&deployment.secrets).unwrap();
+    let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
+    let secrets = serde_json::to_string(&deployment.secrets).unwrap_or_else(|_| "[]".to_string());
 
     let config_json = match &deployment.config {
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
@@ -327,7 +328,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":namespace": deployment.namespace,
         ":name": deployment.name,
         ":image": deployment.image,
-        ":command": serde_json::to_string(&deployment.command).unwrap(),
+        ":command": serde_json::to_string(&deployment.command).unwrap_or_else(|_| "[]".to_string()),
         ":config": config_json,
         ":runtime": deployment.runtime,
         ":kind": deployment.kind,
@@ -335,7 +336,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":replicas": deployment.replicas,
         ":secrets": secrets,
         ":volumes": deployment.volumes,
-        ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap(),
+        ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string()),
     };
 
     statement.execute(params).expect("Could not create deployment");

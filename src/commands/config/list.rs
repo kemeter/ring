@@ -62,12 +62,24 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return;
             }
 
-            let config_list: Vec<ConfigOutput> = response.json::<Vec<ConfigOutput>>().await.unwrap();
+            let config_list: Vec<ConfigOutput> = match response.json::<Vec<ConfigOutput>>().await {
+                Ok(list) => list,
+                Err(e) => {
+                    println!("Failed to parse config list: {}", e);
+                    return;
+                }
+            };
 
             let mut configs = vec![];
 
             for config in  config_list {
-                let data_config: HashMap<String, String> = serde_json::from_str(&config.data).unwrap();
+                let data_config: HashMap<String, String> = match serde_json::from_str(&config.data) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        eprintln!("Failed to parse config data for {}: {}", config.name, e);
+                        HashMap::new()
+                    }
+                };
 
                 configs.push(ConfigTableItem {
                     id: config.id.to_string(),

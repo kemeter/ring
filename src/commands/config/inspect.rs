@@ -50,7 +50,13 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return;
             }
 
-            let config: ConfigOutput = response.json::<ConfigOutput>().await.unwrap();
+            let config: ConfigOutput = match response.json::<ConfigOutput>().await {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Failed to parse config: {}", e);
+                    return;
+                }
+            };
 
             let data: Value = serde_json::from_str(&config.data)
                 .expect("Failed to parse config data as JSON");

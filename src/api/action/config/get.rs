@@ -18,14 +18,13 @@ pub(crate) async fn get(
 ) -> impl IntoResponse {
     let guard = connexion.lock().await;
 
-    let option = config::find(&guard, id.clone());
-    if let Some(deployment) = option.unwrap() {
-
-        let output = ConfigOutput::from_to_model(deployment);
-
-        Json(output).into_response()
-    } else {
-        StatusCode::NOT_FOUND.into_response()
+    match config::find(&guard, id.clone()) {
+        Ok(Some(deployment)) => {
+            let output = ConfigOutput::from_to_model(deployment);
+            Json(output).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response()
     }
 }
 

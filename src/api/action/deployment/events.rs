@@ -67,10 +67,8 @@ pub async fn get_deployment_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::Query;
     use axum_test::TestServer;
-    use serde_json::json;
-    use crate::api::server::tests::{new_test_app, login, ResponseBody};
+    use crate::api::server::tests::{new_test_app, login};
 
     #[tokio::test]
     async fn test_get_deployment_events_success() {

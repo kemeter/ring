@@ -65,12 +65,31 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
     }
 
 
-    let mut statement = connection.prepare(&query).unwrap();
-    let rows: Result<Vec<Config>, _> = from_rows::<Config>(statement.query(all_values.as_slice()).unwrap()).collect();
+    let mut statement = match connection.prepare(&query) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to prepare config query: {}", e);
+            return vec![];
+        }
+    };
 
-    let configs: Vec<Config> = rows.unwrap();
+    let query_result = match statement.query(all_values.as_slice()) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Failed to execute config query: {}", e);
+            return vec![];
+        }
+    };
 
-    configs
+    let rows: Result<Vec<Config>, _> = from_rows::<Config>(query_result).collect();
+
+    match rows {
+        Ok(configs) => configs,
+        Err(e) => {
+            log::error!("Failed to parse config rows: {}", e);
+            vec![]
+        }
+    }
 }
 
 pub(crate) fn delete(connection: &MutexGuard<Connection>, id: String) -> Result<(), Box<dyn std::error::Error>> {

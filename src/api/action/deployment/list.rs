@@ -154,6 +154,6 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let deployments = response.json::<Vec<DeploymentOutput>>();
-        assert!(deployments.len() >= 0);
+        assert!(!deployments.is_empty());
     }
 }
