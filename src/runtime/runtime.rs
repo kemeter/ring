@@ -11,7 +11,7 @@ pub struct Runtime {
 #[async_trait]
 pub trait RuntimeInterface {
     async fn list_instances(&self) -> Vec<String>;
-    async fn get_logs(&self) -> Vec<Log>;
+    async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log>;
     async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>);
     async fn remove_instance(&self, instance_id: &str);
 }
@@ -63,13 +63,21 @@ impl RuntimeInterface for DockerRuntime {
         docker::list_instances(self.deployment.clone().id, "all").await
     }
 
-    async fn get_logs(&self) -> Vec<Log> {
+    async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log> {
         let mut logs = vec![];
 
         let instances = self.list_instances().await;
 
-        for instance in instances {
-            let instance_logs: Vec<String> = docker::logs(instance.clone()).await;
+        let filtered_instances: Vec<String> = if let Some(container_filter) = container {
+            instances.into_iter()
+                .filter(|id| id.starts_with(container_filter))
+                .collect()
+        } else {
+            instances
+        };
+
+        for instance in filtered_instances {
+            let instance_logs: Vec<String> = docker::logs(instance.clone(), tail, since).await;
             for message in instance_logs {
                 let log = Log {
                     instance: instance.clone(),

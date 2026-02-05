@@ -985,7 +985,7 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
     return instances;
 }
 
-pub(crate) async fn logs(container_id: String) -> Vec<String> {
+pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
     let docker = match Docker::connect_with_local_defaults() {
         Ok(docker) => docker,
         Err(e) => {
@@ -1005,10 +1005,19 @@ pub(crate) async fn logs(container_id: String) -> Vec<String> {
         }
     }
 
-    let options = LogsOptionsBuilder::new()
+    let mut builder = LogsOptionsBuilder::new()
         .stdout(true)
-        .stderr(true)
-        .build();
+        .stderr(true);
+
+    if let Some(tail_value) = tail {
+        builder = builder.tail(tail_value);
+    }
+
+    if let Some(since_value) = since {
+        builder = builder.since(since_value);
+    }
+
+    let options = builder.build();
 
     let mut logs_stream = docker.logs(&container_id, Some(options));
     let mut logs = vec![];
