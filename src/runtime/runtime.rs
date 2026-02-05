@@ -1,8 +1,12 @@
 use crate::models::deployments::Deployment;
 use crate::runtime::docker;
 use async_trait::async_trait;
+use axum::response::sse::Event;
+use futures::stream::{Stream, StreamExt};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::pin::Pin;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 
 pub struct Runtime {
@@ -12,6 +16,7 @@ pub struct Runtime {
 pub trait RuntimeInterface {
     async fn list_instances(&self) -> Vec<String>;
     async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log>;
+    async fn stream_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
     async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>);
     async fn remove_instance(&self, instance_id: &str);
 }
@@ -90,6 +95,38 @@ impl RuntimeInterface for DockerRuntime {
         }
 
         logs
+    }
+
+    async fn stream_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
+        let instances = self.list_instances().await;
+
+        let filtered_instances: Vec<String> = if let Some(container_filter) = container {
+            instances.into_iter()
+                .filter(|id| id.starts_with(container_filter))
+                .collect()
+        } else {
+            instances
+        };
+
+        if let Some(instance) = filtered_instances.first() {
+            let stream = docker::logs_stream(instance.clone(), tail, since).await;
+
+            let instance_id = instance.clone();
+            let mapped = stream.map(move |line| {
+                let log = Log {
+                    instance: instance_id.clone(),
+                    message: line.clone(),
+                    level: classify_log(line.clone()),
+                    timestamp: extract_date(line),
+                };
+                let json = serde_json::to_string(&log).unwrap_or_default();
+                Ok(Event::default().data(json))
+            });
+
+            Box::pin(mapped)
+        } else {
+            Box::pin(futures::stream::empty())
+        }
     }
 
     async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>) {

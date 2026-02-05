@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    response::IntoResponse,
+    response::{IntoResponse, Response, sse::{KeepAlive, Sse}},
     Json
 };
 use chrono::Utc;
@@ -19,6 +19,8 @@ pub struct LogsQuery {
     since: Option<String>,
     #[serde(default)]
     container: Option<String>,
+    #[serde(default)]
+    follow: bool,
 }
 
 fn default_tail() -> Option<u64> {
@@ -51,7 +53,7 @@ pub(crate) async fn logs(
     Query(params): Query<LogsQuery>,
     _user: User,
     State(connexion): State<Db>,
-) -> impl IntoResponse {
+) -> Response {
     let guard = connexion.lock().await;
     let deployment_result = deployments::find(&guard, id.clone());
 
@@ -62,18 +64,30 @@ pub(crate) async fn logs(
             let tail = params.tail.map(|t| t.to_string());
             let since = params.since.as_deref().and_then(parse_since);
 
-            let logs = runtime.get_logs(
-                tail.as_deref(),
-                since,
-                params.container.as_deref(),
-            ).await;
-            Json(logs)
+            if params.follow {
+                let stream = runtime.stream_logs(
+                    tail.as_deref(),
+                    since,
+                    params.container.as_deref(),
+                ).await;
+
+                Sse::new(stream)
+                    .keep_alive(KeepAlive::default())
+                    .into_response()
+            } else {
+                let logs = runtime.get_logs(
+                    tail.as_deref(),
+                    since,
+                    params.container.as_deref(),
+                ).await;
+                Json(logs).into_response()
+            }
         }
         Ok(None) => {
-            Json(Vec::<crate::runtime::runtime::Log>::new())
+            Json(Vec::<crate::runtime::runtime::Log>::new()).into_response()
         }
         Err(_) => {
-            Json(Vec::<crate::runtime::runtime::Log>::new())
+            Json(Vec::<crate::runtime::runtime::Log>::new()).into_response()
         }
     }
 }

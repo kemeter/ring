@@ -85,11 +85,15 @@ pub(crate) struct AppState {
 }
 
 pub(crate) fn router(state: AppState) -> Router {
-    Router::new()
+    // Routes that support long-lived connections (SSE streaming) - no timeout
+    let streaming_routes = Router::new()
+        .route("/deployments/{id}/logs", get(deployment_logs));
+
+    // All other routes with timeout
+    let api_routes = Router::new()
         .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
-        .route("/deployments/{id}/logs", get(deployment_logs))
         .route("/deployments/{id}/events", get(get_deployment_events))
         .route("/deployments/{id}/health-checks", get(get_health_checks))
         .route("/node/get", get(node_get))
@@ -100,8 +104,6 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/users/{id}", delete(user_delete))
         .route("/users/me", get(user_current))
         .route("/healthz", get(healthz))
-
-        .with_state(state)
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|error: BoxError| async move {
@@ -116,7 +118,12 @@ pub(crate) fn router(state: AppState) -> Router {
                 }))
                 .timeout(Duration::from_secs(10))
                 .into_inner(),
-        )
+        );
+
+    Router::new()
+        .merge(streaming_routes)
+        .merge(api_routes)
+        .with_state(state)
 }
 
 pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)

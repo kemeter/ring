@@ -20,7 +20,9 @@ use bollard::{
     exec::{CreateExecOptions, StartExecOptions},
 };
 use futures::StreamExt;
+use futures::stream::Stream;
 use std::collections::HashMap;
+use std::pin::Pin;
 use crate::models::deployments::Deployment;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
@@ -1038,6 +1040,63 @@ pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option
     }
 
     return logs;
+}
+
+pub(crate) async fn logs_stream(
+    container_id: String,
+    tail: Option<&str>,
+    since: Option<i32>,
+) -> Pin<Box<dyn Stream<Item = String> + Send>> {
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            error!("Failed to connect to Docker: {}", e);
+            return Box::pin(futures::stream::empty());
+        }
+    };
+
+    match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
+        Ok(_) => {}
+        Err(e) => {
+            debug!("Container {} not found or not accessible: {}", container_id, e);
+            return Box::pin(futures::stream::empty());
+        }
+    }
+
+    let mut builder = LogsOptionsBuilder::new()
+        .stdout(true)
+        .stderr(true)
+        .follow(true);
+
+    if let Some(tail_value) = tail {
+        builder = builder.tail(tail_value);
+    }
+
+    if let Some(since_value) = since {
+        builder = builder.since(since_value);
+    }
+
+    let options = builder.build();
+
+    let stream = docker.logs(&container_id, Some(options))
+        .filter_map(|result| async {
+            match result {
+                Ok(chunk) => {
+                    let log_line = format_log_output(chunk).replace("\n", "");
+                    if !log_line.trim().is_empty() {
+                        Some(log_line)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    debug!("Docker stream logs error: {}", e);
+                    None
+                }
+            }
+        });
+
+    Box::pin(stream)
 }
 
 fn format_log_output(output: LogOutput) -> String {
