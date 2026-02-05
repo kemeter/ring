@@ -987,6 +987,66 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
     return instances;
 }
 
+pub(crate) async fn list_instances_with_names(id: String, status: &str) -> Vec<(String, String)> {
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            error!("Failed to connect to Docker: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut instances: Vec<(String, String)> = Vec::new();
+
+    let options = if status == "all" {
+        ListContainersOptionsBuilder::new()
+            .all(true)
+            .build()
+    } else if status == "active" {
+        let filters = HashMap::from([
+            ("status".to_string(), vec![
+                "running".to_string(),
+                "created".to_string(),
+                "restarting".to_string(),
+            ])
+        ]);
+        ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build()
+    } else {
+        let filters = HashMap::from([("status".to_string(), vec![status.to_string()])]);
+        ListContainersOptionsBuilder::new()
+            .all(false)
+            .filters(&filters)
+            .build()
+    };
+
+    match docker.list_containers(Some(options)).await {
+        Ok(containers) => {
+            for container in containers {
+                if let Some(labels) = &container.labels {
+                    if let Some(deployment_id) = labels.get("ring_deployment") {
+                        if deployment_id == &id {
+                            if let Some(container_id) = &container.id {
+                                let name = container.names
+                                    .as_ref()
+                                    .and_then(|names| names.first())
+                                    .map(|n| n.trim_start_matches('/').to_string())
+                                    .unwrap_or_else(|| container_id[..12].to_string());
+                                instances.push((container_id.clone(), name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => debug!("Docker list instances error: {}", e),
+    }
+
+    instances
+}
+
 pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
     let docker = match Docker::connect_with_local_defaults() {
         Ok(docker) => docker,
