@@ -273,21 +273,26 @@ pub(crate) async fn create(
                 events: vec![],
             };
 
-            deployments::create(&guard, &deployment);
+            match deployments::create(&guard, &deployment) {
+                Ok(deployment) => {
+                    let _ = deployment_event::log_event(
+                        &guard,
+                        deployment.id.clone(),
+                        "info",
+                        format!("Deployment '{}' created successfully", deployment.name),
+                        "api",
+                        Some("DeploymentCreated")
+                    );
 
-            // Create deployment creation event
-            let _ = deployment_event::log_event(
-                &guard,
-                deployment.id.clone(),
-                "info",
-                format!("Deployment '{}' created successfully", deployment.name),
-                "api",
-                Some("DeploymentCreated")
-            );
-
-            let deployment_output = DeploymentOutput::from_to_model(deployment);
-
-            (StatusCode::CREATED, Json(deployment_output)).into_response()
+                    let deployment_output = DeploymentOutput::from_to_model(deployment);
+                    (StatusCode::CREATED, Json(deployment_output)).into_response()
+                }
+                Err(e) => {
+                    error!("Failed to create deployment: {}", e);
+                    let message = Message { message: format!("A deployment with name '{}' already exists in namespace '{}'", input.name, input.namespace) };
+                    (StatusCode::CONFLICT, Json(message)).into_response()
+                }
+            }
         }
         Err(e) => {
             let message = Message { message: e.to_string() };

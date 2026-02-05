@@ -272,7 +272,7 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
     }
 }
 
-pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Deployment {
+pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Result<Deployment, rusqlite::Error> {
 
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
     let secrets = serde_json::to_string(&deployment.secrets).unwrap_or_else(|_| "[]".to_string());
@@ -318,7 +318,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :volumes,
                 :health_checks
             )"
-    ).expect("Could not create deployment");
+    )?;
 
     let params = named_params!{
         ":id": deployment.id,
@@ -339,9 +339,9 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string()),
     };
 
-    statement.execute(params).expect("Could not create deployment");
+    statement.execute(params)?;
 
-    return deployment.clone();
+    Ok(deployment.clone())
 }
 
 pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deployment) {
