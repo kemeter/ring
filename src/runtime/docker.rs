@@ -844,15 +844,20 @@ async fn execute_command_check_for_container(container_id: &str, command: &str) 
         }
     };
     
-    // Parse command into parts (simple split by space)
-    let cmd_parts: Vec<&str> = command.split_whitespace().collect();
-    if cmd_parts.is_empty() {
-        return (HealthCheckStatus::Failed, Some("Empty command".to_string()));
-    }
+    // Parse command using shell-words to properly handle quotes and escaping
+    let cmd_parts = match shell_words::split(command) {
+        Ok(parts) if parts.is_empty() => {
+            return (HealthCheckStatus::Failed, Some("Empty command".to_string()));
+        }
+        Ok(parts) => parts,
+        Err(e) => {
+            return (HealthCheckStatus::Failed, Some(format!("Invalid command syntax: {}", e)));
+        }
+    };
     
     // Create exec instance
     let exec_options = CreateExecOptions {
-        cmd: Some(cmd_parts.iter().map(|s| s.to_string()).collect()),
+        cmd: Some(cmd_parts),
         attach_stdout: Some(true),
         attach_stderr: Some(true),
         ..Default::default()
