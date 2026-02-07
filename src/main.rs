@@ -26,7 +26,9 @@ mod scheduler {
 
 mod runtime {
   pub(crate) mod docker;
+  pub(crate) mod error;
   pub(crate) mod runtime;
+  pub(crate) mod types;
 }
 
 mod models {
