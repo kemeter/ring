@@ -74,11 +74,10 @@ pub(crate) async fn login(
 
 fn generate_token() -> String {
     format!(
-        "tk_{}_{}",
-        chrono::Utc::now().timestamp(),
+        "tk_{}",
         rng()
             .sample_iter(&Alphanumeric)
-            .take(24)
+            .take(64)
             .map(char::from)
             .collect::<String>()
     )
