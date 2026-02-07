@@ -108,17 +108,17 @@ impl Deployment {
         Ok(())
     }
 
-    fn resolve_env_vars(&mut self) {
-        self.namespace = env_resolver(&self.namespace);
-        self.name = env_resolver(&self.name);
-        self.image = env_resolver(&self.image);
+    fn resolve_env_vars(&mut self, env_vars: &HashMap<String, String>) {
+        self.namespace = env_resolver(&self.namespace, env_vars);
+        self.name = env_resolver(&self.name, env_vars);
+        self.image = env_resolver(&self.image, env_vars);
 
         for (_, value) in self.secrets.iter_mut() {
-            *value = env_resolver(value);
+            *value = env_resolver(value, env_vars);
         }
 
         for (_, value) in self.config.iter_mut() {
-            *value = env_resolver(value);
+            *value = env_resolver(value, env_vars);
         }
     }
 }
@@ -253,7 +253,7 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
 
     let binding = String::new();
     let env_file = args.get_one::<String>("env-file").unwrap_or(&binding);
-    parse_env_file(env_file);
+    let env_vars = parse_env_file(env_file);
 
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name);
@@ -274,7 +274,7 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
             continue;
         }
 
-        deployment.resolve_env_vars();
+        deployment.resolve_env_vars(&env_vars);
 
         if is_verbose {
             let json = json!(deployment);
@@ -310,16 +310,18 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
     Ok(())
 }
 
-fn parse_env_file(env_file: &str) {
+fn parse_env_file(env_file: &str) -> HashMap<String, String> {
+    let mut env_vars = HashMap::new();
+
     if env_file.is_empty() {
-        return;
+        return env_vars;
     }
 
     let env_file_content = match fs::read_to_string(env_file) {
         Ok(content) => content,
         Err(e) => {
             eprintln!("Warning: Failed to read env file '{}': {}", env_file, e);
-            return;
+            return env_vars;
         }
     };
 
@@ -335,17 +337,16 @@ fn parse_env_file(env_file: &str) {
         if parts.len() == 2 {
             let key = parts[0].trim();
             let value = parts[1].trim_matches('"').trim_matches('\'');
-
-            if env::var(key).is_err() {
-                env::set_var(key, value);
-            }
+            env_vars.insert(key.to_string(), value.to_string());
         } else {
             eprintln!("Warning: Invalid env line {} in '{}': {}", line_num + 1, env_file, line);
         }
     }
+
+    env_vars
 }
 
-fn env_resolver(text: &str) -> String {
+fn env_resolver(text: &str, env_vars: &HashMap<String, String>) -> String {
     use once_cell::sync::Lazy;
 
     static ENV_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -358,7 +359,9 @@ fn env_resolver(text: &str) -> String {
         let variable_str = variable.as_str();
         let key = &variable_str[1..];
 
-        if let Ok(value) = env::var(key) {
+        // Priority: system env vars first, then file env vars
+        let value = env::var(key).ok().or_else(|| env_vars.get(key).cloned());
+        if let Some(value) = value {
             content = content.replace(variable_str, &value);
         }
     }
@@ -372,16 +375,17 @@ mod tests {
 
     #[test]
     fn test_env_resolver() {
-        env::set_var("APP_VERSION", "v1.0.0");
-        env::set_var("REGISTRY", "hub.docker.com");
+        let mut env_vars = HashMap::new();
+        env_vars.insert("APP_VERSION".to_string(), "v1.0.0".to_string());
+        env_vars.insert("REGISTRY".to_string(), "hub.docker.com".to_string());
 
         assert_eq!(
-            env_resolver("registry.$REGISTRY/app:$APP_VERSION"),
+            env_resolver("registry.$REGISTRY/app:$APP_VERSION", &env_vars),
             "registry.hub.docker.com/app:v1.0.0"
         );
 
         assert_eq!(
-            env_resolver("test:$UNDEFINED_VAR"),
+            env_resolver("test:$UNDEFINED_VAR", &env_vars),
             "test:$UNDEFINED_VAR"
         );
     }
