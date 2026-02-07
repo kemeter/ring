@@ -17,7 +17,9 @@ impl fmt::Display for RuntimeError {
         match self {
             RuntimeError::ImageNotFound(msg) => write!(f, "Image not found: {}", msg),
             RuntimeError::ImagePullFailed(msg) => write!(f, "Image pull failed: {}", msg),
-            RuntimeError::InstanceCreationFailed(msg) => write!(f, "Instance creation failed: {}", msg),
+            RuntimeError::InstanceCreationFailed(msg) => {
+                write!(f, "Instance creation failed: {}", msg)
+            }
             RuntimeError::ConfigNotFound(msg) => write!(f, "Config not found: {}", msg),
             RuntimeError::ConfigKeyNotFound(msg) => write!(f, "Config key not found: {}", msg),
             RuntimeError::FileSystemError(msg) => write!(f, "File system error: {}", msg),

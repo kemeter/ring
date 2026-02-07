@@ -26,6 +26,8 @@ use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::default::Default;
 use crate::models::config::Config;
+use crate::runtime::error::RuntimeError;
+use crate::runtime::types::InstanceStatus;
 
 struct DockerImage {
     name: String,
@@ -33,44 +35,14 @@ struct DockerImage {
     auth: Option<(String, String, String)>,
 }
 
-#[derive(Debug)]
-pub enum DockerError {
-    ImageNotFound(String),
-    ImagePullFailed(String),
-    ContainerCreationFailed(String),
-    ConfigNotFound(String),
-    ConfigKeyNotFound(String),
-    FileSystemError(String),
-    Other(String),
-}
-
-#[derive(Debug)]
-enum ContainerStatus {
-    Running,
-    Completed,
-    Failed,
-}
-
-impl From<bollard::errors::Error> for DockerError {
+impl From<bollard::errors::Error> for RuntimeError {
     fn from(err: bollard::errors::Error) -> Self {
         let err_msg = err.to_string();
         if err_msg.contains("404") || err_msg.contains("not found") || err_msg.contains("manifest unknown") {
-            DockerError::ImageNotFound(err_msg)
+            RuntimeError::ImageNotFound(err_msg)
         } else {
-            DockerError::Other(err_msg)
+            RuntimeError::Other(err_msg)
         }
-    }
-}
-
-impl From<serde_json::Error> for DockerError {
-    fn from(err: serde_json::Error) -> Self {
-        DockerError::Other(format!("JSON parsing error: {}", err))
-    }
-}
-
-impl From<std::io::Error> for DockerError {
-    fn from(err: std::io::Error) -> Self {
-        DockerError::FileSystemError(format!("File system error: {}", err))
     }
 }
 
@@ -123,15 +95,15 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
         // Check the status of the existing container
         for instance_id in &all_instances {
             match check_container_status(docker.clone(), instance_id.clone()).await {
-                ContainerStatus::Running => {
+                InstanceStatus::Running => {
                     deployment.status = "running".to_string();
                     break;
                 }
-                ContainerStatus::Completed => {
+                InstanceStatus::Completed => {
                     deployment.status = "completed".to_string();
                     break;
                 }
-                ContainerStatus::Failed => {
+                InstanceStatus::Failed => {
                     deployment.status = "failed".to_string();
                     break;
                 }
@@ -144,7 +116,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                 Ok(_) => {
                     deployment.status = "running".to_string();
                 }
-                Err(DockerError::ImageNotFound(msg)) => {
+                Err(RuntimeError::ImageNotFound(msg)) => {
                     error!("Image not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ImagePullBackOff".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -155,7 +127,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("ImageNotFound")
                     ));
                 }
-                Err(DockerError::ImagePullFailed(msg)) => {
+                Err(RuntimeError::ImagePullFailed(msg)) => {
                     error!("Image pull failed for job {}: {}", deployment.id, msg);
                     deployment.status = "ImagePullBackOff".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -166,7 +138,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("ImagePullFailed")
                     ));
                 }
-                Err(DockerError::ContainerCreationFailed(msg)) => {
+                Err(RuntimeError::InstanceCreationFailed(msg)) => {
                     error!("Container creation failed for job {}: {}", deployment.id, msg);
                     deployment.status = "CreateContainerError".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -174,10 +146,10 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         "error",
                         format!("Container creation failed: {}", msg),
                         "docker",
-                        Some("ContainerCreationFailed")
+                        Some("InstanceCreationFailed")
                     ));
                 }
-                Err(DockerError::ConfigNotFound(msg)) => {
+                Err(RuntimeError::ConfigNotFound(msg)) => {
                     error!("Config not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ConfigError".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -188,7 +160,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("ConfigNotFound")
                     ));
                 }
-                Err(DockerError::ConfigKeyNotFound(msg)) => {
+                Err(RuntimeError::ConfigKeyNotFound(msg)) => {
                     error!("Config key not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ConfigError".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -199,7 +171,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("ConfigKeyNotFound")
                     ));
                 }
-                Err(DockerError::FileSystemError(msg)) => {
+                Err(RuntimeError::FileSystemError(msg)) => {
                     error!("File system error for job {}: {}", deployment.id, msg);
                     deployment.status = "FileSystemError".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -210,7 +182,18 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         Some("FileSystemError")
                     ));
                 }
-                Err(DockerError::Other(msg)) => {
+                Err(RuntimeError::ConnectionFailed(msg)) => {
+                    error!("Connection failed for job {}: {}", deployment.id, msg);
+                    deployment.status = "Error".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Connection failed: {}", msg),
+                        "docker",
+                        Some("ConnectionFailed")
+                    ));
+                }
+                Err(RuntimeError::Other(msg)) => {
                     error!("Unknown error for job {}: {}", deployment.id, msg);
                     deployment.status = "Error".to_string();
                     deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
@@ -218,7 +201,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                         "error",
                         format!("Docker error: {}", msg),
                         "docker",
-                        Some("DockerError")
+                        Some("RuntimeError")
                     ));
                 }
             }
@@ -292,7 +275,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             deployment.status = "running".to_string();
                         }
                     }
-                    Err(DockerError::ImageNotFound(msg)) => {
+                    Err(RuntimeError::ImageNotFound(msg)) => {
                         error!("Image not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ImagePullBackOff".to_string();
                         deployment.restart_count += 1;
@@ -304,7 +287,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("ImageNotFound")
                         ));
                     }
-                    Err(DockerError::ImagePullFailed(msg)) => {
+                    Err(RuntimeError::ImagePullFailed(msg)) => {
                         error!("Image pull failed for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ImagePullBackOff".to_string();
                         deployment.restart_count += 1;
@@ -316,7 +299,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("ImagePullFailed")
                         ));
                     }
-                    Err(DockerError::ContainerCreationFailed(msg)) => {
+                    Err(RuntimeError::InstanceCreationFailed(msg)) => {
                         error!("Docker container creation failed for deployment {}: {}", deployment.id, msg);
                         deployment.status = "CreateContainerError".to_string();
                         deployment.restart_count += 1;
@@ -325,10 +308,10 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             "error",
                             format!("Container creation failed: {}", msg),
                             "docker",
-                            Some("ContainerCreationFailed")
+                            Some("InstanceCreationFailed")
                         ));
                     }
-                    Err(DockerError::ConfigNotFound(msg)) => {
+                    Err(RuntimeError::ConfigNotFound(msg)) => {
                         error!("Config not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ConfigError".to_string();
                         deployment.restart_count += 1;
@@ -340,7 +323,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("ConfigNotFound")
                         ));
                     }
-                    Err(DockerError::ConfigKeyNotFound(msg)) => {
+                    Err(RuntimeError::ConfigKeyNotFound(msg)) => {
                         error!("Config key not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ConfigError".to_string();
                         deployment.restart_count += 1;
@@ -352,7 +335,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("ConfigKeyNotFound")
                         ));
                     }
-                    Err(DockerError::FileSystemError(msg)) => {
+                    Err(RuntimeError::FileSystemError(msg)) => {
                         error!("File system error for deployment {}: {}", deployment.id, msg);
                         deployment.status = "FileSystemError".to_string();
                         deployment.restart_count += 1;
@@ -364,7 +347,19 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("FileSystemError")
                         ));
                     }
-                    Err(DockerError::Other(msg)) => {
+                    Err(RuntimeError::ConnectionFailed(msg)) => {
+                        error!("Connection failed for deployment {}: {}", deployment.id, msg);
+                        deployment.status = "Error".to_string();
+                        deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Connection failed: {}", msg),
+                            "docker",
+                            Some("ConnectionFailed")
+                        ));
+                    }
+                    Err(RuntimeError::Other(msg)) => {
                         error!("Unknown error for deployment {}: {}", deployment.id, msg);
                         deployment.status = "Error".to_string();
                         deployment.restart_count += 1;
@@ -373,7 +368,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             "error",
                             format!("Docker error: {}", msg),
                             "docker",
-                            Some("DockerError")
+                            Some("RuntimeError")
                         ));
                     }
                 }
@@ -411,7 +406,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
     deployment
 }
 
-async fn check_container_status(docker: Docker, container_id: String) -> ContainerStatus {
+async fn check_container_status(docker: Docker, container_id: String) -> InstanceStatus {
     let inspect_options = InspectContainerOptions {
         size: true,
         ..Default::default()
@@ -420,24 +415,24 @@ async fn check_container_status(docker: Docker, container_id: String) -> Contain
         Ok(info) => {
             if let Some(state) = info.state {
                 if state.running == Some(true) {
-                    ContainerStatus::Running
+                    InstanceStatus::Running
                 } else if state.exit_code == Some(0) {
-                    ContainerStatus::Completed
+                    InstanceStatus::Completed
                 } else {
-                    ContainerStatus::Failed
+                    InstanceStatus::Failed
                 }
             } else {
-                ContainerStatus::Failed
+                InstanceStatus::Failed
             }
         }
         Err(e) => {
             debug!("Failed to inspect container {}: {}", container_id, e);
-            ContainerStatus::Failed
+            InstanceStatus::Failed
         }
     }
 }
 
-async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), DockerError> {
+async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), RuntimeError> {
     let image = image_config.name.clone();
     let tag = image_config.tag.clone();
     let image_name = format!("{}:{}", image, tag);
@@ -492,14 +487,14 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), Doc
 
                 // If 404 or "not found" error, stop immediately
                 if error_msg.contains("404") || error_msg.contains("not found") || error_msg.contains("manifest unknown") {
-                    return Err(DockerError::ImageNotFound(last_error));
+                    return Err(RuntimeError::ImageNotFound(last_error));
                 }
             }
         }
     }
 
     if has_error {
-        return Err(DockerError::ImagePullFailed(last_error));
+        return Err(RuntimeError::ImagePullFailed(last_error));
     }
 
     // Check one last time that the image is available after pull
@@ -510,7 +505,7 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), Doc
         }
         Err(e) => {
             error!("Docker image {} still not available after pull: {}", image_name, e);
-            Err(DockerError::ImageNotFound(format!("Image {} not available after pull", image_name)))
+            Err(RuntimeError::ImageNotFound(format!("Image {} not available after pull", image_name)))
         }
     }
 }
@@ -538,7 +533,7 @@ fn get_privileged_config(deployment_config: &Option<crate::models::deployments::
         .and_then(|u| u.privileged)
 }
 
-async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, configs: HashMap<String, Config>) -> Result<(), DockerError> {
+async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, configs: HashMap<String, Config>) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
         Some((image, tag)) => (image.to_string(), tag.to_string()),
@@ -597,7 +592,7 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
     }
 
     let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
-        .map_err(|e| DockerError::ContainerCreationFailed(format!("Failed to parse volumes: {}", e)))?;
+        .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Failed to parse volumes: {}", e)))?;
     let mut mounts: Vec<Mount> = vec![];
 
     for volume in volumes_collection {
@@ -647,31 +642,31 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
             docker
                 .connect_network(&network_name, connect_options)
                 .await
-                .map_err(|e| DockerError::ContainerCreationFailed(format!("Docker failed to connect to network: {}", e)))?;
+                .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Docker failed to connect to network: {}", e)))?;
 
             // Start container
             let start_options = StartContainerOptionsBuilder::new().build();
             docker
                 .start_container(&container.id, Some(start_options))
                 .await
-                .map_err(|e| DockerError::ContainerCreationFailed(format!("Docker failed to start container: {}", e)))?;
+                .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Docker failed to start container: {}", e)))?;
 
             info!("Docker container {} created and started successfully", container_name);
             Ok(())
         }
         Err(e) => {
             error!("Docker failed to create container: {}", e);
-            Err(DockerError::from(e))
+            Err(RuntimeError::from(e))
         }
     }
 }
 
-fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, Config>, deployment_id: String) -> Result<Mount, DockerError> {
+fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, Config>, deployment_id: String) -> Result<Mount, RuntimeError> {
 
     let mount = if volume.r#type.as_str() == "bind" {
 
         let volume_source = volume.source.ok_or_else(||
-            DockerError::ContainerCreationFailed("Bind volume requires a source".to_string()))?;
+            RuntimeError::InstanceCreationFailed("Bind volume requires a source".to_string()))?;
         let type_mount = if volume_source.starts_with('/') { Some(MountTypeEnum::BIND) } else { Some(MountTypeEnum::VOLUME) };
 
         Mount {
@@ -684,7 +679,7 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
     } else if volume.r#type.as_str() == "volume" {
 
         let volume_name = volume.source.ok_or_else(||
-            DockerError::ContainerCreationFailed("Named volume requires a source".to_string()))?;
+            RuntimeError::InstanceCreationFailed("Named volume requires a source".to_string()))?;
 
         Mount {
             target: Some(volume.destination),
@@ -695,18 +690,18 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
         }
     } else {
         let config_name = volume.source.as_ref().ok_or_else(||
-            DockerError::ContainerCreationFailed("Config volume requires a source".to_string()))?;
+            RuntimeError::InstanceCreationFailed("Config volume requires a source".to_string()))?;
 
         let config = configs.get(config_name)
-            .ok_or_else(|| DockerError::ConfigNotFound(format!("Config '{}' not found", config_name)))?;
+            .ok_or_else(|| RuntimeError::ConfigNotFound(format!("Config '{}' not found", config_name)))?;
 
         let config_data: HashMap<String, String> = serde_json::from_str(&config.data)?;
 
         let key = volume.key.as_ref()
-            .ok_or_else(|| DockerError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string()))?;
+            .ok_or_else(|| RuntimeError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string()))?;
 
         let content = config_data.get(key)
-            .ok_or_else(|| DockerError::ConfigKeyNotFound(format!("Key '{}' not found in config '{}'", key, config_name)))?;
+            .ok_or_else(|| RuntimeError::ConfigKeyNotFound(format!("Key '{}' not found in config '{}'", key, config_name)))?;
 
         let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
         std::fs::create_dir_all(&temp_dir)?;
@@ -1203,7 +1198,7 @@ mod tests {
 
         let result = create_mount_from_volume(volume, configs, "test-deployment".to_string());
 
-        assert!(matches!(result, Err(DockerError::ConfigKeyNotFound(_))));
+        assert!(matches!(result, Err(RuntimeError::ConfigKeyNotFound(_))));
     }
 
     #[test]
