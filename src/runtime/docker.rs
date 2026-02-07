@@ -147,30 +147,79 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
                 Err(DockerError::ImageNotFound(msg)) => {
                     error!("Image not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ImagePullBackOff".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Image not found: {}", msg),
+                        "docker",
+                        Some("ImageNotFound")
+                    ));
                 }
                 Err(DockerError::ImagePullFailed(msg)) => {
                     error!("Image pull failed for job {}: {}", deployment.id, msg);
                     deployment.status = "ImagePullBackOff".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Image pull failed: {}", msg),
+                        "docker",
+                        Some("ImagePullFailed")
+                    ));
                 }
                 Err(DockerError::ContainerCreationFailed(msg)) => {
                     error!("Container creation failed for job {}: {}", deployment.id, msg);
                     deployment.status = "CreateContainerError".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Container creation failed: {}", msg),
+                        "docker",
+                        Some("ContainerCreationFailed")
+                    ));
                 }
                 Err(DockerError::ConfigNotFound(msg)) => {
                     error!("Config not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ConfigError".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Config not found: {}", msg),
+                        "docker",
+                        Some("ConfigNotFound")
+                    ));
                 }
                 Err(DockerError::ConfigKeyNotFound(msg)) => {
                     error!("Config key not found for job {}: {}", deployment.id, msg);
                     deployment.status = "ConfigError".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Config key not found: {}", msg),
+                        "docker",
+                        Some("ConfigKeyNotFound")
+                    ));
                 }
                 Err(DockerError::FileSystemError(msg)) => {
                     error!("File system error for job {}: {}", deployment.id, msg);
                     deployment.status = "FileSystemError".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("File system error: {}", msg),
+                        "docker",
+                        Some("FileSystemError")
+                    ));
                 }
                 Err(DockerError::Other(msg)) => {
                     error!("Unknown error for job {}: {}", deployment.id, msg);
                     deployment.status = "Error".to_string();
+                    deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                        deployment.id.clone(),
+                        "error",
+                        format!("Docker error: {}", msg),
+                        "docker",
+                        Some("DockerError")
+                    ));
                 }
             }
         }
@@ -247,36 +296,85 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                         error!("Image not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ImagePullBackOff".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Image not found: {}", msg),
+                            "docker",
+                            Some("ImageNotFound")
+                        ));
                     }
                     Err(DockerError::ImagePullFailed(msg)) => {
                         error!("Image pull failed for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ImagePullBackOff".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Image pull failed: {}", msg),
+                            "docker",
+                            Some("ImagePullFailed")
+                        ));
                     }
                     Err(DockerError::ContainerCreationFailed(msg)) => {
                         error!("Docker container creation failed for deployment {}: {}", deployment.id, msg);
                         deployment.status = "CreateContainerError".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Container creation failed: {}", msg),
+                            "docker",
+                            Some("ContainerCreationFailed")
+                        ));
                     }
                     Err(DockerError::ConfigNotFound(msg)) => {
                         error!("Config not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ConfigError".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Config not found: {}", msg),
+                            "docker",
+                            Some("ConfigNotFound")
+                        ));
                     }
                     Err(DockerError::ConfigKeyNotFound(msg)) => {
                         error!("Config key not found for deployment {}: {}", deployment.id, msg);
                         deployment.status = "ConfigError".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Config key not found: {}", msg),
+                            "docker",
+                            Some("ConfigKeyNotFound")
+                        ));
                     }
                     Err(DockerError::FileSystemError(msg)) => {
                         error!("File system error for deployment {}: {}", deployment.id, msg);
                         deployment.status = "FileSystemError".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("File system error: {}", msg),
+                            "docker",
+                            Some("FileSystemError")
+                        ));
                     }
                     Err(DockerError::Other(msg)) => {
                         error!("Unknown error for deployment {}: {}", deployment.id, msg);
                         deployment.status = "Error".to_string();
                         deployment.restart_count += 1;
+                        deployment.events.push(crate::models::deployment_event::DeploymentEvent::new(
+                            deployment.id.clone(),
+                            "error",
+                            format!("Docker error: {}", msg),
+                            "docker",
+                            Some("DockerError")
+                        ));
                     }
                 }
             }
