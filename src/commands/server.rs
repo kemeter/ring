@@ -18,9 +18,11 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config, mut stora
         .run(&mut storage)
         .expect("Could not execute database migrations.");
 
-    let connection = Arc::new(Mutex::new(storage));
-    let api_server_handler = task::spawn(ApiServer::start(Arc::clone(&connection), configuration.clone()));
-    let scheduler_handler = task::spawn(schedule(Arc::clone(&connection), configuration));
+    let api_connection = Arc::new(Mutex::new(storage));
+    let scheduler_connection = Arc::new(Mutex::new(crate::database::get_database_connection()));
+
+    let api_server_handler = task::spawn(ApiServer::start(api_connection, configuration.clone()));
+    let scheduler_handler = task::spawn(schedule(scheduler_connection, configuration));
 
     let _ = api_server_handler.await;
     let _ = scheduler_handler.await;

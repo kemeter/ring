@@ -13,5 +13,10 @@ pub(crate) fn get_database_connection() -> Connection {
 
     let database_file_path = env::var_os("RING_DATABASE_PATH").unwrap_or_else(|| "ring.db".into());
 
-    Connection::open_with_flags(database_file_path, db_flags).expect("Could not test: DB not created")
+    let conn = Connection::open_with_flags(database_file_path, db_flags).expect("Could not open database");
+
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+        .expect("Could not set WAL mode");
+
+    conn
 }
