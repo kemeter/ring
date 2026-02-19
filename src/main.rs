@@ -62,7 +62,7 @@ async fn main() {
     env_logger::init();
 
     let app = Command::new("ring")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
         .about("The ring to rule them all")
         .arg(
