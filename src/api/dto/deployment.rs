@@ -2,7 +2,7 @@
 use serde::{Serialize, Deserialize, Serializer};
 use std::collections::HashMap;
 use serde::ser::SerializeStruct;
-use crate::models::deployments::{Deployment, DeploymentConfig};
+use crate::models::deployments::{Deployment, DeploymentConfig, ResourceLimits};
 
 fn serialize_option_deployment_config<S>(
     opt: &Option<DeploymentConfig>,
@@ -42,7 +42,9 @@ pub(crate) struct DeploymentOutput {
     pub(crate) secrets: HashMap<String, String>,
     pub(crate) volumes: Vec<DeploymentVolume>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>
+    pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) resources: Option<ResourceLimits>,
 }
 
 impl DeploymentOutput {
@@ -76,7 +78,8 @@ impl DeploymentOutput {
             secrets: secrets,
             volumes: volumes,
             instances: [].to_vec(),
-            health_checks: deployment.health_checks
+            health_checks: deployment.health_checks,
+            resources: deployment.resources,
         };
     }
 }

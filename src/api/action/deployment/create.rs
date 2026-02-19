@@ -17,7 +17,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::models::deployment_event;
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::models::deployments::DeploymentConfig;
+use crate::models::deployments::{DeploymentConfig, ResourceLimits};
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
@@ -188,7 +188,9 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     command: Vec<String>,
     #[serde(default)]
-    health_checks: Option<Vec<crate::models::health_check::HealthCheck>>
+    health_checks: Option<Vec<crate::models::health_check::HealthCheck>>,
+    #[serde(default)]
+    resources: Option<ResourceLimits>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -270,6 +272,7 @@ pub(crate) async fn create(
                 restart_count: 0,
                 volumes: volumes,
                 health_checks: input.health_checks.unwrap_or_default(),
+                resources: input.resources,
                 pending_events: vec![],
             };
 
@@ -1127,6 +1130,93 @@ mod tests {
         assert!(check_types.contains(&"tcp".to_string()));
         assert!(check_types.contains(&"http".to_string()));
         assert!(check_types.contains(&"command".to_string()));
+    }
+
+    #[tokio::test]
+    async fn create_with_resources() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "limited-nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "resources": {
+                    "cpu_limit": 0.5,
+                    "memory_limit": "512Mi",
+                    "memory_reservation": "256Mi",
+                    "cpu_shares": 512
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        let deployment: DeploymentOutput = response.json();
+        assert_eq!(deployment.name, "limited-nginx");
+        let resources = deployment.resources.expect("resources should be present");
+        assert_eq!(resources.cpu_limit, Some(0.5));
+        assert_eq!(resources.memory_limit, Some("512Mi".to_string()));
+        assert_eq!(resources.memory_reservation, Some("256Mi".to_string()));
+        assert_eq!(resources.cpu_shares, Some(512));
+    }
+
+    #[tokio::test]
+    async fn create_without_resources() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "no-limits-nginx",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        let deployment: DeploymentOutput = response.json();
+        assert!(deployment.resources.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_with_partial_resources() {
+        let app = new_test_app();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "partial-nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "resources": {
+                    "memory_limit": "1Gi"
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        let deployment: DeploymentOutput = response.json();
+        let resources = deployment.resources.expect("resources should be present");
+        assert_eq!(resources.memory_limit, Some("1Gi".to_string()));
+        assert!(resources.cpu_limit.is_none());
+        assert!(resources.memory_reservation.is_none());
+        assert!(resources.cpu_shares.is_none());
     }
 
     #[tokio::test]

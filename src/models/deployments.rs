@@ -26,6 +26,53 @@ fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct ResourceLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cpu_limit: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) memory_limit: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) memory_reservation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) cpu_shares: Option<i64>,
+}
+
+pub(crate) fn parse_memory_string(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+
+    if let Ok(bytes) = s.parse::<i64>() {
+        return Ok(bytes);
+    }
+
+    let (suffix, multiplier): (&str, i64) = if s.ends_with("Ti") {
+        ("Ti", 1024i64 * 1024 * 1024 * 1024)
+    } else if s.ends_with("Gi") {
+        ("Gi", 1024i64 * 1024 * 1024)
+    } else if s.ends_with("Mi") {
+        ("Mi", 1024i64 * 1024)
+    } else if s.ends_with("Ki") {
+        ("Ki", 1024i64)
+    } else if s.ends_with('T') {
+        ("T", 1_000_000_000_000i64)
+    } else if s.ends_with('G') {
+        ("G", 1_000_000_000i64)
+    } else if s.ends_with('M') {
+        ("M", 1_000_000i64)
+    } else if s.ends_with('K') {
+        ("K", 1_000i64)
+    } else {
+        return Err(format!("Invalid memory format: {}", s));
+    };
+
+    let num_str = &s[..s.len() - suffix.len()];
+    let value: f64 = num_str
+        .parse()
+        .map_err(|_| format!("Invalid numeric value in memory string: {}", s))?;
+
+    Ok((value * multiplier as f64) as i64)
+}
+
 impl ToSql for DeploymentConfig {
     fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
         let json_string = serde_json::to_string(self)
@@ -72,6 +119,8 @@ pub(crate) struct Deployment {
     pub(crate) volumes: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) resources: Option<ResourceLimits>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
@@ -122,6 +171,12 @@ impl Deployment {
                     serde_json::from_str(&health_checks_str).unwrap_or_default()
                 }
             },
+            resources: {
+                match row.get::<_, Option<String>>("resources") {
+                    Ok(Some(s)) if !s.is_empty() => serde_json::from_str(&s).ok(),
+                    _ => None,
+                }
+            },
             pending_events: vec![],
         })
     }
@@ -146,7 +201,8 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
                 labels,
                 secrets,
                 volumes,
-                health_checks
+                health_checks,
+                resources
             FROM deployment
     ");
 
@@ -221,7 +277,8 @@ pub(crate) fn find_active_by_namespace_name(
             labels,
             secrets,
             volumes,
-            health_checks
+            health_checks,
+            resources
         FROM deployment
         WHERE
             namespace = :namespace
@@ -267,7 +324,8 @@ pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Op
                 labels,
                 secrets,
                 volumes,
-                health_checks
+                health_checks,
+                resources
             FROM deployment
             WHERE id = :id
             "
@@ -311,7 +369,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 labels,
                 secrets,
                 volumes,
-                health_checks
+                health_checks,
+                resources
             ) VALUES (
                 :id,
                 :created_at,
@@ -328,7 +387,8 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
                 :labels,
                 :secrets,
                 :volumes,
-                :health_checks
+                :health_checks,
+                :resources
             )"
     )?;
 
@@ -349,6 +409,7 @@ pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deploymen
         ":secrets": secrets,
         ":volumes": deployment.volumes,
         ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string()),
+        ":resources": deployment.resources.as_ref().map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string())),
     };
 
     statement.execute(params)?;
@@ -385,5 +446,47 @@ pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<Str
         statement.execute(named_params!{
             ":id": id
         }).expect("Could not delete deployment");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_memory_string_binary_suffixes() {
+        assert_eq!(parse_memory_string("1Ki").unwrap(), 1024);
+        assert_eq!(parse_memory_string("1Mi").unwrap(), 1024 * 1024);
+        assert_eq!(parse_memory_string("512Mi").unwrap(), 512 * 1024 * 1024);
+        assert_eq!(parse_memory_string("1Gi").unwrap(), 1024 * 1024 * 1024);
+        assert_eq!(parse_memory_string("2Gi").unwrap(), 2 * 1024 * 1024 * 1024);
+        assert_eq!(parse_memory_string("1Ti").unwrap(), 1024i64 * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_parse_memory_string_decimal_suffixes() {
+        assert_eq!(parse_memory_string("1K").unwrap(), 1_000);
+        assert_eq!(parse_memory_string("1M").unwrap(), 1_000_000);
+        assert_eq!(parse_memory_string("1G").unwrap(), 1_000_000_000);
+        assert_eq!(parse_memory_string("1T").unwrap(), 1_000_000_000_000);
+    }
+
+    #[test]
+    fn test_parse_memory_string_raw_bytes() {
+        assert_eq!(parse_memory_string("536870912").unwrap(), 536870912);
+        assert_eq!(parse_memory_string("0").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_memory_string_fractional() {
+        assert_eq!(parse_memory_string("0.5Gi").unwrap(), 536870912);
+        assert_eq!(parse_memory_string("1.5Mi").unwrap(), (1.5 * 1024.0 * 1024.0) as i64);
+    }
+
+    #[test]
+    fn test_parse_memory_string_invalid() {
+        assert!(parse_memory_string("abc").is_err());
+        assert!(parse_memory_string("Mi").is_err());
+        assert!(parse_memory_string("").is_err());
     }
 }
