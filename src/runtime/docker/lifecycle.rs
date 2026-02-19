@@ -167,8 +167,6 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
 
                 match create_container(&mut deployment, &docker, configs).await {
                     Ok(_) => {
-                        deployment.restart_count += 1;
-
                         deployment.emit_event(
                             "info",
                             format!("Scaled up from {} to {} replicas", current_count, current_count + 1),

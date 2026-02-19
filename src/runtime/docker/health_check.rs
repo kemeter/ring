@@ -68,7 +68,15 @@ async fn execute_tcp_check(container_ip: &str, port: u16) -> (HealthCheckStatus,
 async fn execute_http_check(container_ip: &str, url: &str) -> (HealthCheckStatus, Option<String>) {
     let target_url = url.replace("localhost", container_ip);
 
-    match reqwest::get(&target_url).await {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return (HealthCheckStatus::Failed, Some(format!("Failed to create HTTP client: {}", e))),
+    };
+
+    match client.get(&target_url).send().await {
         Ok(response) => {
             let code = response.status().as_u16();
             if (200..300).contains(&code) {
