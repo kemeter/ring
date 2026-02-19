@@ -1047,7 +1047,7 @@ pub(crate) async fn list_instances_with_names(id: String, status: &str) -> Vec<(
                                     .as_ref()
                                     .and_then(|names| names.first())
                                     .map(|n| n.trim_start_matches('/').to_string())
-                                    .unwrap_or_else(|| container_id[..12].to_string());
+                                    .unwrap_or_else(|| container_id.chars().take(12).collect());
                                 instances.push((container_id.clone(), name));
                             }
                         }
