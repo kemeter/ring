@@ -1,5 +1,7 @@
 # Ring
 
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.3.0)
+
 A simple container orchestrator with declarative service deployment using containers.
 
 ## Why Ring?
@@ -22,6 +24,7 @@ Ring was created as a lightweight alternative to Kubernetes and Docker Swarm, pr
 - **Container Logs Access**: Stream and inspect container logs
 - **Network Isolation**: Create isolated container networks per namespace
 - **Health Checks**: Monitor container health with TCP, HTTP, and command-based checks
+- **Resource Limits**: Set CPU and memory limits per container (Kubernetes-like format)
 
 *Note*: Ring does not handle load balancing, as it's not within its scope.
 
@@ -151,6 +154,11 @@ deployments:
         timeout: "15s"
         threshold: 1
         on_failure: "stop"
+    resources:
+      cpu_limit: 0.5                    # CPU limit (0.5 = 50% of one core)
+      memory_limit: "512Mi"             # hard memory limit
+      memory_reservation: "256Mi"       # soft memory limit
+      cpu_shares: 512                   # relative CPU weight (default: 1024)
 ```
 
 ### User Management
@@ -205,6 +213,23 @@ ring namespace prune <namespace>
 ```bash
 ring node get
 ```
+
+## Resource Limits
+
+Ring supports optional CPU and memory limits per container, using Kubernetes-like notation:
+
+```yaml
+resources:
+  cpu_limit: 0.5              # max CPU (0.5 = 50% of one core)
+  memory_limit: "512Mi"       # hard memory limit
+  memory_reservation: "256Mi" # soft memory limit (Docker memory reservation)
+  cpu_shares: 512             # relative CPU weight (default: 1024)
+```
+
+All fields are optional. Supported memory suffixes:
+- Binary: `Ki`, `Mi`, `Gi`, `Ti` (powers of 1024)
+- Decimal: `K`, `M`, `G`, `T` (powers of 1000)
+- Raw bytes: `536870912`
 
 ## Health Checks
 
@@ -275,4 +300,15 @@ View health check results and events:
 ```bash
 # View deployment events (includes health check alerts)
 ring deployment events <deployment_id>
+```
+
+## Releasing
+
+```bash
+./scripts/release.sh patch   # 0.3.0 -> 0.3.1
+./scripts/release.sh minor   # 0.3.0 -> 0.4.0
+./scripts/release.sh major   # 0.3.0 -> 1.0.0
+./scripts/release.sh 1.0.0   # explicit version
+
+git push && git push --tags   # publish
 ```
