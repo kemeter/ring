@@ -20,7 +20,7 @@ use futures::StreamExt;
 use futures::stream::Stream;
 use std::collections::HashMap;
 use std::pin::Pin;
-use crate::models::deployments::Deployment;
+use crate::models::deployments::{Deployment, parse_memory_string};
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
 use std::default::Default;
@@ -607,6 +607,14 @@ async fn create_container<'a>(deployment: &mut Deployment, docker: &Docker, conf
     let host_config = HostConfig {
         mounts: Some(mounts),
         privileged: privileged_config,
+        nano_cpus: deployment.resources.as_ref()
+            .and_then(|r| r.cpu_limit.map(|cpu| (cpu * 1_000_000_000.0) as i64)),
+        memory: deployment.resources.as_ref()
+            .and_then(|r| r.memory_limit.as_ref().and_then(|m| parse_memory_string(m).ok())),
+        memory_reservation: deployment.resources.as_ref()
+            .and_then(|r| r.memory_reservation.as_ref().and_then(|m| parse_memory_string(m).ok())),
+        cpu_shares: deployment.resources.as_ref()
+            .and_then(|r| r.cpu_shares),
         ..Default::default()
     };
 
