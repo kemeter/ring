@@ -2,7 +2,7 @@ use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use crate::models::deployments::Deployment;
+use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::config::Config;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::types::InstanceStatus;
@@ -14,7 +14,7 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
         Ok(docker) => docker,
         Err(e) => {
             error!("Failed to connect to Docker: {}", e);
-            deployment.status = "Error".to_string();
+            deployment.status = DeploymentStatus::Error;
             return deployment;
         }
     };
@@ -35,45 +35,41 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
 
     let (status, reason, message) = match &err {
         RuntimeError::ImageNotFound(_) => (
-            "ImagePullBackOff", "ImagePullBackOff",
+            DeploymentStatus::ImagePullBackOff, "ImagePullBackOff",
             format!("Image '{}' not found", deployment.image),
         ),
         RuntimeError::ImagePullFailed(_) => (
-            "ImagePullBackOff", "ImagePullBackOff",
+            DeploymentStatus::ImagePullBackOff, "ImagePullBackOff",
             format!("Failed to pull image '{}'", deployment.image),
         ),
         RuntimeError::InstanceCreationFailed(msg) => (
-            "CreateContainerError", "InstanceCreationFailed",
+            DeploymentStatus::CreateContainerError, "InstanceCreationFailed",
             format!("Container creation failed: {}", msg),
         ),
         RuntimeError::NetworkCreationFailed(_) => (
-            "NetworkError", "NetworkCreationFailed",
+            DeploymentStatus::NetworkError, "NetworkCreationFailed",
             format!("Failed to create network for namespace '{}'", deployment.namespace),
         ),
         RuntimeError::ConfigNotFound(_) => (
-            "ConfigError", "ConfigError",
+            DeploymentStatus::ConfigError, "ConfigError",
             format!("Config not found in namespace '{}'", deployment.namespace),
         ),
         RuntimeError::ConfigKeyNotFound(_) => (
-            "ConfigError", "ConfigError",
+            DeploymentStatus::ConfigError, "ConfigError",
             format!("Config key not found in namespace '{}'", deployment.namespace),
         ),
         RuntimeError::FileSystemError(_) => (
-            "FileSystemError", "FileSystemError",
+            DeploymentStatus::FileSystemError, "FileSystemError",
             "Failed to access file system for config mount".to_string(),
         ),
-        RuntimeError::ConnectionFailed(msg) => (
-            "Error", "ConnectionFailed",
-            format!("Connection failed: {}", msg),
-        ),
         RuntimeError::Other(msg) => (
-            "Error", "RuntimeError",
+            DeploymentStatus::Error, "RuntimeError",
             format!("Docker error: {}", msg),
         ),
     };
 
     error!("[{}] {}: {}", deployment.id, reason, err);
-    deployment.status = status.to_string();
+    deployment.status = status;
     deployment.emit_event("error", message, "docker", Some(reason));
 }
 
@@ -95,7 +91,7 @@ async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind
 }
 
 async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
-    if deployment.status == "deleted" {
+    if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
         remove_all_instances(&mut deployment, &docker, "job").await;
         return deployment;
@@ -107,23 +103,23 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
         for instance_id in &all_instances {
             match check_container_status(docker.clone(), instance_id.clone()).await {
                 InstanceStatus::Running => {
-                    deployment.status = "running".to_string();
+                    deployment.status = DeploymentStatus::Running;
                     break;
                 }
                 InstanceStatus::Completed => {
-                    deployment.status = "completed".to_string();
+                    deployment.status = DeploymentStatus::Completed;
                     break;
                 }
                 InstanceStatus::Failed => {
-                    deployment.status = "failed".to_string();
+                    deployment.status = DeploymentStatus::Failed;
                     break;
                 }
             }
         }
-    } else if deployment.status == "creating" || deployment.status == "pending" {
+    } else if deployment.status == DeploymentStatus::Creating || deployment.status == DeploymentStatus::Pending {
         match create_container(&mut deployment, &docker, configs).await {
             Ok(_) => {
-                deployment.status = "running".to_string();
+                deployment.status = DeploymentStatus::Running;
             }
             Err(err) => {
                 handle_create_error(&mut deployment, err, false);
@@ -136,16 +132,16 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
 }
 
 async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
-    if deployment.restart_count >= 5 && deployment.status != "deleted" {
-        deployment.status = "CrashLoopBackOff".to_string();
+    if deployment.restart_count >= MAX_RESTART_COUNT && deployment.status != DeploymentStatus::Deleted {
+        deployment.status = DeploymentStatus::CrashLoopBackOff;
         return deployment;
     }
 
-    if deployment.status == "CrashLoopBackOff" {
+    if deployment.status == DeploymentStatus::CrashLoopBackOff {
         return deployment;
     }
 
-    if deployment.status == "deleted" {
+    if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
         remove_all_instances(&mut deployment, &docker, "worker").await;
     } else {
@@ -154,7 +150,7 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
             Ok(count) => count,
             Err(_) => {
                 error!("Invalid replicas count for deployment {}: {}", deployment.id, deployment.replicas);
-                deployment.status = "Failed".to_string();
+                deployment.status = DeploymentStatus::Failed;
                 return deployment;
             }
         };
@@ -174,8 +170,8 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
                             Some("ScaleUp"),
                         );
 
-                        if deployment.status == "pending" || deployment.status == "creating" {
-                            deployment.status = "running".to_string();
+                        if deployment.status == DeploymentStatus::Pending || deployment.status == DeploymentStatus::Creating {
+                            deployment.status = DeploymentStatus::Running;
                         }
                     }
                     Err(err) => {

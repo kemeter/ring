@@ -17,7 +17,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::models::deployment_event;
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::models::deployments::{DeploymentConfig, ResourceLimits};
+use crate::models::deployments::{DeploymentConfig, DeploymentStatus, ResourceLimits};
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
@@ -227,7 +227,7 @@ pub(crate) async fn create(
 
                         for mut deployment in deployments_list {
                             info!("Marking deployment {} as deleted", deployment.id);
-                            deployment.status = "deleted".to_string();
+                            deployment.status = DeploymentStatus::Deleted;
                             deployment.updated_at = Some(Utc::now().to_string());
                             deployments::update(&guard, &deployment);
                         }
@@ -261,7 +261,7 @@ pub(crate) async fn create(
                 },
                 image: input.image.clone(),
                 config: input.config.clone(),
-                status: "creating".to_string(),
+                status: DeploymentStatus::Creating,
                 created_at: utc.to_string(),
                 updated_at: None,
                 labels: input.labels,

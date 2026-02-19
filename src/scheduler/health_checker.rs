@@ -1,5 +1,5 @@
 use crate::models::health_check::{HealthCheck, HealthCheckResult, HealthCheckStatus, FailureAction};
-use crate::models::deployments::{Deployment, self as deployments};
+use crate::models::deployments::{Deployment, DeploymentStatus, self as deployments};
 use crate::models::deployment_event;
 use rusqlite::Connection;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ impl HealthChecker {
     pub(crate) async fn execute_checks(&self, deployment: &Deployment) -> Vec<HealthCheckResult> {
         let mut results = Vec::new();
 
-        if deployment.status != "running" {
+        if deployment.status != DeploymentStatus::Running {
             return results;
         }
 
@@ -192,7 +192,7 @@ impl HealthChecker {
                 
                 // Stop deployment by changing status to deleted (actually stops containers)
                 let mut updated_deployment = deployment.clone();
-                updated_deployment.status = "deleted".to_string();
+                updated_deployment.status = DeploymentStatus::Deleted;
                 
                 let guard = self.storage.lock().await;
                 deployments::update(&guard, &updated_deployment);

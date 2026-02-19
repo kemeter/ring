@@ -63,7 +63,7 @@ impl DeploymentOutput {
             id: deployment.id,
             created_at: deployment.created_at,
             updated_at: deployment.updated_at.unwrap_or("".to_string()),
-            status: deployment.status,
+            status: deployment.status.to_string(),
             restart_count: deployment.restart_count,
             name: deployment.name,
             namespace: deployment.namespace,

@@ -3,7 +3,101 @@ use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
 use tokio::sync::MutexGuard;
 use std::collections::HashMap;
+use std::fmt;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
+
+pub(crate) const MAX_RESTART_COUNT: u32 = 5;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum DeploymentStatus {
+    #[serde(rename = "pending")]
+    Pending,
+    #[serde(rename = "creating")]
+    Creating,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "deleted")]
+    Deleted,
+    #[serde(rename = "CrashLoopBackOff")]
+    CrashLoopBackOff,
+    #[serde(rename = "ImagePullBackOff")]
+    ImagePullBackOff,
+    #[serde(rename = "CreateContainerError")]
+    CreateContainerError,
+    #[serde(rename = "NetworkError")]
+    NetworkError,
+    #[serde(rename = "ConfigError")]
+    ConfigError,
+    #[serde(rename = "FileSystemError")]
+    FileSystemError,
+    #[serde(rename = "Error")]
+    Error,
+}
+
+impl fmt::Display for DeploymentStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pending => write!(f, "pending"),
+            Self::Creating => write!(f, "creating"),
+            Self::Running => write!(f, "running"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Deleted => write!(f, "deleted"),
+            Self::CrashLoopBackOff => write!(f, "CrashLoopBackOff"),
+            Self::ImagePullBackOff => write!(f, "ImagePullBackOff"),
+            Self::CreateContainerError => write!(f, "CreateContainerError"),
+            Self::NetworkError => write!(f, "NetworkError"),
+            Self::ConfigError => write!(f, "ConfigError"),
+            Self::FileSystemError => write!(f, "FileSystemError"),
+            Self::Error => write!(f, "Error"),
+        }
+    }
+}
+
+impl std::str::FromStr for DeploymentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(Self::Pending),
+            "creating" => Ok(Self::Creating),
+            "running" => Ok(Self::Running),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "deleted" => Ok(Self::Deleted),
+            "CrashLoopBackOff" => Ok(Self::CrashLoopBackOff),
+            "ImagePullBackOff" => Ok(Self::ImagePullBackOff),
+            "CreateContainerError" => Ok(Self::CreateContainerError),
+            "NetworkError" => Ok(Self::NetworkError),
+            "ConfigError" => Ok(Self::ConfigError),
+            "FileSystemError" => Ok(Self::FileSystemError),
+            "Error" => Ok(Self::Error),
+            other => Err(format!("Unknown deployment status: {}", other)),
+        }
+    }
+}
+
+impl ToSql for DeploymentStatus {
+    fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
+        Ok(ToSqlOutput::Owned(TypeValue::Text(self.to_string())))
+    }
+}
+
+impl FromSql for DeploymentStatus {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value {
+            ValueRef::Text(b) => {
+                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+                s.parse().map_err(|e: String| FromSqlError::Other(e.into()))
+            }
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct UserConfig {
@@ -102,7 +196,7 @@ pub(crate) struct Deployment {
     pub(crate) id: String,
     pub(crate) created_at: String,
     pub(crate) updated_at: Option<String>,
-    pub(crate) status: String,
+    pub(crate) status: DeploymentStatus,
     pub(crate) restart_count: u32,
     pub(crate) namespace: String,
     pub(crate) name: String,
@@ -143,7 +237,7 @@ impl Deployment {
             id: row.get("id")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
-            status: row.get("status")?,
+            status: row.get::<_, DeploymentStatus>("status")?,
             restart_count: row.get("restart_count")?,
             namespace: row.get("namespace")?,
             name: row.get("name")?,

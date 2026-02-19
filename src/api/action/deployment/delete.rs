@@ -6,7 +6,7 @@ use axum::{
 use axum::extract::State;
 
 use crate::api::server::Db;
-use crate::models::deployments;
+use crate::models::deployments::{self, DeploymentStatus};
 use crate::models::users::User;
 
 pub(crate) async fn delete(
@@ -19,7 +19,7 @@ pub(crate) async fn delete(
 
     match option {
         Ok(Some(mut deployment)) => {
-            deployment.status = "deleted".to_string();
+            deployment.status = DeploymentStatus::Deleted;
             deployments::update(&guard, &deployment);
 
             StatusCode::NO_CONTENT

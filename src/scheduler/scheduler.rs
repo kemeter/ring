@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::runtime::docker;
-use crate::models::deployments;
+use crate::models::deployments::{self, DeploymentStatus};
 use crate::models::config;
 use crate::models::deployment_event;
 use crate::models::health_check_logs;
@@ -85,7 +85,7 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>, config: crate::con
                     config.pending_events.clear();
                 }
 
-                if "deleted" == config.status && config.instances.len() == 0 {
+                if config.status == DeploymentStatus::Deleted && config.instances.is_empty() {
                     info!("Marking deployment {} for cleanup", config.id);
                     
                     // Record cleanup event
@@ -105,7 +105,7 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>, config: crate::con
                 }
 
                 {
-                    if config.status == "creating" && config.instances.len() > 0 {
+                    if config.status == DeploymentStatus::Creating && !config.instances.is_empty() {
                         info!("Deployment {} transition: creating -> running", config.id);
                         
                         // Record state transition event
@@ -121,11 +121,11 @@ pub(crate) async fn schedule(storage: Arc<Mutex<Connection>>, config: crate::con
                             );
                         }
                         
-                        config.status = "running".to_string();
+                        config.status = DeploymentStatus::Running;
                     }
 
                     // Execute health checks for running deployments
-                    if config.status == "running" && !config.health_checks.is_empty() {
+                    if config.status == DeploymentStatus::Running && !config.health_checks.is_empty() {
                         debug!("Executing health checks for deployment {}", config.id);
                         health_checker.execute_checks(&config).await;
                         
