@@ -17,7 +17,9 @@ use bollard::{
     exec::{CreateExecOptions, StartExecOptions},
 };
 use futures::StreamExt;
+use futures::stream::Stream;
 use std::collections::HashMap;
+use std::pin::Pin;
 use crate::models::deployments::Deployment;
 use std::convert::TryInto;
 use crate::api::dto::deployment::DeploymentVolume;
@@ -991,7 +993,67 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
     return instances;
 }
 
-pub(crate) async fn logs(container_id: String) -> Vec<String> {
+pub(crate) async fn list_instances_with_names(id: String, status: &str) -> Vec<(String, String)> {
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            error!("Failed to connect to Docker: {}", e);
+            return Vec::new();
+        }
+    };
+
+    let mut instances: Vec<(String, String)> = Vec::new();
+
+    let options = if status == "all" {
+        ListContainersOptionsBuilder::new()
+            .all(true)
+            .build()
+    } else if status == "active" {
+        let filters = HashMap::from([
+            ("status".to_string(), vec![
+                "running".to_string(),
+                "created".to_string(),
+                "restarting".to_string(),
+            ])
+        ]);
+        ListContainersOptionsBuilder::new()
+            .all(true)
+            .filters(&filters)
+            .build()
+    } else {
+        let filters = HashMap::from([("status".to_string(), vec![status.to_string()])]);
+        ListContainersOptionsBuilder::new()
+            .all(false)
+            .filters(&filters)
+            .build()
+    };
+
+    match docker.list_containers(Some(options)).await {
+        Ok(containers) => {
+            for container in containers {
+                if let Some(labels) = &container.labels {
+                    if let Some(deployment_id) = labels.get("ring_deployment") {
+                        if deployment_id == &id {
+                            if let Some(container_id) = &container.id {
+                                let name = container.names
+                                    .as_ref()
+                                    .and_then(|names| names.first())
+                                    .map(|n| n.trim_start_matches('/').to_string())
+                                    .unwrap_or_else(|| container_id[..12].to_string());
+                                instances.push((container_id.clone(), name));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => debug!("Docker list instances error: {}", e),
+    }
+
+    instances
+}
+
+pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
     let docker = match Docker::connect_with_local_defaults() {
         Ok(docker) => docker,
         Err(e) => {
@@ -1011,10 +1073,19 @@ pub(crate) async fn logs(container_id: String) -> Vec<String> {
         }
     }
 
-    let options = LogsOptionsBuilder::new()
+    let mut builder = LogsOptionsBuilder::new()
         .stdout(true)
-        .stderr(true)
-        .build();
+        .stderr(true);
+
+    if let Some(tail_value) = tail {
+        builder = builder.tail(tail_value);
+    }
+
+    if let Some(since_value) = since {
+        builder = builder.since(since_value);
+    }
+
+    let options = builder.build();
 
     let mut logs_stream = docker.logs(&container_id, Some(options));
     let mut logs = vec![];
@@ -1035,6 +1106,63 @@ pub(crate) async fn logs(container_id: String) -> Vec<String> {
     }
 
     return logs;
+}
+
+pub(crate) async fn logs_stream(
+    container_id: String,
+    tail: Option<&str>,
+    since: Option<i32>,
+) -> Pin<Box<dyn Stream<Item = String> + Send>> {
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(docker) => docker,
+        Err(e) => {
+            error!("Failed to connect to Docker: {}", e);
+            return Box::pin(futures::stream::empty());
+        }
+    };
+
+    match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
+        Ok(_) => {}
+        Err(e) => {
+            debug!("Container {} not found or not accessible: {}", container_id, e);
+            return Box::pin(futures::stream::empty());
+        }
+    }
+
+    let mut builder = LogsOptionsBuilder::new()
+        .stdout(true)
+        .stderr(true)
+        .follow(true);
+
+    if let Some(tail_value) = tail {
+        builder = builder.tail(tail_value);
+    }
+
+    if let Some(since_value) = since {
+        builder = builder.since(since_value);
+    }
+
+    let options = builder.build();
+
+    let stream = docker.logs(&container_id, Some(options))
+        .filter_map(|result| async {
+            match result {
+                Ok(chunk) => {
+                    let log_line = format_log_output(chunk).replace("\n", "");
+                    if !log_line.trim().is_empty() {
+                        Some(log_line)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    debug!("Docker stream logs error: {}", e);
+                    None
+                }
+            }
+        });
+
+    Box::pin(stream)
 }
 
 fn format_log_output(output: LogOutput) -> String {
