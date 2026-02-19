@@ -1,6 +1,6 @@
 [package]
 name = "ring-server"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Nawo Mbechezi mlanawo@mbechezi.kemeter.io"]
 edition = "2024"
 
