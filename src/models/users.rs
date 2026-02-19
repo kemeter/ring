@@ -1,9 +1,5 @@
-use rusqlite::Connection;
-use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
-use serde_rusqlite::from_rows;
-use serde_rusqlite::from_rows_ref;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 use argon2::{self, Config as Argon2Config};
 
@@ -24,176 +20,114 @@ pub(crate) struct User {
     pub(crate) login_at: Option<String>,
 }
 
-pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<User>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("SELECT * FROM user WHERE id = :id")
-        .map_err(serde_rusqlite::Error::from)?;
-    let mut rows = statement.query(named_params!{
-        ":id": id,
-    }).map_err(serde_rusqlite::Error::from)?;
-
-    let mut ref_rows = from_rows_ref::<User>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
+#[derive(sqlx::FromRow)]
+struct UserRow {
+    id: String,
+    created_at: String,
+    updated_at: Option<String>,
+    status: String,
+    username: String,
+    password: String,
+    token: Option<String>,
+    login_at: Option<String>,
 }
 
-pub(crate) fn find_by_username(connection: &MutexGuard<Connection>, username: &str) -> Result<Option<User>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("SELECT * FROM user WHERE username = :username")
-        .map_err(serde_rusqlite::Error::from)?;
-    let mut rows = statement.query(named_params!{
-        ":username": username,
-    }).map_err(serde_rusqlite::Error::from)?;
-
-    let mut ref_rows = from_rows_ref::<User>(&mut rows);
-    let result = ref_rows.next();
-
-    result.transpose()
-}
-
-pub(crate) fn login(connection: &MutexGuard<Connection>, user: User) -> Result<(), rusqlite::Error> {
-    let mut statement = connection.prepare("
-        UPDATE user
-        SET
-            token = :token,
-            login_at = datetime()
-        WHERE
-            id = :id"
-    )?;
-
-    statement.execute(named_params!{
-        ":token": user.token,
-        ":id": user.id,
-    })?;
-    
-    Ok(())
-}
-
-pub(crate) fn find_by_token(connection: &Connection, token: &str) -> rusqlite::Result<User> {
-    let query ="
-        SELECT
-            id,
-            created_at,
-            updated_at,
-            status,
-            username,
-            password,
-            login_at,
-            token
-        FROM user
-        WHERE
-            token = :token";
-
-    let user = connection.query_row(
-        query,
-        &[(":token", &token)],
-        |row| {
-            Ok(User {
-                id: row.get(0)?,
-                created_at: row.get(1)?,
-                updated_at: row.get(2)?,
-                status: row.get(3)?,
-                username: row.get(4)?,
-                token: row.get(5)?,
-                password: row.get(6)?,
-                login_at: row.get(7)?,
-            })
-        },
-    );
-
-    return user;
-}
-
-pub(crate) fn find_all(connection: MutexGuard<Connection>) -> Result<Vec<User>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("
-            SELECT
-                id,
-                created_at,
-                updated_at,
-                status,
-                username,
-                password,
-                token,
-                login_at
-            FROM user"
-    ).map_err(serde_rusqlite::Error::from)?;
-
-    let mut users: Vec<User> = Vec::new();
-    let mut rows_iter = from_rows::<User>(statement.query([]).map_err(serde_rusqlite::Error::from)?);
-
-    loop {
-        match rows_iter.next() {
-            None => { break; },
-            Some(user) => {
-                let user = user?;
-                users.push(user);
-            }
+impl From<UserRow> for User {
+    fn from(row: UserRow) -> Self {
+        User {
+            id: row.id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            status: row.status,
+            username: row.username,
+            password: row.password,
+            token: row.token.unwrap_or_default(),
+            login_at: row.login_at,
         }
     }
-
-    Ok(users)
 }
 
-pub(crate) fn create(connection: &MutexGuard<Connection>, username: &str, password: &str) -> Result<(), rusqlite::Error> {
-    let mut statement = connection.prepare("
-            INSERT INTO user (
-                id,
-                created_at,
-                status,
-                username,
-                password,
-                token
-            ) VALUES (
-                :id,
-                datetime(),
-                :status,
-                :username,
-                :password,
-                :token
-            )"
-    )?;
+pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<User>, sqlx::Error> {
+    let row = sqlx::query_as::<_, UserRow>("SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(pool)
+        .await?;
 
-    statement.execute(named_params!{
-        ":id": Uuid::new_v4().to_string(),
-        ":status": "active",
-        ":username": username,
-        ":password": password,
-        ":token": Uuid::new_v4().to_string()
-    })?;
-    
+    Ok(row.map(User::from))
+}
+
+pub(crate) async fn find_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, sqlx::Error> {
+    let row = sqlx::query_as::<_, UserRow>("SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(User::from))
+}
+
+pub(crate) async fn find_by_token(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
+    let row = sqlx::query_as::<_, UserRow>(
+        "SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE token = ?"
+    )
+    .bind(token)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(User::from(row))
+}
+
+pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, UserRow>(
+        "SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(User::from).collect())
+}
+
+pub(crate) async fn login(pool: &SqlitePool, user: User) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE user SET token = ?, login_at = datetime() WHERE id = ?")
+        .bind(&user.token)
+        .bind(&user.id)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
-pub(crate) fn update(connection: &MutexGuard<Connection>, user: &User) -> Result<(), rusqlite::Error> {
-    let mut statement = connection.prepare("
-            UPDATE user
-            SET
-                username = :username,
-                password = :password,
-                updated_at = datetime()
-            WHERE
-                id = :id"
-    )?;
+pub(crate) async fn create(pool: &SqlitePool, username: &str, password: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO user (id, created_at, status, username, password, token) VALUES (?, datetime(), ?, ?, ?, ?)"
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind("active")
+    .bind(username)
+    .bind(password)
+    .bind(Uuid::new_v4().to_string())
+    .execute(pool)
+    .await?;
 
-    statement.execute(named_params!{
-        ":id": user.id,
-        ":username": user.username,
-        ":password": user.password
-    })?;
-    
     Ok(())
 }
 
-pub(crate) fn delete(connection: &MutexGuard<Connection>, user: &User) -> Result<(), rusqlite::Error> {
-    let mut statement = connection.prepare("
-            DELETE FROM user
-            WHERE
-                id = :id"
-    )?;
+pub(crate) async fn update(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE user SET username = ?, password = ?, updated_at = datetime() WHERE id = ?")
+        .bind(&user.username)
+        .bind(&user.password)
+        .bind(&user.id)
+        .execute(pool)
+        .await?;
 
-    statement.execute(named_params!{
-        ":id": user.id
-    })?;
-    
+    Ok(())
+}
+
+pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM user WHERE id = ?")
+        .bind(&user.id)
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 

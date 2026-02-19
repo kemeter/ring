@@ -14,17 +14,14 @@ use crate::models::users::User;
 use crate::config::config::{Config};
 
 pub(crate) async fn update(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     State(configuration): State<Config>,
     Path(id): Path<String>,
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
 
-    let mut user = match {
-        let guard = connexion.lock().await;
-        users_model::find(&guard, id).ok().flatten()
-    } {
+    let mut user = match users_model::find(&pool, id).await.ok().flatten() {
         Some(user) => user,
         None => return Err((StatusCode::NOT_FOUND, "User not found").into_response()),
     };
@@ -43,8 +40,7 @@ pub(crate) async fn update(
         user.password = password_hash;
     }
 
-    let guard = connexion.lock().await;
-    if let Err(_) = users_model::update(&guard, &user) {
+    if let Err(_) = users_model::update(&pool, &user).await {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "errors": ["Failed to update user"] }))
@@ -69,7 +65,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_not_found() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -86,7 +82,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_username() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -111,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_password() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 

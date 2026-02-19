@@ -21,7 +21,7 @@ fn get_node_info() -> Value {
     serde_json::json!({
         "hostname": System::host_name().unwrap_or_default(),
         "os": consts::OS,
-        "arch": consts::ARCH, 
+        "arch": consts::ARCH,
         "uptime": format!("{}s", System::uptime()),
         "cpu_count": sys.cpus().len() as i64,
         "memory_total": memory_total_gib,
@@ -39,7 +39,7 @@ mod tests {
 
     #[tokio::test]
     async fn get() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -52,7 +52,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_without_auth() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let server = TestServer::new(app).unwrap();
         let response = server
             .get("/node/get")

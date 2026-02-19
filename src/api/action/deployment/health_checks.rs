@@ -24,13 +24,10 @@ struct Message {
 pub(crate) async fn get_health_checks(
     Path(deployment_id): Path<String>,
     Query(params): Query<HealthCheckQuery>,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User,
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-    
-    // First verify the deployment exists
-    match deployments::find(&guard, deployment_id.clone()) {
+    match deployments::find(&pool, deployment_id.clone()).await {
         Ok(Some(_)) => {},
         Ok(None) => {
             let message = Message { message: "Deployment not found".to_string() };
@@ -42,10 +39,8 @@ pub(crate) async fn get_health_checks(
         }
     }
 
-    // Get health check results
     let results = if params.latest.unwrap_or(false) {
-        // Get latest results for each check type
-        match health_check_logs::find_latest_by_deployment(&guard, deployment_id) {
+        match health_check_logs::find_latest_by_deployment(&pool, deployment_id).await {
             Ok(results) => results,
             Err(e) => {
                 let message = Message { message: format!("Failed to fetch health check results: {}", e) };
@@ -53,8 +48,7 @@ pub(crate) async fn get_health_checks(
             }
         }
     } else {
-        // Get all results with limit
-        match health_check_logs::find_by_deployment(&guard, deployment_id, params.limit) {
+        match health_check_logs::find_by_deployment(&pool, deployment_id, params.limit).await {
             Ok(results) => results,
             Err(e) => {
                 let message = Message { message: format!("Failed to fetch health check results: {}", e) };
@@ -65,4 +59,3 @@ pub(crate) async fn get_health_checks(
 
     (StatusCode::OK, Json(results)).into_response()
 }
-

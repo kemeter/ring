@@ -24,7 +24,7 @@ mod tests {
 
     #[tokio::test]
     async fn me() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server

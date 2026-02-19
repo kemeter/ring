@@ -1,8 +1,6 @@
-use rusqlite::Connection;
 use log::info;
-use std::sync::Arc;
-use std::{time::Duration};
-use axum::{error_handling::HandleErrorLayer, extract::{ FromRequestParts}, http::StatusCode, routing::{get, post, put, delete}, Router, Json, RequestPartsExt};
+use std::time::Duration;
+use axum::{error_handling::HandleErrorLayer, extract::FromRequestParts, http::StatusCode, routing::{get, post, put, delete}, Router, Json, RequestPartsExt};
 use axum::extract::FromRef;
 use axum_extra::{
     headers::{authorization::Bearer, Authorization},
@@ -11,9 +9,9 @@ use axum_extra::{
 use axum::http::request::Parts;
 use axum_macros::FromRef;
 use serde_json::json;
+use sqlx::SqlitePool;
 
 use tower::{BoxError, ServiceBuilder};
-use tokio::sync::Mutex;
 
 use crate::config::config::Config;
 use crate::api::action::login::login;
@@ -44,7 +42,7 @@ use crate::api::action::healthz::healthz;
 use crate::models::users::User;
 use crate::models::users as users_model;
 
-pub(crate) type Db = Arc<Mutex<Connection>>;
+pub(crate) type Db = SqlitePool;
 
 impl<S> FromRequestParts<S> for User
     where
@@ -64,9 +62,8 @@ impl<S> FromRequestParts<S> for User
 
         let token = bearer.token();
         let app_state = AppState::from_ref(state);
-        let storage = app_state.connexion.lock().await;
 
-        let user = users_model::find_by_token(&storage, token);
+        let user = users_model::find_by_token(&app_state.connexion, token).await;
         match user {
             Ok(user) => Ok(user),
             Err(_) => Err((
@@ -80,7 +77,7 @@ impl<S> FromRequestParts<S> for User
 
 #[derive(Clone, FromRef, Debug)]
 pub(crate) struct AppState {
-    pub(crate) connexion: Arc<Mutex<Connection>>,
+    pub(crate) connexion: SqlitePool,
     pub(crate) configuration: Config,
 }
 
@@ -126,13 +123,12 @@ pub(crate) fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Config)
+pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
 {
     info!("Starting server on {}", configuration.get_api_url());
 
-    let connexion = Arc::clone(&storage);
     let state = AppState {
-        connexion,
+        connexion: pool,
         configuration,
     };
 
@@ -146,14 +142,12 @@ pub(crate) async fn start(storage: Arc<Mutex<Connection>>, mut configuration: Co
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::Arc;
     use axum::Router;
-    use axum_test::{TestServer};
+    use axum_test::TestServer;
     use axum::http::StatusCode;
-    use rusqlite::Connection;
     use serde::Deserialize;
     use serde_json::json;
-    use tokio::sync::Mutex;
+    use sqlx::sqlite::SqlitePoolOptions;
     use crate::api::server::{AppState, router};
     use crate::config::config::Config;
 
@@ -166,26 +160,29 @@ pub(crate) mod tests {
     pub(crate) struct ErrorResponse {
         pub errors: Vec<String>
     }
-    mod embedded {
-        refinery::embed_migrations!("src/migrations");
-    }
 
-    pub(crate) fn new_test_app() -> Router {
+    pub(crate) async fn new_test_app() -> Router {
         let configuration = Config::default();
-        let mut connection = Connection::open_in_memory().unwrap();
 
-        embedded::migrations::runner()
-            .run(&mut connection)
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("Could not create test database pool");
+
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
             .expect("Could not execute database migrations.");
 
-        load_fixtures(&mut connection);
+        load_fixtures(&pool).await;
 
         let state = AppState {
-            connexion: Arc::new(Mutex::new(connection)),
+            connexion: pool,
             configuration,
         };
 
-        return router(state);
+        router(state)
     }
 
     pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {
@@ -201,17 +198,16 @@ pub(crate) mod tests {
         response.json::<ResponseBody>().token
     }
 
-    fn load_fixtures(connexion: &mut Connection) {
-        crate::fixtures::load_all_fixtures(connexion);
+    async fn load_fixtures(pool: &sqlx::SqlitePool) {
+        crate::fixtures::load_all_fixtures(pool).await;
     }
 
     #[tokio::test]
     async fn test_health_checks_api_endpoint() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
-        // First create a deployment
         let create_response = server
             .post(&"/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -234,29 +230,26 @@ pub(crate) mod tests {
             .await;
 
         assert_eq!(create_response.status_code(), StatusCode::CREATED);
-        
+
         let deployment: crate::api::dto::deployment::DeploymentOutput = create_response.json();
         let deployment_id = deployment.id;
 
-        // Test accessing health checks endpoint
         let health_response = server
             .get(&format!("/deployments/{}/health-checks", deployment_id))
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
         assert_eq!(health_response.status_code(), StatusCode::OK);
-        
-        // The response should be an array (empty initially as no checks have run yet)
+
         let health_results: Vec<serde_json::Value> = health_response.json();
-        assert!(health_results.is_empty()); // No health check results yet
+        assert!(health_results.is_empty());
     }
 
     #[tokio::test]
     async fn test_health_checks_api_unauthorized() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let server = TestServer::new(app).unwrap();
 
-        // Try to access health checks without authentication
         let response = server
             .get(&"/deployments/some-id/health-checks")
             .await;
@@ -266,11 +259,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_health_checks_api_deployment_not_found() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
-        // Try to access health checks for non-existent deployment
         let response = server
             .get(&"/deployments/non-existent-id/health-checks")
             .add_header("Authorization", format!("Bearer {}", token))

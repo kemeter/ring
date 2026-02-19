@@ -7,11 +7,10 @@ use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User,
 ) -> StatusCode {
-    let guard = connexion.lock().await;
-    let result = ConfigModel::delete(&guard, id.clone());
+    let result = ConfigModel::delete(&pool, id.clone()).await;
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
         return StatusCode::NOT_FOUND
@@ -28,7 +27,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -40,7 +39,7 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
 
         let response = server
-            .get("/configs/cde7806a-21af-473b-968b-08addc7bf0ba") // Assuming 9999 does not exist
+            .get("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 

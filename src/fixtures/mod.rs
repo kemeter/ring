@@ -3,11 +3,11 @@ pub mod deployments;
 pub mod configs;
 pub mod events;
 
-use rusqlite::Connection;
+use sqlx::SqlitePool;
 
-pub fn load_all_fixtures(connection: &mut Connection) {
-    users::load(connection);
-    deployments::load(connection);
-    configs::load(connection);
-    events::load(connection);
+pub async fn load_all_fixtures(pool: &SqlitePool) {
+    users::load(pool).await;
+    deployments::load(pool).await;
+    configs::load(pool).await;
+    events::load(pool).await;
 }

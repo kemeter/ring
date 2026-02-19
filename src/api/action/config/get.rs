@@ -14,11 +14,9 @@ use crate::api::dto::config::ConfigOutput;
 pub(crate) async fn get(
     Path(id): Path<String>,
     _user: User,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-
-    match config::find(&guard, id.clone()) {
+    match config::find(&pool, id.clone()).await {
         Ok(Some(deployment)) => {
             let output = ConfigOutput::from_to_model(deployment);
             Json(output).into_response()
@@ -37,7 +35,7 @@ mod tests {
 
     #[tokio::test]
     async fn not_fount() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -50,7 +48,7 @@ mod tests {
 
     #[tokio::test]
     async fn get() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server

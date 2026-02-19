@@ -22,7 +22,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_healthz_ok() {
-        let server = TestServer::new(new_test_app()).unwrap();
+        let server = TestServer::new(new_test_app().await).unwrap();
 
         let response: TestResponse = server
             .get(&"/healthz")

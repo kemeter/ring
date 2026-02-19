@@ -49,22 +49,19 @@ where
 
 pub(crate) async fn list(
     query_parameters: QueryParameters,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User
 ) -> impl IntoResponse {
 
     let mut configs: Vec<ConfigOutput> = Vec::new();
 
-    let list_configs = {
-        let guard = connexion.lock().await;
-        let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
 
-        if !query_parameters.namespaces.is_empty() {
-            filters.insert(String::from("namespace"), query_parameters.namespaces);
-        }
+    if !query_parameters.namespaces.is_empty() {
+        filters.insert(String::from("namespace"), query_parameters.namespaces);
+    }
 
-        ConfigModel::find_all(&guard, filters)
-    };
+    let list_configs = ConfigModel::find_all(&pool, filters).await;
 
     for config in list_configs.into_iter() {
         let output = ConfigOutput::from_to_model(config.clone());
@@ -84,7 +81,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_all_configs() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -100,7 +97,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_configs_filter_by_namespace_production() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -112,7 +109,7 @@ mod tests {
 
         let configs = response.json::<Vec<ConfigOutput>>();
         assert_eq!(2, configs.len()); // Should have 2 configs in production namespace
-        
+
         // Verify all configs are in production namespace
         for config in configs {
             assert_eq!(config.namespace, "production");
@@ -121,7 +118,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_configs_filter_by_namespace_staging() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -139,7 +136,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_configs_filter_by_multiple_namespaces() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -151,7 +148,7 @@ mod tests {
 
         let configs = response.json::<Vec<ConfigOutput>>();
         assert_eq!(2, configs.len()); // Should have 2 configs (1 from kemeter + 1 from staging)
-        
+
         // Verify configs are from the right namespaces
         let namespaces: Vec<String> = configs.iter().map(|c| c.namespace.clone()).collect();
         assert!(namespaces.contains(&"kemeter".to_string()));
@@ -160,7 +157,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_configs_filter_by_nonexistent_namespace() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
