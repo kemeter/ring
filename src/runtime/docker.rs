@@ -55,7 +55,7 @@ pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, C
         }
     };
 
-    deployment.instances = list_instances(deployment.id.to_string(), "active").await;
+    deployment.instances = list_instances(&docker, deployment.id.to_string(), "active").await;
 
     // Handle the processing based on deployment type
     if deployment.kind == "job" {
@@ -87,7 +87,7 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
     }
 
     // Check all instances for jobs (running + completed/failed)
-    let all_instances = list_instances(deployment.id.to_string(), "all").await;
+    let all_instances = list_instances(&docker, deployment.id.to_string(), "all").await;
 
     if !all_instances.is_empty() {
         // Check the status of the existing container
@@ -733,24 +733,21 @@ fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, C
     Ok(mount)
 }
 
-pub(crate) async fn remove_container_by_id(container_id: String) {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            return;
-        }
-    };
-    
-    remove_container(docker, container_id).await;
+pub(crate) fn connect() -> Result<Docker, RuntimeError> {
+    Docker::connect_with_local_defaults()
+        .map_err(|e| RuntimeError::Other(format!("Failed to connect to Docker: {}", e)))
 }
 
-pub(crate) async fn execute_health_check_for_instance(container_id: String, health_check: crate::models::health_check::HealthCheck) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String) {
+    remove_container(docker.clone(), container_id).await;
+}
+
+pub(crate) async fn execute_health_check_for_instance(docker: &Docker, container_id: String, health_check: crate::models::health_check::HealthCheck) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
     use crate::models::health_check::{HealthCheck, HealthCheckStatus};
-    
+
     let container_ip = match health_check {
         HealthCheck::Command { .. } => None,
-        _ => get_container_ip(&container_id).await
+        _ => get_container_ip(docker, &container_id).await
     };
     
     match health_check {
@@ -767,14 +764,12 @@ pub(crate) async fn execute_health_check_for_instance(container_id: String, heal
             }
         },
         HealthCheck::Command { command, .. } => {
-            execute_command_check_for_container(&container_id, &command).await
+            execute_command_check_for_container(docker, &container_id, &command).await
         }
     }
 }
 
-async fn get_container_ip(container_id: &str) -> Option<String> {
-    let docker = Docker::connect_with_local_defaults().ok()?;
-    
+async fn get_container_ip(docker: &Docker, container_id: &str) -> Option<String> {
     let inspect_result = docker.inspect_container(container_id, None::<InspectContainerOptions>).await.ok()?;
     
     if let Some(networks) = inspect_result.network_settings?.networks {
@@ -838,16 +833,9 @@ async fn execute_http_check_for_container(container_ip: &str, url: &str) -> (cra
     }
 }
 
-async fn execute_command_check_for_container(container_id: &str, command: &str) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
+async fn execute_command_check_for_container(docker: &Docker, container_id: &str, command: &str) -> (crate::models::health_check::HealthCheckStatus, Option<String>) {
     use crate::models::health_check::HealthCheckStatus;
-    
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            return (HealthCheckStatus::Failed, Some(format!("Failed to connect to Docker: {}", e)));
-        }
-    };
-    
+
     // Parse command using shell-words to properly handle quotes and escaping
     let cmd_parts = match shell_words::split(command) {
         Ok(parts) if parts.is_empty() => {
@@ -945,15 +933,7 @@ async fn create_network(docker: Docker, network_name: String) -> Result<(), Runt
     }
 }
 
-pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            return Vec::new();
-        }
-    };
-
+pub(crate) async fn list_instances(docker: &Docker, id: String, status: &str) -> Vec<String> {
     let mut instances: Vec<String> = Vec::new();
 
     let options = if status == "all" {
@@ -1001,15 +981,7 @@ pub(crate) async fn list_instances(id: String, status: &str) -> Vec<String> {
     return instances;
 }
 
-pub(crate) async fn list_instances_with_names(id: String, status: &str) -> Vec<(String, String)> {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            return Vec::new();
-        }
-    };
-
+pub(crate) async fn list_instances_with_names(docker: &Docker, id: String, status: &str) -> Vec<(String, String)> {
     let mut instances: Vec<(String, String)> = Vec::new();
 
     let options = if status == "all" {
@@ -1061,15 +1033,7 @@ pub(crate) async fn list_instances_with_names(id: String, status: &str) -> Vec<(
     instances
 }
 
-pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            return Vec::new();
-        }
-    };
-
+pub(crate) async fn logs(docker: &Docker, container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
     // Check if container exists first
     match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
         Ok(_) => {
@@ -1117,18 +1081,11 @@ pub(crate) async fn logs(container_id: String, tail: Option<&str>, since: Option
 }
 
 pub(crate) async fn logs_stream(
+    docker: Docker,
     container_id: String,
     tail: Option<&str>,
     since: Option<i32>,
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            return Box::pin(futures::stream::empty());
-        }
-    };
-
     match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
         Ok(_) => {}
         Err(e) => {

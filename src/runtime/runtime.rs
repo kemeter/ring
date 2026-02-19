@@ -1,3 +1,4 @@
+use bollard::Docker;
 use crate::models::deployments::Deployment;
 use crate::runtime::docker;
 use async_trait::async_trait;
@@ -23,12 +24,14 @@ pub trait RuntimeInterface {
 }
 
 pub struct DockerRuntime {
+    docker: Docker,
     deployment: Deployment,
 }
 
 impl Runtime {
     pub fn new(deployment: Deployment) -> Box<dyn RuntimeInterface + Send + Sync> {
-        Box::new(DockerRuntime { deployment })
+        let docker = docker::connect().expect("Failed to connect to Docker");
+        Box::new(DockerRuntime { docker, deployment })
     }
 }
 
@@ -66,11 +69,11 @@ fn extract_date(log: String) -> Option<String> {
 #[async_trait]
 impl RuntimeInterface for DockerRuntime {
     async fn list_instances(&self) -> Vec<String> {
-        docker::list_instances(self.deployment.clone().id, "all").await
+        docker::list_instances(&self.docker, self.deployment.id.clone(), "all").await
     }
 
     async fn list_instances_with_names(&self) -> Vec<(String, String)> {
-        docker::list_instances_with_names(self.deployment.clone().id, "all").await
+        docker::list_instances_with_names(&self.docker, self.deployment.id.clone(), "all").await
     }
 
     async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log> {
@@ -87,7 +90,7 @@ impl RuntimeInterface for DockerRuntime {
         };
 
         for (instance_id, instance_name) in filtered_instances {
-            let instance_logs: Vec<String> = docker::logs(instance_id.clone(), tail, since).await;
+            let instance_logs: Vec<String> = docker::logs(&self.docker, instance_id.clone(), tail, since).await;
             for message in instance_logs {
                 let log = Log {
                     instance: instance_name.clone(),
@@ -120,7 +123,7 @@ impl RuntimeInterface for DockerRuntime {
         let mut streams: Vec<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>> = Vec::new();
 
         for (instance_id, instance_name) in filtered_instances {
-            let raw_stream = docker::logs_stream(instance_id.clone(), tail, since).await;
+            let raw_stream = docker::logs_stream(self.docker.clone(), instance_id.clone(), tail, since).await;
 
             let mapped = raw_stream.map(move |line| {
                 let log = Log {
@@ -140,11 +143,11 @@ impl RuntimeInterface for DockerRuntime {
     }
 
     async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>) {
-        docker::execute_health_check_for_instance(instance_id.to_string(), health_check.clone()).await
+        docker::execute_health_check_for_instance(&self.docker, instance_id.to_string(), health_check.clone()).await
     }
 
     async fn remove_instance(&self, instance_id: &str) {
-        docker::remove_container_by_id(instance_id.to_string()).await;
+        docker::remove_container_by_id(&self.docker, instance_id.to_string()).await;
     }
 }
 

@@ -88,10 +88,14 @@ pub(crate) async fn list(
         deployments::find_all(&guard, filters)
     };
 
-    for deployment in list_deployments.into_iter() {
+    let docker = match docker::connect() {
+        Ok(d) => d,
+        Err(_) => return Json(deployments),
+    };
 
+    for deployment in list_deployments.into_iter() {
         let mut output = DeploymentOutput::from_to_model(deployment.clone());
-        let instances = docker::list_instances(deployment.id.to_string(), "running").await;
+        let instances = docker::list_instances(&docker, deployment.id.to_string(), "running").await;
         output.instances = instances;
 
         deployments.push(output);
