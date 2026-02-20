@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::runtime::docker;
+use crate::runtime::runtime::Runtime;
 use crate::models::deployments::{self, DeploymentStatus};
 use crate::models::config;
 use crate::models::deployment_event;
@@ -7,7 +8,7 @@ use crate::models::health_check_logs;
 use crate::scheduler::health_checker::HealthChecker;
 use sqlx::SqlitePool;
 use std::env;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 use crate::models::config::Config;
 
 pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config) {
@@ -16,11 +17,19 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(config.scheduler.interval);
 
+    let apply_timeout_secs = env::var("RING_APPLY_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300);
+    let apply_timeout = Duration::from_secs(apply_timeout_secs);
+
     let duration = Duration::from_secs(interval_seconds);
     let health_checker = HealthChecker::new(pool.clone());
-    let mut cleanup_counter = 0;
 
-    info!("Starting scheduler with interval: {}s", interval_seconds);
+    let cleanup_interval = Duration::from_secs(300);
+    let mut last_cleanup = Instant::now();
+
+    info!("Starting scheduler with interval: {}s, apply timeout: {}s", interval_seconds, apply_timeout_secs);
 
     loop {
         let mut filters = HashMap::new();
@@ -48,7 +57,6 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                     Err(e) => {
                         error!("Failed to load configs for deployment {}: {}", deployment.id, e);
 
-                        // Record error event
                         let _ = deployment_event::log_event(
                             &pool,
                             deployment.id.clone(),
@@ -58,12 +66,25 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                             Some("ConfigLoadError")
                         ).await;
 
-                        continue; // Skip this deployment, process others
+                        continue;
                     }
                 };
 
-
-                let mut config = docker::apply(deployment.clone(), configs).await;
+                let mut config = match tokio::time::timeout(apply_timeout, docker::apply(deployment.clone(), configs)).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        error!("docker::apply timed out for deployment {}", deployment.id);
+                        let _ = deployment_event::log_event(
+                            &pool,
+                            deployment.id.clone(),
+                            "error",
+                            format!("Scheduler apply timed out after {} seconds", apply_timeout_secs),
+                            "scheduler",
+                            Some("ApplyTimeout")
+                        ).await;
+                        continue;
+                    }
+                };
 
                 // Persist any events emitted by the runtime
                 if !config.pending_events.is_empty() {
@@ -76,7 +97,6 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 if config.status == DeploymentStatus::Deleted && config.instances.is_empty() {
                     info!("Marking deployment {} for cleanup", config.id);
 
-                    // Record cleanup event
                     let _ = deployment_event::log_event(
                         &pool,
                         config.id.clone(),
@@ -89,51 +109,54 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                     deleted.push(config.id.clone());
                 }
 
-                {
-                    if config.status == DeploymentStatus::Creating && !config.instances.is_empty() {
-                        info!("Deployment {} transition: creating -> running", config.id);
+                if config.status == DeploymentStatus::Creating && !config.instances.is_empty() {
+                    info!("Deployment {} transition: creating -> running", config.id);
 
-                        // Record state transition event
-                        let _ = deployment_event::log_event(
-                            &pool,
-                            config.id.clone(),
-                            "info",
-                            format!("Status changed from creating to running ({} containers)", config.instances.len()),
-                            "scheduler",
-                            Some("StateTransition")
-                        ).await;
+                    let _ = deployment_event::log_event(
+                        &pool,
+                        config.id.clone(),
+                        "info",
+                        format!("Status changed from creating to running ({} containers)", config.instances.len()),
+                        "scheduler",
+                        Some("StateTransition")
+                    ).await;
 
-                        config.status = DeploymentStatus::Running;
+                    config.status = DeploymentStatus::Running;
+                }
+
+                // Execute health checks for running deployments
+                if config.status == DeploymentStatus::Running && !config.health_checks.is_empty() {
+                    debug!("Executing health checks for deployment {}", config.id);
+                    let outcome = health_checker.execute_checks(&config).await;
+
+                    // Persist health check results
+                    for result in &outcome.results {
+                        health_checker.store_result(result).await;
                     }
 
-                    // Execute health checks for running deployments
-                    if config.status == DeploymentStatus::Running && !config.health_checks.is_empty() {
-                        debug!("Executing health checks for deployment {}", config.id);
-                        health_checker.execute_checks(&config).await;
+                    // Persist events
+                    for event in &outcome.events {
+                        let _ = deployment_event::create_event(&pool, event).await;
+                    }
 
-                        // Re-read deployment after health checks to preserve any status changes
-                        match deployments::find(&pool, config.id.clone()).await {
-                            Ok(Some(mut updated_deployment)) => {
-                                // Preserve scheduler changes (instances, etc.) but keep health checker status changes
-                                updated_deployment.instances = config.instances;
-                                updated_deployment.restart_count = config.restart_count;
-                                // Keep the status from health checker (could be "deleted" or "failed")
-                                if let Err(e) = deployments::update(&pool, &updated_deployment).await {
-                                    error!("Failed to update deployment {}: {}", updated_deployment.id, e);
-                                }
+                    // Apply status change
+                    if let Some(new_status) = outcome.proposed_status {
+                        config.status = new_status;
+                    }
+
+                    // Remove failing instances
+                    if !outcome.instances_to_remove.is_empty() {
+                        if let Ok(rt) = Runtime::new(config.clone()) {
+                            for instance_id in &outcome.instances_to_remove {
+                                rt.remove_instance(instance_id).await;
+                                config.instances.retain(|id| id != instance_id);
                             }
-                            _ => {
-                                // If deployment not found, use the original config
-                                if let Err(e) = deployments::update(&pool, &config).await {
-                                    error!("Failed to update deployment {}: {}", config.id, e);
-                                }
-                            }
-                        }
-                    } else {
-                        if let Err(e) = deployments::update(&pool, &config).await {
-                            error!("Failed to update deployment {}: {}", config.id, e);
                         }
                     }
+                }
+
+                if let Err(e) = deployments::update(&pool, &config).await {
+                    error!("Failed to update deployment {}: {}", config.id, e);
                 }
             }
         }
@@ -141,13 +164,11 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
         if !deleted.is_empty() {
             info!("Cleaning up {} deployments", deleted.len());
 
-            // Clean up deployment events and health checks before deleting deployments
             for id in &deleted {
                 if let Ok(count) = deployment_event::delete_by_deployment_id(&pool, id).await {
                     debug!("Deleted {} events for deployment {}", count, id);
                 }
 
-                // Clean up health checks
                 if let Ok(count) = health_check_logs::delete_by_deployment_id(&pool, id).await {
                     debug!("Deleted {} health checks for deployment {}", count, id);
                 }
@@ -158,10 +179,9 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             }
         }
 
-        // Cleanup health checks every 30 cycles (5 minutes with 10s intervals)
-        cleanup_counter += 1;
-        if cleanup_counter >= 30 {
-            cleanup_counter = 0;
+        // Cleanup health checks based on elapsed time
+        if last_cleanup.elapsed() >= cleanup_interval {
+            last_cleanup = Instant::now();
             if let Err(e) = health_check_logs::cleanup_old_health_checks(&pool).await {
                 error!("Failed to cleanup old health checks: {}", e);
             }

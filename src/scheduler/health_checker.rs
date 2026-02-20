@@ -1,6 +1,6 @@
 use crate::models::health_check::{HealthCheck, HealthCheckResult, HealthCheckStatus, FailureAction};
-use crate::models::deployments::{Deployment, DeploymentStatus, self as deployments};
-use crate::models::deployment_event;
+use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::deployment_event::DeploymentEvent;
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -9,9 +9,15 @@ use std::collections::HashMap;
 use uuid::Uuid;
 use chrono::Utc;
 
+pub(crate) struct HealthCheckOutcome {
+    pub(crate) results: Vec<HealthCheckResult>,
+    pub(crate) events: Vec<DeploymentEvent>,
+    pub(crate) proposed_status: Option<DeploymentStatus>,
+    pub(crate) instances_to_remove: Vec<String>,
+}
+
 pub(crate) struct HealthChecker {
     pool: SqlitePool,
-    // Track failure counts per deployment+health_check combination
     failure_counts: Arc<Mutex<HashMap<String, u32>>>,
 }
 
@@ -23,41 +29,46 @@ impl HealthChecker {
         }
     }
 
-    pub(crate) async fn execute_checks(&self, deployment: &Deployment) -> Vec<HealthCheckResult> {
-        let mut results = Vec::new();
+    pub(crate) async fn execute_checks(&self, deployment: &Deployment) -> HealthCheckOutcome {
+        let mut outcome = HealthCheckOutcome {
+            results: Vec::new(),
+            events: Vec::new(),
+            proposed_status: None,
+            instances_to_remove: Vec::new(),
+        };
 
         if deployment.status != DeploymentStatus::Running {
-            return results;
+            return outcome;
         }
 
         let runtime = match crate::runtime::runtime::Runtime::new(deployment.clone()) {
             Ok(r) => r,
             Err(e) => {
                 log::error!("Failed to connect to runtime for deployment {}: {}", deployment.name, e);
-                return results;
+                return outcome;
             }
         };
+
         for instance_id in &deployment.instances {
             for (hc_index, health_check) in deployment.health_checks.iter().enumerate() {
                 let result = self.execute_single_check_with_runtime(&runtime, deployment, health_check, instance_id).await;
 
-                self.store_result(&result).await;
                 let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
                 if matches!(result.status, HealthCheckStatus::Failed | HealthCheckStatus::Timeout) {
                     let should_trigger_action = self.increment_failure_count(&key, health_check.threshold()).await;
                     if should_trigger_action {
-                        self.handle_failure_with_runtime(&runtime, deployment, health_check, &result, instance_id).await;
+                        self.handle_failure(&mut outcome, deployment, health_check, &result, instance_id);
                         self.reset_failure_count(&key).await;
                     }
                 } else {
                     self.reset_failure_count(&key).await;
                 }
 
-                results.push(result);
+                outcome.results.push(result);
             }
         }
 
-        results
+        outcome
     }
 
     async fn execute_single_check_with_runtime(&self, runtime: &Box<dyn crate::runtime::runtime::RuntimeInterface + Send + Sync>, deployment: &Deployment, health_check: &HealthCheck, instance_id: &str) -> HealthCheckResult {
@@ -109,8 +120,7 @@ impl HealthChecker {
         }
     }
 
-
-    async fn store_result(&self, result: &HealthCheckResult) {
+    pub(crate) async fn store_result(&self, result: &HealthCheckResult) {
         debug!("Attempting to store health check result for deployment: {}", result.deployment_id);
 
         let status_str = match result.status {
@@ -140,7 +150,6 @@ impl HealthChecker {
         }
     }
 
-
     async fn increment_failure_count(&self, key: &str, threshold: u32) -> bool {
         let mut counts = self.failure_counts.lock().await;
         let current_count = counts.entry(key.to_string()).or_insert(0);
@@ -158,66 +167,47 @@ impl HealthChecker {
         }
     }
 
-    async fn handle_failure_with_runtime(&self, runtime: &Box<dyn crate::runtime::runtime::RuntimeInterface + Send + Sync>, deployment: &Deployment, health_check: &HealthCheck, result: &HealthCheckResult, instance_id: &str) {
+    fn handle_failure(&self, outcome: &mut HealthCheckOutcome, deployment: &Deployment, health_check: &HealthCheck, result: &HealthCheckResult, instance_id: &str) {
         let action = health_check.on_failure();
 
         match action {
             FailureAction::Restart => {
                 info!("Health check failed for instance {} in deployment {}, triggering restart", instance_id, deployment.id);
 
-                // Log event
-                let _ = deployment_event::log_event(
-                    &self.pool,
+                outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
                     format!("Health check failed for instance {} ({}), triggering instance restart", instance_id, result.message.as_deref().unwrap_or("unknown error")),
                     "health_checker",
-                    Some("HealthCheckInstanceRestart")
-                ).await;
+                    Some("HealthCheckInstanceRestart"),
+                ));
 
-                // Remove the failing instance using runtime - scheduler will recreate it automatically
-                runtime.remove_instance(instance_id).await;
-
-                // Update deployment instance list in database
-                if let Ok(Some(mut updated_deployment)) = deployments::find(&self.pool, deployment.id.clone()).await {
-                    updated_deployment.instances.retain(|id| id != instance_id);
-                    if let Err(e) = deployments::update(&self.pool, &updated_deployment).await {
-                        error!("Failed to update deployment {}: {}", updated_deployment.id, e);
-                    }
-                    info!("Updated deployment {} instances list (removed {})", updated_deployment.id, instance_id);
-                }
+                outcome.instances_to_remove.push(instance_id.to_string());
             },
             FailureAction::Stop => {
                 info!("Health check failed for instance {} in deployment {}, triggering deployment stop", instance_id, deployment.id);
 
-                // Stop deployment by changing status to deleted (actually stops containers)
-                let mut updated_deployment = deployment.clone();
-                updated_deployment.status = DeploymentStatus::Deleted;
-
-                if let Err(e) = deployments::update(&self.pool, &updated_deployment).await {
-                    error!("Failed to update deployment {}: {}", updated_deployment.id, e);
-                }
-                let _ = deployment_event::log_event(
-                    &self.pool,
+                outcome.proposed_status = Some(DeploymentStatus::Deleted);
+                outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
                     format!("Health check failed for instance {} ({}), triggering deployment stop", instance_id, result.message.as_deref().unwrap_or("unknown error")),
                     "health_checker",
-                    Some("HealthCheckStop")
-                ).await;
+                    Some("HealthCheckStop"),
+                ));
+
                 info!("Deployment {} status changed to deleted by health checker due to instance {} failure", deployment.id, instance_id);
             },
             FailureAction::Alert => {
                 info!("Health check failed for instance {} in deployment {}, sending alert", instance_id, deployment.id);
 
-                let _ = deployment_event::log_event(
-                    &self.pool,
+                outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "error",
                     format!("Health check failed for instance {}: {}", instance_id, result.message.as_deref().unwrap_or("unknown error")),
                     "health_checker",
-                    Some("HealthCheckAlert")
-                ).await;
+                    Some("HealthCheckAlert"),
+                ));
             },
         }
     }
