@@ -35,7 +35,7 @@ impl UpdateConfigRequest {
 
 pub(crate) async fn update(
     Path(id): Path<String>,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User,
     Json(request): Json<UpdateConfigRequest>,
 ) -> impl IntoResponse {
@@ -58,18 +58,16 @@ pub(crate) async fn update(
         ).into_response();
     }
 
-    let guard = connexion.lock().await;
-
     // Find existing config
-    match ConfigModel::find(&guard, id.clone()) {
+    match ConfigModel::find(&pool, id.clone()).await {
         Ok(Some(mut config)) => {
             // PUT behavior: Full replacement (like create but keeping id, created_at, namespace)
             config.name = request.name;
             config.data = request.data;
             config.labels = request.labels.unwrap_or_default();
             config.updated_at = Some(chrono::Utc::now().to_rfc3339());
-            
-            match ConfigModel::update(&guard, config.clone()) {
+
+            match ConfigModel::update(&pool, config.clone()).await {
                 Ok(_) => {
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
@@ -109,7 +107,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_config_name() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -132,7 +130,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_config_data() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -154,7 +152,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_config_invalid_json_data() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -172,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_nonexistent_config() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -190,10 +188,10 @@ mod tests {
 
     #[tokio::test]
     async fn update_config_multiple_fields() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
-        
+
         let response = server
             .put("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -205,7 +203,7 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
-        
+
         let config = response.json::<ConfigOutput>();
         assert_eq!(config.name, "multi-update");
         assert_eq!(config.data, "{\"env\": \"production\"}");

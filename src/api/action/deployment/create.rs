@@ -199,23 +199,22 @@ struct Message {
 }
 
 pub(crate) async fn create(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
-    
+
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
 
     match input.validate() {
         Ok(()) => {
-            let guard = connexion.lock().await;
             let active_deployments = deployments::find_active_by_namespace_name(
-                &guard,
+                &pool,
                 input.namespace.clone(),
                 input.name.clone(),
-            );
+            ).await;
 
             match active_deployments {
                 Ok(deployments_list) => {
@@ -229,7 +228,7 @@ pub(crate) async fn create(
                             info!("Marking deployment {} as deleted", deployment.id);
                             deployment.status = DeploymentStatus::Deleted;
                             deployment.updated_at = Some(Utc::now().to_string());
-                            deployments::update(&guard, &deployment);
+                            deployments::update(&pool, &deployment).await;
                         }
                     }
                 }
@@ -241,7 +240,6 @@ pub(crate) async fn create(
 
             let utc: DateTime<Utc> = Utc::now();
 
-            // Serialize volumes with error handling
             let volumes = match serde_json::to_string(&input.volumes) {
                 Ok(json_str) => json_str,
                 Err(e) => {
@@ -276,16 +274,16 @@ pub(crate) async fn create(
                 pending_events: vec![],
             };
 
-            match deployments::create(&guard, &deployment) {
+            match deployments::create(&pool, &deployment).await {
                 Ok(deployment) => {
                     let _ = deployment_event::log_event(
-                        &guard,
+                        &pool,
                         deployment.id.clone(),
                         "info",
                         format!("Deployment '{}' created successfully", deployment.name),
                         "api",
                         Some("DeploymentCreated")
-                    );
+                    ).await;
 
                     let deployment_output = DeploymentOutput::from_to_model(deployment);
                     (StatusCode::CREATED, Json(deployment_output)).into_response()
@@ -313,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_invalid_runtime() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -333,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_without_auth() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
@@ -351,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn create() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -371,9 +369,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_volumes() {
-        let app = new_test_app();
-        let token = login(app.clone(), "john.doe", "john.doe").await;
-        dbg!(token.clone());
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
@@ -408,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_invalid_volume_permission() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -426,7 +423,7 @@ mod tests {
                     "source": "/var/run/docker.sock",
                     "destination": "/var/run/docker.sock",
                     "driver": "local",
-                    "permission": "invalid_permission"  // Invalid permission
+                    "permission": "invalid_permission"
                 }
             ]
         }))
@@ -439,8 +436,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_with_bind_volume_missing_source() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+            "runtime": "docker",
+            "name": "nginx",
+            "namespace": "ring",
+            "image": "nginx:latest",
+            "volumes": [
+                {
+                    "type": "bind",
+                    "destination": "/var/run/docker.sock",
+                    "driver": "local",
+                    "permission": "ro"
+                }
+            ]
+        }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let error_body: Message = response.json();
+        assert!(error_body.message.contains("source is required for bind volumes"));
+    }
+
+    #[tokio::test]
     async fn create_with_invalid_volume_driver() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -457,7 +484,7 @@ mod tests {
                     "type": "bind",
                     "source": "/var/run/docker.sock",
                     "destination": "/var/run/docker.sock",
-                    "driver": "invalid_driver",  // Invalid driver
+                    "driver": "invalid_driver",
                     "permission": "ro"
                 }
             ]
@@ -471,39 +498,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_with_bind_volume_missing_source() {
-        let app = new_test_app();
-        let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
-
-        let response: TestResponse = server
-            .post(&"/deployments")
-            .add_header("Authorization", format!("Bearer {}", token))
-            .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                    // Missing source
-                }
-            ]
-        }))
-            .await;
-
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("source is required for bind volumes"));
-    }
-
-    #[tokio::test]
     async fn create_with_bind_volume_empty_source() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -518,7 +514,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "bind",
-                    "source": "",  // Empty source
+                    "source": "",
                     "destination": "/var/run/docker.sock",
                     "driver": "local",
                     "permission": "ro"
@@ -534,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_missing_config_reference() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -552,7 +548,6 @@ mod tests {
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
-                    // Missing source and key
                 }
             ]
         }))
@@ -566,7 +561,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_empty_config_reference() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -581,8 +576,8 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "source": "",  // Empty source
-                    "key": "",   // Empty key
+                    "source": "",
+                    "key": "",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -599,7 +594,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_volume_empty_destination() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -615,7 +610,7 @@ mod tests {
                 {
                     "type": "bind",
                     "source": "/var/run/docker.sock",
-                    "destination": "",  // Empty destination
+                    "destination": "",
                     "driver": "local",
                     "permission": "ro"
                 }
@@ -630,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_invalid_volume_type() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -644,7 +639,7 @@ mod tests {
             "image": "nginx:latest",
             "volumes": [
                 {
-                    "type": "invalid_type",  // Invalid type
+                    "type": "invalid_type",
                     "source": "/var/run/docker.sock",
                     "destination": "/var/run/docker.sock",
                     "driver": "local",
@@ -662,7 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_valid_bind_volume() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -691,7 +686,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_valid_config_volume() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -721,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_valid_named_volume() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -750,7 +745,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_multiple_volumes_mixed_types() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -794,7 +789,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_multiple_validation_errors() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -809,8 +804,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "bind",
-                    // Missing source
-                    "destination": "",  // Empty destination
+                    "destination": "",
                     "driver": "local",
                     "permission": "ro"
                 }
@@ -820,14 +814,13 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        // Should contain both errors
         let message = &error_body.message;
         assert!(message.contains("source") || message.contains("destination"));
     }
 
     #[tokio::test]
     async fn create_with_config_volume_missing_source_only() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -842,7 +835,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "key": "nginx.conf",  // Only key, missing source
+                    "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -858,7 +851,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_missing_key_only() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -873,7 +866,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "source": "nginx-config",  // Only source, missing key
+                    "source": "nginx-config",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -889,7 +882,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_empty_source_only() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -904,7 +897,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "config",
-                    "source": "",  // Empty source
+                    "source": "",
                     "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
@@ -921,7 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_empty_key_only() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -937,7 +930,7 @@ mod tests {
                 {
                     "type": "config",
                     "source": "nginx-config",
-                    "key": "",  // Empty key
+                    "key": "",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
                     "permission": "ro"
@@ -953,7 +946,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_named_volume_missing_source() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -971,7 +964,6 @@ mod tests {
                     "destination": "/data",
                     "driver": "local",
                     "permission": "rw"
-                    // Missing source (volume name)
                 }
             ]
         }))
@@ -984,7 +976,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_named_volume_empty_source() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -999,7 +991,7 @@ mod tests {
             "volumes": [
                 {
                     "type": "volume",
-                    "source": "",  // Empty source
+                    "source": "",
                     "destination": "/data",
                     "driver": "local",
                     "permission": "rw"
@@ -1015,7 +1007,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_config_volume_invalid_permission() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1034,7 +1026,7 @@ mod tests {
                     "key": "nginx.conf",
                     "destination": "/etc/nginx/nginx.conf",
                     "driver": "local",
-                    "permission": "rw"  // INVALID: config volumes must be read-only
+                    "permission": "rw"
                 }
             ]
         }))
@@ -1047,7 +1039,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_worker_with_json_array_command() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1074,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_health_checks() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1121,8 +1113,7 @@ mod tests {
         assert_eq!(deployment.name, "web-service");
         assert_eq!(deployment.namespace, "production");
         assert_eq!(deployment.health_checks.len(), 3);
-        
-        // Verify health check types
+
         let check_types: Vec<String> = deployment.health_checks
             .iter()
             .map(|check| check.check_type().to_string())
@@ -1134,7 +1125,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_resources() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1168,7 +1159,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_without_resources() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1191,7 +1182,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_partial_resources() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -1221,7 +1212,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_invalid_health_check_threshold() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 

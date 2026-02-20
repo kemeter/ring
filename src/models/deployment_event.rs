@@ -1,19 +1,17 @@
-use rusqlite::{Connection, Result, Row};
-use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 use chrono::Utc;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DeploymentEvent {
     pub id: String,
     pub deployment_id: String,
     pub timestamp: String,
-    pub level: String,        // "info", "warning", "error"
+    pub level: String,
     pub message: String,
-    pub component: String,    // "scheduler", "docker", "api"
-    pub reason: Option<String>, // "ContainerStart", "ImagePull", "StateTransition", etc.
+    pub component: String,
+    pub reason: Option<String>,
 }
 
 impl DeploymentEvent {
@@ -34,128 +32,85 @@ impl DeploymentEvent {
             reason: reason.map(|r| r.to_string()),
         }
     }
-
-    fn from_row(row: &Row) -> Result<DeploymentEvent> {
-        Ok(DeploymentEvent {
-            id: row.get("id")?,
-            deployment_id: row.get("deployment_id")?,
-            timestamp: row.get("timestamp")?,
-            level: row.get("level")?,
-            message: row.get("message")?,
-            component: row.get("component")?,
-            reason: row.get("reason")?,
-        })
-    }
 }
 
-pub fn create_event(connection: &MutexGuard<Connection>, event: &DeploymentEvent) -> Result<()> {
-    let mut statement = connection.prepare(
+pub async fn create_event(pool: &SqlitePool, event: &DeploymentEvent) -> Result<(), sqlx::Error> {
+    sqlx::query(
         "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason)
-         VALUES (:id, :deployment_id, :timestamp, :level, :message, :component, :reason)"
-    )?;
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&event.id)
+    .bind(&event.deployment_id)
+    .bind(&event.timestamp)
+    .bind(&event.level)
+    .bind(&event.message)
+    .bind(&event.component)
+    .bind(&event.reason)
+    .execute(pool)
+    .await?;
 
-    statement.execute(named_params! {
-        ":id": event.id,
-        ":deployment_id": event.deployment_id,
-        ":timestamp": event.timestamp,
-        ":level": event.level,
-        ":message": event.message,
-        ":component": event.component,
-        ":reason": event.reason,
-    })?;
-
-    // Update last_event_at in deployment table
-    let mut update_statement = connection.prepare(
-        "UPDATE deployment SET last_event_at = :timestamp WHERE id = :deployment_id"
-    )?;
-
-    update_statement.execute(named_params! {
-        ":timestamp": event.timestamp,
-        ":deployment_id": event.deployment_id,
-    })?;
+    sqlx::query("UPDATE deployment SET last_event_at = ? WHERE id = ?")
+        .bind(&event.timestamp)
+        .bind(&event.deployment_id)
+        .execute(pool)
+        .await?;
 
     Ok(())
 }
 
-pub fn find_events_by_deployment(
-    connection: &MutexGuard<Connection>,
+pub async fn find_events_by_deployment(
+    pool: &SqlitePool,
     deployment_id: &str,
-    limit: Option<u32>
-) -> Result<Vec<DeploymentEvent>> {
-    let safe_limit = limit.unwrap_or(100).min(1000);
+    limit: Option<u32>,
+) -> Result<Vec<DeploymentEvent>, sqlx::Error> {
+    let safe_limit = limit.unwrap_or(100).min(1000) as i32;
 
-    let query = "SELECT id, deployment_id, timestamp, level, message, component, reason
-         FROM deployment_event
-         WHERE deployment_id = :deployment_id
-         ORDER BY timestamp DESC
-         LIMIT :limit";
-
-    let mut statement = connection.prepare(query)?;
-
-    let event_iter = statement.query_map(
-        named_params! {
-            ":deployment_id": deployment_id,
-            ":limit": safe_limit
-        },
-        DeploymentEvent::from_row
-    )?;
-
-    let mut events = Vec::new();
-    for event in event_iter {
-        events.push(event?);
-    }
-
-    Ok(events)
+    sqlx::query_as::<_, DeploymentEvent>(
+        "SELECT id, deployment_id, timestamp, level, message, component, reason
+         FROM deployment_event WHERE deployment_id = ? ORDER BY timestamp DESC LIMIT ?"
+    )
+    .bind(deployment_id)
+    .bind(safe_limit)
+    .fetch_all(pool)
+    .await
 }
 
-pub fn delete_by_deployment_id(connection: &MutexGuard<Connection>, deployment_id: &str) -> Result<usize> {
-    let mut statement = connection.prepare("DELETE FROM deployment_event WHERE deployment_id = ?")?;
-    let deleted_count = statement.execute(&[deployment_id])?;
-    Ok(deleted_count)
+pub async fn delete_by_deployment_id(pool: &SqlitePool, deployment_id: &str) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM deployment_event WHERE deployment_id = ?")
+        .bind(deployment_id)
+        .execute(pool)
+        .await?;
+
+    Ok(result.rows_affected())
 }
 
-pub fn find_events_by_deployment_and_level(
-    connection: &MutexGuard<Connection>,
+pub async fn find_events_by_deployment_and_level(
+    pool: &SqlitePool,
     deployment_id: &str,
     level: &str,
-    limit: Option<u32>
-) -> Result<Vec<DeploymentEvent>> {
-    let safe_limit = limit.unwrap_or(100).min(1000);
+    limit: Option<u32>,
+) -> Result<Vec<DeploymentEvent>, sqlx::Error> {
+    let safe_limit = limit.unwrap_or(100).min(1000) as i32;
 
-    let query = "SELECT id, deployment_id, timestamp, level, message, component, reason
-         FROM deployment_event
-         WHERE deployment_id = :deployment_id AND level = :level
-         ORDER BY timestamp DESC
-         LIMIT :limit";
-
-    let mut statement = connection.prepare(query)?;
-
-    let event_iter = statement.query_map(
-        named_params! {
-            ":deployment_id": deployment_id,
-            ":level": level,
-            ":limit": safe_limit
-        },
-        DeploymentEvent::from_row
-    )?;
-
-    let mut events = Vec::new();
-    for event in event_iter {
-        events.push(event?);
-    }
-
-    Ok(events)
+    sqlx::query_as::<_, DeploymentEvent>(
+        "SELECT id, deployment_id, timestamp, level, message, component, reason
+         FROM deployment_event WHERE deployment_id = ? AND level = ? ORDER BY timestamp DESC LIMIT ?"
+    )
+    .bind(deployment_id)
+    .bind(level)
+    .bind(safe_limit)
+    .fetch_all(pool)
+    .await
 }
 
-// Helper function to create and store an event in one call
-pub fn log_event(
-    connection: &MutexGuard<Connection>,
+pub async fn log_event(
+    pool: &SqlitePool,
     deployment_id: String,
     level: &str,
     message: String,
     component: &str,
     reason: Option<&str>,
-) -> Result<()> {
+) -> Result<(), sqlx::Error> {
     let event = DeploymentEvent::new(deployment_id, level, message, component, reason);
-    create_event(connection, &event)
+    create_event(pool, &event).await
 }

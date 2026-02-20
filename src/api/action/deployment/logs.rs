@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    response::{IntoResponse, Response, sse::{KeepAlive, Sse}},
+    response::{IntoResponse, sse::{KeepAlive, Sse}},
     Json
 };
 use chrono::Utc;
@@ -52,10 +52,9 @@ pub(crate) async fn logs(
     Path(id): Path<String>,
     Query(params): Query<LogsQuery>,
     _user: User,
-    State(connexion): State<Db>,
-) -> Response {
-    let guard = connexion.lock().await;
-    let deployment_result = deployments::find(&guard, id.clone());
+    State(pool): State<Db>,
+) -> impl IntoResponse {
+    let deployment_result = deployments::find(&pool, id.clone()).await;
 
     match deployment_result {
         Ok(Some(deployment)) => {

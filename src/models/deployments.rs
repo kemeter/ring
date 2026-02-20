@@ -1,10 +1,7 @@
-use rusqlite::{Connection, ToSql, Result, Row};
-use rusqlite::named_params;
 use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
+use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::fmt;
-use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, Value as TypeValue, ValueRef};
 
 pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 
@@ -81,24 +78,6 @@ impl std::str::FromStr for DeploymentStatus {
     }
 }
 
-impl ToSql for DeploymentStatus {
-    fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
-        Ok(ToSqlOutput::Owned(TypeValue::Text(self.to_string())))
-    }
-}
-
-impl FromSql for DeploymentStatus {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Text(b) => {
-                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                s.parse().map_err(|e: String| FromSqlError::Other(e.into()))
-            }
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct UserConfig {
     pub id: Option<u32>,
@@ -167,29 +146,6 @@ pub(crate) fn parse_memory_string(s: &str) -> Result<i64, String> {
     Ok((value * multiplier as f64) as i64)
 }
 
-impl ToSql for DeploymentConfig {
-    fn to_sql(&self) -> Result<ToSqlOutput<'_>, rusqlite::Error> {
-        let json_string = serde_json::to_string(self)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        Ok(ToSqlOutput::Owned(TypeValue::Text(json_string)))
-    }
-}
-
-impl FromSql for DeploymentConfig {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value {
-            ValueRef::Blob(b) => {
-                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                serde_json::from_str(s).map_err(|e| FromSqlError::Other(Box::new(e)))
-            },
-            ValueRef::Text(b) => {
-                let s = std::str::from_utf8(b).map_err(|e| FromSqlError::Other(Box::new(e)))?;
-                serde_json::from_str(s).map_err(|e| FromSqlError::Other(Box::new(e)))
-            },
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
@@ -231,75 +187,70 @@ impl Deployment {
         );
         self.pending_events.push(event);
     }
+}
 
-    fn from_row(row: &Row) -> rusqlite::Result<Deployment> {
-        Ok(Deployment {
-            id: row.get("id")?,
-            created_at: row.get("created_at")?,
-            updated_at: row.get("updated_at")?,
-            status: row.get::<_, DeploymentStatus>("status")?,
-            restart_count: row.get("restart_count")?,
-            namespace: row.get("namespace")?,
-            name: row.get("name")?,
-            image: row.get("image")?,
-            config: match row.get::<_, Option<String>>("config") {
-                Ok(Some(c)) => serde_json::from_str(&c).ok(),
-                _ => None,
-            },
-            runtime: row.get("runtime")?,
-            kind: row.get("kind")?,
-            replicas: row.get("replicas")?,
-            command: {
-                let command_str: String = row.get("command")?;
-                serde_json::from_str(&command_str).unwrap_or_default()
-            },
+#[derive(sqlx::FromRow)]
+struct DeploymentRow {
+    id: String,
+    created_at: String,
+    updated_at: Option<String>,
+    status: String,
+    restart_count: i32,
+    namespace: String,
+    name: String,
+    image: String,
+    command: String,
+    config: Option<String>,
+    runtime: String,
+    kind: String,
+    replicas: i32,
+    labels: String,
+    secrets: String,
+    volumes: String,
+    health_checks: Option<String>,
+    resources: Option<String>,
+}
+
+impl From<DeploymentRow> for Deployment {
+    fn from(row: DeploymentRow) -> Self {
+        Deployment {
+            id: row.id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            status: row.status.parse().unwrap_or(DeploymentStatus::Error),
+            restart_count: row.restart_count as u32,
+            namespace: row.namespace,
+            name: row.name,
+            image: row.image,
+            config: row.config.and_then(|c| serde_json::from_str(&c).ok()),
+            runtime: row.runtime,
+            kind: row.kind,
+            replicas: row.replicas as u32,
+            command: serde_json::from_str(&row.command).unwrap_or_default(),
             instances: vec![],
-            labels: serde_json::from_str(&row.get::<_, String>("labels")?).unwrap_or_default(),
-            secrets: serde_json::from_str(&row.get::<_, String>("secrets")?).unwrap_or_default(),
-            volumes: row.get("volumes")?,
-            health_checks: {
-                let health_checks_str: String = row.get("health_checks").unwrap_or_default();
-                if health_checks_str.is_empty() {
-                    vec![]
-                } else {
-                    serde_json::from_str(&health_checks_str).unwrap_or_default()
-                }
-            },
-            resources: {
-                match row.get::<_, Option<String>>("resources") {
-                    Ok(Some(s)) if !s.is_empty() => serde_json::from_str(&s).ok(),
-                    _ => None,
-                }
-            },
+            labels: serde_json::from_str(&row.labels).unwrap_or_default(),
+            secrets: serde_json::from_str(&row.secrets).unwrap_or_default(),
+            volumes: row.volumes,
+            health_checks: row.health_checks
+                .filter(|s| !s.is_empty())
+                .map(|s| serde_json::from_str(&s).unwrap_or_default())
+                .unwrap_or_default(),
+            resources: row.resources
+                .filter(|s| !s.is_empty())
+                .and_then(|s| serde_json::from_str(&s).ok()),
             pending_events: vec![],
-        })
+        }
     }
 }
 
-pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<String, Vec<String>>) -> Vec<Deployment> {
-    let mut query = String::from("
-            SELECT
-                id,
-                created_at,
-                updated_at,
-                status,
-                restart_count,
-                namespace,
-                name,
-                image,
-                command,
-                config,
-                runtime,
-                kind,
-                replicas,
-                labels,
-                secrets,
-                volumes,
-                health_checks,
-                resources
-            FROM deployment
-    ");
+const SELECT_COLUMNS: &str = "
+    id, created_at, updated_at, status, restart_count,
+    namespace, name, image, command, config, runtime, kind,
+    replicas, labels, secrets, volumes, health_checks, resources
+";
 
+pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Deployment> {
+    let mut query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
     let mut all_values: Vec<String> = Vec::new();
 
     if !filters.is_empty() {
@@ -318,228 +269,117 @@ pub(crate) fn find_all(connection: &MutexGuard<Connection>, filters: HashMap<Str
         }
     }
 
-    let values: Vec<&dyn rusqlite::ToSql> = all_values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    let mut q = sqlx::query_as::<_, DeploymentRow>(&query);
+    for val in &all_values {
+        q = q.bind(val);
+    }
 
-    let mut statement = match connection.prepare(&query) {
-        Ok(stmt) => stmt,
-        Err(e) => {
-            eprintln!("Could not prepare SQL statement: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let deployment_iter = match statement.query_map(&values[..], |row| {
-        Deployment::from_row(row)
-    }) {
-        Ok(iter) => iter,
+    match q.fetch_all(pool).await {
+        Ok(rows) => rows.into_iter().map(Deployment::from).collect(),
         Err(e) => {
             eprintln!("Could not execute SQL query: {}", e);
-            return Vec::new();
-        }
-    };
-
-    let mut deployments: Vec<Deployment> = Vec::new();
-    for deployment in deployment_iter {
-        match deployment {
-            Ok(d) => deployments.push(d),
-            Err(e) => eprintln!("Error processing row: {}", e),
+            Vec::new()
         }
     }
-
-    deployments
 }
 
-pub(crate) fn find_active_by_namespace_name(
-    connection: &Connection,
+pub(crate) async fn find_active_by_namespace_name(
+    pool: &SqlitePool,
     namespace: String,
-    name: String
-) -> Result<Vec<Deployment>, rusqlite::Error> {
-    let sql = "
-        SELECT
-            id,
-            created_at,
-            updated_at,
-            status,
-            restart_count,
-            namespace,
-            name,
-            image,
-            command,
-            runtime,
-            kind,
-            replicas,
-            labels,
-            secrets,
-            volumes,
-            health_checks,
-            resources
-        FROM deployment
-        WHERE
-            namespace = :namespace
-            AND name = :name
-            AND status <> 'deleted'
-        ORDER BY created_at DESC
-    ";
+    name: String,
+) -> Result<Vec<Deployment>, sqlx::Error> {
+    let sql = format!(
+        "SELECT {} FROM deployment WHERE namespace = ? AND name = ? AND status <> 'deleted' ORDER BY created_at DESC",
+        SELECT_COLUMNS
+    );
 
-    let mut stmt = connection.prepare(sql)?;
+    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(&namespace)
+        .bind(&name)
+        .fetch_all(pool)
+        .await?;
 
-    let deployment_iter = stmt.query_map(
-        named_params! {
-            ":namespace": namespace,
-            ":name": name
-        },
-        Deployment::from_row,
-    )?;
-
-    let mut deployments = Vec::new();
-    for deployment_result in deployment_iter {
-        deployments.push(deployment_result?);
-    }
-
-    Ok(deployments)
+    Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
-pub(crate) fn find(connection: &MutexGuard<Connection>, id: String) -> Result<Option<Deployment>, serde_rusqlite::Error> {
-    let mut statement = connection.prepare("
-            SELECT
-                id,
-                created_at,
-                updated_at,
-                status,
-                restart_count,
-                namespace,
-                name,
-                image,
-                command,
-                config,
-                runtime,
-                kind,
-                replicas,
-                labels,
-                secrets,
-                volumes,
-                health_checks,
-                resources
-            FROM deployment
-            WHERE id = :id
-            "
-    ).expect("Could not fetch deployment");
+pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Deployment>, sqlx::Error> {
+    let sql = format!("SELECT {} FROM deployment WHERE id = ?", SELECT_COLUMNS);
 
-    let mut deployments = statement.query_map(named_params!{":id": id}, |row| {
-        Deployment::from_row(row)
-    })?;
+    let row = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(&id)
+        .fetch_optional(pool)
+        .await?;
 
-    if let Some(deployment) = deployments.next() {
-        Ok(Some(deployment?))
-    } else {
-        Ok(None)
-    }
+    Ok(row.map(Deployment::from))
 }
 
-pub(crate) fn create(connection: &MutexGuard<Connection>, deployment: &Deployment) -> Result<Deployment, rusqlite::Error> {
-
+pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result<Deployment, sqlx::Error> {
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
     let secrets = serde_json::to_string(&deployment.secrets).unwrap_or_else(|_| "[]".to_string());
-
     let config_json = match &deployment.config {
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
         None => "{}".to_string(),
     };
+    let command_json = serde_json::to_string(&deployment.command).unwrap_or_else(|_| "[]".to_string());
+    let health_checks_json = serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string());
 
-    let mut statement = connection.prepare("
-            INSERT INTO deployment (
-                id,
-                created_at,
-                status,
-                restart_count,
-                namespace,
-                name,
-                image,
-                command,
-                config,
-                runtime,
-                kind,
-                replicas,
-                labels,
-                secrets,
-                volumes,
-                health_checks,
-                resources
-            ) VALUES (
-                :id,
-                :created_at,
-                :status,
-                :restart_count,
-                :namespace,
-                :name,
-                :image,
-                :command,
-                :config,
-                :runtime,
-                :kind,
-                :replicas,
-                :labels,
-                :secrets,
-                :volumes,
-                :health_checks,
-                :resources
-            )"
-    )?;
+    let resources_json = deployment.resources.as_ref()
+        .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
 
-    let params = named_params!{
-        ":id": deployment.id,
-        ":created_at": deployment.created_at,
-        ":status": deployment.status,
-        ":restart_count": deployment.restart_count,
-        ":namespace": deployment.namespace,
-        ":name": deployment.name,
-        ":image": deployment.image,
-        ":command": serde_json::to_string(&deployment.command).unwrap_or_else(|_| "[]".to_string()),
-        ":config": config_json,
-        ":runtime": deployment.runtime,
-        ":kind": deployment.kind,
-        ":labels": labels,
-        ":replicas": deployment.replicas,
-        ":secrets": secrets,
-        ":volumes": deployment.volumes,
-        ":health_checks": serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string()),
-        ":resources": deployment.resources.as_ref().map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string())),
-    };
-
-    statement.execute(params)?;
+    sqlx::query(
+        "INSERT INTO deployment (
+            id, created_at, status, restart_count, namespace, name, image,
+            command, config, runtime, kind, replicas, labels, secrets, volumes, health_checks, resources
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&deployment.id)
+    .bind(&deployment.created_at)
+    .bind(deployment.status.to_string())
+    .bind(deployment.restart_count as i32)
+    .bind(&deployment.namespace)
+    .bind(&deployment.name)
+    .bind(&deployment.image)
+    .bind(&command_json)
+    .bind(&config_json)
+    .bind(&deployment.runtime)
+    .bind(&deployment.kind)
+    .bind(deployment.replicas as i32)
+    .bind(&labels)
+    .bind(&secrets)
+    .bind(&deployment.volumes)
+    .bind(&health_checks_json)
+    .bind(&resources_json)
+    .execute(pool)
+    .await?;
 
     Ok(deployment.clone())
 }
 
-pub(crate) fn update(connection: &MutexGuard<Connection>, deployment: &Deployment) {
-    let mut statement = connection.prepare("
-            UPDATE deployment
-            SET
-                status = :status,
-                updated_at = datetime('now'),
-                restart_count = :restart_count
-            WHERE
-                id = :id"
-    ).expect("Could not update deployment");
+pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) {
+    let result = sqlx::query(
+        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ? WHERE id = ?"
+    )
+    .bind(deployment.status.to_string())
+    .bind(deployment.restart_count as i32)
+    .bind(&deployment.id)
+    .execute(pool)
+    .await;
 
-    statement.execute(named_params!{
-        ":id": deployment.id,
-        ":status": deployment.status,
-        ":restart_count": deployment.restart_count
-    }).expect("Could not update deployment");
+    if let Err(e) = result {
+        eprintln!("Could not update deployment: {}", e);
+    }
 }
 
-pub(crate) fn delete_batch(connection: &MutexGuard<Connection>, deleted: Vec<String>) {
+pub(crate) async fn delete_batch(pool: &SqlitePool, deleted: Vec<String>) {
     for id in deleted {
-        let mut statement = connection.prepare("
-            DELETE FROM deployment
-            WHERE
-                id = :id"
-        ).expect("Could not delete deployment");
+        let result = sqlx::query("DELETE FROM deployment WHERE id = ?")
+            .bind(&id)
+            .execute(pool)
+            .await;
 
-        statement.execute(named_params!{
-            ":id": id
-        }).expect("Could not delete deployment");
+        if let Err(e) = result {
+            eprintln!("Could not delete deployment: {}", e);
+        }
     }
 }
 

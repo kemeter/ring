@@ -11,14 +11,13 @@ use crate::api::dto::user::UserOutput;
 use crate::models::users::User;
 
 pub(crate) async fn list(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User
 ) -> Result<Json<Vec<UserOutput>>, (StatusCode, Json<serde_json::Value>)> {
 
     let mut users: Vec<UserOutput> = Vec::new();
-    let guard = connexion.lock().await;
 
-    let list_users = users_model::find_all(guard).map_err(|_| (
+    let list_users = users_model::find_all(&pool).await.map_err(|_| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "errors": ["Internal server error"] }))
     ))?;
@@ -47,7 +46,7 @@ mod tests {
 
     #[tokio::test]
     async fn create() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 

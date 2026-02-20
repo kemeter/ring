@@ -13,15 +13,12 @@ use rand::rng;
 use rand::distr::Alphanumeric;
 
 pub(crate) async fn login(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     Json(input): Json<LoginInput>
 ) -> impl IntoResponse {
     debug!("Login attempt");
 
-    let option = {
-        let guard = connexion.lock().await;
-        users_model::find_by_username(&guard, &input.username)
-    };
+    let option = users_model::find_by_username(&pool, &input.username).await;
 
     match option {
         Ok(Some(mut user)) => {
@@ -46,14 +43,11 @@ pub(crate) async fn login(
 
             let token: String = user.token.clone();
 
-            {
-                let guard = connexion.lock().await;
-                if let Err(_) = users_model::login(&guard, user) {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "errors": ["Internal server error"] }))
-                    );
-                }
+            if let Err(_) = users_model::login(&pool, user).await {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "errors": ["Internal server error"] }))
+                );
             }
 
             (
@@ -104,9 +98,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_success() {
-        let server = TestServer::new(new_test_app()).unwrap();
+        let server = TestServer::new(new_test_app().await).unwrap();
 
-        // Get the request.
         let response: TestResponse = server
             .post(&"/login")
             .json(&json!({
@@ -121,9 +114,8 @@ mod tests {
 
     #[tokio::test]
     async fn login_fail() {
-        let server = TestServer::new(new_test_app()).unwrap();
+        let server = TestServer::new(new_test_app().await).unwrap();
 
-        // Get the request.
         let response: TestResponse = server
             .post(&"/login")
             .json(&json!({

@@ -1,33 +1,35 @@
-use rusqlite::Connection;
+use sqlx::SqlitePool;
 
-pub fn load(connection: &mut Connection) {
+pub async fn load(pool: &SqlitePool) {
     let now = chrono::Utc::now().to_rfc3339();
-    
+
     // Event for deployment creation
-    connection.execute(
-        "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [
-            "event-1",
-            "658c0199-85a2-49da-86d6-1ecd2e427118", // Links to nginx deployment
-            &now,
-            "info",
-            "Deployment created successfully",
-            "api",
-            "DeploymentCreated"
-        ]
-    ).unwrap();
-    
+    sqlx::query(
+        "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+        .bind("event-1")
+        .bind("658c0199-85a2-49da-86d6-1ecd2e427118") // Links to nginx deployment
+        .bind(&now)
+        .bind("info")
+        .bind("Deployment created successfully")
+        .bind("api")
+        .bind("DeploymentCreated")
+        .execute(pool)
+        .await
+        .unwrap();
+
     // Event for deployment error
-    connection.execute(
-        "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [
-            "event-2",
-            "658c0199-85a2-49da-86d6-1ecd2e427118", // Links to nginx deployment
-            &now,
-            "error",
-            "Failed to pull image nginx:latest",
-            "docker",
-            "ImagePullError"
-        ]
-    ).unwrap();
+    sqlx::query(
+        "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+        .bind("event-2")
+        .bind("658c0199-85a2-49da-86d6-1ecd2e427118") // Links to nginx deployment
+        .bind(&now)
+        .bind("error")
+        .bind("Failed to pull image nginx:latest")
+        .bind("docker")
+        .bind("ImagePullError")
+        .execute(pool)
+        .await
+        .unwrap();
 }

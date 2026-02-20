@@ -12,14 +12,13 @@ use crate::models::users::User;
 pub(crate) async fn delete(
     Path(id): Path<String>,
     _user: User,
-    State(connexion): State<Db>
+    State(pool): State<Db>
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-    let option = users::find(&guard, id);
+    let option = users::find(&pool, id).await;
 
     match option {
         Ok(Some(user)) => {
-            if let Err(_) = users::delete(&guard, &user) {
+            if let Err(_) = users::delete(&pool, &user).await {
                 return StatusCode::INTERNAL_SERVER_ERROR;
             }
 
@@ -44,7 +43,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server

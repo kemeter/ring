@@ -12,24 +12,22 @@ use crate::api::dto::user::UserOutput;
 use crate::config::config::{Config};
 
 pub(crate) async fn create(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     State(configuration): State<Config>,
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, Json<UserOutput>), (StatusCode, Json<serde_json::Value>)> {
-    let guard = connexion.lock().await;
-    
     let password_hash = users_model::hash_password(&input.password, &configuration.user.salt).map_err(|_| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "errors": ["Password hashing failed"] }))
     ))?;
 
-    users_model::create(&guard, &input.username, &password_hash).map_err(|_| (
+    users_model::create(&pool, &input.username, &password_hash).await.map_err(|_| (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "errors": ["User creation failed"] }))
     ))?;
 
-    let user = users_model::find_by_username(&guard, &input.username)
+    let user = users_model::find_by_username(&pool, &input.username).await
         .map_err(|_| (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "errors": ["Failed to retrieve created user"] }))
@@ -66,7 +64,7 @@ mod tests {
 
     #[tokio::test]
     async fn create() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 

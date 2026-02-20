@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path},
+    extract::Path,
     http::StatusCode,
     response::IntoResponse
 };
@@ -11,16 +11,15 @@ use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-    let option = deployments::find(&guard, id);
+    let option = deployments::find(&pool, id).await;
 
     match option {
         Ok(Some(mut deployment)) => {
             deployment.status = DeploymentStatus::Deleted;
-            deployments::update(&guard, &deployment);
+            deployments::update(&pool, &deployment).await;
 
             StatusCode::NO_CONTENT
         }
@@ -42,7 +41,7 @@ mod tests{
 
     #[tokio::test]
     async fn delete() {
-        let app = new_test_app();
+        let app = new_test_app().await;
 
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();

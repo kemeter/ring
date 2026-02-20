@@ -63,30 +63,27 @@ impl<S> FromRequestParts<S> for QueryParameters
 
 pub(crate) async fn list(
     query_parameters: QueryParameters,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User
 ) -> impl IntoResponse {
 
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
 
-    let list_deployments = {
-        let guard = connexion.lock().await;
-        let mut filters: HashMap<String, Vec<String>> = HashMap::new();
+    let mut filters: HashMap<String, Vec<String>> = HashMap::new();
 
-        if !query_parameters.namespaces.is_empty() {
-            filters.insert(String::from("namespace"), query_parameters.namespaces);
-        }
+    if !query_parameters.namespaces.is_empty() {
+        filters.insert(String::from("namespace"), query_parameters.namespaces);
+    }
 
-        if !query_parameters.status.is_empty() {
-            filters.insert(String::from("status"), query_parameters.status);
-        }
+    if !query_parameters.status.is_empty() {
+        filters.insert(String::from("status"), query_parameters.status);
+    }
 
-        if !query_parameters.kind.is_empty() {
-            filters.insert(String::from("kind"), query_parameters.kind);
-        }
+    if !query_parameters.kind.is_empty() {
+        filters.insert(String::from("kind"), query_parameters.kind);
+    }
 
-        deployments::find_all(&guard, filters)
-    };
+    let list_deployments = deployments::find_all(&pool, filters).await;
 
     let docker = match docker::connect() {
         Ok(d) => d,
@@ -114,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn list() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -131,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_by_namespace() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -147,7 +144,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_by_kind() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server

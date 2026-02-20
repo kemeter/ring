@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path},
+    extract::Path,
     response::IntoResponse,
     Json
 };
@@ -15,11 +15,9 @@ use axum::http::StatusCode;
 pub(crate) async fn get(
     Path(id): Path<String>,
     _user: User,
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
 ) -> impl IntoResponse {
-    let guard = connexion.lock().await;
-
-    match deployments::find(&guard, id.clone()) {
+    match deployments::find(&pool, id.clone()).await {
         Ok(Some(deployment)) => {
             let runtime = Runtime::new(deployment.clone());
             let instances = runtime.list_instances().await;
@@ -43,7 +41,7 @@ mod tests {
 
     #[tokio::test]
     async fn not_fount() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server
@@ -56,7 +54,7 @@ mod tests {
 
     #[tokio::test]
     async fn get() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
         let response = server

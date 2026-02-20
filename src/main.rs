@@ -55,8 +55,6 @@ mod utils;
 #[cfg(test)]
 mod fixtures;
 
-use crate::database::get_database_connection;
-
 #[tokio::main]
 async fn main() {
     env_logger::init();
@@ -188,14 +186,12 @@ async fn main() {
             commands::init::init(sub_matches);
         }
         Some(("server", sub_matches)) => {
-            let storage = get_database_connection();
             let server_command = sub_matches.subcommand().unwrap_or(("start", sub_matches));
             match server_command {
                 ("start", sub_matches) => {
                     commands::server::execute(
                         sub_matches,
                         config,
-                        storage
                     ).await
                 }
                 _ => {}
@@ -360,4 +356,3 @@ async fn main() {
         }
     }
 }
-

@@ -32,16 +32,15 @@ impl ConfigInput {
 }
 
 pub(crate) async fn create(
-    State(connexion): State<Db>,
+    State(pool): State<Db>,
     _user: User,
     Json(input): Json<ConfigInput>,
 ) -> impl IntoResponse {
     match input.validate() {
         Ok(_) => {
-            let guard = connexion.lock().await;
             let utc: DateTime<Utc> = Utc::now();
 
-            let config = config::Config {
+            let new_config = config::Config {
                 id: Uuid::new_v4().to_string(),
                 created_at: utc.to_string(),
                 updated_at: None,
@@ -51,9 +50,9 @@ pub(crate) async fn create(
                 labels: input.labels.unwrap_or_default(),
             };
 
-            match config::create(&guard, config.clone()) {
+            match config::create(&pool, new_config.clone()).await {
                 Ok(_) => {
-                    (StatusCode::CREATED, Json(serde_json::to_value(config).unwrap())).into_response()
+                    (StatusCode::CREATED, Json(serde_json::to_value(new_config).unwrap())).into_response()
                 }
                 Err(e) => {
                     if e.to_string().contains("UNIQUE constraint failed") {
@@ -87,7 +86,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_config() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -112,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_duplicate_config() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
@@ -133,7 +132,7 @@ mod tests {
             .post("/configs")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&serde_json::json!({
-                "namespace": "test", 
+                "namespace": "test",
                 "name": "duplicate-config",
                 "data": "test data"
             }))
@@ -144,7 +143,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_invalid_config() {
-        let app = new_test_app();
+        let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
