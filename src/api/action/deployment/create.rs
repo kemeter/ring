@@ -228,7 +228,9 @@ pub(crate) async fn create(
                             info!("Marking deployment {} as deleted", deployment.id);
                             deployment.status = DeploymentStatus::Deleted;
                             deployment.updated_at = Some(Utc::now().to_string());
-                            deployments::update(&pool, &deployment).await;
+                            if let Err(e) = deployments::update(&pool, &deployment).await {
+                                log::error!("Failed to mark deployment {} as deleted: {}", deployment.id, e);
+                            }
                         }
                     }
                 }

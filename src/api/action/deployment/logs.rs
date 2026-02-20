@@ -58,7 +58,10 @@ pub(crate) async fn logs(
 
     match deployment_result {
         Ok(Some(deployment)) => {
-            let runtime = Runtime::new(deployment);
+            let runtime = match Runtime::new(deployment) {
+                Ok(r) => r,
+                Err(_) => return Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
+            };
 
             let tail = params.tail.map(|t| t.to_string());
             let since = params.since.as_deref().and_then(parse_since);

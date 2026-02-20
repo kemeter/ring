@@ -29,9 +29,9 @@ pub struct DockerRuntime {
 }
 
 impl Runtime {
-    pub fn new(deployment: Deployment) -> Box<dyn RuntimeInterface + Send + Sync> {
-        let docker = docker::connect().expect("Failed to connect to Docker");
-        Box::new(DockerRuntime { docker, deployment })
+    pub fn new(deployment: Deployment) -> Result<Box<dyn RuntimeInterface + Send + Sync>, crate::runtime::error::RuntimeError> {
+        let docker = docker::connect()?;
+        Ok(Box::new(DockerRuntime { docker, deployment }))
     }
 }
 

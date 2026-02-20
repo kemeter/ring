@@ -30,7 +30,13 @@ impl HealthChecker {
             return results;
         }
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone());
+        let runtime = match crate::runtime::runtime::Runtime::new(deployment.clone()) {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("Failed to connect to runtime for deployment {}: {}", deployment.name, e);
+                return results;
+            }
+        };
         for instance_id in &deployment.instances {
             for (hc_index, health_check) in deployment.health_checks.iter().enumerate() {
                 let result = self.execute_single_check_with_runtime(&runtime, deployment, health_check, instance_id).await;
@@ -175,7 +181,9 @@ impl HealthChecker {
                 // Update deployment instance list in database
                 if let Ok(Some(mut updated_deployment)) = deployments::find(&self.pool, deployment.id.clone()).await {
                     updated_deployment.instances.retain(|id| id != instance_id);
-                    deployments::update(&self.pool, &updated_deployment).await;
+                    if let Err(e) = deployments::update(&self.pool, &updated_deployment).await {
+                        error!("Failed to update deployment {}: {}", updated_deployment.id, e);
+                    }
                     info!("Updated deployment {} instances list (removed {})", updated_deployment.id, instance_id);
                 }
             },
@@ -186,7 +194,9 @@ impl HealthChecker {
                 let mut updated_deployment = deployment.clone();
                 updated_deployment.status = DeploymentStatus::Deleted;
 
-                deployments::update(&self.pool, &updated_deployment).await;
+                if let Err(e) = deployments::update(&self.pool, &updated_deployment).await {
+                    error!("Failed to update deployment {}: {}", updated_deployment.id, e);
+                }
                 let _ = deployment_event::log_event(
                     &self.pool,
                     deployment.id.clone(),

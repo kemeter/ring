@@ -30,7 +30,7 @@ struct ConfigTableItem {
     #[table(title = "Namespace")]
     namespace: String,
     #[table(title = "Data")]
-    data: f64,
+    data: usize,
 }
 
 
@@ -56,7 +56,6 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
 
     match request {
         Ok(response) => {
-            println!("{:?}", response);
             if response.status() != 200 {
                 println!("Unable to fetch configurations list: {}", response.status());
                 return;
@@ -87,7 +86,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                     updated_at: config.updated_at.unwrap_or_default(),
                     name: config.name,
                     namespace: config.namespace,
-                    data: data_config.len() as f64,
+                    data: data_config.len(),
                 });
             }
 

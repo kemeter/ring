@@ -118,15 +118,21 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                                 updated_deployment.instances = config.instances;
                                 updated_deployment.restart_count = config.restart_count;
                                 // Keep the status from health checker (could be "deleted" or "failed")
-                                deployments::update(&pool, &updated_deployment).await;
+                                if let Err(e) = deployments::update(&pool, &updated_deployment).await {
+                                    error!("Failed to update deployment {}: {}", updated_deployment.id, e);
+                                }
                             }
                             _ => {
                                 // If deployment not found, use the original config
-                                deployments::update(&pool, &config).await;
+                                if let Err(e) = deployments::update(&pool, &config).await {
+                                    error!("Failed to update deployment {}: {}", config.id, e);
+                                }
                             }
                         }
                     } else {
-                        deployments::update(&pool, &config).await;
+                        if let Err(e) = deployments::update(&pool, &config).await {
+                            error!("Failed to update deployment {}: {}", config.id, e);
+                        }
                     }
                 }
             }
@@ -147,7 +153,9 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 }
             }
 
-            deployments::delete_batch(&pool, deleted).await;
+            if let Err(e) = deployments::delete_batch(&pool, deleted).await {
+                error!("Failed to delete deployments: {}", e);
+            }
         }
 
         // Cleanup health checks every 30 cycles (5 minutes with 10s intervals)

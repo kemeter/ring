@@ -19,9 +19,10 @@ pub(crate) async fn delete(
     match option {
         Ok(Some(mut deployment)) => {
             deployment.status = DeploymentStatus::Deleted;
-            deployments::update(&pool, &deployment).await;
-
-            StatusCode::NO_CONTENT
+            match deployments::update(&pool, &deployment).await {
+                Ok(_) => StatusCode::NO_CONTENT,
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            }
         }
         Ok(None) => {
             StatusCode::NOT_FOUND

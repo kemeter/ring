@@ -4,18 +4,18 @@ use uuid::Uuid;
 use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct DeploymentEvent {
-    pub id: String,
-    pub deployment_id: String,
-    pub timestamp: String,
-    pub level: String,
-    pub message: String,
-    pub component: String,
-    pub reason: Option<String>,
+pub(crate) struct DeploymentEvent {
+    pub(crate) id: String,
+    pub(crate) deployment_id: String,
+    pub(crate) timestamp: String,
+    pub(crate) level: String,
+    pub(crate) message: String,
+    pub(crate) component: String,
+    pub(crate) reason: Option<String>,
 }
 
 impl DeploymentEvent {
-    pub fn new(
+    pub(crate) fn new(
         deployment_id: String,
         level: &str,
         message: String,
@@ -34,7 +34,7 @@ impl DeploymentEvent {
     }
 }
 
-pub async fn create_event(pool: &SqlitePool, event: &DeploymentEvent) -> Result<(), sqlx::Error> {
+pub(crate) async fn create_event(pool: &SqlitePool, event: &DeploymentEvent) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason)
          VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -58,7 +58,7 @@ pub async fn create_event(pool: &SqlitePool, event: &DeploymentEvent) -> Result<
     Ok(())
 }
 
-pub async fn find_events_by_deployment(
+pub(crate) async fn find_events_by_deployment(
     pool: &SqlitePool,
     deployment_id: &str,
     limit: Option<u32>,
@@ -75,7 +75,7 @@ pub async fn find_events_by_deployment(
     .await
 }
 
-pub async fn delete_by_deployment_id(pool: &SqlitePool, deployment_id: &str) -> Result<u64, sqlx::Error> {
+pub(crate) async fn delete_by_deployment_id(pool: &SqlitePool, deployment_id: &str) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM deployment_event WHERE deployment_id = ?")
         .bind(deployment_id)
         .execute(pool)
@@ -84,7 +84,7 @@ pub async fn delete_by_deployment_id(pool: &SqlitePool, deployment_id: &str) -> 
     Ok(result.rows_affected())
 }
 
-pub async fn find_events_by_deployment_and_level(
+pub(crate) async fn find_events_by_deployment_and_level(
     pool: &SqlitePool,
     deployment_id: &str,
     level: &str,
@@ -103,7 +103,7 @@ pub async fn find_events_by_deployment_and_level(
     .await
 }
 
-pub async fn log_event(
+pub(crate) async fn log_event(
     pool: &SqlitePool,
     deployment_id: String,
     level: &str,

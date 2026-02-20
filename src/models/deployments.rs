@@ -277,7 +277,7 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
     match q.fetch_all(pool).await {
         Ok(rows) => rows.into_iter().map(Deployment::from).collect(),
         Err(e) => {
-            eprintln!("Could not execute SQL query: {}", e);
+            log::error!("Could not execute deployment query: {}", e);
             Vec::new()
         }
     }
@@ -355,32 +355,28 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
     Ok(deployment.clone())
 }
 
-pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) {
-    let result = sqlx::query(
+pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
+    sqlx::query(
         "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ? WHERE id = ?"
     )
     .bind(deployment.status.to_string())
     .bind(deployment.restart_count as i32)
     .bind(&deployment.id)
     .execute(pool)
-    .await;
+    .await?;
 
-    if let Err(e) = result {
-        eprintln!("Could not update deployment: {}", e);
-    }
+    Ok(())
 }
 
-pub(crate) async fn delete_batch(pool: &SqlitePool, deleted: Vec<String>) {
+pub(crate) async fn delete_batch(pool: &SqlitePool, deleted: Vec<String>) -> Result<(), sqlx::Error> {
     for id in deleted {
-        let result = sqlx::query("DELETE FROM deployment WHERE id = ?")
+        sqlx::query("DELETE FROM deployment WHERE id = ?")
             .bind(&id)
             .execute(pool)
-            .await;
-
-        if let Err(e) = result {
-            eprintln!("Could not delete deployment: {}", e);
-        }
+            .await?;
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

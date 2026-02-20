@@ -63,7 +63,7 @@ impl<S> FromRequestParts<S> for User
         let token = bearer.token();
         let app_state = AppState::from_ref(state);
 
-        let user = users_model::find_by_token(&app_state.connexion, token).await;
+        let user = users_model::find_by_token(&app_state.connection, token).await;
         match user {
             Ok(user) => Ok(user),
             Err(_) => Err((
@@ -77,7 +77,7 @@ impl<S> FromRequestParts<S> for User
 
 #[derive(Clone, FromRef, Debug)]
 pub(crate) struct AppState {
-    pub(crate) connexion: SqlitePool,
+    pub(crate) connection: SqlitePool,
     pub(crate) configuration: Config,
 }
 
@@ -128,7 +128,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
     info!("Starting server on {}", configuration.get_api_url());
 
     let state = AppState {
-        connexion: pool,
+        connection: pool,
         configuration,
     };
 
@@ -178,7 +178,7 @@ pub(crate) mod tests {
         load_fixtures(&pool).await;
 
         let state = AppState {
-            connexion: pool,
+            connection: pool,
             configuration,
         };
 

@@ -13,6 +13,7 @@ pub(crate) struct User {
     pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
     pub(crate) username: String,
+    #[serde(skip_serializing)]
     pub(crate) password: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) token: String,
@@ -32,6 +33,8 @@ struct UserRow {
     login_at: Option<String>,
 }
 
+const SELECT_COLUMNS: &str = "id, created_at, updated_at, status, username, password, token, login_at";
+
 impl From<UserRow> for User {
     fn from(row: UserRow) -> Self {
         User {
@@ -48,7 +51,8 @@ impl From<UserRow> for User {
 }
 
 pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<User>, sqlx::Error> {
-    let row = sqlx::query_as::<_, UserRow>("SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE id = ?")
+    let sql = format!("SELECT {} FROM user WHERE id = ?", SELECT_COLUMNS);
+    let row = sqlx::query_as::<_, UserRow>(&sql)
         .bind(&id)
         .fetch_optional(pool)
         .await?;
@@ -57,7 +61,8 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<User>, 
 }
 
 pub(crate) async fn find_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, sqlx::Error> {
-    let row = sqlx::query_as::<_, UserRow>("SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE username = ?")
+    let sql = format!("SELECT {} FROM user WHERE username = ?", SELECT_COLUMNS);
+    let row = sqlx::query_as::<_, UserRow>(&sql)
         .bind(username)
         .fetch_optional(pool)
         .await?;
@@ -66,22 +71,20 @@ pub(crate) async fn find_by_username(pool: &SqlitePool, username: &str) -> Resul
 }
 
 pub(crate) async fn find_by_token(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
-    let row = sqlx::query_as::<_, UserRow>(
-        "SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user WHERE token = ?"
-    )
-    .bind(token)
-    .fetch_one(pool)
-    .await?;
+    let sql = format!("SELECT {} FROM user WHERE token = ?", SELECT_COLUMNS);
+    let row = sqlx::query_as::<_, UserRow>(&sql)
+        .bind(token)
+        .fetch_one(pool)
+        .await?;
 
     Ok(User::from(row))
 }
 
 pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, UserRow>(
-        "SELECT id, created_at, updated_at, status, username, password, token, login_at FROM user"
-    )
-    .fetch_all(pool)
-    .await?;
+    let sql = format!("SELECT {} FROM user", SELECT_COLUMNS);
+    let rows = sqlx::query_as::<_, UserRow>(&sql)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.into_iter().map(User::from).collect())
 }
