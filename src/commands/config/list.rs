@@ -48,6 +48,12 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
         }
     }
 
+    let query = if !params.is_empty() {
+        format!("{}?{}", query, params.join("&"))
+    } else {
+        query
+    };
+
     let request = client
         .get(&*query)
         .header("Authorization", format!("Bearer {}", auth_config.token))
