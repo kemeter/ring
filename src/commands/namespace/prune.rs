@@ -28,7 +28,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
     match request {
         Ok(response) => {
             if response.status() != 200 {
-                return eprintln!("Unable to fetch deployments: {}", response.status());
+                eprintln!("Unable to fetch deployments: {}", response.status());
+                return;
             }
 
             let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap_or(vec![]);

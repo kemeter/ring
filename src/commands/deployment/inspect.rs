@@ -51,13 +51,15 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
     match request {
         Ok(response) => {
             if response.status() != 200 {
-                return eprintln!("Unable to fetch deployment: {}", response.status());
+                eprintln!("Unable to fetch deployment: {}", response.status());
+                return;
             }
 
             let deployment = match response.json::<DeploymentOutput>().await {
                 Ok(d) => d,
                 Err(e) => {
-                    return eprintln!("Failed to parse deployment: {}", e);
+                    eprintln!("Failed to parse deployment: {}", e);
+                    return;
                 }
             };
 

@@ -46,7 +46,8 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, clien
     match request {
         Ok(response) => {
             if response.status() != 200 {
-                return eprintln!("Unable to fetch users: {}", response.status());
+                eprintln!("Unable to fetch users: {}", response.status());
+                return;
             }
 
             let users_list: Vec<UserDto> = response.json().await.unwrap_or(vec![]);

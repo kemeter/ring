@@ -38,7 +38,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
     match response {
         Ok(res) => {
             if res.status() != 200 {
-                return eprintln!("Unable to fetch metrics: {}", res.status());
+                eprintln!("Unable to fetch metrics: {}", res.status());
+                return;
             }
 
             match res.json::<DeploymentStatsOutput>().await {

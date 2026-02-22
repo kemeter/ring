@@ -94,13 +94,15 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
     match request {
         Ok(response) => {
             if response.status() != 200 {
-                return eprintln!("Unable to fetch deployments: {}", response.status());
+                eprintln!("Unable to fetch deployments: {}", response.status());
+                return;
             }
 
             let deployments_list: Vec<DeploymentOutput> = match response.json::<Vec<DeploymentOutput>>().await {
                 Ok(list) => list,
                 Err(e) => {
-                    return eprintln!("Failed to parse deployment list: {}", e);
+                    eprintln!("Failed to parse deployment list: {}", e);
+                    return;
                 }
             };
 
@@ -125,7 +127,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
             print_stdout(deployments.with_title()).expect("");
         },
         Err(error) => {
-            return eprintln!("Error fetching deployments: {}", error);
+            eprintln!("Error fetching deployments: {}", error);
+            return;
         }
     }
 }
