@@ -3,3 +3,4 @@ pub(crate) mod inspect;
 pub(crate) mod delete;
 pub(crate) mod logs;
 pub(crate) mod events;
+pub(crate) mod metrics;

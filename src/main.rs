@@ -110,6 +110,9 @@ async fn main() {
                 .subcommand(
                     commands::deployment::events::command_config(),
                 )
+                .subcommand(
+                    commands::deployment::metrics::command_config(),
+                )
         )
         .subcommand(
             Command::new("namespace")
@@ -238,6 +241,13 @@ async fn main() {
                 }
                 ("events", sub_matches) => {
                     commands::deployment::events::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
+                ("metrics", sub_matches) => {
+                    commands::deployment::metrics::execute(
                         sub_matches,
                         config,
                         &client,

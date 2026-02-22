@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
+use crate::api::dto::stats::ContainerStatsOutput;
 
 pub struct Runtime {
 }
@@ -21,6 +22,7 @@ pub trait RuntimeInterface {
     async fn stream_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
     async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>);
     async fn remove_instance(&self, instance_id: &str);
+    async fn get_instance_stats(&self) -> Vec<ContainerStatsOutput>;
 }
 
 pub struct DockerRuntime {
@@ -148,6 +150,39 @@ impl RuntimeInterface for DockerRuntime {
 
     async fn remove_instance(&self, instance_id: &str) {
         docker::remove_container_by_id(&self.docker, instance_id.to_string()).await;
+    }
+
+    async fn get_instance_stats(&self) -> Vec<ContainerStatsOutput> {
+        let instances = self.list_instances_with_names().await;
+        let mut results = Vec::new();
+
+        for (container_id, container_name) in instances {
+            match docker::fetch_container_stats(&self.docker, &container_id).await {
+                Ok(raw_stats) => {
+                    let restart_count =
+                        docker::fetch_restart_count(&self.docker, &container_id).await;
+                    results.push(ContainerStatsOutput {
+                        container_id: container_id.chars().take(12).collect(),
+                        container_name,
+                        cpu_usage_percent: docker::compute_cpu_percent(&raw_stats),
+                        memory: docker::compute_memory_stats(&raw_stats),
+                        network: docker::compute_network_stats(&raw_stats),
+                        disk_io: docker::compute_disk_io_stats(&raw_stats),
+                        pids: docker::compute_pid_stats(&raw_stats),
+                        restart_count,
+                    });
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to get stats for container {}: {}",
+                        container_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        results
     }
 }
 

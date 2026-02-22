@@ -62,6 +62,10 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             DeploymentStatus::FileSystemError, "FileSystemError",
             "Failed to access file system for config mount".to_string(),
         ),
+        RuntimeError::StatsFetchFailed(msg) => (
+            DeploymentStatus::Error, "StatsFetchFailed",
+            format!("Stats fetch failed: {}", msg),
+        ),
         RuntimeError::Other(msg) => (
             DeploymentStatus::Error, "RuntimeError",
             format!("Docker error: {}", msg),

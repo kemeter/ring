@@ -9,6 +9,7 @@ pub enum RuntimeError {
     ConfigKeyNotFound(String),
     FileSystemError(String),
     NetworkCreationFailed(String),
+    StatsFetchFailed(String),
     Other(String),
 }
 
@@ -24,6 +25,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::ConfigKeyNotFound(msg) => write!(f, "Config key not found: {}", msg),
             RuntimeError::FileSystemError(msg) => write!(f, "File system error: {}", msg),
             RuntimeError::NetworkCreationFailed(msg) => write!(f, "Network creation failed: {}", msg),
+            RuntimeError::StatsFetchFailed(msg) => write!(f, "Stats fetch failed: {}", msg),
             RuntimeError::Other(msg) => write!(f, "Runtime error: {}", msg),
         }
     }
