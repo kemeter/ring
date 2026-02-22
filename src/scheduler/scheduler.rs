@@ -127,30 +127,28 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 // Execute health checks for running deployments
                 if config.status == DeploymentStatus::Running && !config.health_checks.is_empty() {
                     debug!("Executing health checks for deployment {}", config.id);
-                    let outcome = health_checker.execute_checks(&config).await;
+                    if let Ok(rt) = Runtime::new(config.clone()) {
+                        let outcome = health_checker.execute_checks(&config, rt.as_ref()).await;
 
-                    // Persist health check results
-                    for result in &outcome.results {
-                        health_checker.store_result(result).await;
-                    }
+                        // Persist health check results
+                        for result in &outcome.results {
+                            health_checker.store_result(result).await;
+                        }
 
-                    // Persist events
-                    for event in &outcome.events {
-                        let _ = deployment_event::create_event(&pool, event).await;
-                    }
+                        // Persist events
+                        for event in &outcome.events {
+                            let _ = deployment_event::create_event(&pool, event).await;
+                        }
 
-                    // Apply status change
-                    if let Some(new_status) = outcome.proposed_status {
-                        config.status = new_status;
-                    }
+                        // Apply status change
+                        if let Some(new_status) = outcome.proposed_status {
+                            config.status = new_status;
+                        }
 
-                    // Remove failing instances
-                    if !outcome.instances_to_remove.is_empty() {
-                        if let Ok(rt) = Runtime::new(config.clone()) {
-                            for instance_id in &outcome.instances_to_remove {
-                                rt.remove_instance(instance_id).await;
-                                config.instances.retain(|id| id != instance_id);
-                            }
+                        // Remove failing instances
+                        for instance_id in &outcome.instances_to_remove {
+                            rt.remove_instance(instance_id).await;
+                            config.instances.retain(|id| id != instance_id);
                         }
                     }
                 }
