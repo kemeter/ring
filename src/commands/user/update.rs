@@ -49,7 +49,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
 
             let binding = String::from(user.username);
             let username = args.get_one::<String>("username").unwrap_or(&binding);
-            let password = args.get_one::<String>("password").unwrap();
+            let password = args.get_one::<String>("password").cloned().unwrap_or_default();
 
             let values = if password.is_empty() {
                 json!({"username": username})
