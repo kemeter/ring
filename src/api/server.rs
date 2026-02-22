@@ -129,17 +129,20 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
 {
     info!("Starting server on {}", configuration.get_api_url());
 
+    let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
+
     let state = AppState {
         connection: pool,
         configuration,
     };
 
     let app = router(state);
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3030").await.unwrap();
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .expect(&format!("Failed to bind to {}", bind_addr));
     axum::serve(listener, app)
         .await
-        .unwrap();
+        .expect("Server failed unexpectedly");
 }
 
 #[cfg(test)]
