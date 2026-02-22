@@ -24,6 +24,10 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone()));
     let scheduler_handler = task::spawn(schedule(pool, configuration));
 
-    let _ = api_server_handler.await;
-    let _ = scheduler_handler.await;
+    if let Err(e) = api_server_handler.await {
+        eprintln!("API server task failed: {}", e);
+    }
+    if let Err(e) = scheduler_handler.await {
+        eprintln!("Scheduler task failed: {}", e);
+    }
 }

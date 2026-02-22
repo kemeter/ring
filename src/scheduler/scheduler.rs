@@ -57,14 +57,16 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                     Err(e) => {
                         error!("Failed to load configs for deployment {}: {}", deployment.id, e);
 
-                        let _ = deployment_event::log_event(
+                        if let Err(e) = deployment_event::log_event(
                             &pool,
                             deployment.id.clone(),
                             "error",
                             format!("Failed to load configs: {}", e),
                             "scheduler",
                             Some("ConfigLoadError")
-                        ).await;
+                        ).await {
+                            warn!("Failed to log config load error event: {}", e);
+                        }
 
                         continue;
                     }
@@ -74,14 +76,16 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                     Ok(result) => result,
                     Err(_) => {
                         error!("docker::apply timed out for deployment {}", deployment.id);
-                        let _ = deployment_event::log_event(
+                        if let Err(e) = deployment_event::log_event(
                             &pool,
                             deployment.id.clone(),
                             "error",
                             format!("Scheduler apply timed out after {} seconds", apply_timeout_secs),
                             "scheduler",
                             Some("ApplyTimeout")
-                        ).await;
+                        ).await {
+                            warn!("Failed to log apply timeout event: {}", e);
+                        }
                         continue;
                     }
                 };
@@ -89,7 +93,9 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 // Persist any events emitted by the runtime
                 if !config.pending_events.is_empty() {
                     for event in &config.pending_events {
-                        let _ = deployment_event::create_event(&pool, event).await;
+                        if let Err(e) = deployment_event::create_event(&pool, event).await {
+                            warn!("Failed to persist runtime event for deployment {}: {}", config.id, e);
+                        }
                     }
                     config.pending_events.clear();
                 }
@@ -97,14 +103,16 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 if config.status == DeploymentStatus::Deleted && config.instances.is_empty() {
                     info!("Marking deployment {} for cleanup", config.id);
 
-                    let _ = deployment_event::log_event(
+                    if let Err(e) = deployment_event::log_event(
                         &pool,
                         config.id.clone(),
                         "info",
                         "Deployment marked for cleanup - all containers stopped".to_string(),
                         "scheduler",
                         Some("CleanupScheduled")
-                    ).await;
+                    ).await {
+                        warn!("Failed to log cleanup event for deployment {}: {}", config.id, e);
+                    }
 
                     deleted.push(config.id.clone());
                 }
@@ -112,14 +120,16 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 if config.status == DeploymentStatus::Creating && !config.instances.is_empty() {
                     info!("Deployment {} transition: creating -> running", config.id);
 
-                    let _ = deployment_event::log_event(
+                    if let Err(e) = deployment_event::log_event(
                         &pool,
                         config.id.clone(),
                         "info",
                         format!("Status changed from creating to running ({} containers)", config.instances.len()),
                         "scheduler",
                         Some("StateTransition")
-                    ).await;
+                    ).await {
+                        warn!("Failed to log state transition event for deployment {}: {}", config.id, e);
+                    }
 
                     config.status = DeploymentStatus::Running;
                 }
@@ -137,7 +147,9 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
 
                         // Persist events
                         for event in &outcome.events {
-                            let _ = deployment_event::create_event(&pool, event).await;
+                            if let Err(e) = deployment_event::create_event(&pool, event).await {
+                                warn!("Failed to persist health check event for deployment {}: {}", config.id, e);
+                            }
                         }
 
                         // Apply status change
