@@ -213,8 +213,9 @@ struct DeploymentRow {
 
 impl From<DeploymentRow> for Deployment {
     fn from(row: DeploymentRow) -> Self {
+        let id = row.id;
         Deployment {
-            id: row.id,
+            id: id.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
             status: row.status.parse().unwrap_or(DeploymentStatus::Error),
@@ -226,14 +227,26 @@ impl From<DeploymentRow> for Deployment {
             runtime: row.runtime,
             kind: row.kind,
             replicas: row.replicas as u32,
-            command: serde_json::from_str(&row.command).unwrap_or_default(),
+            command: serde_json::from_str(&row.command).unwrap_or_else(|e| {
+                log::warn!("Failed to deserialize command for deployment {}: {}", id, e);
+                Vec::new()
+            }),
             instances: vec![],
-            labels: serde_json::from_str(&row.labels).unwrap_or_default(),
-            secrets: serde_json::from_str(&row.secrets).unwrap_or_default(),
+            labels: serde_json::from_str(&row.labels).unwrap_or_else(|e| {
+                log::warn!("Failed to deserialize labels for deployment {}: {}", id, e);
+                HashMap::new()
+            }),
+            secrets: serde_json::from_str(&row.secrets).unwrap_or_else(|e| {
+                log::warn!("Failed to deserialize secrets for deployment {}: {}", id, e);
+                HashMap::new()
+            }),
             volumes: row.volumes,
             health_checks: row.health_checks
                 .filter(|s| !s.is_empty())
-                .map(|s| serde_json::from_str(&s).unwrap_or_default())
+                .map(|s| serde_json::from_str(&s).unwrap_or_else(|e| {
+                    log::warn!("Failed to deserialize health_checks for deployment {}: {}", id, e);
+                    Vec::new()
+                }))
                 .unwrap_or_default(),
             resources: row.resources
                 .filter(|s| !s.is_empty())
