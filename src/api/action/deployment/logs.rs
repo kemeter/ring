@@ -4,7 +4,9 @@ use axum::{
     Json
 };
 use chrono::Utc;
+use regex::Regex;
 use serde::Deserialize;
+use std::sync::LazyLock;
 
 use crate::api::server::Db;
 use crate::models::deployments;
@@ -27,8 +29,12 @@ fn default_tail() -> Option<u64> {
     Some(100)
 }
 
+static SINCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(\d+)(s|m|h)$").unwrap()
+});
+
 fn parse_since(since: &str) -> Option<i32> {
-    let re = regex::Regex::new(r"^(\d+)(s|m|h)$").unwrap();
+    let re = &*SINCE_REGEX;
     if let Some(caps) = re.captures(since) {
         let value: i64 = caps[1].parse().ok()?;
         let seconds = match &caps[2] {

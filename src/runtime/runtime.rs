@@ -8,6 +8,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::LazyLock;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::api::dto::stats::ContainerStatsOutput;
 
@@ -57,15 +58,18 @@ fn classify_log(log: String) -> String {
     }
 }
 
-fn extract_date(log: String) -> Option<String> {
-    let date_regex = Regex::new(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}").unwrap();
-    let date = date_regex.find(&*log).map(|d| d.as_str()).unwrap_or("");
+static DATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}").unwrap()
+});
 
-    if date == "" {
+fn extract_date(log: String) -> Option<String> {
+    let date = DATE_REGEX.find(&*log).map(|d| d.as_str()).unwrap_or("");
+
+    if date.is_empty() {
         return None;
     }
 
-    return Some(date.to_string());
+    Some(date.to_string())
 }
 
 #[async_trait]
