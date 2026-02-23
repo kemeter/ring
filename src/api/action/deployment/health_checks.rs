@@ -34,7 +34,8 @@ pub(crate) async fn get_health_checks(
             return (StatusCode::NOT_FOUND, Json(message)).into_response();
         },
         Err(e) => {
-            let message = Message { message: format!("Database error: {}", e) };
+            log::error!("Database error while fetching deployment: {}", e);
+            let message = Message { message: "Internal server error".to_string() };
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
         }
     }
@@ -43,7 +44,8 @@ pub(crate) async fn get_health_checks(
         match health_check_logs::find_latest_by_deployment(&pool, deployment_id).await {
             Ok(results) => results,
             Err(e) => {
-                let message = Message { message: format!("Failed to fetch health check results: {}", e) };
+                log::error!("Failed to fetch health check results: {}", e);
+                let message = Message { message: "Internal server error".to_string() };
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
             }
         }
@@ -51,7 +53,8 @@ pub(crate) async fn get_health_checks(
         match health_check_logs::find_by_deployment(&pool, deployment_id, params.limit).await {
             Ok(results) => results,
             Err(e) => {
-                let message = Message { message: format!("Failed to fetch health check results: {}", e) };
+                log::error!("Failed to fetch health check results: {}", e);
+                let message = Message { message: "Internal server error".to_string() };
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
             }
         }

@@ -20,6 +20,8 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Config>
         .await
 }
 
+const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
+
 pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Config> {
     let mut query = String::from("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config");
     let mut all_values: Vec<String> = Vec::new();
@@ -27,7 +29,7 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
             .iter()
-            .filter(|(_, v)| !v.is_empty())
+            .filter(|(k, v)| !v.is_empty() && ALLOWED_FILTER_COLUMNS.contains(&k.as_str()))
             .map(|(column, values)| {
                 let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 all_values.extend(values.clone());

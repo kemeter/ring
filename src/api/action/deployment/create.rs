@@ -235,7 +235,8 @@ pub(crate) async fn create(
                     }
                 }
                 Err(e) => {
-                    let message = Message { message: format!("Database error: {}", e.to_string()) };
+                    log::error!("Database error while checking active deployments: {}", e);
+                    let message = Message { message: "Internal server error".to_string() };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
             }
@@ -245,7 +246,8 @@ pub(crate) async fn create(
             let volumes = match serde_json::to_string(&input.volumes) {
                 Ok(json_str) => json_str,
                 Err(e) => {
-                    let message = Message { message: format!("Volume serialization error: {}", e) };
+                    log::error!("Volume serialization error: {}", e);
+                    let message = Message { message: "Internal server error".to_string() };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
             };
@@ -273,6 +275,7 @@ pub(crate) async fn create(
                 volumes: volumes,
                 health_checks: input.health_checks.unwrap_or_default(),
                 resources: input.resources,
+                image_digest: None,
                 pending_events: vec![],
             };
 
@@ -1210,6 +1213,28 @@ mod tests {
         assert!(resources.cpu_limit.is_none());
         assert!(resources.memory_reservation.is_none());
         assert!(resources.cpu_shares.is_none());
+    }
+
+    #[tokio::test]
+    async fn create_returns_null_image_digest() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "digest-test",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert!(body.get("image_digest").is_none() || body["image_digest"].is_null());
     }
 
     #[tokio::test]

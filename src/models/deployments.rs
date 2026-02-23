@@ -171,6 +171,8 @@ pub(crate) struct Deployment {
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) resources: Option<ResourceLimits>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) image_digest: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
@@ -209,6 +211,7 @@ struct DeploymentRow {
     volumes: String,
     health_checks: Option<String>,
     resources: Option<String>,
+    image_digest: Option<String>,
 }
 
 impl From<DeploymentRow> for Deployment {
@@ -251,6 +254,7 @@ impl From<DeploymentRow> for Deployment {
             resources: row.resources
                 .filter(|s| !s.is_empty())
                 .and_then(|s| serde_json::from_str(&s).ok()),
+            image_digest: row.image_digest,
             pending_events: vec![],
         }
     }
@@ -259,8 +263,10 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, secrets, volumes, health_checks, resources
+    replicas, labels, secrets, volumes, health_checks, resources, image_digest
 ";
+
+const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
 
 pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Deployment> {
     let mut query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
@@ -269,7 +275,7 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
     if !filters.is_empty() {
         let conditions: Vec<String> = filters
             .iter()
-            .filter(|(_, v)| !v.is_empty())
+            .filter(|(k, v)| !v.is_empty() && ALLOWED_FILTER_COLUMNS.contains(&k.as_str()))
             .map(|(column, values)| {
                 let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 all_values.extend(values.clone());
@@ -342,8 +348,8 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, secrets, volumes, health_checks, resources
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, secrets, volumes, health_checks, resources, image_digest
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -362,6 +368,7 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
     .bind(&deployment.volumes)
     .bind(&health_checks_json)
     .bind(&resources_json)
+    .bind(&deployment.image_digest)
     .execute(pool)
     .await?;
 
@@ -370,10 +377,11 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
 
 pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ? WHERE id = ?"
+        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ?, image_digest = ? WHERE id = ?"
     )
     .bind(deployment.status.to_string())
     .bind(deployment.restart_count as i32)
+    .bind(&deployment.image_digest)
     .bind(&deployment.id)
     .execute(pool)
     .await?;

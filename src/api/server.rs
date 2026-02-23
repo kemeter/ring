@@ -111,7 +111,7 @@ pub(crate) fn router(state: AppState) -> Router {
                     } else {
                         Err((
                             StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Unhandled internal error: {}", error),
+                            "Internal server error".to_string(),
                         ))
                     }
                 }))
