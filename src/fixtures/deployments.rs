@@ -41,6 +41,27 @@ pub async fn load(pool: &SqlitePool) {
         .await
         .unwrap();
 
+    // Running deployment with image_digest in default namespace
+    sqlx::query(
+        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes, image_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+        .bind("a71f2492-b7c5-42ef-98f8-4hg2527gh451")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind("running")
+        .bind("default")
+        .bind("redis")
+        .bind("redis:7-alpine")
+        .bind("1")
+        .bind("docker")
+        .bind("worker")
+        .bind("[]")
+        .bind("[]")
+        .bind("[]")
+        .bind("sha256:abc123def456789")
+        .execute(pool)
+        .await
+        .unwrap();
+
     // Pending deployment in kemeter namespace
     sqlx::query(
         "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"

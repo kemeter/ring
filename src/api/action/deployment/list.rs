@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
 
         let deployments = response.json::<Vec<DeploymentOutput>>();
-        assert_eq!(1, deployments.len());
+        assert_eq!(2, deployments.len());
     }
 
 

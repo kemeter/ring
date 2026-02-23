@@ -35,16 +35,23 @@ fn get_privileged_config(deployment_config: &Option<crate::models::deployments::
         .and_then(|u| u.privileged)
 }
 
-async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), RuntimeError> {
+fn extract_digest(repo_digests: &Option<Vec<String>>) -> Option<String> {
+    repo_digests
+        .as_ref()?
+        .first()
+        .and_then(|d| d.split_once('@').map(|(_, digest)| digest.to_string()))
+}
+
+async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<Option<String>, RuntimeError> {
     let image = image_config.name.clone();
     let tag = image_config.tag.clone();
     let image_name = format!("{}:{}", image, tag);
     info!("Pull docker image: {}", image_name);
 
     match docker.inspect_image(&image_name).await {
-        Ok(_) => {
+        Ok(inspect) => {
             debug!("Docker image {} already exists locally", image_name);
-            return Ok(());
+            return Ok(extract_digest(&inspect.repo_digests));
         }
         Err(_) => {
             debug!("Docker image {} not found locally, pulling...", image_name);
@@ -91,9 +98,9 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<(), Run
     }
 
     match docker.inspect_image(&image_name).await {
-        Ok(_) => {
+        Ok(inspect) => {
             info!("Docker successfully pulled image {}", image_name);
-            Ok(())
+            Ok(extract_digest(&inspect.repo_digests))
         }
         Err(e) => {
             error!("Docker image {} still not available after pull: {}", image_name, e);
@@ -125,7 +132,8 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
         .unwrap_or(true);
 
     if should_pull {
-        pull_image(docker.clone(), image_config).await?;
+        let digest = pull_image(docker.clone(), image_config).await?;
+        deployment.image_digest = digest;
     }
 
     let network_name = format!("ring_{}", deployment.namespace);
@@ -456,5 +464,25 @@ mod tests {
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
         assert_eq!(mount.read_only, Some(false));
+    }
+
+    #[test]
+    fn test_extract_digest_from_repo_digests() {
+        let repo_digests = Some(vec![
+            "nginx@sha256:abc123def456".to_string(),
+        ]);
+        assert_eq!(extract_digest(&repo_digests), Some("sha256:abc123def456".to_string()));
+    }
+
+    #[test]
+    fn test_extract_digest_none_when_empty() {
+        assert_eq!(extract_digest(&None), None);
+        assert_eq!(extract_digest(&Some(vec![])), None);
+    }
+
+    #[test]
+    fn test_extract_digest_none_when_no_at_sign() {
+        let repo_digests = Some(vec!["nginx:latest".to_string()]);
+        assert_eq!(extract_digest(&repo_digests), None);
     }
 }

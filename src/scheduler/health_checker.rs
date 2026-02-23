@@ -292,6 +292,7 @@ mod tests {
             volumes: "".to_string(),
             health_checks,
             resources: None,
+            image_digest: None,
             pending_events: vec![],
         }
     }
