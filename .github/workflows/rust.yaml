@@ -18,6 +18,8 @@ jobs:
         toolchain: stable
         profile: minimal
         override: true
+    - name: Pull test images
+      run: docker pull nginx:alpine
     - name: Build
       uses: actions-rs/cargo@v1
       with:
