@@ -99,6 +99,16 @@ fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub(crate) enum EnvValue {
+    Plain(String),
+    SecretRef {
+        #[serde(rename = "secretRef")]
+        secret_ref: String,
+    },
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub(crate) struct ResourceSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -185,7 +195,7 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) instances: Vec<String>,
     pub(crate) labels: HashMap<String, String>,
-    pub(crate) secrets: HashMap<String, String>,
+    pub(crate) environment: HashMap<String, EnvValue>,
     pub(crate) volumes: String,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
@@ -234,6 +244,27 @@ struct DeploymentRow {
     image_digest: Option<String>,
 }
 
+fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
+    // Try new format first (HashMap<String, EnvValue>)
+    if let Ok(env) = serde_json::from_str::<HashMap<String, EnvValue>>(json_str) {
+        return env;
+    }
+
+    // Fallback to old format (HashMap<String, String>) for backwards compatibility
+    match serde_json::from_str::<HashMap<String, String>>(json_str) {
+        Ok(old_format) => {
+            old_format
+                .into_iter()
+                .map(|(k, v)| (k, EnvValue::Plain(v)))
+                .collect()
+        }
+        Err(e) => {
+            log::warn!("Failed to deserialize environment for deployment {}: {}", deployment_id, e);
+            HashMap::new()
+        }
+    }
+}
+
 impl From<DeploymentRow> for Deployment {
     fn from(row: DeploymentRow) -> Self {
         let id = row.id;
@@ -259,10 +290,7 @@ impl From<DeploymentRow> for Deployment {
                 log::warn!("Failed to deserialize labels for deployment {}: {}", id, e);
                 HashMap::new()
             }),
-            secrets: serde_json::from_str(&row.secrets).unwrap_or_else(|e| {
-                log::warn!("Failed to deserialize secrets for deployment {}: {}", id, e);
-                HashMap::new()
-            }),
+            environment: parse_environment(&row.secrets, &id),
             volumes: row.volumes,
             health_checks: row.health_checks
                 .filter(|s| !s.is_empty())
@@ -354,7 +382,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Deploym
 
 pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result<Deployment, sqlx::Error> {
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
-    let secrets = serde_json::to_string(&deployment.secrets).unwrap_or_else(|_| "[]".to_string());
+    let environment = serde_json::to_string(&deployment.environment).unwrap_or_else(|_| "{}".to_string());
     let config_json = match &deployment.config {
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
         None => "{}".to_string(),
@@ -384,7 +412,7 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
     .bind(&deployment.kind)
     .bind(deployment.replicas as i32)
     .bind(&labels)
-    .bind(&secrets)
+    .bind(&environment)
     .bind(&deployment.volumes)
     .bind(&health_checks_json)
     .bind(&resources_json)

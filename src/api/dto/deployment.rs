@@ -2,7 +2,7 @@
 use serde::{Serialize, Deserialize, Serializer};
 use std::collections::HashMap;
 use serde::ser::SerializeStruct;
-use crate::models::deployments::{Deployment, DeploymentConfig, Resource};
+use crate::models::deployments::{Deployment, DeploymentConfig, EnvValue, Resource};
 
 fn serialize_option_deployment_config<S>(
     opt: &Option<DeploymentConfig>,
@@ -39,7 +39,7 @@ pub(crate) struct DeploymentOutput {
     pub(crate) ports: Vec<String>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
-    pub(crate) secrets: HashMap<String, String>,
+    pub(crate) environment: HashMap<String, EnvValue>,
     pub(crate) volumes: Vec<DeploymentVolume>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
@@ -52,7 +52,7 @@ pub(crate) struct DeploymentOutput {
 impl DeploymentOutput {
     pub(crate) fn from_to_model(deployment: Deployment) -> DeploymentOutput {
         let labels: HashMap<String, String> = deployment.labels;
-        let secrets: HashMap<String, String> = deployment.secrets;
+        let environment: HashMap<String, EnvValue> = deployment.environment;
 
         let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
             .unwrap_or_else(|e| {
@@ -77,7 +77,7 @@ impl DeploymentOutput {
             replicas: deployment.replicas,
             ports: [].to_vec(),
             labels: labels,
-            secrets: secrets,
+            environment: environment,
             volumes: volumes,
             instances: [].to_vec(),
             health_checks: deployment.health_checks,
