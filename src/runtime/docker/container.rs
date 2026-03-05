@@ -13,7 +13,7 @@ use bollard::{
 };
 use futures::StreamExt;
 use std::collections::HashMap;
-use crate::models::deployments::{Deployment, parse_memory_string};
+use crate::models::deployments::{Deployment, EnvValue, parse_memory_string};
 use crate::api::dto::deployment::DeploymentVolume;
 use crate::models::config::Config;
 use crate::runtime::error::RuntimeError;
@@ -148,9 +148,18 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
         labels.insert(key.clone(), value.clone());
     }
 
-    let envs: Vec<String> = deployment.secrets
+    let envs: Vec<String> = deployment.environment
         .iter()
-        .map(|(key, value)| format!("{}={}", key, value))
+        .filter_map(|(key, env_value)| {
+            match env_value {
+                EnvValue::Plain(v) => Some(format!("{}={}", key, v)),
+                EnvValue::SecretRef { .. } => {
+                    // SecretRef should be resolved before reaching the runtime
+                    error!("Unresolved secretRef for key '{}' - this should have been resolved before calling create_container", key);
+                    None
+                }
+            }
+        })
         .collect();
 
     let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)

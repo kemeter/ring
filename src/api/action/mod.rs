@@ -3,4 +3,5 @@ pub(crate) mod node;
 pub(crate) mod login;
 pub(crate) mod user;
 pub(crate) mod config;
+pub(crate) mod secret;
 pub(crate) mod healthz;

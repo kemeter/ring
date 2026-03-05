@@ -17,7 +17,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::models::deployment_event;
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::models::deployments::{DeploymentConfig, DeploymentStatus, ResourceLimits};
+use crate::models::deployments::{DeploymentConfig, DeploymentStatus, EnvValue, ResourceLimits};
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
@@ -181,7 +181,7 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     labels: HashMap<String, String>,
     #[serde(default)]
-    secrets: HashMap<String, String>,
+    environment: HashMap<String, EnvValue>,
     #[serde(default)]
     #[validate(nested)]
     volumes: Vec<Volume>,
@@ -267,7 +267,7 @@ pub(crate) async fn create(
                 created_at: utc.to_string(),
                 updated_at: None,
                 labels: input.labels,
-                secrets: input.secrets,
+                environment: input.environment,
                 replicas: input.replicas,
                 command: input.command,
                 instances: [].to_vec(),
