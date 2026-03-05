@@ -288,7 +288,7 @@ mod tests {
             command: vec![],
             instances,
             labels: HashMap::new(),
-            secrets: HashMap::new(),
+            environment: HashMap::new(),
             volumes: "".to_string(),
             health_checks,
             resources: None,

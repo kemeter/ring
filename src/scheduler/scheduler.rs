@@ -1,15 +1,48 @@
 use std::collections::HashMap;
 use crate::runtime::docker;
 use crate::runtime::runtime::Runtime;
-use crate::models::deployments::{self, DeploymentStatus};
+use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
 use crate::models::config;
 use crate::models::deployment_event;
 use crate::models::health_check_logs;
+use crate::models::secret as SecretModel;
 use crate::scheduler::health_checker::HealthChecker;
 use sqlx::SqlitePool;
 use std::env;
 use tokio::time::{sleep, Duration, Instant};
 use crate::models::config::Config;
+
+async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
+    let mut resolved = HashMap::new();
+
+    for (key, env_value) in deployment.environment.iter() {
+        let value = match env_value {
+            EnvValue::Plain(v) => EnvValue::Plain(v.clone()),
+            EnvValue::SecretRef { secret_ref } => {
+                match SecretModel::find_by_namespace_name(pool, &deployment.namespace, secret_ref).await {
+                    Ok(Some(secret)) => {
+                        match secret.get_decrypted_value() {
+                            Ok(v) => EnvValue::Plain(v),
+                            Err(e) => {
+                                return Err(format!("Failed to decrypt secret '{}': {}", secret_ref, e));
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        return Err(format!("Secret '{}' not found in namespace '{}'", secret_ref, deployment.namespace));
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to fetch secret '{}': {}", secret_ref, e));
+                    }
+                }
+            }
+        };
+        resolved.insert(key.clone(), value);
+    }
+
+    deployment.environment = resolved;
+    Ok(())
+}
 
 pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config) {
     let interval_seconds = env::var("SCHEDULER_INTERVAL")
@@ -72,7 +105,26 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                     }
                 };
 
-                let mut config = match tokio::time::timeout(apply_timeout, docker::apply(deployment.clone(), configs)).await {
+                // Resolve secretRef values before passing to runtime
+                let mut deployment_with_resolved_env = deployment.clone();
+                if let Err(e) = resolve_environment(&mut deployment_with_resolved_env, &pool).await {
+                    error!("Failed to resolve secrets for deployment {}: {}", deployment.id, e);
+
+                    if let Err(log_err) = deployment_event::log_event(
+                        &pool,
+                        deployment.id.clone(),
+                        "error",
+                        format!("Failed to resolve secrets: {}", e),
+                        "scheduler",
+                        Some("SecretResolutionError")
+                    ).await {
+                        warn!("Failed to log secret resolution error event: {}", log_err);
+                    }
+
+                    continue;
+                }
+
+                let mut config = match tokio::time::timeout(apply_timeout, docker::apply(deployment_with_resolved_env, configs)).await {
                     Ok(result) => result,
                     Err(_) => {
                         error!("docker::apply timed out for deployment {}", deployment.id);
