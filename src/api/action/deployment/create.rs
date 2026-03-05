@@ -17,7 +17,7 @@ use crate::api::server::Db;
 use crate::models::deployments;
 use crate::models::deployment_event;
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::models::deployments::{DeploymentConfig, DeploymentStatus, ResourceLimits};
+use crate::models::deployments::{DeploymentConfig, DeploymentStatus, Resource};
 use crate::models::users::User;
 
 fn default_replicas() -> u32 { 1 }
@@ -190,7 +190,7 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     health_checks: Option<Vec<crate::models::health_check::HealthCheck>>,
     #[serde(default)]
-    resources: Option<ResourceLimits>,
+    resources: Option<Resource>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -1143,10 +1143,14 @@ mod tests {
                 "namespace": "ring",
                 "image": "nginx:latest",
                 "resources": {
-                    "cpu_limit": 0.5,
-                    "memory_limit": "512Mi",
-                    "memory_reservation": "256Mi",
-                    "cpu_shares": 512
+                    "limits": {
+                        "cpu": "0.5",
+                        "memory": "512Mi"
+                    },
+                    "requests": {
+                        "cpu": "0.25",
+                        "memory": "256Mi"
+                    }
                 }
             }))
             .await;
@@ -1156,10 +1160,12 @@ mod tests {
         let deployment: DeploymentOutput = response.json();
         assert_eq!(deployment.name, "limited-nginx");
         let resources = deployment.resources.expect("resources should be present");
-        assert_eq!(resources.cpu_limit, Some(0.5));
-        assert_eq!(resources.memory_limit, Some("512Mi".to_string()));
-        assert_eq!(resources.memory_reservation, Some("256Mi".to_string()));
-        assert_eq!(resources.cpu_shares, Some(512));
+        let limits = resources.limits.expect("limits should be present");
+        assert_eq!(limits.cpu, Some("0.5".to_string()));
+        assert_eq!(limits.memory, Some("512Mi".to_string()));
+        let requests = resources.requests.expect("requests should be present");
+        assert_eq!(requests.cpu, Some("0.25".to_string()));
+        assert_eq!(requests.memory, Some("256Mi".to_string()));
     }
 
     #[tokio::test]
@@ -1200,7 +1206,9 @@ mod tests {
                 "namespace": "ring",
                 "image": "nginx:latest",
                 "resources": {
-                    "memory_limit": "1Gi"
+                    "limits": {
+                        "memory": "1Gi"
+                    }
                 }
             }))
             .await;
@@ -1209,10 +1217,10 @@ mod tests {
 
         let deployment: DeploymentOutput = response.json();
         let resources = deployment.resources.expect("resources should be present");
-        assert_eq!(resources.memory_limit, Some("1Gi".to_string()));
-        assert!(resources.cpu_limit.is_none());
-        assert!(resources.memory_reservation.is_none());
-        assert!(resources.cpu_shares.is_none());
+        let limits = resources.limits.expect("limits should be present");
+        assert_eq!(limits.memory, Some("1Gi".to_string()));
+        assert!(limits.cpu.is_none());
+        assert!(resources.requests.is_none());
     }
 
     #[tokio::test]

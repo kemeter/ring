@@ -99,16 +99,36 @@ fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct ResourceLimits {
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub(crate) struct ResourceSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) cpu_limit: Option<f64>,
+    pub(crate) cpu: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) memory_limit: Option<String>,
+    pub(crate) memory: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub(crate) struct Resource {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) memory_reservation: Option<String>,
+    pub(crate) limits: Option<ResourceSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) cpu_shares: Option<i64>,
+    pub(crate) requests: Option<ResourceSpec>,
+}
+
+pub(crate) fn parse_cpu_string(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+
+    if s.ends_with('m') {
+        let millis: f64 = s[..s.len() - 1]
+            .parse()
+            .map_err(|_| format!("Invalid CPU millicores value: {}", s))?;
+        return Ok((millis * 1_000_000.0) as i64);
+    }
+
+    let cores: f64 = s
+        .parse()
+        .map_err(|_| format!("Invalid CPU value: {}", s))?;
+    Ok((cores * 1_000_000_000.0) as i64)
 }
 
 pub(crate) fn parse_memory_string(s: &str) -> Result<i64, String> {
@@ -170,7 +190,7 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) resources: Option<ResourceLimits>,
+    pub(crate) resources: Option<Resource>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) image_digest: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
