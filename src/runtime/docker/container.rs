@@ -13,7 +13,7 @@ use bollard::{
 };
 use futures::StreamExt;
 use std::collections::HashMap;
-use crate::models::deployments::{Deployment, parse_memory_string};
+use crate::models::deployments::{Deployment, parse_memory_string, parse_cpu_string};
 use crate::api::dto::deployment::DeploymentVolume;
 use crate::models::config::Config;
 use crate::runtime::error::RuntimeError;
@@ -168,13 +168,17 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
         mounts: Some(mounts),
         privileged: privileged_config,
         nano_cpus: deployment.resources.as_ref()
-            .and_then(|r| r.cpu_limit.map(|cpu| (cpu * 1_000_000_000.0) as i64)),
+            .and_then(|r| r.limits.as_ref())
+            .and_then(|l| l.cpu.as_ref())
+            .and_then(|cpu| parse_cpu_string(cpu).ok()),
         memory: deployment.resources.as_ref()
-            .and_then(|r| r.memory_limit.as_ref().and_then(|m| parse_memory_string(m).ok())),
+            .and_then(|r| r.limits.as_ref())
+            .and_then(|l| l.memory.as_ref())
+            .and_then(|m| parse_memory_string(m).ok()),
         memory_reservation: deployment.resources.as_ref()
-            .and_then(|r| r.memory_reservation.as_ref().and_then(|m| parse_memory_string(m).ok())),
-        cpu_shares: deployment.resources.as_ref()
-            .and_then(|r| r.cpu_shares),
+            .and_then(|r| r.requests.as_ref())
+            .and_then(|req| req.memory.as_ref())
+            .and_then(|m| parse_memory_string(m).ok()),
         ..Default::default()
     };
 
