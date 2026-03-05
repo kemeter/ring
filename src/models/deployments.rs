@@ -417,6 +417,27 @@ pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result
     Ok(())
 }
 
+pub(crate) async fn find_referencing_secret(
+    pool: &SqlitePool,
+    namespace: &str,
+    secret_name: &str,
+) -> Result<Vec<Deployment>, sqlx::Error> {
+    // Search for deployments in the same namespace that reference this secret
+    let pattern = format!("%\"secretRef\":\"{}\"% ", secret_name);
+    let sql = format!(
+        "SELECT {} FROM deployment WHERE namespace = ? AND secrets LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
+        SELECT_COLUMNS
+    );
+
+    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(namespace)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(Deployment::from).collect())
+}
+
 pub(crate) async fn delete_batch(pool: &SqlitePool, deleted: Vec<String>) -> Result<(), sqlx::Error> {
     for id in deleted {
         sqlx::query("DELETE FROM deployment WHERE id = ?")
