@@ -60,7 +60,7 @@ curl -X POST http://localhost:3030/deployments \
     "replicas": 1,
     "image": "nginx:latest",
     "labels": {},
-    "secrets": {},
+    "environment": {},
     "volumes": []
   }'
 ```
@@ -164,7 +164,7 @@ deployments:
     replicas: 2
 
     # Environment variables
-    secrets:
+    environment:
       NGINX_PORT: "80"
       CUSTOM_CONFIG: "production"
 
@@ -245,5 +245,5 @@ Now that you master the basics, you can:
     - Use **namespaces** to organize your environments
     - Always specify an explicit **image version** in production
     - Add descriptive **labels** to facilitate management
-    - Use **secrets** for sensitive information
+    - Use **secret references** for sensitive information
     - Test your deployments in a development environment first

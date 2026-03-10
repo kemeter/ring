@@ -131,14 +131,24 @@ Create a new deployment.
     "app": "nginx",
     "version": "1.21"
   },
-  "secrets": {
+  "environment": {
     "ENV": "production",
-    "DEBUG": "false"
+    "DEBUG": "false",
+    "DATABASE_PASSWORD": { "secretRef": "database-password" }
   },
   "volumes": [
     "/host/data:/app/data"
   ]
 }
+```
+
+Environment variables support two formats:
+
+- **Plain value**: `"KEY": "value"` — literal string
+- **Secret reference**: `"KEY": { "secretRef": "secret-name" }` — references an encrypted secret in the same namespace. The secret is decrypted and injected at deployment time.
+
+!!! warning "Secret Resolution"
+    If a referenced secret does not exist in the deployment's namespace, the deployment will fail with an error event.
 ```
 
 **Job example:**
@@ -181,7 +191,7 @@ Retrieve deployment details.
   "status": "running",
   "instances": ["container_id_123"],
   "volumes": "[{\"source\":\"/data\",\"destination\":\"/app/data\"}]",
-  "secrets": {
+  "environment": {
     "ENV": "production"
   },
   "labels": {
@@ -249,6 +259,117 @@ curl -H "Authorization: Bearer $TOKEN" \
     "message": "Container nginx-demo-container started successfully"
   }
 ]
+```
+
+---
+
+## Secrets
+
+Secrets are encrypted values stored with AES-256-GCM encryption. The API never exposes secret values — only metadata is returned.
+
+!!! info "Prerequisite"
+    The `RING_SECRET_KEY` environment variable must be set on the server. See [Installation](installation.md#generating-a-secret-key).
+
+### `POST /secrets`
+
+Create a new secret.
+
+**Body:**
+```json
+{
+  "namespace": "production",
+  "name": "database-password",
+  "value": "my-secret-value"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2024-01-15T10:30:00Z",
+  "namespace": "production",
+  "name": "database-password"
+}
+```
+
+**Errors:**
+- `409 Conflict`: Secret with this name already exists in this namespace
+
+### `GET /secrets`
+
+List all secrets (metadata only).
+
+**Query parameters:**
+- `namespace[]`: Filter by namespace(s)
+
+**Examples:**
+```bash
+# All secrets
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/secrets
+
+# Filter by namespace
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/secrets?namespace[]=production
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": null,
+    "namespace": "production",
+    "name": "database-password"
+  }
+]
+```
+
+### `GET /secrets/{id}`
+
+Retrieve a specific secret's metadata.
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": null,
+  "namespace": "production",
+  "name": "database-password"
+}
+```
+
+### `DELETE /secrets/{id}`
+
+Delete a secret.
+
+**Query parameters:**
+- `force` (boolean): Force deletion even if the secret is referenced by active deployments
+
+**Examples:**
+```bash
+# Delete a secret
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/secrets/550e8400-e29b-41d4-a716-446655440000
+
+# Force delete a referenced secret
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/secrets/550e8400-e29b-41d4-a716-446655440000?force=true
+```
+
+**Errors:**
+- `404 Not Found`: Secret does not exist
+- `409 Conflict`: Secret is referenced by active deployments (includes list of referencing deployments)
+
+```json
+{
+  "error": "Secret is referenced by deployments",
+  "deployments": ["production/web-app", "production/worker"],
+  "hint": "Use ?force=true to delete anyway"
+}
 ```
 
 ---

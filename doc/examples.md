@@ -37,7 +37,7 @@ deployments:
     replicas: 3
 
     # Environment variables
-    secrets:
+    environment:
       NODE_ENV: "production"
       PORT: "3000"
       DATABASE_URL: "$DATABASE_URL"
@@ -70,10 +70,11 @@ deployments:
     replicas: 1
 
     # PostgreSQL configuration
-    secrets:
+    environment:
       POSTGRES_DB: "myapp"
       POSTGRES_USER: "appuser"
-      POSTGRES_PASSWORD: "$POSTGRES_PASSWORD"
+      POSTGRES_PASSWORD:
+        secretRef: "postgres-password"
       PGDATA: "/var/lib/postgresql/data/pgdata"
 
     # Persistent storage
@@ -85,6 +86,12 @@ deployments:
       - "app=postgres"
       - "type=database"
       - "backup=enabled"
+```
+
+Create the secret before deploying:
+
+```bash
+ring secret create postgres-password -n database -v "secure-pg-password"
 ```
 
 ### Redis Cache
@@ -99,7 +106,7 @@ deployments:
     replicas: 1
 
     # Redis configuration
-    secrets:
+    environment:
       REDIS_PASSWORD: "$REDIS_PASSWORD"
 
     # Redis persistence
@@ -136,7 +143,7 @@ deployments:
     image: "wordpress:latest"
     replicas: 2
 
-    secrets:
+    environment:
       WORDPRESS_DB_HOST: "mysql.database:3306"
       WORDPRESS_DB_NAME: "wordpress"
       WORDPRESS_DB_USER: "wp_user"
@@ -165,7 +172,7 @@ deployments:
     image: "mysql:8.0"
     replicas: 1
 
-    secrets:
+    environment:
       MYSQL_ROOT_PASSWORD: "$MYSQL_ROOT_PASSWORD"
       MYSQL_DATABASE: "wordpress"
       MYSQL_USER: "wp_user"
@@ -226,7 +233,7 @@ deployments:
     image: "mycompany/user-service:v1.2.0"
     replicas: 3
 
-    secrets:
+    environment:
       DATABASE_URL: "$USER_DB_URL"
       JWT_SECRET: "$JWT_SECRET"
       SERVICE_PORT: "8001"
@@ -244,7 +251,7 @@ deployments:
     image: "mycompany/order-service:v1.1.5"
     replicas: 2
 
-    secrets:
+    environment:
       DATABASE_URL: "$ORDER_DB_URL"
       REDIS_URL: "redis://redis.cache:6379"
       SERVICE_PORT: "8002"
@@ -262,7 +269,7 @@ deployments:
     image: "mycompany/notification-service:v1.0.3"
     replicas: 1
 
-    secrets:
+    environment:
       SMTP_HOST: "$SMTP_HOST"
       SMTP_USER: "$SMTP_USER"
       SMTP_PASSWORD: "$SMTP_PASSWORD"
@@ -293,7 +300,7 @@ deployments:
       password: "$REGISTRY_PASSWORD"
       image_pull_policy: "Always"
 
-    secrets:
+    environment:
       # Application configuration
       APP_ENV: "production"
       LOG_LEVEL: "info"
@@ -339,7 +346,7 @@ deployments:
     image: "myapp:dev"
     replicas: 1
 
-    secrets:
+    environment:
       NODE_ENV: "development"
       LOG_LEVEL: "debug"
       DATABASE_URL: "postgres://dev-db:5432/myapp_dev"
@@ -360,7 +367,7 @@ deployments:
     image: "myapp:staging"
     replicas: 2
 
-    secrets:
+    environment:
       NODE_ENV: "staging"
       LOG_LEVEL: "info"
       DATABASE_URL: "$STAGING_DATABASE_URL"
@@ -381,7 +388,7 @@ deployments:
     image: "myapp:v1.5.2"  # Fixed version in production
     replicas: 5
 
-    secrets:
+    environment:
       NODE_ENV: "production"
       LOG_LEVEL: "warn"
       DATABASE_URL: "$PRODUCTION_DATABASE_URL"
@@ -439,7 +446,7 @@ deployments:
     image: "myapp:latest"
     replicas: 3
 
-    secrets:
+    environment:
       ROLE: "web"
       PORT: "8000"
       REDIS_URL: "redis://redis.workers:6379"
@@ -457,7 +464,7 @@ deployments:
     image: "myapp:latest"
     replicas: 2
 
-    secrets:
+    environment:
       ROLE: "worker"
       REDIS_URL: "redis://redis.workers:6379"
       DATABASE_URL: "$DATABASE_URL"
@@ -478,7 +485,7 @@ deployments:
     image: "myapp:latest"
     replicas: 1
 
-    secrets:
+    environment:
       ROLE: "scheduler"
       REDIS_URL: "redis://redis.workers:6379"
       DATABASE_URL: "$DATABASE_URL"
@@ -513,7 +520,7 @@ deployments:
     runtime: docker
     image: "grafana/grafana:latest"
     replicas: 1
-    secrets:
+    environment:
       GF_SECURITY_ADMIN_PASSWORD: "$GRAFANA_PASSWORD"
 ```
 
@@ -556,19 +563,31 @@ deployments:
 ### Secret Management
 
 ```yaml
-# ✅ Good example with secret separation
+# ✅ Good example with encrypted secret references
 deployments:
   secure-app:
-    secrets:
-      # Application configuration (non-sensitive)
+    namespace: production
+    environment:
+      # Application configuration (non-sensitive, plain values)
       NODE_ENV: "production"
       LOG_LEVEL: "info"
       PORT: "3000"
 
-      # Secrets (from environment variables)
-      DATABASE_PASSWORD: "$DATABASE_PASSWORD"
-      JWT_SECRET: "$JWT_SECRET"
-      API_KEY: "$EXTERNAL_API_KEY"
+      # Sensitive values (encrypted, managed via ring secret create)
+      DATABASE_PASSWORD:
+        secretRef: "database-password"
+      JWT_SECRET:
+        secretRef: "jwt-secret"
+      API_KEY:
+        secretRef: "external-api-key"
+```
+
+Create the secrets first:
+
+```bash
+ring secret create database-password -n production -v "$DATABASE_PASSWORD"
+ring secret create jwt-secret -n production -v "$JWT_SECRET"
+ring secret create external-api-key -n production -v "$EXTERNAL_API_KEY"
 ```
 
 These examples cover most common use cases. Feel free to adapt them according to your specific needs!

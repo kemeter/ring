@@ -147,6 +147,7 @@ Requires=docker.service
 Type=simple
 User=root
 WorkingDirectory=/opt/ring
+Environment=RING_SECRET_KEY=your-base64-encoded-key
 ExecStart=/usr/local/bin/ring server start
 Restart=always
 RestartSec=10
@@ -189,6 +190,7 @@ services:
     restart: unless-stopped
     environment:
       - RING_DATABASE_PATH=/app/data/ring.db
+      - RING_SECRET_KEY=${RING_SECRET_KEY}
 ```
 
 ## Configuration Options
@@ -196,6 +198,24 @@ services:
 ### Environment Variables
 
 - `RING_DATABASE_PATH`: Path to SQLite database file (default: `./ring.db`)
+- `RING_SECRET_KEY`: Encryption key for secrets management (32 bytes, base64-encoded). Required to use the secrets feature.
+
+#### Generating a secret key
+
+```bash
+# Generate a random 32-byte key, base64-encoded
+openssl rand -base64 32
+```
+
+Set it before starting the server:
+
+```bash
+export RING_SECRET_KEY="your-base64-encoded-key"
+ring server start
+```
+
+!!! warning "Key Management"
+    Store this key securely. If lost, all encrypted secrets become unrecoverable. If compromised, rotate it and recreate all secrets.
 
 ### Command Line Options
 
