@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 pub async fn load(pool: &SqlitePool) {
     // Pending deployment in default namespace
     sqlx::query(
-        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, environment, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
         .bind("658c0199-85a2-49da-86d6-1ecd2e427118")
         .bind(chrono::Utc::now().to_rfc3339())
@@ -23,7 +23,7 @@ pub async fn load(pool: &SqlitePool) {
 
     // Running deployment in default namespace
     sqlx::query(
-        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, environment, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
         .bind("759d1280-95a3-40da-86d6-2fde3f538229")
         .bind(chrono::Utc::now().to_rfc3339())
@@ -43,7 +43,7 @@ pub async fn load(pool: &SqlitePool) {
 
     // Running deployment with image_digest in default namespace
     sqlx::query(
-        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes, image_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, environment, volumes, image_digest) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
         .bind("a71f2492-b7c5-42ef-98f8-4hg2527gh451")
         .bind(chrono::Utc::now().to_rfc3339())
@@ -64,7 +64,7 @@ pub async fn load(pool: &SqlitePool) {
 
     // Pending deployment in kemeter namespace
     sqlx::query(
-        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, secrets, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO deployment (id, created_at, status, namespace, name, image, replicas, runtime, kind, labels, environment, volumes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
         .bind("860e1381-a6b4-51eb-97e7-3gf1416fg340")
         .bind(chrono::Utc::now().to_rfc3339())

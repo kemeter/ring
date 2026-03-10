@@ -237,7 +237,7 @@ struct DeploymentRow {
     kind: String,
     replicas: i32,
     labels: String,
-    secrets: String,
+    environment: String,
     volumes: String,
     health_checks: Option<String>,
     resources: Option<String>,
@@ -290,7 +290,7 @@ impl From<DeploymentRow> for Deployment {
                 log::warn!("Failed to deserialize labels for deployment {}: {}", id, e);
                 HashMap::new()
             }),
-            environment: parse_environment(&row.secrets, &id),
+            environment: parse_environment(&row.environment, &id),
             volumes: row.volumes,
             health_checks: row.health_checks
                 .filter(|s| !s.is_empty())
@@ -311,7 +311,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, secrets, volumes, health_checks, resources, image_digest
+    replicas, labels, environment, volumes, health_checks, resources, image_digest
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -396,7 +396,7 @@ pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, secrets, volumes, health_checks, resources, image_digest
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
@@ -445,7 +445,7 @@ pub(crate) async fn find_referencing_secret(
     // Search for deployments in the same namespace that reference this secret
     let pattern = format!("%\"secretRef\":\"{}\"% ", secret_name);
     let sql = format!(
-        "SELECT {} FROM deployment WHERE namespace = ? AND secrets LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
+        "SELECT {} FROM deployment WHERE namespace = ? AND environment LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
         SELECT_COLUMNS
     );
 
