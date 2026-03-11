@@ -279,6 +279,40 @@ ring config delete unused-secret
 
 ## Namespace Management
 
+### `ring namespace create`
+Creates a new namespace.
+
+```bash
+ring namespace create <NAME>
+```
+
+**Examples:**
+```bash
+ring namespace create production
+ring namespace create staging
+```
+
+**Function:**
+- Creates a new namespace for isolating deployments
+- Each namespace gets its own Docker network (`ring_<name>`)
+
+### `ring namespace list`
+Lists all namespaces.
+
+```bash
+ring namespace list
+```
+
+**Output:**
+```
++--------------------------------------+------------+---------------------+
+| Id                                   | Name       | Created at          |
++--------------------------------------+------------+---------------------+
+| a1b2c3d4-...                         | default    | 2024-01-15 10:00:00 |
+| e5f6g7h8-...                         | production | 2024-01-16 09:00:00 |
++--------------------------------------+------------+---------------------+
+```
+
 ### `ring namespace prune`
 Cleans a namespace by removing unused resources.
 
@@ -296,6 +330,9 @@ ring namespace prune staging
 - Removes stopped deployments
 - Cleans unused containers
 - Removes empty networks
+
+!!! tip "Auto-creation"
+    Namespaces are automatically created when you deploy to a namespace that doesn't exist yet. You don't need to create them manually before deploying.
 
 ## System Information
 

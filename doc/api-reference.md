@@ -373,6 +373,80 @@ Delete a configuration.
 
 ---
 
+## Namespaces
+
+### `GET /namespaces`
+
+List all namespaces.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/namespaces
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "default",
+    "created_at": "2024-01-15T10:00:00Z",
+    "updated_at": null
+  },
+  {
+    "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+    "name": "production",
+    "created_at": "2024-01-16T09:00:00Z",
+    "updated_at": null
+  }
+]
+```
+
+### `GET /namespaces/{id}`
+
+Retrieve a specific namespace.
+
+**Response:**
+```json
+{
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "name": "production",
+  "created_at": "2024-01-16T09:00:00Z",
+  "updated_at": null
+}
+```
+
+**Error:** `404 Not Found` if the namespace doesn't exist.
+
+### `POST /namespaces`
+
+Create a new namespace.
+
+**Body:**
+```json
+{
+  "name": "staging"
+}
+```
+
+**Response:** `201 Created`
+```json
+{
+  "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+  "name": "staging",
+  "created_at": "2024-01-17T14:00:00Z",
+  "updated_at": null
+}
+```
+
+**Error:** `409 Conflict` if a namespace with the same name already exists.
+
+!!! tip "Auto-creation"
+    Namespaces are automatically created when you deploy to a namespace that doesn't exist yet. You don't need to create them explicitly before deploying.
+
+---
+
 ## Nodes
 
 ### `GET /node/get`
