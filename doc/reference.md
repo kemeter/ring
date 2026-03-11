@@ -416,10 +416,15 @@ Ring uses standard exit codes:
 ### YAML (Recommended)
 
 ```yaml
+# Namespaces (optional, created before deployments)
+namespaces:
+  production:
+    name: production
+
 deployments:
   app-name:
     name: app-name
-    namespace: default
+    namespace: production
     runtime: docker
     kind: worker  # "worker" (default) or "job"
     image: "nginx:latest"
@@ -431,6 +436,9 @@ deployments:
     labels:
       - "key=value"
 ```
+
+!!! info "Namespaces in YAML"
+    The `namespaces` section is optional. When present, namespaces are created before deployments are processed. If a namespace already exists, it is silently skipped.
 
 ### JSON
 

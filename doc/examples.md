@@ -321,6 +321,15 @@ deployments:
 ### Environment-based Configuration
 
 ```yaml title="multi-env.yaml"
+# Declare namespaces upfront
+namespaces:
+  development:
+    name: development
+  staging:
+    name: staging
+  production:
+    name: production
+
 # Development
 deployments:
   dev-api:

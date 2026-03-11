@@ -79,8 +79,15 @@ struct Volume {
 fn default_driver() -> String { "local".to_string() }
 fn default_permission() -> String { "rw".to_string() }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct NamespaceDefinition {
+    name: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ConfigFile {
+    #[serde(default)]
+    namespaces: HashMap<String, NamespaceDefinition>,
     deployments: HashMap<String, Deployment>,
 }
 
@@ -200,6 +207,38 @@ fn preview_deployment(deployment: &Deployment, api_url: &str, force: bool, verbo
     println!("---");
 }
 
+async fn create_namespace_on_server(
+    namespace: &NamespaceDefinition,
+    api_url: &str,
+    auth_token: &str,
+    client: &reqwest::Client,
+) -> Result<(), ApplyError> {
+    let url = format!("{}/namespaces", api_url);
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .json(&json!({ "name": namespace.name }))
+        .send()
+        .await
+        .map_err(ApplyError::Http)?;
+
+    let status = response.status();
+
+    if status.is_success() {
+        info!("Namespace '{}' created successfully", namespace.name);
+        println!("Namespace '{}' created", namespace.name);
+        Ok(())
+    } else if status == reqwest::StatusCode::CONFLICT {
+        info!("Namespace '{}' already exists, skipping", namespace.name);
+        println!("Namespace '{}' already exists, skipping", namespace.name);
+        Ok(())
+    } else {
+        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+        Err(ApplyError::Validation(format!("Failed to create namespace '{}': {} {}", namespace.name, status, error_body)))
+    }
+}
+
 async fn deploy_to_server(
     deployment: &Deployment,
     api_url: &str,
@@ -261,6 +300,17 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
     let is_dry_run = args.get_flag("dry-run");
     let is_verbose = args.get_flag("verbose");
     let is_force = args.get_flag("force");
+
+    // Create namespaces first
+    for (key, namespace) in &config_file.namespaces {
+        if is_dry_run {
+            println!("DRY RUN - Would create namespace '{}'", namespace.name);
+        } else {
+            if let Err(e) = create_namespace_on_server(namespace, &api_url, &auth_config.token, client).await {
+                eprintln!("Failed to create namespace '{}': {}", key, e);
+            }
+        }
+    }
 
     let mut success_count = 0;
     let mut error_count = 0;
@@ -507,5 +557,46 @@ deployments:
         assert_eq!(labels3.len(), 2);
         assert_eq!(labels3.get("app"), Some(&"my-app".to_string()));
         assert_eq!(labels3.get("version"), Some(&"1.0".to_string()));
+    }
+
+    #[test]
+    fn test_config_file_with_namespaces() {
+        let yaml_content = r#"
+namespaces:
+  production:
+    name: production
+  staging:
+    name: staging
+
+deployments:
+  api:
+    name: api
+    namespace: production
+    image: myapp:latest
+    runtime: docker
+    replicas: 3
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+
+        assert_eq!(config.namespaces.len(), 2);
+        assert_eq!(config.namespaces["production"].name, "production");
+        assert_eq!(config.namespaces["staging"].name, "staging");
+        assert_eq!(config.deployments.len(), 1);
+    }
+
+    #[test]
+    fn test_config_file_without_namespaces() {
+        let yaml_content = r#"
+deployments:
+  api:
+    name: api
+    image: myapp:latest
+    runtime: docker
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        assert_eq!(config.namespaces.len(), 0);
+        assert_eq!(config.deployments.len(), 1);
     }
 }
