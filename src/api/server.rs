@@ -32,6 +32,10 @@ use crate::api::action::config::create as config_create;
 use crate::api::action::config::update as config_update;
 use crate::api::action::config::delete as config_delete;
 
+use crate::api::action::namespace::list as namespace_list;
+use crate::api::action::namespace::get as namespace_get;
+use crate::api::action::namespace::create as namespace_create;
+
 use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
 use crate::api::action::user::me::me as user_current;
@@ -96,6 +100,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/deployments/{id}/health-checks", get(get_health_checks))
         .route("/deployments/{id}/metrics", get(get_deployment_metrics))
         .route("/node/get", get(node_get))
+        .route("/namespaces", get(namespace_list).post(namespace_create))
+        .route("/namespaces/{id}", get(namespace_get))
         .route("/configs", get(config_list).post(config_create))
         .route("/configs/{id}", get(config_get).put(config_update).delete(config_delete))
         .route("/users", get(user_list).post(user_create))
