@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS namespace (
+    id VARCHAR(255) NOT NULL PRIMARY KEY,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME DEFAULT NULL,
+    name VARCHAR(255) NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS namespace_name ON namespace (name);

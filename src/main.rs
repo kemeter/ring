@@ -35,6 +35,7 @@ mod models {
   pub(crate) mod deployments;
   pub(crate) mod users;
   pub(crate) mod config;
+  pub(crate) mod namespace;
   pub(crate) mod deployment_event;
   pub(crate) mod health_check;
   pub(crate) mod health_check_logs;
@@ -118,6 +119,12 @@ async fn main() {
             Command::new("namespace")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
+                .subcommand(
+                    commands::namespace::create::command_config(),
+                )
+                .subcommand(
+                    commands::namespace::list::command_config(),
+                )
                 .subcommand(
                     commands::namespace::prune::command_config(),
                 )
@@ -257,8 +264,22 @@ async fn main() {
             }
         }
         Some(("namespace", sub_matches)) => {
-            let namespace_command = sub_matches.subcommand().unwrap_or(("prune", sub_matches));
+            let namespace_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match namespace_command {
+                ("create", sub_matches) => {
+                    commands::namespace::create::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
+                ("list", sub_matches) => {
+                    commands::namespace::list::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
                 ("prune", sub_matches) => {
                     commands::namespace::prune::execute(
                         sub_matches,

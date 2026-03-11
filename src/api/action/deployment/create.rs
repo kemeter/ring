@@ -16,6 +16,7 @@ use validator::{Validate, ValidationError};
 use crate::api::server::Db;
 use crate::models::deployments;
 use crate::models::deployment_event;
+use crate::models::namespace;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::models::deployments::{DeploymentConfig, DeploymentStatus, Resource};
 use crate::models::users::User;
@@ -210,6 +211,32 @@ pub(crate) async fn create(
 
     match input.validate() {
         Ok(()) => {
+            // Auto-create namespace if it doesn't exist
+            match namespace::find_by_name(&pool, &input.namespace).await {
+                Ok(None) => {
+                    let new_namespace = namespace::Namespace {
+                        id: Uuid::new_v4().to_string(),
+                        created_at: Utc::now().to_string(),
+                        updated_at: None,
+                        name: input.namespace.clone(),
+                    };
+                    if let Err(e) = namespace::create(&pool, new_namespace).await {
+                        if !e.to_string().contains("UNIQUE constraint failed") {
+                            log::error!("Failed to create namespace '{}': {}", input.namespace, e);
+                            let message = Message { message: "Failed to create namespace".to_string() };
+                            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+                        }
+                    }
+                    info!("Namespace '{}' created automatically", input.namespace);
+                }
+                Ok(Some(_)) => {}
+                Err(e) => {
+                    log::error!("Failed to check namespace '{}': {}", input.namespace, e);
+                    let message = Message { message: "Internal server error".to_string() };
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+                }
+            }
+
             let active_deployments = deployments::find_active_by_namespace_name(
                 &pool,
                 input.namespace.clone(),
@@ -1277,5 +1304,42 @@ mod tests {
             response.status_code() == StatusCode::BAD_REQUEST ||
             response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
         );
+    }
+
+    #[tokio::test]
+    async fn create_auto_creates_namespace() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Verify namespace doesn't exist yet
+        let response = server
+            .get("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        let namespaces: Vec<crate::api::dto::namespace::NamespaceOutput> = response.json();
+        assert!(namespaces.is_empty());
+
+        // Create a deployment in a new namespace
+        let response = server
+            .post(&"/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "auto-created-ns",
+                "image": "nginx:latest"
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Verify namespace was auto-created
+        let response = server
+            .get("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        let namespaces: Vec<crate::api::dto::namespace::NamespaceOutput> = response.json();
+        assert_eq!(namespaces.len(), 1);
+        assert_eq!(namespaces[0].name, "auto-created-ns");
     }
 }
