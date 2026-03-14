@@ -241,6 +241,66 @@ ring user delete --username <USERNAME>
 ring user delete --username alice
 ```
 
+## Secret Management
+
+### `ring secret create`
+Creates a new encrypted secret.
+
+```bash
+ring secret create <NAME> -n <NAMESPACE> -v <VALUE>
+```
+
+**Required options:**
+- `<NAME>` : Secret name (positional argument)
+- `-n <NAMESPACE>`, `--namespace <NAMESPACE>` : Namespace
+- `-v <VALUE>`, `--value <VALUE>` : Secret value (will be encrypted at rest)
+
+**Examples:**
+```bash
+ring secret create database-password -n production -v "s3cret!"
+ring secret create api-key -n staging -v "sk-1234567890"
+```
+
+### `ring secret list`
+Lists all secrets (metadata only, values are never displayed).
+
+```bash
+ring secret list [OPTIONS]
+```
+
+**Options:**
+- `-n <NAMESPACE>`, `--namespace <NAMESPACE>` : Filter by namespace
+
+**Examples:**
+```bash
+# All secrets
+ring secret list
+
+# Filter by namespace
+ring secret list -n production
+```
+
+### `ring secret delete`
+Deletes a secret.
+
+```bash
+ring secret delete <ID> [OPTIONS]
+```
+
+**Required options:**
+- `<ID>` : Secret ID (positional argument)
+
+**Options:**
+- `-f`, `--force` : Force deletion even if referenced by deployments
+
+**Examples:**
+```bash
+ring secret delete 550e8400-e29b-41d4-a716-446655440000
+ring secret delete 550e8400-e29b-41d4-a716-446655440000 -f
+```
+
+If the secret is referenced by active deployments, Ring will list them and ask for confirmation before deleting.
+
 ## Configuration Management
 
 ### `ring config list`
@@ -363,21 +423,9 @@ export RUST_LOG=debug  # debug, info, warn, error
 
 # Ring server URL (for remote clients)
 export RING_SERVER_URL=http://remote-ring:3030
-```
 
-### Variables for secrets
-
-```bash
-# Database
-export DATABASE_PASSWORD="secret123"
-export DATABASE_URL="postgres://user:pass@host:5432/db"
-
-# External APIs
-export API_KEY="your-api-key"
-export JWT_SECRET="your-jwt-secret"
-
-# Private registries
-export REGISTRY_PASSWORD="registry-pass"
+# Encryption key for secrets management (required for secrets feature)
+export RING_SECRET_KEY="$(openssl rand -base64 32)"
 ```
 
 ## Exit Codes
@@ -404,7 +452,7 @@ Ring uses standard exit codes:
 - `namespace` : Namespace (default: "default")
 - `kind` : Deployment type ("worker" or "job", default: "worker")
 - `replicas` : Number of replicas (default: 1, always 1 for jobs)
-- `secrets` : Environment variables
+- `environment` : Environment variables (plain values or secret references)
 - `volumes` : Volume mounts
 - `labels` : Labels for identification
 - `command` : Custom command to execute
@@ -429,8 +477,11 @@ deployments:
     kind: worker  # "worker" (default) or "job"
     image: "nginx:latest"
     replicas: 1
-    secrets:
+    environment:
       ENV_VAR: "value"
+      # Reference an encrypted secret (must exist in same namespace)
+      DB_PASSWORD:
+        secretRef: "database-password"
     volumes:
       - "/host:/container"
     labels:
@@ -451,8 +502,9 @@ deployments:
   "replicas": 1,
   "image": "nginx:latest",
   "labels": {},
-  "secrets": {
-    "ENV_VAR": "value"
+  "environment": {
+    "ENV_VAR": "value",
+    "DB_PASSWORD": { "secretRef": "database-password" }
   },
   "volumes": ["/host:/container"]
 }

@@ -105,16 +105,17 @@ deployments:
 Ring supports several approaches:
 
 ```yaml
-# ✅ Environment variables (recommended)
-secrets:
-  DATABASE_PASSWORD: "$DB_PASSWORD"
+# ✅ Secret references (recommended)
+environment:
+  DATABASE_PASSWORD:
+    secretRef: "database-password"
 
 # ✅ External secret files
 volumes:
   - "/secure/secrets:/app/secrets:ro"
 
 # ❌ Avoid hardcoded secrets
-secrets:
+environment:
   PASSWORD: "password123"  # Bad practice
 ```
 

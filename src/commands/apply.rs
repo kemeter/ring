@@ -55,7 +55,7 @@ struct Deployment {
     labels: HashMap<String, String>,
 
     #[serde(default)]
-    secrets: HashMap<String, String>,
+    environment: HashMap<String, String>,
 
     #[serde(default)]
     volumes: Vec<Volume>,
@@ -120,7 +120,7 @@ impl Deployment {
         self.name = env_resolver(&self.name, env_vars);
         self.image = env_resolver(&self.image, env_vars);
 
-        for (_, value) in self.secrets.iter_mut() {
+        for (_, value) in self.environment.iter_mut() {
             *value = env_resolver(value, env_vars);
         }
 
@@ -450,7 +450,7 @@ mod tests {
             name: "test-app".to_string(),
             replicas: 1,
             labels: HashMap::new(),
-            secrets: HashMap::new(),
+            environment: HashMap::new(),
             volumes: Vec::new(),
             config: HashMap::new(),
         };
@@ -478,7 +478,7 @@ deployments:
     labels: []
     config:
       image_pull_policy: "IfNotPresent"
-    secrets:
+    environment:
       DATABASE_URL: postgres://test
   nginx:
     name: test-nginx

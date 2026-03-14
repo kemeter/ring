@@ -187,18 +187,30 @@ deployments:
     image: "myapp:latest"
     replicas: 2
 
-    secrets:
-      # Static secrets
+    environment:
+      # Plain values
       DATABASE_HOST: "prod-db.company.com"
       DATABASE_PORT: "5432"
-
-      # Host system environment variables
-      DATABASE_PASSWORD: "$DB_PASSWORD"
-      API_KEY: "$API_SECRET"
-
-      # Application configuration
       LOG_LEVEL: "info"
       REDIS_URL: "redis://redis.production:6379"
+
+      # References to encrypted secrets (managed via ring secret create)
+      DATABASE_PASSWORD:
+        secretRef: "database-password"
+      API_KEY:
+        secretRef: "api-key"
+```
+
+Ring supports two ways to define environment variables:
+
+- **Plain values**: `KEY: "value"` — passed directly to the container
+- **Secret references**: `KEY: { secretRef: "name" }` — references an encrypted secret stored in Ring. The secret must exist in the same namespace as the deployment. It is decrypted and injected at deployment time.
+
+To create the secrets referenced above:
+
+```bash
+ring secret create database-password -n production -v "s3cret-p@ss"
+ring secret create api-key -n production -v "sk-1234567890"
 ```
 
 ### Persistent Volumes
@@ -221,7 +233,7 @@ deployments:
       # Logs
       - "/var/log/postgres:/var/log/postgresql"
 
-    secrets:
+    environment:
       POSTGRES_DB: "myapp"
       POSTGRES_USER: "appuser"
       POSTGRES_PASSWORD: "$POSTGRES_PASSWORD"

@@ -17,6 +17,7 @@ mod commands {
   pub(crate) mod login;
   pub(crate) mod user;
   pub(crate) mod config;
+  pub(crate) mod secret;
 }
 
 mod scheduler {
@@ -36,6 +37,7 @@ mod models {
   pub(crate) mod users;
   pub(crate) mod config;
   pub(crate) mod namespace;
+  pub(crate) mod secret;
   pub(crate) mod deployment_event;
   pub(crate) mod health_check;
   pub(crate) mod health_check_logs;
@@ -166,6 +168,20 @@ async fn main() {
                 )
                 .subcommand(
                     commands::user::delete::command_config(),
+                )
+        )
+        .subcommand(
+            Command::new("secret")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(
+                    commands::secret::list::command_config(),
+                )
+                .subcommand(
+                    commands::secret::create::command_config(),
+                )
+                .subcommand(
+                    commands::secret::delete::command_config(),
                 )
         );
 
@@ -363,6 +379,33 @@ async fn main() {
                 }
                 ("delete", sub_matches) => {
                     commands::user::delete::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
+                _ => {}
+            }
+        }
+        Some(("secret", sub_matches)) => {
+            let secret_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match secret_command {
+                ("list", sub_matches) => {
+                    commands::secret::list::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
+                ("create", sub_matches) => {
+                    commands::secret::create::execute(
+                        sub_matches,
+                        config,
+                        &client,
+                    ).await;
+                }
+                ("delete", sub_matches) => {
+                    commands::secret::delete::execute(
                         sub_matches,
                         config,
                         &client,

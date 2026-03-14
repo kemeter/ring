@@ -42,6 +42,11 @@ use crate::api::action::user::me::me as user_current;
 use crate::api::action::user::update::update as user_update;
 use crate::api::action::user::delete::delete as user_delete;
 
+use crate::api::action::secret::list as secret_list;
+use crate::api::action::secret::get as secret_get;
+use crate::api::action::secret::create as secret_create;
+use crate::api::action::secret::delete as secret_delete;
+
 use crate::api::action::healthz::healthz;
 
 use crate::models::users::User;
@@ -104,6 +109,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/namespaces/{id}", get(namespace_get))
         .route("/configs", get(config_list).post(config_create))
         .route("/configs/{id}", get(config_get).put(config_update).delete(config_delete))
+        .route("/secrets", get(secret_list).post(secret_create))
+        .route("/secrets/{id}", get(secret_get).delete(secret_delete))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))
