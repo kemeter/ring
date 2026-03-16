@@ -11,9 +11,13 @@ use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
-    _user: User,
+    current_user: User,
     State(pool): State<Db>
 ) -> impl IntoResponse {
+    if current_user.id == id {
+        return StatusCode::FORBIDDEN;
+    }
+
     let option = users::find(&pool, id).await;
 
     match option {
@@ -52,5 +56,18 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn cannot_delete_self() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .delete("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
     }
 }
