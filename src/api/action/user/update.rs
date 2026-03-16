@@ -7,6 +7,7 @@ use serde::{Serialize, Deserialize};
 use serde_json::json;
 use axum::extract::State;
 use http::StatusCode;
+use validator::Validate;
 use crate::api::server::Db;
 use crate::models::users as users_model;
 use crate::models::users::User;
@@ -20,6 +21,10 @@ pub(crate) async fn update(
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
+
+    if let Err(errors) = input.validate() {
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "errors": errors }))).into_response());
+    }
 
     let mut user = match users_model::find(&pool, id).await.ok().flatten() {
         Some(user) => user,
@@ -50,9 +55,11 @@ pub(crate) async fn update(
     Ok(StatusCode::OK.into_response())
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct UserInput {
+    #[validate(length(min = 2, max = 50))]
     username: Option<String>,
+    #[validate(length(min = 8, max = 128))]
     password: Option<String>
 }
 
