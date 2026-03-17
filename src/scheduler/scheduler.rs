@@ -45,7 +45,7 @@ async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> 
 }
 
 pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config) {
-    let interval_seconds = env::var("SCHEDULER_INTERVAL")
+    let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(config.scheduler.interval);
