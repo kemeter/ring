@@ -142,14 +142,17 @@ docker network ls | grep ring
 ### Application Logs
 
 ```bash
-# Real-time logs
+# Real-time logs (SSE streaming)
 ring deployment logs web-app --follow
-
-# Logs with timestamps
-ring deployment logs web-app --timestamps
 
 # Last 100 lines
 ring deployment logs web-app --tail 100
+
+# Logs from last 10 minutes
+ring deployment logs web-app --since 10m
+
+# Filter by container name
+ring deployment logs web-app --container web-app-1
 ```
 
 ### System Events
@@ -165,10 +168,13 @@ ring deployment events web-app --type error
 ring deployment events web-app --follow
 ```
 
-### Basic Metrics
+### Container Metrics
 
 ```bash
-# Node information
+# Detailed resource usage for a deployment
+ring deployment metrics web-app
+
+# Node-level information
 ring node get
 
 # Status of all deployments

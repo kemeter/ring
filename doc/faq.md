@@ -78,12 +78,21 @@ Currently, Ring only supports Docker. Podman support might be added in the futur
 
 ### How to configure Ring to listen on a different port?
 
-```bash
-# Start with custom port
-ring server start --port 8080
+The port is configured via `config.toml` in the context definition:
 
-# Or via environment variable
-export RING_PORT=8080
+```toml
+# ~/.config/kemeter/ring/config.toml
+[contexts.default]
+current = true
+host = "127.0.0.1"
+api.scheme = "http"
+api.port = 8080        # Change the port here
+user.salt = "changeme"
+```
+
+Then start the server normally:
+
+```bash
 ring server start
 ```
 
@@ -219,8 +228,8 @@ docker ps
 # Find the process
 sudo ss -tlnp | grep 3030
 
-# Use a different port
-ring server start --port 8080
+# Use a different port by editing config.toml
+# Set api.port = 8080 in your context, then restart
 
 # Or stop the other service
 sudo systemctl stop service-using-3030

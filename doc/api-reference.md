@@ -212,17 +212,46 @@ Delete a deployment.
 
 Retrieve deployment logs.
 
+**Query parameters:**
+- `tail`: Number of lines to return (default: 100)
+- `since`: Time filter — relative (`30s`, `10m`, `2h`) or RFC3339 (`2024-01-01T00:00:00Z`)
+- `container`: Filter by container name
+- `follow`: Enable SSE streaming (default: false)
+
+**Examples:**
+```bash
+# Last 50 lines
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/logs?tail=50
+
+# Logs from last 10 minutes
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/logs?since=10m
+
+# Stream logs in real-time (SSE)
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/logs?follow=true
+```
+
 **Response:**
 ```json
 [
   {
-    "message": "2024-01-15T10:30:00Z nginx: starting server"
+    "instance": "nginx-demo-1",
+    "message": "nginx: starting server",
+    "level": "info",
+    "timestamp": "2024-01-15T10:30:00Z"
   },
   {
-    "message": "2024-01-15T10:30:01Z nginx: server ready"
+    "instance": "nginx-demo-1",
+    "message": "nginx: server ready",
+    "level": "info",
+    "timestamp": "2024-01-15T10:30:01Z"
   }
 ]
 ```
+
+When `follow=true`, the response is a Server-Sent Events (SSE) stream with the same format.
 
 ### `GET /deployments/{id}/events`
 
@@ -230,7 +259,7 @@ Retrieve deployment events.
 
 **Query parameters:**
 - `level`: Filter by level (info, warning, error)
-- `limit`: Maximum number of events (default: 50)
+- `limit`: Maximum number of events (default: 50, max: 1000)
 
 **Examples:**
 ```bash
@@ -252,6 +281,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 [
   {
     "id": "event_123",
+    "deployment_id": "nginx-demo",
     "timestamp": "2024-01-15T10:30:00Z",
     "level": "info",
     "component": "scheduler",
@@ -259,6 +289,104 @@ curl -H "Authorization: Bearer $TOKEN" \
     "message": "Container nginx-demo-container started successfully"
   }
 ]
+```
+
+### `GET /deployments/{id}/health-checks`
+
+Retrieve health check results for a deployment.
+
+**Query parameters:**
+- `limit`: Maximum number of results (default: 100)
+- `latest`: If `true`, returns only the most recent check per check type (default: false)
+
+**Examples:**
+```bash
+# All health check results
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/health-checks
+
+# Latest result per check type
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/health-checks?latest=true
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "deployment_id": "nginx-demo",
+    "check_type": "tcp",
+    "status": "success",
+    "message": null,
+    "created_at": "2024-01-15T10:30:00Z",
+    "started_at": "2024-01-15T10:30:00Z",
+    "finished_at": "2024-01-15T10:30:01Z"
+  }
+]
+```
+
+### `GET /deployments/{id}/metrics`
+
+Retrieve real-time resource usage metrics for a deployment and its containers.
+
+**Example:**
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3030/deployments/nginx-demo/metrics
+```
+
+**Response:**
+```json
+{
+  "deployment_id": "nginx-demo",
+  "deployment_name": "nginx-demo",
+  "container_count": 3,
+  "total_cpu_usage_percent": 2.5,
+  "total_memory": {
+    "usage_bytes": 52428800,
+    "limit_bytes": 536870912,
+    "usage_percent": 9.8
+  },
+  "total_network": {
+    "rx_bytes": 1024000,
+    "tx_bytes": 512000,
+    "rx_packets": 1500,
+    "tx_packets": 800
+  },
+  "total_disk_io": {
+    "read_bytes": 2048000,
+    "write_bytes": 1024000
+  },
+  "total_pids": 12,
+  "containers": [
+    {
+      "container_id": "abc123",
+      "container_name": "nginx-demo-1",
+      "cpu_usage_percent": 0.8,
+      "memory": {
+        "usage_bytes": 17476267,
+        "limit_bytes": 178956970,
+        "usage_percent": 9.8
+      },
+      "network": {
+        "rx_bytes": 341333,
+        "tx_bytes": 170667,
+        "rx_packets": 500,
+        "tx_packets": 267
+      },
+      "disk_io": {
+        "read_bytes": 682667,
+        "write_bytes": 341333
+      },
+      "pids": {
+        "current": 4,
+        "limit": 1024
+      },
+      "restart_count": 0
+    }
+  ]
+}
 ```
 
 ---
@@ -407,14 +535,17 @@ Create a new user.
 
 ### `GET /users/me`
 
-Retrieve current user information.
+Retrieve current authenticated user information.
 
 **Response:**
 ```json
 {
-  "id": "1",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
   "username": "admin",
-  "created_at": "2024-01-15T10:00:00Z"
+  "created_at": "2024-01-15T10:00:00Z",
+  "updated_at": null,
+  "status": "active",
+  "login_at": "2024-01-15T14:30:00Z"
 }
 ```
 
@@ -482,9 +613,39 @@ Retrieve a specific configuration.
   "id": "app-config",
   "name": "app-config",
   "namespace": "production",
-  "data": "{\"database\":{\"host\":\"localhost\",\"port\":5432}}"
+  "data": "{\"database\":{\"host\":\"localhost\",\"port\":5432}}",
+  "labels": ""
 }
 ```
+
+### `PUT /configs/{id}`
+
+Update an existing configuration.
+
+**Body:**
+```json
+{
+  "name": "app-config",
+  "data": "{\"database\":{\"host\":\"new-host\",\"port\":5432}}",
+  "labels": "env=production"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "id": "app-config",
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-16T09:00:00Z",
+  "namespace": "production",
+  "name": "app-config",
+  "data": "{\"database\":{\"host\":\"new-host\",\"port\":5432}}",
+  "labels": "env=production"
+}
+```
+
+!!! warning "Full replacement"
+    This is a full replacement (PUT), not a partial update (PATCH). All fields must be provided.
 
 ### `DELETE /configs/{id}`
 

@@ -68,6 +68,25 @@ Ring is ideal for:
 - **CI/CD**: Automated deployment in your pipelines
 - **Docker Compose migration**: Progressive transition to a more robust solution
 
+=== "🔒 Secret Management"
+
+    Encrypt sensitive values with AES-256-GCM and reference them in deployments.
+
+    ```yaml
+    environment:
+      DATABASE_PASSWORD:
+        secretRef: "database-password"
+    ```
+
+=== "📊 Metrics & Health Checks"
+
+    Monitor container resources and configure automated health checks with failure actions.
+
+    ```bash
+    ring deployment metrics my-app
+    ring deployment events my-app
+    ```
+
 ## Quick Comparison
 
 | Feature | Ring | Docker Compose | Kubernetes |
@@ -138,11 +157,15 @@ That's it! Your Nginx server is now running and managed by Ring.
 
 -   **SQLite Database**
 
-    Stores deployment state, user information, and configuration locally.
+    Stores deployment state, user information, and configuration locally with WAL mode for performance.
 
 -   **REST API**
 
     Complete API access to all Ring functionality. Powers both CLI and external integrations.
+
+-   **Scheduler**
+
+    Background process that monitors deployments, runs health checks, and maintains desired state.
 
 </div>
 

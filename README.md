@@ -1,6 +1,6 @@
 # Ring
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.3.0)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.4.0)
 
 A simple container orchestrator with declarative service deployment using containers.
 
@@ -155,10 +155,12 @@ deployments:
         threshold: 1
         on_failure: "stop"
     resources:
-      cpu_limit: 0.5                    # CPU limit (0.5 = 50% of one core)
-      memory_limit: "512Mi"             # hard memory limit
-      memory_reservation: "256Mi"       # soft memory limit
-      cpu_shares: 512                   # relative CPU weight (default: 1024)
+      limits:
+        cpu: "500m"                     # CPU limit (500m = 50% of one core)
+        memory: "512Mi"                 # hard memory limit
+      requests:
+        cpu: "250m"                     # CPU request (soft limit)
+        memory: "256Mi"                 # memory request (soft limit)
 ```
 
 ### User Management
@@ -220,13 +222,19 @@ Ring supports optional CPU and memory limits per container, using Kubernetes-lik
 
 ```yaml
 resources:
-  cpu_limit: 0.5              # max CPU (0.5 = 50% of one core)
-  memory_limit: "512Mi"       # hard memory limit
-  memory_reservation: "256Mi" # soft memory limit (Docker memory reservation)
-  cpu_shares: 512             # relative CPU weight (default: 1024)
+  limits:
+    cpu: "500m"              # max CPU (500m = 50% of one core, "2" = 2 cores)
+    memory: "512Mi"          # hard memory limit
+  requests:
+    cpu: "250m"              # CPU request (soft limit)
+    memory: "256Mi"          # memory request (soft limit)
 ```
 
-All fields are optional. Supported memory suffixes:
+All fields are optional. Supported CPU formats:
+- Millicores: `500m` (500 millicores = 0.5 core)
+- Cores: `2` (2 full cores)
+
+Supported memory suffixes:
 - Binary: `Ki`, `Mi`, `Gi`, `Ti` (powers of 1024)
 - Decimal: `K`, `M`, `G`, `T` (powers of 1000)
 - Raw bytes: `536870912`
@@ -305,9 +313,9 @@ ring deployment events <deployment_id>
 ## Releasing
 
 ```bash
-./scripts/release.sh patch   # 0.3.0 -> 0.3.1
-./scripts/release.sh minor   # 0.3.0 -> 0.4.0
-./scripts/release.sh major   # 0.3.0 -> 1.0.0
+./scripts/release.sh patch   # 0.4.0 -> 0.4.1
+./scripts/release.sh minor   # 0.4.0 -> 0.5.0
+./scripts/release.sh major   # 0.4.0 -> 1.0.0
 ./scripts/release.sh 1.0.0   # explicit version
 
 git push && git push --tags   # publish

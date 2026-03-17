@@ -198,7 +198,11 @@ services:
 ### Environment Variables
 
 - `RING_DATABASE_PATH`: Path to SQLite database file (default: `./ring.db`)
+- `RING_DB_POOL_SIZE`: Maximum database connections in the pool (default: `5`)
+- `RING_CONFIG_DIR`: Configuration directory path (default: `~/.config/kemeter/ring`)
 - `RING_SECRET_KEY`: Encryption key for secrets management (32 bytes, base64-encoded). Required to use the secrets feature.
+- `RING_APPLY_TIMEOUT`: Timeout in seconds for apply operations (default: `300`)
+- `RING_SCHEDULER_INTERVAL`: Scheduler check interval in seconds (overrides config.toml value, default: `10`)
 
 #### Generating a secret key
 

@@ -184,6 +184,24 @@ ring deployment events web-app --level error
 ring deployment events web-app --limit 10
 ```
 
+### `ring deployment metrics`
+Displays resource usage metrics for a deployment.
+
+```bash
+ring deployment metrics <DEPLOYMENT_ID>
+```
+
+**Examples:**
+```bash
+ring deployment metrics web-app
+```
+
+**Information displayed:**
+- CPU and memory usage (total and per container)
+- Network I/O (rx/tx bytes and packets)
+- Disk I/O (read/write bytes)
+- Process count per container
+
 ## User Management
 
 ### `ring user list`
@@ -410,6 +428,68 @@ ring node get
 - Number of active containers
 - Ring statistics
 
+## Context Management
+
+### `ring context`
+Manages Ring configuration contexts. Contexts allow you to switch between multiple Ring server environments.
+
+```bash
+ring context [PARAMETER]
+```
+
+**Parameters:**
+- `configs` (default): List all available contexts
+- `current-context`: Show the currently active context
+- `user-token`: Display the authentication token for the current context
+
+**Examples:**
+```bash
+# List all contexts
+ring context
+ring context configs
+
+# Show active context
+ring context current-context
+
+# Print authentication token
+ring context user-token
+```
+
+### Configuration Files
+
+Contexts are stored in `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`):
+
+- `config.toml` — Context definitions
+- `auth.json` — Authentication tokens per context
+
+**config.toml example:**
+```toml
+[contexts.default]
+current = true
+host = "127.0.0.1"
+api.scheme = "http"
+api.port = 3030
+user.salt = "changeme"
+scheduler.interval = 10
+
+[contexts.production]
+current = false
+host = "prod.example.com"
+api.scheme = "https"
+api.port = 443
+user.salt = "changeme"
+```
+
+### Using Contexts
+
+```bash
+# Use a specific context for a command
+ring --context production deployment list
+ring -c staging server start
+
+# The default context (current = true) is used when no --context flag is provided
+```
+
 ## Environment Variables
 
 ### Configuration variables
@@ -418,14 +498,23 @@ ring node get
 # Database location
 export RING_DATABASE_PATH=/custom/path/ring.db
 
+# Database connection pool size (default: 5)
+export RING_DB_POOL_SIZE=10
+
+# Configuration directory (default: ~/.config/kemeter/ring)
+export RING_CONFIG_DIR=/custom/config/path
+
 # Logging level
 export RUST_LOG=debug  # debug, info, warn, error
 
-# Ring server URL (for remote clients)
-export RING_SERVER_URL=http://remote-ring:3030
-
 # Encryption key for secrets management (required for secrets feature)
 export RING_SECRET_KEY="$(openssl rand -base64 32)"
+
+# Scheduler check interval in seconds (overrides config.toml, default: 10)
+export RING_SCHEDULER_INTERVAL=30
+
+# Apply operation timeout in seconds (default: 300)
+export RING_APPLY_TIMEOUT=600
 ```
 
 ## Exit Codes
@@ -456,6 +545,9 @@ Ring uses standard exit codes:
 - `volumes` : Volume mounts
 - `labels` : Labels for identification
 - `command` : Custom command to execute
+- `resources` : CPU and memory limits/requests (Kubernetes-like format)
+- `health_checks` : Health check configurations (tcp, http, command)
+- `config` : Image pull policy, registry auth, user settings
 
 **Difference between worker vs job:**
 - **worker** : Permanent service with automatic restart and scaling
