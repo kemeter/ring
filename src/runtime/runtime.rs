@@ -63,7 +63,7 @@ pub(crate) struct Log {
 }
 
 #[allow(clippy::if_same_then_else)]
-fn classify_log(log: String) -> String {
+fn classify_log(log: &str) -> String {
     if log.contains("[error]") {
         "error".to_string()
     } else if log.contains("[warning]") {
@@ -78,8 +78,8 @@ fn classify_log(log: String) -> String {
 static DATE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}").unwrap());
 
-fn extract_date(log: String) -> Option<String> {
-    let date = DATE_REGEX.find(&log).map(|d| d.as_str()).unwrap_or("");
+fn extract_date(log: &str) -> Option<String> {
+    let date = DATE_REGEX.find(log).map(|d| d.as_str()).unwrap_or("");
 
     if date.is_empty() {
         return None;
@@ -123,9 +123,9 @@ impl RuntimeInterface for DockerRuntime {
             for message in instance_logs {
                 let log = Log {
                     instance: instance_name.clone(),
-                    message: message.clone(),
-                    level: classify_log(message.clone()),
-                    timestamp: extract_date(message),
+                    level: classify_log(&message),
+                    timestamp: extract_date(&message),
+                    message,
                 };
                 logs.push(log);
             }
@@ -165,9 +165,9 @@ impl RuntimeInterface for DockerRuntime {
             let mapped = raw_stream.map(move |line| {
                 let log = Log {
                     instance: instance_name.clone(),
-                    message: line.clone(),
-                    level: classify_log(line.clone()),
-                    timestamp: extract_date(line),
+                    level: classify_log(&line),
+                    timestamp: extract_date(&line),
+                    message: line,
                 };
                 let json = serde_json::to_string(&log).unwrap_or_default();
                 Ok(Event::default().data(json))
@@ -232,31 +232,20 @@ mod tests {
 
     #[test]
     fn test_classify_log() {
-        let log = "[info] This is an info log".to_string();
-        assert_eq!(classify_log(log), "info".to_string());
-
-        let log = "[error] This is an error log".to_string();
-        assert_eq!(classify_log(log), "error".to_string());
-
-        let log = "[warning] This is a warning log".to_string();
-        assert_eq!(classify_log(log), "warning".to_string());
-
-        let log = "[notice] This is a notice log".to_string();
-        assert_eq!(classify_log(log), "info".to_string());
-
-        let log = "info: This is a notice log".to_string();
-        assert_eq!(classify_log(log), "info".to_string());
-
-        let log = "Coucou".to_string();
-        assert_eq!(classify_log(log), "info".to_string());
+        assert_eq!(classify_log("[info] This is an info log"), "info");
+        assert_eq!(classify_log("[error] This is an error log"), "error");
+        assert_eq!(classify_log("[warning] This is a warning log"), "warning");
+        assert_eq!(classify_log("[notice] This is a notice log"), "info");
+        assert_eq!(classify_log("info: This is a notice log"), "info");
+        assert_eq!(classify_log("Coucou"), "info");
     }
 
     #[test]
     fn test_extract_date() {
-        let log = "2021/08/10 12:00:00 [info] This is an info log".to_string();
-        assert_eq!(extract_date(log), Some("2021/08/10 12:00:00".to_string()));
-
-        let log = "[info] This is an info log".to_string();
-        assert_eq!(extract_date(log), None);
+        assert_eq!(
+            extract_date("2021/08/10 12:00:00 [info] This is an info log"),
+            Some("2021/08/10 12:00:00".to_string())
+        );
+        assert_eq!(extract_date("[info] This is an info log"), None);
     }
 }

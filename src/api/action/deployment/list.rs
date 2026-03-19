@@ -96,9 +96,9 @@ pub(crate) async fn list(
     };
 
     for deployment in list_deployments.into_iter() {
-        let mut output = DeploymentOutput::from_to_model(deployment.clone());
-        let instances = docker::list_instances(&docker, deployment.id.to_string(), "running").await;
-        output.instances = instances;
+        let id = deployment.id.clone();
+        let mut output = DeploymentOutput::from_to_model(deployment);
+        output.instances = docker::list_instances(&docker, id, "running").await;
 
         deployments.push(output);
     }
