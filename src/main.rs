@@ -41,6 +41,7 @@ mod models {
   pub(crate) mod deployment_event;
   pub(crate) mod health_check;
   pub(crate) mod health_check_logs;
+  pub(crate) mod query;
 }
 
 mod api;

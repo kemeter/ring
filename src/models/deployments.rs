@@ -317,27 +317,11 @@ const SELECT_COLUMNS: &str = "
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
 
 pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Deployment>, sqlx::Error> {
-    let mut query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
-    let mut all_values: Vec<String> = Vec::new();
-
-    if !filters.is_empty() {
-        let conditions: Vec<String> = filters
-            .iter()
-            .filter(|(k, v)| !v.is_empty() && ALLOWED_FILTER_COLUMNS.contains(&k.as_str()))
-            .map(|(column, values)| {
-                let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                all_values.extend(values.clone());
-                format!("{} IN({})", column, placeholders)
-            })
-            .collect();
-
-        if !conditions.is_empty() {
-            query += &format!(" WHERE {}", conditions.join(" AND "));
-        }
-    }
+    let base_query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
+    let (query, values) = crate::models::query::build_filtered_query(&base_query, &filters, ALLOWED_FILTER_COLUMNS);
 
     let mut q = sqlx::query_as::<_, DeploymentRow>(&query);
-    for val in &all_values {
+    for val in &values {
         q = q.bind(val);
     }
 
