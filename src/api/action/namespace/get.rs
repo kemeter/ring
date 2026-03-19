@@ -1,15 +1,11 @@
-use axum::{
-    extract::Path,
-    response::IntoResponse,
-    Json,
-};
 use axum::extract::State;
+use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::models::namespace;
 use crate::models::users::User;
 use axum::http::StatusCode;
-use crate::api::dto::namespace::NamespaceOutput;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
@@ -28,11 +24,11 @@ pub(crate) async fn get(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
-    use crate::api::server::tests::login;
     use crate::api::dto::namespace::NamespaceOutput;
+    use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn not_found() {

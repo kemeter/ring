@@ -128,16 +128,14 @@ pub(crate) struct Resource {
 pub(crate) fn parse_cpu_string(s: &str) -> Result<i64, String> {
     let s = s.trim();
 
-    if s.ends_with('m') {
-        let millis: f64 = s[..s.len() - 1]
+    if let Some(stripped) = s.strip_suffix('m') {
+        let millis: f64 = stripped
             .parse()
             .map_err(|_| format!("Invalid CPU millicores value: {}", s))?;
         return Ok((millis * 1_000_000.0) as i64);
     }
 
-    let cores: f64 = s
-        .parse()
-        .map_err(|_| format!("Invalid CPU value: {}", s))?;
+    let cores: f64 = s.parse().map_err(|_| format!("Invalid CPU value: {}", s))?;
     Ok((cores * 1_000_000_000.0) as i64)
 }
 
@@ -176,7 +174,6 @@ pub(crate) fn parse_memory_string(s: &str) -> Result<i64, String> {
     Ok((value * multiplier as f64) as i64)
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
     pub(crate) id: String,
@@ -209,13 +206,19 @@ pub(crate) struct Deployment {
 }
 
 impl Deployment {
-    pub fn emit_event(&mut self, level: &str, message: String, component: &str, reason: Option<&str>) {
+    pub fn emit_event(
+        &mut self,
+        level: &str,
+        message: String,
+        component: &str,
+        reason: Option<&str>,
+    ) {
         let event = crate::models::deployment_event::DeploymentEvent::new(
             self.id.clone(),
             level,
             message,
             component,
-            reason
+            reason,
         );
         self.pending_events.push(event);
     }
@@ -252,14 +255,16 @@ fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, Env
 
     // Fallback to old format (HashMap<String, String>) for backwards compatibility
     match serde_json::from_str::<HashMap<String, String>>(json_str) {
-        Ok(old_format) => {
-            old_format
-                .into_iter()
-                .map(|(k, v)| (k, EnvValue::Plain(v)))
-                .collect()
-        }
+        Ok(old_format) => old_format
+            .into_iter()
+            .map(|(k, v)| (k, EnvValue::Plain(v)))
+            .collect(),
         Err(e) => {
-            log::warn!("Failed to deserialize environment for deployment {}: {}", deployment_id, e);
+            log::warn!(
+                "Failed to deserialize environment for deployment {}: {}",
+                deployment_id,
+                e
+            );
             HashMap::new()
         }
     }
@@ -292,14 +297,22 @@ impl From<DeploymentRow> for Deployment {
             }),
             environment: parse_environment(&row.environment, &id),
             volumes: row.volumes,
-            health_checks: row.health_checks
+            health_checks: row
+                .health_checks
                 .filter(|s| !s.is_empty())
-                .map(|s| serde_json::from_str(&s).unwrap_or_else(|e| {
-                    log::warn!("Failed to deserialize health_checks for deployment {}: {}", id, e);
-                    Vec::new()
-                }))
+                .map(|s| {
+                    serde_json::from_str(&s).unwrap_or_else(|e| {
+                        log::warn!(
+                            "Failed to deserialize health_checks for deployment {}: {}",
+                            id,
+                            e
+                        );
+                        Vec::new()
+                    })
+                })
                 .unwrap_or_default(),
-            resources: row.resources
+            resources: row
+                .resources
                 .filter(|s| !s.is_empty())
                 .and_then(|s| serde_json::from_str(&s).ok()),
             image_digest: row.image_digest,
@@ -316,9 +329,13 @@ const SELECT_COLUMNS: &str = "
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Deployment>, sqlx::Error> {
+pub(crate) async fn find_all(
+    pool: &SqlitePool,
+    filters: HashMap<String, Vec<String>>,
+) -> Result<Vec<Deployment>, sqlx::Error> {
     let base_query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
-    let (query, values) = crate::models::query::build_filtered_query(&base_query, &filters, ALLOWED_FILTER_COLUMNS);
+    let (query, values) =
+        crate::models::query::build_filtered_query(&base_query, &filters, ALLOWED_FILTER_COLUMNS);
 
     let mut q = sqlx::query_as::<_, DeploymentRow>(&query);
     for val in &values {
@@ -359,17 +376,25 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Deploym
     Ok(row.map(Deployment::from))
 }
 
-pub(crate) async fn create(pool: &SqlitePool, deployment: &Deployment) -> Result<Deployment, sqlx::Error> {
+pub(crate) async fn create(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+) -> Result<Deployment, sqlx::Error> {
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
-    let environment = serde_json::to_string(&deployment.environment).unwrap_or_else(|_| "{}".to_string());
+    let environment =
+        serde_json::to_string(&deployment.environment).unwrap_or_else(|_| "{}".to_string());
     let config_json = match &deployment.config {
         Some(config) => serde_json::to_string(config).unwrap_or_else(|_| "{}".to_string()),
         None => "{}".to_string(),
     };
-    let command_json = serde_json::to_string(&deployment.command).unwrap_or_else(|_| "[]".to_string());
-    let health_checks_json = serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string());
+    let command_json =
+        serde_json::to_string(&deployment.command).unwrap_or_else(|_| "[]".to_string());
+    let health_checks_json =
+        serde_json::to_string(&deployment.health_checks).unwrap_or_else(|_| "[]".to_string());
 
-    let resources_json = deployment.resources.as_ref()
+    let resources_json = deployment
+        .resources
+        .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
 
     sqlx::query(
@@ -437,7 +462,10 @@ pub(crate) async fn find_referencing_secret(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
-pub(crate) async fn delete_batch(pool: &SqlitePool, deleted: Vec<String>) -> Result<(), sqlx::Error> {
+pub(crate) async fn delete_batch(
+    pool: &SqlitePool,
+    deleted: Vec<String>,
+) -> Result<(), sqlx::Error> {
     for id in deleted {
         sqlx::query("DELETE FROM deployment WHERE id = ?")
             .bind(&id)
@@ -459,7 +487,10 @@ mod tests {
         assert_eq!(parse_memory_string("512Mi").unwrap(), 512 * 1024 * 1024);
         assert_eq!(parse_memory_string("1Gi").unwrap(), 1024 * 1024 * 1024);
         assert_eq!(parse_memory_string("2Gi").unwrap(), 2 * 1024 * 1024 * 1024);
-        assert_eq!(parse_memory_string("1Ti").unwrap(), 1024i64 * 1024 * 1024 * 1024);
+        assert_eq!(
+            parse_memory_string("1Ti").unwrap(),
+            1024i64 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]
@@ -479,7 +510,10 @@ mod tests {
     #[test]
     fn test_parse_memory_string_fractional() {
         assert_eq!(parse_memory_string("0.5Gi").unwrap(), 536870912);
-        assert_eq!(parse_memory_string("1.5Mi").unwrap(), (1.5 * 1024.0 * 1024.0) as i64);
+        assert_eq!(
+            parse_memory_string("1.5Mi").unwrap(),
+            (1.5 * 1024.0 * 1024.0) as i64
+        );
     }
 
     #[test]

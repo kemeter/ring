@@ -7,7 +7,7 @@ pub struct NodeRootDto {
     pub arch: String,
     pub uptime: String,
     pub cpu_count: i64,
-    pub memory_total: f64,   
+    pub memory_total: f64,
     pub memory_available: f64,
     pub load_average: Vec<f64>,
 }

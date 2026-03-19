@@ -1,14 +1,14 @@
-use axum::extract::State;
-use axum::Json;
-use axum::response::IntoResponse;
-use axum::http::StatusCode;
-use chrono::{DateTime, Utc};
-use serde::Deserialize;
-use uuid::Uuid;
+use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::models::namespace;
 use crate::models::users::User;
-use crate::api::dto::namespace::NamespaceOutput;
+use axum::Json;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use uuid::Uuid;
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct NamespaceInput {
@@ -32,17 +32,29 @@ pub(crate) async fn create(
     match namespace::create(&pool, new_namespace.clone()).await {
         Ok(_) => {
             let output = NamespaceOutput::from_to_model(new_namespace);
-            (StatusCode::CREATED, Json(serde_json::to_value(output).unwrap())).into_response()
+            (
+                StatusCode::CREATED,
+                Json(serde_json::to_value(output).unwrap()),
+            )
+                .into_response()
         }
         Err(e) => {
             if e.to_string().contains("UNIQUE constraint failed") {
-                (StatusCode::CONFLICT, Json(serde_json::json!({
-                    "error": "Namespace with this name already exists"
-                }))).into_response()
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "Namespace with this name already exists"
+                    })),
+                )
+                    .into_response()
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                    "error": "Failed to create namespace"
-                }))).into_response()
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "Failed to create namespace"
+                    })),
+                )
+                    .into_response()
             }
         }
     }
@@ -50,11 +62,11 @@ pub(crate) async fn create(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
-    use crate::api::server::tests::login;
     use crate::api::dto::namespace::NamespaceOutput;
+    use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn create_namespace() {

@@ -1,25 +1,27 @@
-use clap::{Command};
-use clap::Arg;
-use clap::ArgMatches;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use clap::Arg;
+use clap::ArgMatches;
+use clap::Command;
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("delete")
         .about("Delete user")
-        .arg(
-            Arg::new("id")
-        )
+        .arg(Arg::new("id"))
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
     let id = args.get_one::<String>("id").unwrap();
 
     let request = client
-        .delete(&format!("{}/users/{}", api_url, id))
+        .delete(format!("{}/users/{}", api_url, id))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;

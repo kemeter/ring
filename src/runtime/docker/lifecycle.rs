@@ -1,15 +1,18 @@
+use super::container::{create_container, remove_container};
+use super::instances::list_instances;
+use crate::models::config::Config;
+use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
+use crate::runtime::error::RuntimeError;
+use crate::runtime::types::InstanceStatus;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
-use crate::models::config::Config;
-use crate::runtime::error::RuntimeError;
-use crate::runtime::types::InstanceStatus;
-use super::container::{create_container, remove_container};
-use super::instances::list_instances;
 
-pub(crate) async fn apply(mut deployment: Deployment, configs: HashMap<String, Config>) -> Deployment {
+pub(crate) async fn apply(
+    mut deployment: Deployment,
+    configs: HashMap<String, Config>,
+) -> Deployment {
     let docker = match Docker::connect_with_local_defaults() {
         Ok(docker) => docker,
         Err(e) => {
@@ -35,43 +38,59 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
 
     let (status, reason, message) = match &err {
         RuntimeError::ImageNotFound(_) => (
-            DeploymentStatus::ImagePullBackOff, "ImagePullBackOff",
+            DeploymentStatus::ImagePullBackOff,
+            "ImagePullBackOff",
             format!("Image '{}' not found", deployment.image),
         ),
         RuntimeError::ImagePullFailed(_) => (
-            DeploymentStatus::ImagePullBackOff, "ImagePullBackOff",
+            DeploymentStatus::ImagePullBackOff,
+            "ImagePullBackOff",
             format!("Failed to pull image '{}'", deployment.image),
         ),
         RuntimeError::InstanceCreationFailed(msg) => (
-            DeploymentStatus::CreateContainerError, "InstanceCreationFailed",
+            DeploymentStatus::CreateContainerError,
+            "InstanceCreationFailed",
             format!("Container creation failed: {}", msg),
         ),
         RuntimeError::NetworkCreationFailed(_) => (
-            DeploymentStatus::NetworkError, "NetworkCreationFailed",
-            format!("Failed to create network for namespace '{}'", deployment.namespace),
+            DeploymentStatus::NetworkError,
+            "NetworkCreationFailed",
+            format!(
+                "Failed to create network for namespace '{}'",
+                deployment.namespace
+            ),
         ),
         RuntimeError::ConfigNotFound(_) => (
-            DeploymentStatus::ConfigError, "ConfigError",
+            DeploymentStatus::ConfigError,
+            "ConfigError",
             format!("Config not found in namespace '{}'", deployment.namespace),
         ),
         RuntimeError::ConfigKeyNotFound(_) => (
-            DeploymentStatus::ConfigError, "ConfigError",
-            format!("Config key not found in namespace '{}'", deployment.namespace),
+            DeploymentStatus::ConfigError,
+            "ConfigError",
+            format!(
+                "Config key not found in namespace '{}'",
+                deployment.namespace
+            ),
         ),
         RuntimeError::StatsFetchFailed(msg) => (
-            DeploymentStatus::Error, "StatsFetchFailed",
+            DeploymentStatus::Error,
+            "StatsFetchFailed",
             format!("Stats fetch failed: {}", msg),
         ),
         RuntimeError::Other(msg) => (
-            DeploymentStatus::Error, "RuntimeError",
+            DeploymentStatus::Error,
+            "RuntimeError",
             format!("Docker error: {}", msg),
         ),
         RuntimeError::Io(e) => (
-            DeploymentStatus::FileSystemError, "FileSystemError",
+            DeploymentStatus::FileSystemError,
+            "FileSystemError",
             format!("IO error: {}", e),
         ),
         RuntimeError::Json(e) => (
-            DeploymentStatus::Error, "RuntimeError",
+            DeploymentStatus::Error,
+            "RuntimeError",
             format!("JSON error: {}", e),
         ),
     };
@@ -91,14 +110,21 @@ async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind
     if instance_count > 0 {
         deployment.emit_event(
             "info",
-            format!("Deleted {} container(s) for {} marked as deleted", instance_count, kind),
+            format!(
+                "Deleted {} container(s) for {} marked as deleted",
+                instance_count, kind
+            ),
             "docker",
             Some("ContainerDeletion"),
         );
     }
 }
 
-async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
+async fn handle_job_deployment(
+    mut deployment: Deployment,
+    docker: Docker,
+    configs: HashMap<String, Config>,
+) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
         remove_all_instances(&mut deployment, &docker, "job").await;
@@ -107,24 +133,21 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
 
     let all_instances = list_instances(&docker, deployment.id.to_string(), "all").await;
 
-    if !all_instances.is_empty() {
-        for instance_id in &all_instances {
-            match check_container_status(docker.clone(), instance_id.clone()).await {
-                InstanceStatus::Running => {
-                    deployment.status = DeploymentStatus::Running;
-                    break;
-                }
-                InstanceStatus::Completed => {
-                    deployment.status = DeploymentStatus::Completed;
-                    break;
-                }
-                InstanceStatus::Failed => {
-                    deployment.status = DeploymentStatus::Failed;
-                    break;
-                }
+    if let Some(instance_id) = all_instances.first() {
+        match check_container_status(docker.clone(), instance_id.clone()).await {
+            InstanceStatus::Running => {
+                deployment.status = DeploymentStatus::Running;
+            }
+            InstanceStatus::Completed => {
+                deployment.status = DeploymentStatus::Completed;
+            }
+            InstanceStatus::Failed => {
+                deployment.status = DeploymentStatus::Failed;
             }
         }
-    } else if deployment.status == DeploymentStatus::Creating || deployment.status == DeploymentStatus::Pending {
+    } else if deployment.status == DeploymentStatus::Creating
+        || deployment.status == DeploymentStatus::Pending
+    {
         match create_container(&mut deployment, &docker, configs).await {
             Ok(_) => {
                 deployment.status = DeploymentStatus::Running;
@@ -139,8 +162,14 @@ async fn handle_job_deployment(mut deployment: Deployment, docker: Docker, confi
     deployment
 }
 
-async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, configs: HashMap<String, Config>) -> Deployment {
-    if deployment.restart_count >= MAX_RESTART_COUNT && deployment.status != DeploymentStatus::Deleted {
+async fn handle_worker_deployment(
+    mut deployment: Deployment,
+    docker: Docker,
+    configs: HashMap<String, Config>,
+) -> Deployment {
+    if deployment.restart_count >= MAX_RESTART_COUNT
+        && deployment.status != DeploymentStatus::Deleted
+    {
         deployment.status = DeploymentStatus::CrashLoopBackOff;
         return deployment;
     }
@@ -157,28 +186,43 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
         let target_count: usize = match deployment.replicas.try_into() {
             Ok(count) => count,
             Err(_) => {
-                error!("Invalid replicas count for deployment {}: {}", deployment.id, deployment.replicas);
+                error!(
+                    "Invalid replicas count for deployment {}: {}",
+                    deployment.id, deployment.replicas
+                );
                 deployment.status = DeploymentStatus::Failed;
                 return deployment;
             }
         };
 
-        debug!("Current instances: {}, Target instances: {}", current_count, target_count);
+        debug!(
+            "Current instances: {}, Target instances: {}",
+            current_count, target_count
+        );
 
         match current_count.cmp(&target_count) {
             std::cmp::Ordering::Less => {
-                debug!("Scaling up: {} -> {} (creating 1 container)", current_count, target_count);
+                debug!(
+                    "Scaling up: {} -> {} (creating 1 container)",
+                    current_count, target_count
+                );
 
                 match create_container(&mut deployment, &docker, configs).await {
                     Ok(_) => {
                         deployment.emit_event(
                             "info",
-                            format!("Scaled up from {} to {} replicas", current_count, current_count + 1),
+                            format!(
+                                "Scaled up from {} to {} replicas",
+                                current_count,
+                                current_count + 1
+                            ),
                             "docker",
                             Some("ScaleUp"),
                         );
 
-                        if deployment.status == DeploymentStatus::Pending || deployment.status == DeploymentStatus::Creating {
+                        if deployment.status == DeploymentStatus::Pending
+                            || deployment.status == DeploymentStatus::Creating
+                        {
                             deployment.status = DeploymentStatus::Running;
                         }
                     }
@@ -189,20 +233,34 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
             }
             std::cmp::Ordering::Greater => {
                 if target_count == 0 {
-                    info!("Scaling deployment {} down to 0: removing container ({} remaining)",
-                          deployment.name, current_count - 1);
+                    info!(
+                        "Scaling deployment {} down to 0: removing container ({} remaining)",
+                        deployment.name,
+                        current_count - 1
+                    );
                 } else {
-                    debug!("Scaling down: {} -> {} (removing 1 container)", current_count, target_count);
+                    debug!(
+                        "Scaling down: {} -> {} (removing 1 container)",
+                        current_count, target_count
+                    );
                 }
 
                 if let Some(container_id) = deployment.instances.first().cloned() {
                     remove_container(docker.clone(), container_id.clone()).await;
                     deployment.instances.remove(0);
-                    info!("Container {} removed from deployment {}", container_id, deployment.id);
+                    info!(
+                        "Container {} removed from deployment {}",
+                        container_id, deployment.id
+                    );
 
                     deployment.emit_event(
                         "info",
-                        format!("Scaled down from {} to {} replicas (removed container {})", current_count, current_count - 1, container_id),
+                        format!(
+                            "Scaled down from {} to {} replicas (removed container {})",
+                            current_count,
+                            current_count - 1,
+                            container_id
+                        ),
                         "docker",
                         Some("ScaleDown"),
                     );
@@ -219,11 +277,11 @@ async fn handle_worker_deployment(mut deployment: Deployment, docker: Docker, co
 }
 
 async fn check_container_status(docker: Docker, container_id: String) -> InstanceStatus {
-    let inspect_options = InspectContainerOptions {
-        size: true,
-        ..Default::default()
-    };
-    match docker.inspect_container(&container_id, Some(inspect_options)).await {
+    let inspect_options = InspectContainerOptions { size: true };
+    match docker
+        .inspect_container(&container_id, Some(inspect_options))
+        .await
+    {
         Ok(info) => {
             if let Some(state) = info.state {
                 if state.running == Some(true) {

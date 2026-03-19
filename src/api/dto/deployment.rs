@@ -1,15 +1,14 @@
-
-use serde::{Serialize, Deserialize, Serializer};
-use std::collections::HashMap;
-use serde::ser::SerializeStruct;
 use crate::models::deployments::{Deployment, DeploymentConfig, EnvValue, Resource};
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::HashMap;
 
 fn serialize_option_deployment_config<S>(
     opt: &Option<DeploymentConfig>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
+where
+    S: Serializer,
 {
     match opt {
         Some(config) => config.serialize(serializer),
@@ -56,12 +55,15 @@ impl DeploymentOutput {
 
         let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
             .unwrap_or_else(|e| {
-                log::warn!("Failed to parse volumes for deployment {}: {}", deployment.name, e);
+                log::warn!(
+                    "Failed to parse volumes for deployment {}: {}",
+                    deployment.name,
+                    e
+                );
                 Vec::new()
             });
 
-
-        return DeploymentOutput {
+        DeploymentOutput {
             id: deployment.id,
             created_at: deployment.created_at,
             updated_at: deployment.updated_at.unwrap_or("".to_string()),
@@ -76,14 +78,14 @@ impl DeploymentOutput {
             config: deployment.config,
             replicas: deployment.replicas,
             ports: [].to_vec(),
-            labels: labels,
-            environment: environment,
-            volumes: volumes,
+            labels,
+            environment,
+            volumes,
             instances: [].to_vec(),
             health_checks: deployment.health_checks,
             resources: deployment.resources,
             image_digest: deployment.image_digest,
-        };
+        }
     }
 }
 
@@ -95,5 +97,5 @@ pub(crate) struct DeploymentVolume {
     pub(crate) key: Option<String>,
     pub(crate) destination: String,
     pub(crate) driver: String,
-    pub(crate) permission: String
+    pub(crate) permission: String,
 }

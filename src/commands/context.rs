@@ -1,18 +1,18 @@
-use std::fs;
-use clap::{ Arg, Command};
-use clap::ArgMatches;
-use cli_table::{format::Justify, print_stdout, Table, WithTitle};
 use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
+use clap::ArgMatches;
+use clap::{Arg, Command};
+use cli_table::{Table, WithTitle, format::Justify, print_stdout};
+use std::fs;
 use toml::de::Error as TomlError;
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("context")
         .name("context")
         .about("Print contexts configuration")
         .arg(
             Arg::new("parameter")
                 .required(false)
-                .help("show specific parameter")
+                .help("show specific parameter"),
         )
 }
 
@@ -21,7 +21,7 @@ struct ConfigTableItem {
     #[table(title = "Name", justify = "Justify::Right")]
     name: String,
     #[table(title = "Host")]
-    host: String
+    host: String,
 }
 
 pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
@@ -53,18 +53,18 @@ pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
             };
             let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
 
-           for (key, value) in match contexts {
-               Ok(c) => c.contexts,
-               Err(e) => {
-                   eprintln!("Failed to parse config file: {}", e);
-                   return;
-               }
-           } {
-               configs.push(ConfigTableItem {
-                   name: key,
-                   host: value.host,
-               })
-           }
+            for (key, value) in match contexts {
+                Ok(c) => c.contexts,
+                Err(e) => {
+                    eprintln!("Failed to parse config file: {}", e);
+                    return;
+                }
+            } {
+                configs.push(ConfigTableItem {
+                    name: key,
+                    host: value.host,
+                })
+            }
         }
 
         print_stdout(configs.with_title()).expect("");

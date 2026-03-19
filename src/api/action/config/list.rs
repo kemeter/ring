@@ -1,5 +1,5 @@
 use axum::extract::{FromRequestParts, State};
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 use std::collections::HashMap;
 
 use http::request::Parts;
@@ -8,9 +8,9 @@ use serde::Deserialize;
 
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
-use http::StatusCode;
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
+use http::StatusCode;
 use url::form_urlencoded::parse;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -41,18 +41,15 @@ where
             }
         }
 
-        Ok(QueryParameters{
-            namespaces,
-        })
+        Ok(QueryParameters { namespaces })
     }
 }
 
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User
+    _user: User,
 ) -> impl IntoResponse {
-
     let mut configs: Vec<ConfigOutput> = Vec::new();
 
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();

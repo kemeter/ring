@@ -31,7 +31,13 @@ pub(crate) async fn fetch_container_stats(
 }
 
 pub(crate) async fn fetch_restart_count(docker: &Docker, container_id: &str) -> u64 {
-    match docker.inspect_container(container_id, None::<bollard::query_parameters::InspectContainerOptions>).await {
+    match docker
+        .inspect_container(
+            container_id,
+            None::<bollard::query_parameters::InspectContainerOptions>,
+        )
+        .await
+    {
         Ok(info) => info.restart_count.unwrap_or(0) as u64,
         Err(_) => 0,
     }
@@ -98,7 +104,7 @@ pub(crate) fn compute_network_stats(stats: &ContainerStatsResponse) -> NetworkSt
     let mut tx_packets = 0u64;
 
     if let Some(networks) = &stats.networks {
-        for (_iface, net) in networks {
+        for net in networks.values() {
             rx_bytes += net.rx_bytes.unwrap_or(0);
             tx_bytes += net.tx_bytes.unwrap_or(0);
             rx_packets += net.rx_packets.unwrap_or(0);
@@ -118,14 +124,14 @@ pub(crate) fn compute_disk_io_stats(stats: &ContainerStatsResponse) -> DiskIoSta
     let mut read_bytes = 0u64;
     let mut write_bytes = 0u64;
 
-    if let Some(blkio) = &stats.blkio_stats {
-        if let Some(entries) = &blkio.io_service_bytes_recursive {
-            for entry in entries {
-                match entry.op.as_deref() {
-                    Some("read") | Some("Read") => read_bytes += entry.value.unwrap_or(0),
-                    Some("write") | Some("Write") => write_bytes += entry.value.unwrap_or(0),
-                    _ => {}
-                }
+    if let Some(blkio) = &stats.blkio_stats
+        && let Some(entries) = &blkio.io_service_bytes_recursive
+    {
+        for entry in entries {
+            match entry.op.as_deref() {
+                Some("read") | Some("Read") => read_bytes += entry.value.unwrap_or(0),
+                Some("write") | Some("Write") => write_bytes += entry.value.unwrap_or(0),
+                _ => {}
             }
         }
     }

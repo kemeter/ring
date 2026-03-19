@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
 pub(crate) struct Config {
@@ -14,15 +14,20 @@ pub(crate) struct Config {
 }
 
 pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Config>, sqlx::Error> {
-    sqlx::query_as::<_, Config>("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Config>(
+        "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
 }
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Config>, sqlx::Error> {
+pub(crate) async fn find_all(
+    pool: &SqlitePool,
+    filters: HashMap<String, Vec<String>>,
+) -> Result<Vec<Config>, sqlx::Error> {
     let (query, values) = crate::models::query::build_filtered_query(
         "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config",
         &filters,
@@ -37,7 +42,10 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
     q.fetch_all(pool).await
 }
 
-pub(crate) async fn find_by_namespace(pool: &SqlitePool, namespace: String) -> Result<Vec<Config>, sqlx::Error> {
+pub(crate) async fn find_by_namespace(
+    pool: &SqlitePool,
+    namespace: String,
+) -> Result<Vec<Config>, sqlx::Error> {
     sqlx::query_as::<_, Config>("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE namespace = ?")
         .bind(&namespace)
         .fetch_all(pool)
@@ -50,7 +58,7 @@ pub(crate) async fn create(pool: &SqlitePool, config: Config) -> Result<(), sqlx
     )
     .bind(&config.id)
     .bind(&config.created_at)
-    .bind(&config.updated_at.unwrap_or_default())
+    .bind(config.updated_at.unwrap_or_default())
     .bind(&config.namespace)
     .bind(&config.name)
     .bind(&config.data)
@@ -76,7 +84,7 @@ pub(crate) async fn delete(pool: &SqlitePool, id: String) -> Result<(), sqlx::Er
 
 pub(crate) async fn update(pool: &SqlitePool, config: Config) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE config SET updated_at = ?, name = ?, data = ?, labels = ? WHERE id = ?")
-        .bind(&config.updated_at.unwrap_or_default())
+        .bind(config.updated_at.unwrap_or_default())
         .bind(&config.name)
         .bind(&config.data)
         .bind(&config.labels)

@@ -1,20 +1,18 @@
-use std::collections::HashMap;
 use crate::api::dto::config::ConfigOutput;
-use crate::config::config::{load_auth_config, Config};
+use crate::config::config::{Config, load_auth_config};
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{print_stdout, Table, WithTitle};
+use cli_table::{Table, WithTitle, print_stdout};
+use std::collections::HashMap;
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("list")
-        .about("List of config maps")
-        .arg(
-            Arg::new("namespace")
-                .short('n')
-                .long("namespace")
-                .help("restrict only namespace")
-        )
+pub(crate) fn command_config() -> Command {
+    Command::new("list").about("List of config maps").arg(
+        Arg::new("namespace")
+            .short('n')
+            .long("namespace")
+            .help("restrict only namespace"),
+    )
 }
 
 #[derive(Table)]
@@ -33,14 +31,17 @@ struct ConfigTableItem {
     data: usize,
 }
 
-
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let query = format!("{}/configs", api_url);
     let mut params: Vec<String> = Vec::new();
 
-    if args.contains_id("namespace"){
+    if args.contains_id("namespace") {
         let namespace = args.get_many::<String>("namespace").unwrap();
 
         for namespace in namespace {
@@ -77,8 +78,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
 
             let mut configs = vec![];
 
-            for config in  config_list {
-                let data_config: HashMap<String, String> = match serde_json::from_str(&config.data) {
+            for config in config_list {
+                let data_config: HashMap<String, String> = match serde_json::from_str(&config.data)
+                {
                     Ok(data) => data,
                     Err(e) => {
                         eprintln!("Failed to parse config data for {}: {}", config.name, e);
@@ -101,6 +103,5 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
         Err(error) => {
             println!("Failed to fetch configurations: {}", error);
         }
-
     }
 }

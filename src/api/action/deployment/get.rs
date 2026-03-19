@@ -1,15 +1,11 @@
-use axum::{
-    extract::Path,
-    response::IntoResponse,
-    Json
-};
 use axum::extract::State;
+use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::models::deployments;
-use crate::api::dto::deployment::DeploymentOutput;
-use crate::runtime::runtime::Runtime;
 use crate::models::users::User;
+use crate::runtime::runtime::Runtime;
 use axum::http::StatusCode;
 
 pub(crate) async fn get(
@@ -18,31 +14,29 @@ pub(crate) async fn get(
     State(pool): State<Db>,
 ) -> impl IntoResponse {
     match deployments::find(&pool, id.clone()).await {
-        Ok(Some(deployment)) => {
-            match Runtime::new(deployment.clone()) {
-                Ok(runtime) => {
-                    let instances = runtime.list_instances().await;
-                    let mut output = DeploymentOutput::from_to_model(deployment);
-                    output.instances = instances;
-                    Json(output).into_response()
-                }
-                Err(_) => {
-                    let output = DeploymentOutput::from_to_model(deployment);
-                    Json(output).into_response()
-                }
+        Ok(Some(deployment)) => match Runtime::new(deployment.clone()) {
+            Ok(runtime) => {
+                let instances = runtime.list_instances().await;
+                let mut output = DeploymentOutput::from_to_model(deployment);
+                output.instances = instances;
+                Json(output).into_response()
             }
-        }
+            Err(_) => {
+                let output = DeploymentOutput::from_to_model(deployment);
+                Json(output).into_response()
+            }
+        },
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn not_fount() {

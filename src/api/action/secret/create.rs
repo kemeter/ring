@@ -1,14 +1,14 @@
-use axum::extract::State;
+use crate::api::server::Db;
+use crate::models::namespace;
+use crate::models::secret;
+use crate::models::users::User;
 use axum::Json;
-use axum::response::IntoResponse;
+use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use crate::api::server::Db;
-use crate::models::secret;
-use crate::models::namespace;
-use crate::models::users::User;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct SecretInput {
@@ -32,15 +32,23 @@ pub(crate) async fn create(
 ) -> impl IntoResponse {
     match namespace::find_by_name(&pool, &input.namespace).await {
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": format!("Namespace '{}' not found", input.namespace)
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("Namespace '{}' not found", input.namespace)
+                })),
+            )
+                .into_response();
         }
         Err(e) => {
             log::error!("Failed to check namespace: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": "Failed to verify namespace"
-            }))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to verify namespace"
+                })),
+            )
+                .into_response();
         }
         Ok(Some(_)) => {}
     }
@@ -68,14 +76,22 @@ pub(crate) async fn create(
         }
         Err(e) => {
             if e.to_string().contains("UNIQUE constraint failed") {
-                (StatusCode::CONFLICT, Json(serde_json::json!({
-                    "error": "Secret with this name already exists in this namespace"
-                }))).into_response()
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "Secret with this name already exists in this namespace"
+                    })),
+                )
+                    .into_response()
             } else {
                 log::error!("Failed to create secret: {}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                    "error": "Failed to create secret"
-                }))).into_response()
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "Failed to create secret"
+                    })),
+                )
+                    .into_response()
             }
         }
     }
@@ -83,10 +99,10 @@ pub(crate) async fn create(
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     fn set_test_key() {
         use base64::Engine;

@@ -10,8 +10,8 @@ pub fn deserialize_labels<'de, D>(deserializer: D) -> Result<HashMap<String, Str
 where
     D: Deserializer<'de>,
 {
-    use serde_yaml::Value;
     use serde::de::Error;
+    use serde_yaml::Value;
 
     let value = Value::deserialize(deserializer)?;
     let mut labels = HashMap::new();
@@ -53,7 +53,7 @@ where
 mod tests {
     use super::*;
     use serde::Deserialize;
-    
+
     #[derive(Deserialize)]
     struct TestStruct {
         #[serde(default, deserialize_with = "deserialize_labels")]

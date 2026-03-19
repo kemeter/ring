@@ -1,14 +1,14 @@
-use axum::extract::State;
+use crate::api::server::Db;
+use crate::models::config;
+use crate::models::users::User;
 use axum::Json;
-use axum::response::IntoResponse;
+use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use validator::Validate;
-use crate::api::server::Db;
-use crate::models::config;
-use crate::models::users::User;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct ConfigInput {
@@ -51,38 +51,50 @@ pub(crate) async fn create(
             };
 
             match config::create(&pool, new_config.clone()).await {
-                Ok(_) => {
-                    (StatusCode::CREATED, Json(serde_json::to_value(new_config).unwrap())).into_response()
-                }
+                Ok(_) => (
+                    StatusCode::CREATED,
+                    Json(serde_json::to_value(new_config).unwrap()),
+                )
+                    .into_response(),
                 Err(e) => {
                     if e.to_string().contains("UNIQUE constraint failed") {
-                        (StatusCode::CONFLICT, Json(serde_json::json!({
-                            "error": "Configuration with this name already exists"
-                        }))).into_response()
+                        (
+                            StatusCode::CONFLICT,
+                            Json(serde_json::json!({
+                                "error": "Configuration with this name already exists"
+                            })),
+                        )
+                            .into_response()
                     } else {
-                        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                            "error": "Failed to create configuration"
-                        }))).into_response()
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "error": "Failed to create configuration"
+                            })),
+                        )
+                            .into_response()
                     }
                 }
             }
         }
-        Err(validation_errors) => {
-            (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+        Err(validation_errors) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
                 "error": "Validation failed",
                 "details": validation_errors
-            }))).into_response()
-        }
+            })),
+        )
+            .into_response(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
-    use crate::api::server::tests::login;
     use crate::api::dto::config::ConfigOutput;
+    use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn create_config() {

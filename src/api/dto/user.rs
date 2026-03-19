@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct UserOutput {
@@ -7,5 +7,5 @@ pub(crate) struct UserOutput {
     pub(crate) created_at: String,
     pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
-    pub(crate) login_at: Option<String>
+    pub(crate) login_at: Option<String>,
 }

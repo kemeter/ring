@@ -1,14 +1,14 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::api::server::Db;
-use crate::models::{health_check_logs, deployments};
 use crate::models::users::User;
+use crate::models::{deployments, health_check_logs};
 
 #[derive(Deserialize)]
 pub(crate) struct HealthCheckQuery {
@@ -28,14 +28,18 @@ pub(crate) async fn get_health_checks(
     _user: User,
 ) -> impl IntoResponse {
     match deployments::find(&pool, deployment_id.clone()).await {
-        Ok(Some(_)) => {},
+        Ok(Some(_)) => {}
         Ok(None) => {
-            let message = Message { message: "Deployment not found".to_string() };
+            let message = Message {
+                message: "Deployment not found".to_string(),
+            };
             return (StatusCode::NOT_FOUND, Json(message)).into_response();
-        },
+        }
         Err(e) => {
             log::error!("Database error while fetching deployment: {}", e);
-            let message = Message { message: "Internal server error".to_string() };
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
         }
     }
@@ -45,7 +49,9 @@ pub(crate) async fn get_health_checks(
             Ok(results) => results,
             Err(e) => {
                 log::error!("Failed to fetch health check results: {}", e);
-                let message = Message { message: "Internal server error".to_string() };
+                let message = Message {
+                    message: "Internal server error".to_string(),
+                };
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
             }
         }
@@ -54,7 +60,9 @@ pub(crate) async fn get_health_checks(
             Ok(results) => results,
             Err(e) => {
                 log::error!("Failed to fetch health check results: {}", e);
-                let message = Message { message: "Internal server error".to_string() };
+                let message = Message {
+                    message: "Internal server error".to_string(),
+                };
                 return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
             }
         }

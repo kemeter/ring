@@ -1,27 +1,40 @@
-use bollard::Docker;
+use crate::api::dto::stats::ContainerStatsOutput;
 use crate::models::deployments::Deployment;
+use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::runtime::docker;
 use async_trait::async_trait;
 use axum::response::sse::Event;
+use bollard::Docker;
 use futures::stream::{self, Stream, StreamExt};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::LazyLock;
-use crate::models::health_check::{HealthCheck, HealthCheckStatus};
-use crate::api::dto::stats::ContainerStatsOutput;
 
-pub struct Runtime {
-}
+pub struct Runtime {}
 
 #[async_trait]
 pub trait RuntimeInterface {
     async fn list_instances(&self) -> Vec<String>;
     async fn list_instances_with_names(&self) -> Vec<(String, String)>;
-    async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log>;
-    async fn stream_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
-    async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>);
+    async fn get_logs(
+        &self,
+        tail: Option<&str>,
+        since: Option<i32>,
+        container: Option<&str>,
+    ) -> Vec<Log>;
+    async fn stream_logs(
+        &self,
+        tail: Option<&str>,
+        since: Option<i32>,
+        container: Option<&str>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>;
+    async fn execute_health_check(
+        &self,
+        instance_id: &str,
+        health_check: &HealthCheck,
+    ) -> (HealthCheckStatus, Option<String>);
     async fn remove_instance(&self, instance_id: &str);
     async fn get_instance_stats(&self) -> Vec<ContainerStatsOutput>;
 }
@@ -32,7 +45,10 @@ pub struct DockerRuntime {
 }
 
 impl Runtime {
-    pub fn new(deployment: Deployment) -> Result<Box<dyn RuntimeInterface + Send + Sync>, crate::runtime::error::RuntimeError> {
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(
+        deployment: Deployment,
+    ) -> Result<Box<dyn RuntimeInterface + Send + Sync>, crate::runtime::error::RuntimeError> {
         let docker = docker::connect()?;
         Ok(Box::new(DockerRuntime { docker, deployment }))
     }
@@ -43,11 +59,12 @@ pub(crate) struct Log {
     pub(crate) instance: String,
     pub(crate) message: String,
     pub(crate) level: String,
-    pub(crate) timestamp: Option<String>
+    pub(crate) timestamp: Option<String>,
 }
 
+#[allow(clippy::if_same_then_else)]
 fn classify_log(log: String) -> String {
-    return if log.contains("[error]") {
+    if log.contains("[error]") {
         "error".to_string()
     } else if log.contains("[warning]") {
         "warning".to_string()
@@ -58,12 +75,11 @@ fn classify_log(log: String) -> String {
     }
 }
 
-static DATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}").unwrap()
-});
+static DATE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}").unwrap());
 
 fn extract_date(log: String) -> Option<String> {
-    let date = DATE_REGEX.find(&*log).map(|d| d.as_str()).unwrap_or("");
+    let date = DATE_REGEX.find(&log).map(|d| d.as_str()).unwrap_or("");
 
     if date.is_empty() {
         return None;
@@ -82,13 +98,19 @@ impl RuntimeInterface for DockerRuntime {
         docker::list_instances_with_names(&self.docker, self.deployment.id.clone(), "all").await
     }
 
-    async fn get_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Vec<Log> {
+    async fn get_logs(
+        &self,
+        tail: Option<&str>,
+        since: Option<i32>,
+        container: Option<&str>,
+    ) -> Vec<Log> {
         let mut logs = vec![];
 
         let instances = self.list_instances_with_names().await;
 
         let filtered_instances: Vec<(String, String)> = if let Some(filter) = container {
-            instances.into_iter()
+            instances
+                .into_iter()
                 .filter(|(id, name)| id.starts_with(filter) || name.contains(filter))
                 .collect()
         } else {
@@ -96,7 +118,8 @@ impl RuntimeInterface for DockerRuntime {
         };
 
         for (instance_id, instance_name) in filtered_instances {
-            let instance_logs: Vec<String> = docker::logs(&self.docker, instance_id.clone(), tail, since).await;
+            let instance_logs: Vec<String> =
+                docker::logs(&self.docker, instance_id.clone(), tail, since).await;
             for message in instance_logs {
                 let log = Log {
                     instance: instance_name.clone(),
@@ -111,11 +134,17 @@ impl RuntimeInterface for DockerRuntime {
         logs
     }
 
-    async fn stream_logs(&self, tail: Option<&str>, since: Option<i32>, container: Option<&str>) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
+    async fn stream_logs(
+        &self,
+        tail: Option<&str>,
+        since: Option<i32>,
+        container: Option<&str>,
+    ) -> Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> {
         let instances = self.list_instances_with_names().await;
 
         let filtered_instances: Vec<(String, String)> = if let Some(filter) = container {
-            instances.into_iter()
+            instances
+                .into_iter()
                 .filter(|(id, name)| id.starts_with(filter) || name.contains(filter))
                 .collect()
         } else {
@@ -126,10 +155,12 @@ impl RuntimeInterface for DockerRuntime {
             return Box::pin(stream::empty());
         }
 
-        let mut streams: Vec<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>> = Vec::new();
+        let mut streams: Vec<Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>> =
+            Vec::new();
 
         for (instance_id, instance_name) in filtered_instances {
-            let raw_stream = docker::logs_stream(self.docker.clone(), instance_id.clone(), tail, since).await;
+            let raw_stream =
+                docker::logs_stream(self.docker.clone(), instance_id.clone(), tail, since).await;
 
             let mapped = raw_stream.map(move |line| {
                 let log = Log {
@@ -148,8 +179,17 @@ impl RuntimeInterface for DockerRuntime {
         Box::pin(stream::select_all(streams))
     }
 
-    async fn execute_health_check(&self, instance_id: &str, health_check: &HealthCheck) -> (HealthCheckStatus, Option<String>) {
-        docker::execute_health_check_for_instance(&self.docker, instance_id.to_string(), health_check.clone()).await
+    async fn execute_health_check(
+        &self,
+        instance_id: &str,
+        health_check: &HealthCheck,
+    ) -> (HealthCheckStatus, Option<String>) {
+        docker::execute_health_check_for_instance(
+            &self.docker,
+            instance_id.to_string(),
+            health_check.clone(),
+        )
+        .await
     }
 
     async fn remove_instance(&self, instance_id: &str) {
@@ -177,11 +217,7 @@ impl RuntimeInterface for DockerRuntime {
                     });
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Failed to get stats for container {}: {}",
-                        container_id,
-                        e
-                    );
+                    log::warn!("Failed to get stats for container {}: {}", container_id, e);
                 }
             }
         }
@@ -189,7 +225,6 @@ impl RuntimeInterface for DockerRuntime {
         results
     }
 }
-
 
 #[cfg(test)]
 mod tests {

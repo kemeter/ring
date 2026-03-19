@@ -1,5 +1,5 @@
 use axum::extract::{FromRequestParts, State};
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 use std::collections::HashMap;
 
 use http::request::Parts;
@@ -26,8 +26,8 @@ pub(crate) struct QueryParameters {
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
-    where
-        S: Send + Sync,
+where
+    S: Send + Sync,
 {
     type Rejection = (StatusCode, axum::Json<serde_json::Value>);
 
@@ -53,10 +53,10 @@ impl<S> FromRequestParts<S> for QueryParameters
             }
         }
 
-        Ok(QueryParameters{
+        Ok(QueryParameters {
             namespaces,
             status,
-            kind
+            kind,
         })
     }
 }
@@ -64,9 +64,8 @@ impl<S> FromRequestParts<S> for QueryParameters
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User
+    _user: User,
 ) -> impl IntoResponse {
-
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
 
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
@@ -130,7 +129,6 @@ mod tests {
         let deployments = response.json::<Vec<DeploymentOutput>>();
         assert_eq!(2, deployments.len());
     }
-
 
     #[tokio::test]
     async fn list_by_namespace() {

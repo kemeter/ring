@@ -1,32 +1,32 @@
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::config::config::load_auth_config;
 use crate::config::config::Config;
+use crate::config::config::load_auth_config;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::{ArgAction, Command};
-use cli_table::{format::Justify, print_stdout, Table, WithTitle};
+use cli_table::{Table, WithTitle, format::Justify, print_stdout};
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("list")
         .about("List deployments")
         .arg(
             Arg::new("namespace")
                 .short('n')
                 .long("namespace")
-                .help("restrict only namespace")
+                .help("restrict only namespace"),
         )
         .arg(
             Arg::new("status")
                 .action(ArgAction::Append)
                 .short('s')
                 .long("status")
-                .help("Filter by status")
+                .help("Filter by status"),
         )
         .arg(
             Arg::new("type")
                 .long("type")
                 .help("Filter by type (worker or job)")
-                .value_parser(["worker", "job"])
+                .value_parser(["worker", "job"]),
         )
 }
 
@@ -51,16 +51,20 @@ struct DeploymentTableItem {
     #[table(title = "Replicas")]
     replicas: String,
     #[table(title = "Status")]
-    status: String
+    status: String,
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut query = format!("{}/deployments", api_url);
     let mut params: Vec<String> = Vec::new();
 
-    if args.contains_id("namespace"){
+    if args.contains_id("namespace") {
         let namespace = args.get_many::<String>("namespace").unwrap();
 
         for namespace in namespace {
@@ -68,14 +72,14 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
         }
     }
 
-    if args.contains_id("status"){
+    if args.contains_id("status") {
         let statuses = args.get_many::<String>("status").unwrap();
         for status in statuses {
             params.push(format!("status[]={}", status));
         }
     }
 
-    if args.contains_id("type"){
+    if args.contains_id("type") {
         let type_filter = args.get_one::<String>("type").unwrap();
         params.push(format!("kind={}", type_filter));
     }
@@ -98,37 +102,35 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return;
             }
 
-            let deployments_list: Vec<DeploymentOutput> = match response.json::<Vec<DeploymentOutput>>().await {
-                Ok(list) => list,
-                Err(e) => {
-                    eprintln!("Failed to parse deployment list: {}", e);
-                    return;
-                }
-            };
+            let deployments_list: Vec<DeploymentOutput> =
+                match response.json::<Vec<DeploymentOutput>>().await {
+                    Ok(list) => list,
+                    Err(e) => {
+                        eprintln!("Failed to parse deployment list: {}", e);
+                        return;
+                    }
+                };
 
             let mut deployments = vec![];
             for deployment in deployments_list {
-                deployments.push(
-                    DeploymentTableItem {
-                        id: deployment.id,
-                        created_at: deployment.created_at,
-                        updated_at: deployment.updated_at,
-                        namespace: deployment.namespace,
-                        name: deployment.name,
-                        image: deployment.image,
-                        runtime: deployment.runtime,
-                        kind: deployment.kind,
-                        replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
-                        status: deployment.status,
-                    },
-                )
+                deployments.push(DeploymentTableItem {
+                    id: deployment.id,
+                    created_at: deployment.created_at,
+                    updated_at: deployment.updated_at,
+                    namespace: deployment.namespace,
+                    name: deployment.name,
+                    image: deployment.image,
+                    runtime: deployment.runtime,
+                    kind: deployment.kind,
+                    replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
+                    status: deployment.status,
+                })
             }
 
             print_stdout(deployments.with_title()).expect("");
-        },
+        }
         Err(error) => {
             eprintln!("Error fetching deployments: {}", error);
-            return;
         }
     }
 }

@@ -1,15 +1,11 @@
 use crate::api::dto::stats::DeploymentStatsOutput;
-use crate::config::config::{load_auth_config, Config};
+use crate::config::config::{Config, load_auth_config};
 use clap::{Arg, ArgMatches, Command};
 
 pub(crate) fn command_config() -> Command {
     Command::new("metrics")
         .about("Show real-time resource usage metrics for a deployment")
-        .arg(
-            Arg::new("id")
-                .help("Deployment ID")
-                .required(true),
-        )
+        .arg(Arg::new("id").help("Deployment ID").required(true))
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -24,13 +20,17 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
     let response = client
-        .get(&format!("{}/deployments/{}/metrics", api_url, id))
+        .get(format!("{}/deployments/{}/metrics", api_url, id))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;

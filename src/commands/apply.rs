@@ -1,15 +1,15 @@
-use crate::config::config::{get_config_dir, load_auth_config, Config};
+use crate::config::config::{Config, get_config_dir, load_auth_config};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use serde_json::json;
 
 #[derive(Debug)]
 enum ApplyError {
@@ -76,8 +76,12 @@ struct Volume {
     permission: String,
 }
 
-fn default_driver() -> String { "local".to_string() }
-fn default_permission() -> String { "rw".to_string() }
+fn default_driver() -> String {
+    "local".to_string()
+}
+fn default_permission() -> String {
+    "rw".to_string()
+}
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct NamespaceDefinition {
@@ -91,25 +95,32 @@ struct ConfigFile {
     deployments: HashMap<String, Deployment>,
 }
 
-fn default_runtime() -> String { "docker".to_string() }
-fn default_kind() -> String { "worker".to_string() }
-
-
+fn default_runtime() -> String {
+    "docker".to_string()
+}
+fn default_kind() -> String {
+    "worker".to_string()
+}
 
 impl Deployment {
     fn validate(&self) -> Result<(), ApplyError> {
         if self.name.trim().is_empty() {
-            return Err(ApplyError::Validation("Deployment name cannot be empty".to_string()));
+            return Err(ApplyError::Validation(
+                "Deployment name cannot be empty".to_string(),
+            ));
         }
 
         if self.image.trim().is_empty() {
-            return Err(ApplyError::Validation("Deployment image cannot be empty".to_string()));
+            return Err(ApplyError::Validation(
+                "Deployment image cannot be empty".to_string(),
+            ));
         }
 
         if self.runtime != "docker" {
-            return Err(ApplyError::Validation(
-                format!("Runtime '{}' not supported. Only 'docker' is supported.", self.runtime)
-            ));
+            return Err(ApplyError::Validation(format!(
+                "Runtime '{}' not supported. Only 'docker' is supported.",
+                self.runtime
+            )));
         }
 
         Ok(())
@@ -130,7 +141,7 @@ impl Deployment {
     }
 }
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("apply")
         .name("apply")
         .about("Apply a configuration file")
@@ -171,11 +182,9 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
 }
 
 fn load_config_file(file_path: &str) -> Result<ConfigFile, ApplyError> {
-    let contents = fs::read_to_string(file_path)
-        .map_err(ApplyError::FileRead)?;
+    let contents = fs::read_to_string(file_path).map_err(ApplyError::FileRead)?;
 
-    let config: ConfigFile = serde_yaml::from_str(&contents)
-        .map_err(ApplyError::YamlParse)?;
+    let config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
 
     Ok(config)
 }
@@ -184,7 +193,9 @@ fn check_auth(config_dir: &str) -> Result<(), ApplyError> {
     let auth_config_file = format!("{}/auth.json", config_dir);
 
     if !Path::new(&auth_config_file).exists() {
-        return Err(ApplyError::Auth("Account not found. Login first".to_string()));
+        return Err(ApplyError::Auth(
+            "Account not found. Login first".to_string(),
+        ));
     }
 
     Ok(())
@@ -201,7 +212,10 @@ fn preview_deployment(deployment: &Deployment, api_url: &str, force: bool, verbo
     if verbose {
         let json = json!(deployment);
         println!("Configuration:");
-        println!("{}", serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string()));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string())
+        );
     }
 
     println!("---");
@@ -234,8 +248,14 @@ async fn create_namespace_on_server(
         println!("Namespace '{}' already exists, skipping", namespace.name);
         Ok(())
     } else {
-        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::Validation(format!("Failed to create namespace '{}': {} {}", namespace.name, status, error_body)))
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        Err(ApplyError::Validation(format!(
+            "Failed to create namespace '{}': {} {}",
+            namespace.name, status, error_body
+        )))
     }
 }
 
@@ -244,7 +264,7 @@ async fn deploy_to_server(
     api_url: &str,
     auth_token: &str,
     force: bool,
-    client: &reqwest::Client
+    client: &reqwest::Client,
 ) -> Result<(), ApplyError> {
     let mut url = format!("{}/deployments", api_url);
 
@@ -265,12 +285,21 @@ async fn deploy_to_server(
     let status = response.status();
 
     if status.is_success() {
-        info!("Deployment '{}' created successfully (status: {})", deployment.name, status);
+        info!(
+            "Deployment '{}' created successfully (status: {})",
+            deployment.name, status
+        );
         println!("Deployment '{}' created", deployment.name);
         Ok(())
     } else {
-        let error_body = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::Validation(format!("API returned status {}: {}", status, error_body)))
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        Err(ApplyError::Validation(format!(
+            "API returned status {}: {}",
+            status, error_body
+        )))
     }
 }
 
@@ -281,7 +310,11 @@ pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &req
     }
 }
 
-async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) -> Result<(), ApplyError> {
+async fn apply_internal(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) -> Result<(), ApplyError> {
     debug!("Apply configuration");
 
     let binding = "ring.yaml".to_string();
@@ -305,10 +338,10 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
     for (key, namespace) in &config_file.namespaces {
         if is_dry_run {
             println!("DRY RUN - Would create namespace '{}'", namespace.name);
-        } else {
-            if let Err(e) = create_namespace_on_server(namespace, &api_url, &auth_config.token, client).await {
-                eprintln!("Failed to create namespace '{}': {}", key, e);
-            }
+        } else if let Err(e) =
+            create_namespace_on_server(namespace, &api_url, &auth_config.token, client).await
+        {
+            eprintln!("Failed to create namespace '{}': {}", key, e);
         }
     }
 
@@ -329,14 +362,19 @@ async fn apply_internal(args: &ArgMatches, mut configuration: Config, client: &r
         if is_verbose {
             let json = json!(deployment);
             println!("Configuration:");
-            println!("{}", serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string()));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string())
+            );
         }
 
         if is_dry_run {
             preview_deployment(&deployment, &api_url, is_force, is_verbose);
             success_count += 1;
         } else {
-            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force, client).await {
+            match deploy_to_server(&deployment, &api_url, &auth_config.token, is_force, client)
+                .await
+            {
                 Ok(()) => success_count += 1,
                 Err(e) => {
                     eprintln!("Failed to deploy '{}': {}", deployment_name, e);
@@ -389,7 +427,12 @@ fn parse_env_file(env_file: &str) -> HashMap<String, String> {
             let value = parts[1].trim_matches('"').trim_matches('\'');
             env_vars.insert(key.to_string(), value.to_string());
         } else {
-            eprintln!("Warning: Invalid env line {} in '{}': {}", line_num + 1, env_file, line);
+            eprintln!(
+                "Warning: Invalid env line {} in '{}': {}",
+                line_num + 1,
+                env_file,
+                line
+            );
         }
     }
 
@@ -399,9 +442,7 @@ fn parse_env_file(env_file: &str) -> HashMap<String, String> {
 fn env_resolver(text: &str, env_vars: &HashMap<String, String>) -> String {
     use once_cell::sync::Lazy;
 
-    static ENV_REGEX: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap()
-    });
+    static ENV_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\$[a-zA-Z][0-9a-zA-Z_]*").unwrap());
 
     let mut content = String::from(text);
 
@@ -513,7 +554,10 @@ deployments:
         assert_eq!(nginx.name, "test-nginx");
         assert_eq!(nginx.volumes.len(), 2);
         assert_eq!(nginx.labels.len(), 1);
-        assert_eq!(nginx.labels.get("sozune.host"), Some(&"nginx.localhost".to_string()));
+        assert_eq!(
+            nginx.labels.get("sozune.host"),
+            Some(&"nginx.localhost".to_string())
+        );
     }
 
     #[test]

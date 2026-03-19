@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::fs;
-use std::env;
-use serde::{Deserialize, Serialize};
-use local_ip_address::local_ip;
 use crate::config;
+use local_ip_address::local_ip;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
 use toml::de::Error as TomlError;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -40,8 +40,8 @@ pub(crate) struct Config {
 }
 
 impl Config {
-    pub(crate) fn get_api_url(&mut self)-> String {
-        return format!("{}://{}:{}", self.api.scheme, self.host, self.api.port);
+    pub(crate) fn get_api_url(&mut self) -> String {
+        format!("{}://{}:{}", self.api.scheme, self.host, self.api.port)
     }
 }
 
@@ -50,26 +50,27 @@ impl Default for Config {
         Config {
             current: true,
             name: "default".to_string(),
-            host: local_ip().unwrap_or_else(|_| {
-                warn!("Failed to get local IP, using localhost");
-                "127.0.0.1".parse().unwrap()
-            }).to_string(),
+            host: local_ip()
+                .unwrap_or_else(|_| {
+                    warn!("Failed to get local IP, using localhost");
+                    "127.0.0.1".parse().unwrap()
+                })
+                .to_string(),
             api: config::api::Api {
                 scheme: "http".to_string(),
-                port: 3030
+                port: 3030,
             },
             user: config::user::User {
-                salt: "changeme".to_string()
+                salt: "changeme".to_string(),
             },
-            scheduler: Scheduler::default()
+            scheduler: Scheduler::default(),
         }
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct AuthConfig {
-    pub(crate) token: String
+    pub(crate) token: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,13 +79,19 @@ pub(crate) struct AuthToken {
 }
 
 pub(crate) fn get_config_dir() -> String {
-    return match env::var_os("RING_CONFIG_DIR") {
+    match env::var_os("RING_CONFIG_DIR") {
         Some(variable) => variable.into_string().unwrap_or_else(|_| {
             error!("RING_CONFIG_DIR contains invalid Unicode");
-            format!("{}/.config/kemeter/ring", env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+            format!(
+                "{}/.config/kemeter/ring",
+                env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+            )
         }),
-        None => format!("{}/.config/kemeter/ring", env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
-    };
+        None => format!(
+            "{}/.config/kemeter/ring",
+            env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+        ),
+    }
 }
 
 pub(crate) fn load_config(context_current: &str) -> Config {
@@ -111,12 +118,12 @@ pub(crate) fn load_config(context_current: &str) -> Config {
 
                     if context_name == context_current {
                         debug!("Switch to context from {}", context_name);
-                        return config
+                        return config;
                     }
 
                     if context_current.is_empty() && config.current {
                         debug!("Switch to context {}", context_name);
-                        return config
+                        return config;
                     }
                 }
             }
@@ -128,7 +135,7 @@ pub(crate) fn load_config(context_current: &str) -> Config {
 
     debug!("Switch to default configuration");
 
-    return Config::default();
+    Config::default()
 }
 
 pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
@@ -139,7 +146,7 @@ pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
         Err(e) => {
             error!("Failed to read auth file: {}", e);
             return AuthConfig {
-                token: String::new()
+                token: String::new(),
             };
         }
     };
@@ -149,17 +156,20 @@ pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
         Err(e) => {
             error!("Failed to parse auth file: {}", e);
             return AuthConfig {
-                token: String::new()
+                token: String::new(),
             };
         }
     };
 
     match context_auth.get(&context_name) {
         Some(auth_token) => AuthConfig {
-            token: auth_token.token.clone()
+            token: auth_token.token.clone(),
         },
         None => {
-            eprintln!("Error: Context '{}' does not exist in a configuration file", context_name);
+            eprintln!(
+                "Error: Context '{}' does not exist in a configuration file",
+                context_name
+            );
             std::process::exit(1);
         }
     }

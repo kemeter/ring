@@ -1,9 +1,9 @@
-use axum::Json;
-use serde_json::Value;
-use sysinfo::{System, LoadAvg};
-use std::env::consts;
-use axum::response::IntoResponse;
 use crate::models::users::User;
+use axum::Json;
+use axum::response::IntoResponse;
+use serde_json::Value;
+use std::env::consts;
+use sysinfo::{LoadAvg, System};
 
 pub(crate) async fn get(_user: User) -> impl IntoResponse {
     Json(get_node_info()).into_response()
@@ -15,7 +15,7 @@ fn get_node_info() -> Value {
 
     let load: LoadAvg = System::load_average();
 
-    let memory_total_gib = sys.total_memory()    as f64 / 1024.0 / 1024.0 / 1024.0;   // 3 divisions
+    let memory_total_gib = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0; // 3 divisions
     let memory_available_gib = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
 
     serde_json::json!({
@@ -32,10 +32,10 @@ fn get_node_info() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn get() {
@@ -54,9 +54,7 @@ mod tests {
     async fn get_without_auth() {
         let app = new_test_app().await;
         let server = TestServer::new(app).unwrap();
-        let response = server
-            .get("/node/get")
-            .await;
+        let response = server.get("/node/get").await;
 
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }

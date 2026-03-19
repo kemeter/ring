@@ -1,9 +1,5 @@
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse
-};
 use axum::extract::State;
+use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
 use crate::api::server::Db;
 use crate::models::deployments::{self, DeploymentStatus};
@@ -12,7 +8,7 @@ use crate::models::users::User;
 pub(crate) async fn delete(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User
+    _user: User,
 ) -> impl IntoResponse {
     let option = deployments::find(&pool, id).await;
 
@@ -24,21 +20,17 @@ pub(crate) async fn delete(
                 Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
             }
         }
-        Ok(None) => {
-            StatusCode::NOT_FOUND
-        }
+        Ok(None) => StatusCode::NOT_FOUND,
 
-        Err(_) => {
-            StatusCode::NO_CONTENT
-        }
+        Err(_) => StatusCode::NO_CONTENT,
     }
 }
 
 #[cfg(test)]
-mod tests{
+mod tests {
     use super::*;
-    use axum_test::{TestResponse, TestServer};
     use crate::api::server::tests::{login, new_test_app};
+    use axum_test::{TestResponse, TestServer};
 
     #[tokio::test]
     async fn delete() {
@@ -48,14 +40,14 @@ mod tests{
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .delete(&"/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
+            .delete("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
 
         let response: TestResponse = server
-            .get(&"/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
+            .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 

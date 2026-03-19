@@ -1,7 +1,7 @@
-pub mod users;
-pub mod deployments;
 pub mod configs;
+pub mod deployments;
 pub mod events;
+pub mod users;
 
 use sqlx::SqlitePool;
 

@@ -1,7 +1,10 @@
 use axum::{
+    Json,
     extract::{Path, Query, State},
-    response::{IntoResponse, sse::{KeepAlive, Sse}},
-    Json
+    response::{
+        IntoResponse,
+        sse::{KeepAlive, Sse},
+    },
 };
 use chrono::Utc;
 use regex::Regex;
@@ -10,8 +13,8 @@ use std::sync::LazyLock;
 
 use crate::api::server::Db;
 use crate::models::deployments;
-use crate::runtime::runtime::Runtime;
 use crate::models::users::User;
+use crate::runtime::runtime::Runtime;
 
 #[derive(Debug, Deserialize)]
 pub struct LogsQuery {
@@ -29,9 +32,7 @@ fn default_tail() -> Option<u64> {
     Some(100)
 }
 
-static SINCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d+)(s|m|h)$").unwrap()
-});
+static SINCE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)(s|m|h)$").unwrap());
 
 fn parse_since(since: &str) -> Option<i32> {
     let re = &*SINCE_REGEX;
@@ -73,30 +74,22 @@ pub(crate) async fn logs(
             let since = params.since.as_deref().and_then(parse_since);
 
             if params.follow {
-                let stream = runtime.stream_logs(
-                    tail.as_deref(),
-                    since,
-                    params.container.as_deref(),
-                ).await;
+                let stream = runtime
+                    .stream_logs(tail.as_deref(), since, params.container.as_deref())
+                    .await;
 
                 Sse::new(stream)
                     .keep_alive(KeepAlive::default())
                     .into_response()
             } else {
-                let logs = runtime.get_logs(
-                    tail.as_deref(),
-                    since,
-                    params.container.as_deref(),
-                ).await;
+                let logs = runtime
+                    .get_logs(tail.as_deref(), since, params.container.as_deref())
+                    .await;
                 Json(logs).into_response()
             }
         }
-        Ok(None) => {
-            Json(Vec::<crate::runtime::runtime::Log>::new()).into_response()
-        }
-        Err(_) => {
-            Json(Vec::<crate::runtime::runtime::Log>::new()).into_response()
-        }
+        Ok(None) => Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
+        Err(_) => Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
     }
 }
 

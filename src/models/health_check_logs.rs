@@ -1,6 +1,6 @@
+use crate::models::health_check::{HealthCheckResult, HealthCheckStatus};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use crate::models::health_check::{HealthCheckResult, HealthCheckStatus};
 
 #[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
 pub(crate) struct HealthCheckResultRecord {
@@ -45,7 +45,7 @@ pub(crate) async fn find_by_deployment(
 
     sqlx::query_as::<_, HealthCheckResultRecord>(
         "SELECT id, deployment_id, check_type, status, message, created_at, started_at, finished_at
-         FROM health_check WHERE deployment_id = ? ORDER BY started_at DESC LIMIT ?"
+         FROM health_check WHERE deployment_id = ? ORDER BY started_at DESC LIMIT ?",
     )
     .bind(&deployment_id)
     .bind(limit_val)
@@ -67,7 +67,7 @@ pub(crate) async fn find_latest_by_deployment(
              GROUP BY check_type
          ) latest ON hcr.check_type = latest.check_type AND hcr.started_at = latest.max_started_at
          WHERE hcr.deployment_id = ?
-         ORDER BY hcr.check_type"
+         ORDER BY hcr.check_type",
     )
     .bind(&deployment_id)
     .bind(&deployment_id)
@@ -87,19 +87,20 @@ pub(crate) async fn delete_by_deployment_id(
     Ok(result.rows_affected())
 }
 
-pub(crate) async fn cleanup_old_health_checks(
-    pool: &SqlitePool,
-) -> Result<u64, sqlx::Error> {
-    let deleted_by_age = sqlx::query("DELETE FROM health_check WHERE datetime(started_at) < datetime('now', '-7 days')")
-        .execute(pool)
-        .await?
-        .rows_affected();
+pub(crate) async fn cleanup_old_health_checks(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+    let deleted_by_age = sqlx::query(
+        "DELETE FROM health_check WHERE datetime(started_at) < datetime('now', '-7 days')",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
 
     let mut deleted_by_count: u64 = 0;
 
-    let deployment_ids: Vec<String> = sqlx::query_scalar("SELECT DISTINCT deployment_id FROM health_check")
-        .fetch_all(pool)
-        .await?;
+    let deployment_ids: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT deployment_id FROM health_check")
+            .fetch_all(pool)
+            .await?;
 
     for deployment_id in deployment_ids {
         let result = sqlx::query(
@@ -109,7 +110,7 @@ pub(crate) async fn cleanup_old_health_checks(
                  WHERE deployment_id = ?
                  ORDER BY datetime(started_at) DESC
                  LIMIT 50
-             )"
+             )",
         )
         .bind(&deployment_id)
         .bind(&deployment_id)
@@ -121,8 +122,10 @@ pub(crate) async fn cleanup_old_health_checks(
 
     let total_deleted = deleted_by_age + deleted_by_count;
     if total_deleted > 0 {
-        info!("Cleaned up {} health check records ({} by age, {} by count limit)",
-              total_deleted, deleted_by_age, deleted_by_count);
+        info!(
+            "Cleaned up {} health check records ({} by age, {} by count limit)",
+            total_deleted, deleted_by_age, deleted_by_count
+        );
     }
 
     Ok(total_deleted)

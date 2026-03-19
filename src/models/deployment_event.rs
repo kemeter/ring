@@ -1,7 +1,7 @@
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
-use chrono::Utc;
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub(crate) struct DeploymentEvent {
@@ -34,7 +34,10 @@ impl DeploymentEvent {
     }
 }
 
-pub(crate) async fn create_event(pool: &SqlitePool, event: &DeploymentEvent) -> Result<(), sqlx::Error> {
+pub(crate) async fn create_event(
+    pool: &SqlitePool,
+    event: &DeploymentEvent,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason)
          VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -67,7 +70,7 @@ pub(crate) async fn find_events_by_deployment(
 
     sqlx::query_as::<_, DeploymentEvent>(
         "SELECT id, deployment_id, timestamp, level, message, component, reason
-         FROM deployment_event WHERE deployment_id = ? ORDER BY timestamp DESC LIMIT ?"
+         FROM deployment_event WHERE deployment_id = ? ORDER BY timestamp DESC LIMIT ?",
     )
     .bind(deployment_id)
     .bind(safe_limit)
@@ -75,7 +78,10 @@ pub(crate) async fn find_events_by_deployment(
     .await
 }
 
-pub(crate) async fn delete_by_deployment_id(pool: &SqlitePool, deployment_id: &str) -> Result<u64, sqlx::Error> {
+pub(crate) async fn delete_by_deployment_id(
+    pool: &SqlitePool,
+    deployment_id: &str,
+) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM deployment_event WHERE deployment_id = ?")
         .bind(deployment_id)
         .execute(pool)

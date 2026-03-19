@@ -1,13 +1,15 @@
-use crate::models::health_check::{HealthCheck, HealthCheckResult, HealthCheckStatus, FailureAction};
-use crate::models::deployments::{Deployment, DeploymentStatus};
 use crate::models::deployment_event::DeploymentEvent;
+use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::health_check::{
+    FailureAction, HealthCheck, HealthCheckResult, HealthCheckStatus,
+};
+use chrono::Utc;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
-use std::collections::HashMap;
 use uuid::Uuid;
-use chrono::Utc;
 
 pub(crate) struct HealthCheckOutcome {
     pub(crate) results: Vec<HealthCheckResult>,
@@ -47,13 +49,31 @@ impl HealthChecker {
 
         for instance_id in &deployment.instances {
             for (hc_index, health_check) in deployment.health_checks.iter().enumerate() {
-                let result = self.execute_single_check_with_runtime(runtime, deployment, health_check, instance_id).await;
+                let result = self
+                    .execute_single_check_with_runtime(
+                        runtime,
+                        deployment,
+                        health_check,
+                        instance_id,
+                    )
+                    .await;
 
                 let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
-                if matches!(result.status, HealthCheckStatus::Failed | HealthCheckStatus::Timeout) {
-                    let should_trigger_action = self.increment_failure_count(&key, health_check.threshold()).await;
+                if matches!(
+                    result.status,
+                    HealthCheckStatus::Failed | HealthCheckStatus::Timeout
+                ) {
+                    let should_trigger_action = self
+                        .increment_failure_count(&key, health_check.threshold())
+                        .await;
                     if should_trigger_action {
-                        self.handle_failure(&mut outcome, deployment, health_check, &result, instance_id);
+                        self.handle_failure(
+                            &mut outcome,
+                            deployment,
+                            health_check,
+                            &result,
+                            instance_id,
+                        );
                         self.reset_failure_count(&key).await;
                     }
                 } else {
@@ -67,7 +87,13 @@ impl HealthChecker {
         outcome
     }
 
-    async fn execute_single_check_with_runtime(&self, runtime: &(dyn crate::runtime::runtime::RuntimeInterface + Send + Sync), deployment: &Deployment, health_check: &HealthCheck, instance_id: &str) -> HealthCheckResult {
+    async fn execute_single_check_with_runtime(
+        &self,
+        runtime: &(dyn crate::runtime::runtime::RuntimeInterface + Send + Sync),
+        deployment: &Deployment,
+        health_check: &HealthCheck,
+        instance_id: &str,
+    ) -> HealthCheckResult {
         let created_time = Utc::now();
         let start_time = Utc::now();
         let timeout_duration = match HealthCheck::parse_duration(health_check.timeout()) {
@@ -87,8 +113,11 @@ impl HealthChecker {
         };
 
         let result = timeout(timeout_duration, async {
-            runtime.execute_health_check(instance_id, health_check).await
-        }).await;
+            runtime
+                .execute_health_check(instance_id, health_check)
+                .await
+        })
+        .await;
 
         let end_time = Utc::now();
 
@@ -112,12 +141,15 @@ impl HealthChecker {
                 created_at: created_time.to_rfc3339(),
                 started_at: start_time.to_rfc3339(),
                 finished_at: end_time.to_rfc3339(),
-            }
+            },
         }
     }
 
     pub(crate) async fn store_result(&self, result: &HealthCheckResult) {
-        debug!("Attempting to store health check result for deployment: {}", result.deployment_id);
+        debug!(
+            "Attempting to store health check result for deployment: {}",
+            result.deployment_id
+        );
 
         let status_str = match result.status {
             HealthCheckStatus::Success => "success",
@@ -151,7 +183,10 @@ impl HealthChecker {
         let current_count = counts.entry(key.to_string()).or_insert(0);
         *current_count += 1;
 
-        debug!("Health check failure count for {}: {}/{}", key, *current_count, threshold);
+        debug!(
+            "Health check failure count for {}: {}/{}",
+            key, *current_count, threshold
+        );
 
         *current_count >= threshold
     }
@@ -163,48 +198,79 @@ impl HealthChecker {
         }
     }
 
-    fn handle_failure(&self, outcome: &mut HealthCheckOutcome, deployment: &Deployment, health_check: &HealthCheck, result: &HealthCheckResult, instance_id: &str) {
+    fn handle_failure(
+        &self,
+        outcome: &mut HealthCheckOutcome,
+        deployment: &Deployment,
+        health_check: &HealthCheck,
+        result: &HealthCheckResult,
+        instance_id: &str,
+    ) {
         let action = health_check.on_failure();
 
         match action {
             FailureAction::Restart => {
-                info!("Health check failed for instance {} in deployment {}, triggering restart", instance_id, deployment.id);
+                info!(
+                    "Health check failed for instance {} in deployment {}, triggering restart",
+                    instance_id, deployment.id
+                );
 
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
-                    format!("Health check failed for instance {} ({}), triggering instance restart", instance_id, result.message.as_deref().unwrap_or("unknown error")),
+                    format!(
+                        "Health check failed for instance {} ({}), triggering instance restart",
+                        instance_id,
+                        result.message.as_deref().unwrap_or("unknown error")
+                    ),
                     "health_checker",
                     Some("HealthCheckInstanceRestart"),
                 ));
 
                 outcome.instances_to_remove.push(instance_id.to_string());
-            },
+            }
             FailureAction::Stop => {
-                info!("Health check failed for instance {} in deployment {}, triggering deployment stop", instance_id, deployment.id);
+                info!(
+                    "Health check failed for instance {} in deployment {}, triggering deployment stop",
+                    instance_id, deployment.id
+                );
 
                 outcome.proposed_status = Some(DeploymentStatus::Deleted);
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
-                    format!("Health check failed for instance {} ({}), triggering deployment stop", instance_id, result.message.as_deref().unwrap_or("unknown error")),
+                    format!(
+                        "Health check failed for instance {} ({}), triggering deployment stop",
+                        instance_id,
+                        result.message.as_deref().unwrap_or("unknown error")
+                    ),
                     "health_checker",
                     Some("HealthCheckStop"),
                 ));
 
-                info!("Deployment {} status changed to deleted by health checker due to instance {} failure", deployment.id, instance_id);
-            },
+                info!(
+                    "Deployment {} status changed to deleted by health checker due to instance {} failure",
+                    deployment.id, instance_id
+                );
+            }
             FailureAction::Alert => {
-                info!("Health check failed for instance {} in deployment {}, sending alert", instance_id, deployment.id);
+                info!(
+                    "Health check failed for instance {} in deployment {}, sending alert",
+                    instance_id, deployment.id
+                );
 
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "error",
-                    format!("Health check failed for instance {}: {}", instance_id, result.message.as_deref().unwrap_or("unknown error")),
+                    format!(
+                        "Health check failed for instance {}: {}",
+                        instance_id,
+                        result.message.as_deref().unwrap_or("unknown error")
+                    ),
                     "health_checker",
                     Some("HealthCheckAlert"),
                 ));
-            },
+            }
         }
     }
 }
@@ -215,10 +281,8 @@ mod tests {
     use bollard::Docker;
     use bollard::models::ContainerCreateBody;
     use bollard::query_parameters::{
-        CreateContainerOptionsBuilder,
-        StartContainerOptionsBuilder,
+        CreateContainerOptionsBuilder, RemoveContainerOptionsBuilder, StartContainerOptionsBuilder,
         StopContainerOptionsBuilder,
-        RemoveContainerOptionsBuilder,
     };
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -265,13 +329,21 @@ mod tests {
 
     async fn cleanup_container(docker: &Docker, container_id: &str) {
         let stop_options = StopContainerOptionsBuilder::new().build();
-        let _ = docker.stop_container(container_id, Some(stop_options)).await;
+        let _ = docker
+            .stop_container(container_id, Some(stop_options))
+            .await;
 
         let remove_options = RemoveContainerOptionsBuilder::new().force(true).build();
-        let _ = docker.remove_container(container_id, Some(remove_options)).await;
+        let _ = docker
+            .remove_container(container_id, Some(remove_options))
+            .await;
     }
 
-    fn make_deployment(id: &str, instances: Vec<String>, health_checks: Vec<HealthCheck>) -> Deployment {
+    fn make_deployment(
+        id: &str,
+        instances: Vec<String>,
+        health_checks: Vec<HealthCheck>,
+    ) -> Deployment {
         Deployment {
             id: id.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -317,11 +389,15 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert_eq!(outcome.results.len(), 1);
-        assert!(matches!(outcome.results[0].status, HealthCheckStatus::Success));
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Success
+        ));
         assert!(outcome.instances_to_remove.is_empty());
         assert!(outcome.proposed_status.is_none());
 
@@ -349,13 +425,22 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert_eq!(outcome.results.len(), 1);
-        assert!(matches!(outcome.results[0].status, HealthCheckStatus::Failed));
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Failed
+        ));
         assert_eq!(outcome.instances_to_remove, vec![container_id.clone()]);
-        assert!(outcome.events.iter().any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart")));
+        assert!(
+            outcome
+                .events
+                .iter()
+                .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
+        );
 
         cleanup_container(&docker, &container_id).await;
     }
@@ -380,11 +465,15 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert_eq!(outcome.results.len(), 1);
-        assert!(matches!(outcome.results[0].status, HealthCheckStatus::Success));
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Success
+        ));
         assert!(outcome.instances_to_remove.is_empty());
 
         cleanup_container(&docker, &container_id).await;
@@ -410,11 +499,15 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert_eq!(outcome.results.len(), 1);
-        assert!(matches!(outcome.results[0].status, HealthCheckStatus::Success));
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Success
+        ));
         assert!(outcome.instances_to_remove.is_empty());
 
         cleanup_container(&docker, &container_id).await;
@@ -441,7 +534,8 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
 
         // Call 1: failure count = 1/3, no action
         let outcome1 = checker.execute_checks(&deployment, runtime.as_ref()).await;
@@ -456,7 +550,12 @@ mod tests {
         // Call 3: failure count = 3/3, triggers restart
         let outcome3 = checker.execute_checks(&deployment, runtime.as_ref()).await;
         assert_eq!(outcome3.instances_to_remove, vec![container_id.clone()]);
-        assert!(outcome3.events.iter().any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart")));
+        assert!(
+            outcome3
+                .events
+                .iter()
+                .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
+        );
 
         cleanup_container(&docker, &container_id).await;
     }
@@ -481,11 +580,17 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert_eq!(outcome.proposed_status, Some(DeploymentStatus::Deleted));
-        assert!(outcome.events.iter().any(|e| e.reason.as_deref() == Some("HealthCheckStop")));
+        assert!(
+            outcome
+                .events
+                .iter()
+                .any(|e| e.reason.as_deref() == Some("HealthCheckStop"))
+        );
         assert!(outcome.instances_to_remove.is_empty());
 
         cleanup_container(&docker, &container_id).await;
@@ -511,12 +616,18 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone()).expect("Failed to create runtime");
+        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
+            .expect("Failed to create runtime");
         let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
 
         assert!(outcome.proposed_status.is_none());
         assert!(outcome.instances_to_remove.is_empty());
-        assert!(outcome.events.iter().any(|e| e.reason.as_deref() == Some("HealthCheckAlert")));
+        assert!(
+            outcome
+                .events
+                .iter()
+                .any(|e| e.reason.as_deref() == Some("HealthCheckAlert"))
+        );
         assert!(outcome.events.iter().any(|e| e.level == "error"));
 
         cleanup_container(&docker, &container_id).await;
@@ -541,7 +652,7 @@ mod tests {
         checker.store_result(&result).await;
 
         let row = sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT id, deployment_id, check_type, status FROM health_check WHERE id = ?"
+            "SELECT id, deployment_id, check_type, status FROM health_check WHERE id = ?",
         )
         .bind(&result.id)
         .fetch_one(&pool)

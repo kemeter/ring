@@ -1,27 +1,24 @@
-use std::borrow::Cow;
 use chrono::{DateTime, Utc};
+use std::borrow::Cow;
 use uuid::Uuid;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use validator::{Validate, ValidationError};
 
-use crate::api::server::Db;
-use crate::models::deployments;
-use crate::models::deployment_event;
-use crate::models::namespace;
 use crate::api::dto::deployment::DeploymentOutput;
+use crate::api::server::Db;
+use crate::models::deployment_event;
+use crate::models::deployments;
 use crate::models::deployments::{DeploymentConfig, DeploymentStatus, EnvValue, Resource};
+use crate::models::namespace;
 use crate::models::users::User;
 
-fn default_replicas() -> u32 { 1 }
+fn default_replicas() -> u32 {
+    1
+}
 
 fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     match runtime {
@@ -30,19 +27,14 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     }
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum VolumeType {
+    #[default]
     Bind,
     Config,
     Volume,
-}
-
-impl Default for VolumeType {
-    fn default() -> Self {
-        VolumeType::Bind
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -79,21 +71,25 @@ impl Validate for Volume {
         let mut errors = validator::ValidationErrors::new();
 
         if self.destination.is_empty() {
-            errors.add("destination", ValidationError::new("destination cannot be empty"));
+            errors.add(
+                "destination",
+                ValidationError::new("destination cannot be empty"),
+            );
         }
 
         match self.r#type {
-            VolumeType::Bind => {
-                match &self.source {
-                    None => {
-                        errors.add("source", ValidationError::new("source is required for bind volumes"));
-                    }
-                    Some(source) if source.is_empty() => {
-                        errors.add("source", ValidationError::new("source cannot be empty"));
-                    }
-                    _ => {}
+            VolumeType::Bind => match &self.source {
+                None => {
+                    errors.add(
+                        "source",
+                        ValidationError::new("source is required for bind volumes"),
+                    );
                 }
-            }
+                Some(source) if source.is_empty() => {
+                    errors.add("source", ValidationError::new("source cannot be empty"));
+                }
+                _ => {}
+            },
             VolumeType::Config => {
                 let fields_to_validate = [
                     (&self.source, "source", "source"),
@@ -103,7 +99,8 @@ impl Validate for Volume {
                 for (field, field_name, error_prefix) in fields_to_validate.iter() {
                     match field {
                         None => {
-                            let message = format!("{} is required for config volumes", error_prefix);
+                            let message =
+                                format!("{} is required for config volumes", error_prefix);
                             let error = ValidationError {
                                 code: Cow::from("required"),
                                 message: Some(Cow::Owned(message)),
@@ -133,17 +130,18 @@ impl Validate for Volume {
                     errors.add("permission", error);
                 }
             }
-            VolumeType::Volume => {
-                match &self.source {
-                    None => {
-                        errors.add("source", ValidationError::new("source is required for named volumes"));
-                    }
-                    Some(source) if source.is_empty() => {
-                        errors.add("source", ValidationError::new("source cannot be empty"));
-                    }
-                    _ => {}
+            VolumeType::Volume => match &self.source {
+                None => {
+                    errors.add(
+                        "source",
+                        ValidationError::new("source is required for named volumes"),
+                    );
                 }
-            }
+                Some(source) if source.is_empty() => {
+                    errors.add("source", ValidationError::new("source cannot be empty"));
+                }
+                _ => {}
+            },
         }
 
         if errors.is_empty() {
@@ -156,15 +154,11 @@ impl Validate for Volume {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum DeploymentKind {
+    #[default]
     Worker,
     Job,
-}
-
-impl Default for DeploymentKind {
-    fn default() -> Self {
-        DeploymentKind::Worker
-    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
@@ -204,7 +198,6 @@ pub(crate) async fn create(
     _user: User,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
-
     let mut filters = Vec::new();
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
@@ -220,19 +213,23 @@ pub(crate) async fn create(
                         updated_at: None,
                         name: input.namespace.clone(),
                     };
-                    if let Err(e) = namespace::create(&pool, new_namespace).await {
-                        if !e.to_string().contains("UNIQUE constraint failed") {
-                            log::error!("Failed to create namespace '{}': {}", input.namespace, e);
-                            let message = Message { message: "Failed to create namespace".to_string() };
-                            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-                        }
+                    if let Err(e) = namespace::create(&pool, new_namespace).await
+                        && !e.to_string().contains("UNIQUE constraint failed")
+                    {
+                        log::error!("Failed to create namespace '{}': {}", input.namespace, e);
+                        let message = Message {
+                            message: "Failed to create namespace".to_string(),
+                        };
+                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                     }
                     info!("Namespace '{}' created automatically", input.namespace);
                 }
                 Ok(Some(_)) => {}
                 Err(e) => {
                     log::error!("Failed to check namespace '{}': {}", input.namespace, e);
-                    let message = Message { message: "Internal server error".to_string() };
+                    let message = Message {
+                        message: "Internal server error".to_string(),
+                    };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
             }
@@ -241,29 +238,43 @@ pub(crate) async fn create(
                 &pool,
                 input.namespace.clone(),
                 input.name.clone(),
-            ).await;
+            )
+            .await;
 
             match active_deployments {
                 Ok(deployments_list) => {
-                    info!("Checking for existing deployments: namespace='{}', name='{}' - found: {}",
-                        input.namespace, input.name, deployments_list.len());
+                    info!(
+                        "Checking for existing deployments: namespace='{}', name='{}' - found: {}",
+                        input.namespace,
+                        input.name,
+                        deployments_list.len()
+                    );
 
                     if !deployments_list.is_empty() {
-                        info!("Found {} active deployments with the same namespace and name", deployments_list.len());
+                        info!(
+                            "Found {} active deployments with the same namespace and name",
+                            deployments_list.len()
+                        );
 
                         for mut deployment in deployments_list {
                             info!("Marking deployment {} as deleted", deployment.id);
                             deployment.status = DeploymentStatus::Deleted;
                             deployment.updated_at = Some(Utc::now().to_string());
                             if let Err(e) = deployments::update(&pool, &deployment).await {
-                                log::error!("Failed to mark deployment {} as deleted: {}", deployment.id, e);
+                                log::error!(
+                                    "Failed to mark deployment {} as deleted: {}",
+                                    deployment.id,
+                                    e
+                                );
                             }
                         }
                     }
                 }
                 Err(e) => {
                     log::error!("Database error while checking active deployments: {}", e);
-                    let message = Message { message: "Internal server error".to_string() };
+                    let message = Message {
+                        message: "Internal server error".to_string(),
+                    };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
             }
@@ -274,7 +285,9 @@ pub(crate) async fn create(
                 Ok(json_str) => json_str,
                 Err(e) => {
                     log::error!("Volume serialization error: {}", e);
-                    let message = Message { message: "Internal server error".to_string() };
+                    let message = Message {
+                        message: "Internal server error".to_string(),
+                    };
                     return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
                 }
             };
@@ -299,7 +312,7 @@ pub(crate) async fn create(
                 command: input.command,
                 instances: [].to_vec(),
                 restart_count: 0,
-                volumes: volumes,
+                volumes,
                 health_checks: input.health_checks.unwrap_or_default(),
                 resources: input.resources,
                 image_digest: None,
@@ -314,21 +327,29 @@ pub(crate) async fn create(
                         "info",
                         format!("Deployment '{}' created successfully", deployment.name),
                         "api",
-                        Some("DeploymentCreated")
-                    ).await;
+                        Some("DeploymentCreated"),
+                    )
+                    .await;
 
                     let deployment_output = DeploymentOutput::from_to_model(deployment);
                     (StatusCode::CREATED, Json(deployment_output)).into_response()
                 }
                 Err(e) => {
                     error!("Failed to create deployment: {}", e);
-                    let message = Message { message: format!("A deployment with name '{}' already exists in namespace '{}'", input.name, input.namespace) };
+                    let message = Message {
+                        message: format!(
+                            "A deployment with name '{}' already exists in namespace '{}'",
+                            input.name, input.namespace
+                        ),
+                    };
                     (StatusCode::CONFLICT, Json(message)).into_response()
                 }
             }
         }
         Err(e) => {
-            let message = Message { message: e.to_string() };
+            let message = Message {
+                message: e.to_string(),
+            };
             (StatusCode::BAD_REQUEST, Json(message)).into_response()
         }
     }
@@ -337,9 +358,9 @@ pub(crate) async fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::server::tests::{login, new_test_app};
     use axum_test::{TestResponse, TestServer};
     use serde_json::json;
-    use crate::api::server::tests::{login, new_test_app};
 
     #[tokio::test]
     async fn create_with_invalid_runtime() {
@@ -348,7 +369,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "null",
@@ -367,7 +388,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .json(&json!({
                 "runtime": "docker",
                 "name": "coucou",
@@ -386,7 +407,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -406,7 +427,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -442,29 +463,31 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/var/run/docker.sock",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "invalid_permission"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "invalid_permission"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let error_text = response.text();
-        assert!(error_text.contains("unknown variant") || error_text.contains("invalid_permission"));
+        assert!(
+            error_text.contains("unknown variant") || error_text.contains("invalid_permission")
+        );
     }
 
     #[tokio::test]
@@ -474,27 +497,31 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("source is required for bind volumes"));
+        assert!(
+            error_body
+                .message
+                .contains("source is required for bind volumes")
+        );
     }
 
     #[tokio::test]
@@ -504,23 +531,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/var/run/docker.sock",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "invalid_driver",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "invalid_driver",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -536,23 +563,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -567,28 +594,34 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("source is required for config volumes") ||
-            error_body.message.contains("key is required for config volumes"));
+        assert!(
+            error_body
+                .message
+                .contains("source is required for config volumes")
+                || error_body
+                    .message
+                    .contains("key is required for config volumes")
+        );
     }
 
     #[tokio::test]
@@ -598,30 +631,32 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "",
-                    "key": "",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "",
+                        "key": "",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("source cannot be empty") ||
-            error_body.message.contains("key cannot be empty"));
+        assert!(
+            error_body.message.contains("source cannot be empty")
+                || error_body.message.contains("key cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -631,23 +666,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/var/run/docker.sock",
-                    "destination": "",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "destination": "",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -662,23 +697,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "invalid_type",
-                    "source": "/var/run/docker.sock",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "invalid_type",
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -694,23 +729,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/var/run/docker.sock",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -723,24 +758,24 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "nginx-config",
-                    "key": "nginx.conf",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "nginx-config",
+                        "key": "nginx.conf",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -753,23 +788,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "volume",
-                    "source": "my-volume",
-                    "destination": "/data",
-                    "driver": "local",
-                    "permission": "rw"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "my-volume",
+                        "destination": "/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -782,38 +817,38 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "source": "/var/run/docker.sock",
-                    "destination": "/var/run/docker.sock",
-                    "driver": "local",
-                    "permission": "ro"
-                },
-                {
-                    "type": "config",
-                    "source": "nginx-config",
-                    "key": "nginx.conf",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "nfs",
-                    "permission": "ro"
-                },
-                {
-                    "type": "volume",
-                    "source": "data-volume",
-                    "destination": "/data",
-                    "driver": "local",
-                    "permission": "rw"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/var/run/docker.sock",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    },
+                    {
+                        "type": "config",
+                        "source": "nginx-config",
+                        "key": "nginx.conf",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "nfs",
+                        "permission": "ro"
+                    },
+                    {
+                        "type": "volume",
+                        "source": "data-volume",
+                        "destination": "/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -826,22 +861,22 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "bind",
-                    "destination": "",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "destination": "",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -857,28 +892,32 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "key": "nginx.conf",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "key": "nginx.conf",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("source is required for config volumes"));
+        assert!(
+            error_body
+                .message
+                .contains("source is required for config volumes")
+        );
     }
 
     #[tokio::test]
@@ -888,28 +927,32 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "nginx-config",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "nginx-config",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("key is required for config volumes"));
+        assert!(
+            error_body
+                .message
+                .contains("key is required for config volumes")
+        );
     }
 
     #[tokio::test]
@@ -919,24 +962,24 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "",
-                    "key": "nginx.conf",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "",
+                        "key": "nginx.conf",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -951,24 +994,24 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "nginx-config",
-                    "key": "",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "ro"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "nginx-config",
+                        "key": "",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -983,27 +1026,31 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "volume",
-                    "destination": "/data",
-                    "driver": "local",
-                    "permission": "rw"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "destination": "/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("source is required for named volumes"));
+        assert!(
+            error_body
+                .message
+                .contains("source is required for named volumes")
+        );
     }
 
     #[tokio::test]
@@ -1013,23 +1060,23 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "volume",
-                    "source": "",
-                    "destination": "/data",
-                    "driver": "local",
-                    "permission": "rw"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "",
+                        "destination": "/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
@@ -1044,29 +1091,33 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "runtime": "docker",
-            "name": "nginx",
-            "namespace": "ring",
-            "image": "nginx:latest",
-            "volumes": [
-                {
-                    "type": "config",
-                    "source": "nginx-config",
-                    "key": "nginx.conf",
-                    "destination": "/etc/nginx/nginx.conf",
-                    "driver": "local",
-                    "permission": "rw"
-                }
-            ]
-        }))
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "config",
+                        "source": "nginx-config",
+                        "key": "nginx.conf",
+                        "destination": "/etc/nginx/nginx.conf",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let error_body: Message = response.json();
-        assert!(error_body.message.contains("config volumes must be read-only"));
+        assert!(
+            error_body
+                .message
+                .contains("config volumes must be read-only")
+        );
     }
 
     #[tokio::test]
@@ -1076,17 +1127,17 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-            "kind": "worker",
-            "runtime": "docker",
-            "name": "echo-worker",
-            "namespace": "test",
-            "image": "alpine:latest",
-            "command": ["sh", "-c", "while true; do echo 'Worker running'; sleep 30; done"],
-            "replicas": 2
-        }))
+                "kind": "worker",
+                "runtime": "docker",
+                "name": "echo-worker",
+                "namespace": "test",
+                "image": "alpine:latest",
+                "command": ["sh", "-c", "while true; do echo 'Worker running'; sleep 30; done"],
+                "replicas": 2
+            }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -1103,7 +1154,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1146,7 +1197,8 @@ mod tests {
         assert_eq!(deployment.namespace, "production");
         assert_eq!(deployment.health_checks.len(), 3);
 
-        let check_types: Vec<String> = deployment.health_checks
+        let check_types: Vec<String> = deployment
+            .health_checks
             .iter()
             .map(|check| check.check_type().to_string())
             .collect();
@@ -1162,7 +1214,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1202,7 +1254,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1225,7 +1277,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1257,7 +1309,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1279,7 +1331,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -1300,9 +1352,9 @@ mod tests {
             .await;
 
         assert!(
-            response.status_code() == StatusCode::CREATED ||
-            response.status_code() == StatusCode::BAD_REQUEST ||
-            response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
+            response.status_code() == StatusCode::CREATED
+                || response.status_code() == StatusCode::BAD_REQUEST
+                || response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
         );
     }
 
@@ -1322,7 +1374,7 @@ mod tests {
 
         // Create a deployment in a new namespace
         let response = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",

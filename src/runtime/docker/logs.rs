@@ -1,6 +1,6 @@
 use bollard::Docker;
-use bollard::query_parameters::{LogsOptionsBuilder, InspectContainerOptions};
 use bollard::container::LogOutput;
+use bollard::query_parameters::{InspectContainerOptions, LogsOptionsBuilder};
 use futures::StreamExt;
 use futures::stream::Stream;
 use std::pin::Pin;
@@ -10,29 +10,40 @@ fn format_log_output(output: LogOutput) -> String {
         LogOutput::StdOut { message }
         | LogOutput::StdErr { message }
         | LogOutput::StdIn { message }
-        | LogOutput::Console { message } => {
-            String::from_utf8_lossy(&message).to_string()
-        }
+        | LogOutput::Console { message } => String::from_utf8_lossy(&message).to_string(),
     }
 }
 
 fn process_log_chunk(chunk: LogOutput) -> Option<String> {
     let line = format_log_output(chunk).replace('\n', "");
-    if line.trim().is_empty() { None } else { Some(line) }
+    if line.trim().is_empty() {
+        None
+    } else {
+        Some(line)
+    }
 }
 
-pub(crate) async fn logs(docker: &Docker, container_id: String, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
-    match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
+pub(crate) async fn logs(
+    docker: &Docker,
+    container_id: String,
+    tail: Option<&str>,
+    since: Option<i32>,
+) -> Vec<String> {
+    match docker
+        .inspect_container(&container_id, None::<InspectContainerOptions>)
+        .await
+    {
         Ok(_) => {}
         Err(e) => {
-            debug!("Container {} not found or not accessible: {}", container_id, e);
+            debug!(
+                "Container {} not found or not accessible: {}",
+                container_id, e
+            );
             return Vec::new();
         }
     }
 
-    let mut builder = LogsOptionsBuilder::new()
-        .stdout(true)
-        .stderr(true);
+    let mut builder = LogsOptionsBuilder::new().stdout(true).stderr(true);
 
     if let Some(tail_value) = tail {
         builder = builder.tail(tail_value);
@@ -54,7 +65,10 @@ pub(crate) async fn logs(docker: &Docker, container_id: String, tail: Option<&st
                 }
             }
             Err(e) => {
-                debug!("Docker get logs errors for container {}: {}", container_id, e);
+                debug!(
+                    "Docker get logs errors for container {}: {}",
+                    container_id, e
+                );
                 break;
             }
         }
@@ -69,10 +83,16 @@ pub(crate) async fn logs_stream(
     tail: Option<&str>,
     since: Option<i32>,
 ) -> Pin<Box<dyn Stream<Item = String> + Send>> {
-    match docker.inspect_container(&container_id, None::<InspectContainerOptions>).await {
+    match docker
+        .inspect_container(&container_id, None::<InspectContainerOptions>)
+        .await
+    {
         Ok(_) => {}
         Err(e) => {
-            debug!("Container {} not found or not accessible: {}", container_id, e);
+            debug!(
+                "Container {} not found or not accessible: {}",
+                container_id, e
+            );
             return Box::pin(futures::stream::empty());
         }
     }
@@ -92,7 +112,8 @@ pub(crate) async fn logs_stream(
 
     let options = builder.build();
 
-    let stream = docker.logs(&container_id, Some(options))
+    let stream = docker
+        .logs(&container_id, Some(options))
         .filter_map(|result| async {
             match result {
                 Ok(chunk) => process_log_chunk(chunk),

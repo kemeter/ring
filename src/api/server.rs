@@ -1,63 +1,69 @@
-use log::info;
-use std::time::Duration;
-use axum::{error_handling::HandleErrorLayer, extract::FromRequestParts, http::StatusCode, routing::{get, post, put, delete}, Router, Json, RequestPartsExt};
 use axum::extract::FromRef;
-use axum_extra::{
-    headers::{authorization::Bearer, Authorization},
-    TypedHeader,
-};
 use axum::http::request::Parts;
+use axum::{
+    Json, RequestPartsExt, Router,
+    error_handling::HandleErrorLayer,
+    extract::FromRequestParts,
+    http::StatusCode,
+    routing::{delete, get, post, put},
+};
+use axum_extra::{
+    TypedHeader,
+    headers::{Authorization, authorization::Bearer},
+};
 use axum_macros::FromRef;
+use log::info;
 use serde_json::json;
 use sqlx::SqlitePool;
+use std::time::Duration;
 
 use tower::{BoxError, ServiceBuilder};
 
-use crate::config::config::Config;
 use crate::api::action::login::login;
+use crate::config::config::Config;
 
-use crate::api::action::deployment::list as deployment_list;
-use crate::api::action::deployment::get as deployment_get;
 use crate::api::action::deployment::create as deployment_create;
 use crate::api::action::deployment::delete as deployment_delete;
-use crate::api::action::deployment::logs as deployment_logs;
+use crate::api::action::deployment::get as deployment_get;
 use crate::api::action::deployment::get_deployment_events;
-use crate::api::action::deployment::get_health_checks;
 use crate::api::action::deployment::get_deployment_metrics;
+use crate::api::action::deployment::get_health_checks;
+use crate::api::action::deployment::list as deployment_list;
+use crate::api::action::deployment::logs as deployment_logs;
 
-use crate::api::action::node::get as node_get;
-use crate::api::action::config::list as config_list;
-use crate::api::action::config::get as config_get;
 use crate::api::action::config::create as config_create;
-use crate::api::action::config::update as config_update;
 use crate::api::action::config::delete as config_delete;
+use crate::api::action::config::get as config_get;
+use crate::api::action::config::list as config_list;
+use crate::api::action::config::update as config_update;
+use crate::api::action::node::get as node_get;
 
-use crate::api::action::namespace::list as namespace_list;
-use crate::api::action::namespace::get as namespace_get;
 use crate::api::action::namespace::create as namespace_create;
+use crate::api::action::namespace::get as namespace_get;
+use crate::api::action::namespace::list as namespace_list;
 
-use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::create::create as user_create;
+use crate::api::action::user::delete::delete as user_delete;
+use crate::api::action::user::list::list as user_list;
 use crate::api::action::user::me::me as user_current;
 use crate::api::action::user::update::update as user_update;
-use crate::api::action::user::delete::delete as user_delete;
 
-use crate::api::action::secret::list as secret_list;
-use crate::api::action::secret::get as secret_get;
 use crate::api::action::secret::create as secret_create;
 use crate::api::action::secret::delete as secret_delete;
+use crate::api::action::secret::get as secret_get;
+use crate::api::action::secret::list as secret_list;
 
 use crate::api::action::healthz::healthz;
 
-use crate::models::users::User;
 use crate::models::users as users_model;
+use crate::models::users::User;
 
 pub(crate) type Db = SqlitePool;
 
 impl<S> FromRequestParts<S> for User
-    where
-        AppState: FromRef<S>,
-        S: Send + Sync,
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
 {
     type Rejection = (StatusCode, Json<serde_json::Value>);
 
@@ -65,10 +71,12 @@ impl<S> FromRequestParts<S> for User
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
-            .map_err(|_| (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Invalid token" }))
-            ))?;
+            .map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "Invalid token" })),
+                )
+            })?;
 
         let token = bearer.token();
         let app_state = AppState::from_ref(state);
@@ -78,12 +86,11 @@ impl<S> FromRequestParts<S> for User
             Ok(user) => Ok(user),
             Err(_) => Err((
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Invalid token" }))
-            ))
+                Json(json!({ "error": "Invalid token" })),
+            )),
         }
     }
 }
-
 
 #[derive(Clone, FromRef, Debug)]
 pub(crate) struct AppState {
@@ -93,14 +100,16 @@ pub(crate) struct AppState {
 
 pub(crate) fn router(state: AppState) -> Router {
     // Routes that support long-lived connections (SSE streaming) - no timeout
-    let streaming_routes = Router::new()
-        .route("/deployments/{id}/logs", get(deployment_logs));
+    let streaming_routes = Router::new().route("/deployments/{id}/logs", get(deployment_logs));
 
     // All other routes with timeout
     let api_routes = Router::new()
         .route("/login", post(login))
         .route("/deployments", get(deployment_list).post(deployment_create))
-        .route("/deployments/{id}", get(deployment_get).delete(deployment_delete))
+        .route(
+            "/deployments/{id}",
+            get(deployment_get).delete(deployment_delete),
+        )
         .route("/deployments/{id}/events", get(get_deployment_events))
         .route("/deployments/{id}/health-checks", get(get_health_checks))
         .route("/deployments/{id}/metrics", get(get_deployment_metrics))
@@ -108,7 +117,10 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/namespaces", get(namespace_list).post(namespace_create))
         .route("/namespaces/{id}", get(namespace_get))
         .route("/configs", get(config_list).post(config_create))
-        .route("/configs/{id}", get(config_get).put(config_update).delete(config_delete))
+        .route(
+            "/configs/{id}",
+            get(config_get).put(config_update).delete(config_delete),
+        )
         .route("/secrets", get(secret_list).post(secret_create))
         .route("/secrets/{id}", get(secret_get).delete(secret_delete))
         .route("/users", get(user_list).post(user_create))
@@ -138,8 +150,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
-{
+pub(crate) async fn start(pool: SqlitePool, mut configuration: Config) {
     info!("Starting server on {}", configuration.get_api_url());
 
     let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
@@ -152,7 +163,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect(&format!("Failed to bind to {}", bind_addr));
+        .unwrap_or_else(|_| panic!("Failed to bind to {}", bind_addr));
     axum::serve(listener, app)
         .await
         .expect("Server failed unexpectedly");
@@ -160,14 +171,14 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config)
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::api::server::{AppState, router};
+    use crate::config::config::Config;
     use axum::Router;
-    use axum_test::TestServer;
     use axum::http::StatusCode;
+    use axum_test::TestServer;
     use serde::Deserialize;
     use serde_json::json;
     use sqlx::sqlite::SqlitePoolOptions;
-    use crate::api::server::{AppState, router};
-    use crate::config::config::Config;
 
     #[derive(Debug, Deserialize)]
     pub(crate) struct ResponseBody {
@@ -176,7 +187,7 @@ pub(crate) mod tests {
 
     #[derive(Debug, Deserialize)]
     pub(crate) struct ErrorResponse {
-        pub errors: Vec<String>
+        pub errors: Vec<String>,
     }
 
     pub(crate) async fn new_test_app() -> Router {
@@ -206,7 +217,7 @@ pub(crate) mod tests {
     pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {
         let server = TestServer::new(app).unwrap();
         let response = server
-            .post(&"/login")
+            .post("/login")
             .json(&json!({
                 "username": username,
                 "password": password
@@ -227,7 +238,7 @@ pub(crate) mod tests {
         let server = TestServer::new(app).unwrap();
 
         let create_response = server
-            .post(&"/deployments")
+            .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "runtime": "docker",
@@ -268,9 +279,7 @@ pub(crate) mod tests {
         let app = new_test_app().await;
         let server = TestServer::new(app).unwrap();
 
-        let response = server
-            .get(&"/deployments/some-id/health-checks")
-            .await;
+        let response = server.get("/deployments/some-id/health-checks").await;
 
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
@@ -282,7 +291,7 @@ pub(crate) mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response = server
-            .get(&"/deployments/non-existent-id/health-checks")
+            .get("/deployments/non-existent-id/health-checks")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 

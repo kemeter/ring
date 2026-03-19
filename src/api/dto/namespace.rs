@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::models::namespace::Namespace;
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct NamespaceOutput {

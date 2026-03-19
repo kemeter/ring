@@ -1,18 +1,20 @@
-use clap::ArgMatches;
-use crate::config::config::{load_auth_config, Config};
-use clap::{Command};
-use clap::Arg;
 use crate::api::dto::deployment::DeploymentOutput;
+use crate::config::config::{Config, load_auth_config};
+use clap::Arg;
+use clap::ArgMatches;
+use clap::Command;
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("prune")
         .about("Delete all deployment")
-        .arg(
-            Arg::new("name")
-        )
+        .arg(Arg::new("name"))
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let namespace_filter = args.get_one::<String>("name");
@@ -32,22 +34,25 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                 return;
             }
 
-            let deployments_list: Vec<DeploymentOutput> = response.json::<Vec<DeploymentOutput>>().await.unwrap_or(vec![]);
+            let deployments_list: Vec<DeploymentOutput> = response
+                .json::<Vec<DeploymentOutput>>()
+                .await
+                .unwrap_or(vec![]);
 
             let mut deleted_count = 0;
             let mut error_count = 0;
 
             for deployment in deployments_list {
                 // Filter by namespace if provided
-                if let Some(namespace) = namespace_filter {
-                    if &deployment.namespace != namespace {
-                        continue;
-                    }
+                if let Some(namespace) = namespace_filter
+                    && &deployment.namespace != namespace
+                {
+                    continue;
                 }
 
                 let id = deployment.id;
                 let request = client
-                    .delete(&format!("{}/deployments/{}", api_url, id))
+                    .delete(format!("{}/deployments/{}", api_url, id))
                     .header("Authorization", format!("Bearer {}", auth_config.token))
                     .send()
                     .await;
@@ -58,7 +63,11 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                             println!("Deployment {} deleted", id);
                             deleted_count += 1;
                         } else {
-                            eprintln!("Failed to delete deployment {}: status {}", id, response.status());
+                            eprintln!(
+                                "Failed to delete deployment {}: status {}",
+                                id,
+                                response.status()
+                            );
                             error_count += 1;
                         }
                     }
@@ -74,10 +83,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
             if error_count > 0 {
                 println!("  Failed: {}", error_count);
             }
-        },
+        }
         Err(_) => {
             eprintln!("Error fetching deployments")
         }
     }
 }
-

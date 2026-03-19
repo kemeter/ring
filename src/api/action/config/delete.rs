@@ -13,7 +13,7 @@ pub(crate) async fn delete(
     let result = ConfigModel::delete(&pool, id.clone()).await;
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
-        return StatusCode::NOT_FOUND
+        return StatusCode::NOT_FOUND;
     }
 
     StatusCode::NO_CONTENT
@@ -44,6 +44,5 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
-
     }
 }

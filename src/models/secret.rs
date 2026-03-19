@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::env;
+use aes_gcm::aead::rand_core::RngCore;
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
-use aes_gcm::aead::rand_core::RngCore;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::collections::HashMap;
+use std::env;
 
 const NONCE_SIZE: usize = 12;
 
@@ -15,7 +15,8 @@ fn get_encryption_key() -> [u8; 32] {
     let key_str = env::var("RING_SECRET_KEY")
         .expect("RING_SECRET_KEY environment variable must be set (32 bytes, base64 encoded)");
 
-    let key_bytes = BASE64.decode(&key_str)
+    let key_bytes = BASE64
+        .decode(&key_str)
         .expect("RING_SECRET_KEY must be valid base64");
 
     if key_bytes.len() != 32 {
@@ -60,8 +61,7 @@ pub(crate) fn decrypt_value(encrypted: &[u8]) -> Result<String, String> {
         .decrypt(nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| format!("Invalid UTF-8: {}", e))
+    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -106,7 +106,10 @@ impl Secret {
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Secret>, sqlx::Error> {
+pub(crate) async fn find_all(
+    pool: &SqlitePool,
+    filters: HashMap<String, Vec<String>>,
+) -> Result<Vec<Secret>, sqlx::Error> {
     let (query, values) = crate::models::query::build_filtered_query(
         "SELECT id, created_at, updated_at, namespace, name, value FROM secret",
         &filters,
@@ -124,7 +127,7 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Secret>, sqlx::Error> {
     let row = sqlx::query_as::<_, SecretRow>(
-        "SELECT id, created_at, updated_at, namespace, name, value FROM secret WHERE id = ?"
+        "SELECT id, created_at, updated_at, namespace, name, value FROM secret WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)

@@ -1,26 +1,24 @@
-use axum::{
-    http::StatusCode,
-    Json,
-};
 use axum::extract::State;
+use axum::{Json, http::StatusCode};
 use serde_json::json;
 
+use crate::api::dto::user::UserOutput;
 use crate::api::server::Db;
 use crate::models::users as users_model;
-use crate::api::dto::user::UserOutput;
 use crate::models::users::User;
 
 pub(crate) async fn list(
     State(pool): State<Db>,
-    _user: User
+    _user: User,
 ) -> Result<Json<Vec<UserOutput>>, (StatusCode, Json<serde_json::Value>)> {
-
     let mut users: Vec<UserOutput> = Vec::new();
 
-    let list_users = users_model::find_all(&pool).await.map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "errors": ["Internal server error"] }))
-    ))?;
+    let list_users = users_model::find_all(&pool).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Internal server error"] })),
+        )
+    })?;
 
     for user in list_users.into_iter() {
         let output = UserOutput {
@@ -29,7 +27,7 @@ pub(crate) async fn list(
             created_at: user.created_at,
             updated_at: user.updated_at,
             status: user.status,
-            login_at: user.login_at
+            login_at: user.login_at,
         };
 
         users.push(output);
@@ -40,9 +38,9 @@ pub(crate) async fn list(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::server::tests::{login, new_test_app};
     use axum_test::{TestResponse, TestServer};
     use http::StatusCode;
-    use crate::api::server::tests::{login, new_test_app};
 
     #[tokio::test]
     async fn create() {
@@ -51,7 +49,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .get(&"/users")
+            .get("/users")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 
