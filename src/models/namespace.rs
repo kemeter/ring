@@ -23,17 +23,10 @@ pub(crate) async fn find_by_name(pool: &SqlitePool, name: &str) -> Result<Option
         .await
 }
 
-pub(crate) async fn find_all(pool: &SqlitePool) -> Vec<Namespace> {
-    match sqlx::query_as::<_, Namespace>("SELECT id, created_at, updated_at, name FROM namespace ORDER BY name")
+pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<Namespace>, sqlx::Error> {
+    sqlx::query_as::<_, Namespace>("SELECT id, created_at, updated_at, name FROM namespace ORDER BY name")
         .fetch_all(pool)
         .await
-    {
-        Ok(namespaces) => namespaces,
-        Err(e) => {
-            log::error!("Failed to execute namespace query: {}", e);
-            vec![]
-        }
-    }
 }
 
 pub(crate) async fn create(pool: &SqlitePool, namespace: Namespace) -> Result<(), sqlx::Error> {

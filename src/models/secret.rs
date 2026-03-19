@@ -106,7 +106,7 @@ impl Secret {
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Secret> {
+pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Secret>, sqlx::Error> {
     let mut query = String::from("SELECT id, created_at, updated_at, namespace, name, value FROM secret");
     let mut all_values: Vec<String> = Vec::new();
 
@@ -131,13 +131,8 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
         q = q.bind(val);
     }
 
-    match q.fetch_all(pool).await {
-        Ok(rows) => rows.into_iter().map(Secret::from).collect(),
-        Err(e) => {
-            log::error!("Failed to execute secret query: {}", e);
-            vec![]
-        }
-    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(Secret::from).collect())
 }
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Secret>, sqlx::Error> {

@@ -316,7 +316,7 @@ const SELECT_COLUMNS: &str = "
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Deployment> {
+pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Deployment>, sqlx::Error> {
     let mut query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
     let mut all_values: Vec<String> = Vec::new();
 
@@ -341,13 +341,8 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
         q = q.bind(val);
     }
 
-    match q.fetch_all(pool).await {
-        Ok(rows) => rows.into_iter().map(Deployment::from).collect(),
-        Err(e) => {
-            log::error!("Could not execute deployment query: {}", e);
-            Vec::new()
-        }
-    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
 pub(crate) async fn find_active_by_namespace_name(

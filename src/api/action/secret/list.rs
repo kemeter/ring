@@ -60,7 +60,13 @@ pub(crate) async fn list(
         filters.insert(String::from("namespace"), query_parameters.namespaces);
     }
 
-    let secrets = SecretModel::find_all(&pool, filters).await;
+    let secrets = match SecretModel::find_all(&pool, filters).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list secrets: {}", e);
+            return Json(vec![]);
+        }
+    };
 
     let output: Vec<SecretOutput> = secrets
         .into_iter()

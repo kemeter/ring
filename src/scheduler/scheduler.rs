@@ -71,7 +71,14 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             String::from("running"),
             String::from("deleted")
         ]);
-        let list_deployments = deployments::find_all(&pool, filters).await;
+        let list_deployments = match deployments::find_all(&pool, filters).await {
+            Ok(list) => list,
+            Err(e) => {
+                error!("Failed to fetch deployments: {}", e);
+                sleep(duration).await;
+                continue;
+            }
+        };
 
         info!("Processing {} deployments", list_deployments.len());
         let mut deleted:Vec<String> = Vec::new();

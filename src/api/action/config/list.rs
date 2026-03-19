@@ -61,7 +61,13 @@ pub(crate) async fn list(
         filters.insert(String::from("namespace"), query_parameters.namespaces);
     }
 
-    let list_configs = ConfigModel::find_all(&pool, filters).await;
+    let list_configs = match ConfigModel::find_all(&pool, filters).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list configs: {}", e);
+            return Json(configs);
+        }
+    };
 
     for config in list_configs.into_iter() {
         let output = ConfigOutput::from_to_model(config.clone());

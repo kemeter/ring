@@ -83,7 +83,13 @@ pub(crate) async fn list(
         filters.insert(String::from("kind"), query_parameters.kind);
     }
 
-    let list_deployments = deployments::find_all(&pool, filters).await;
+    let list_deployments = match deployments::find_all(&pool, filters).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list deployments: {}", e);
+            return Json(deployments);
+        }
+    };
 
     let docker = match docker::connect() {
         Ok(d) => d,

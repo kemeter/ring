@@ -22,7 +22,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Config>
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Config> {
+pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Result<Vec<Config>, sqlx::Error> {
     let mut query = String::from("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config");
     let mut all_values: Vec<String> = Vec::new();
 
@@ -47,13 +47,7 @@ pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<Str
         q = q.bind(val);
     }
 
-    match q.fetch_all(pool).await {
-        Ok(configs) => configs,
-        Err(e) => {
-            log::error!("Failed to execute config query: {}", e);
-            vec![]
-        }
-    }
+    q.fetch_all(pool).await
 }
 
 pub(crate) async fn find_by_namespace(pool: &SqlitePool, namespace: String) -> Result<Vec<Config>, sqlx::Error> {

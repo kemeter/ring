@@ -2357,6 +2357,7 @@ dependencies = [
  "shell-words",
  "sqlx",
  "sysinfo",
+ "thiserror",
  "tokio",
  "toml",
  "tower",

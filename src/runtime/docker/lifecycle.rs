@@ -58,10 +58,6 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             DeploymentStatus::ConfigError, "ConfigError",
             format!("Config key not found in namespace '{}'", deployment.namespace),
         ),
-        RuntimeError::FileSystemError(_) => (
-            DeploymentStatus::FileSystemError, "FileSystemError",
-            "Failed to access file system for config mount".to_string(),
-        ),
         RuntimeError::StatsFetchFailed(msg) => (
             DeploymentStatus::Error, "StatsFetchFailed",
             format!("Stats fetch failed: {}", msg),
@@ -69,6 +65,14 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
         RuntimeError::Other(msg) => (
             DeploymentStatus::Error, "RuntimeError",
             format!("Docker error: {}", msg),
+        ),
+        RuntimeError::Io(e) => (
+            DeploymentStatus::FileSystemError, "FileSystemError",
+            format!("IO error: {}", e),
+        ),
+        RuntimeError::Json(e) => (
+            DeploymentStatus::Error, "RuntimeError",
+            format!("JSON error: {}", e),
         ),
     };
 
