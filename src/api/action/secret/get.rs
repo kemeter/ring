@@ -52,3 +52,24 @@ pub(crate) async fn get(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::api::server::tests::{login, new_test_app};
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+
+    #[tokio::test]
+    async fn get_not_found() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/secrets/00000000-0000-0000-0000-000000000000")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+}

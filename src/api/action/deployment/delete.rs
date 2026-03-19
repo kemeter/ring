@@ -56,4 +56,18 @@ mod tests {
 
         assert_eq!(deployment["status"], "deleted");
     }
+
+    #[tokio::test]
+    async fn delete_not_found() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .delete("/deployments/00000000-0000-0000-0000-000000000000")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
 }
