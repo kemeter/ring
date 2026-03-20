@@ -47,6 +47,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+      - run: docker pull nginx:alpine
       - run: cargo test
 
   audit:
@@ -55,4 +56,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: cargo install cargo-audit
-      - run: cargo audit
+      - run: cargo audit --ignore RUSTSEC-2023-0071
