@@ -1,12 +1,12 @@
-use axum::extract::{FromRequestParts, State};
-use axum::{response::IntoResponse, Json};
-use std::collections::HashMap;
-use http::request::Parts;
-use serde::{Deserialize, Serialize};
 use crate::api::server::Db;
-use http::StatusCode;
 use crate::models::secret as SecretModel;
 use crate::models::users::User;
+use axum::extract::{FromRequestParts, State};
+use axum::{Json, response::IntoResponse};
+use http::StatusCode;
+use http::request::Parts;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use url::form_urlencoded::parse;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -60,7 +60,13 @@ pub(crate) async fn list(
         filters.insert(String::from("namespace"), query_parameters.namespaces);
     }
 
-    let secrets = SecretModel::find_all(&pool, filters).await;
+    let secrets = match SecretModel::find_all(&pool, filters).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list secrets: {}", e);
+            return Json(vec![]);
+        }
+    };
 
     let output: Vec<SecretOutput> = secrets
         .into_iter()

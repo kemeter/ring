@@ -1,9 +1,5 @@
-use axum::{
-    extract::{Path},
-    http::StatusCode,
-    response::IntoResponse
-};
 use axum::extract::State;
+use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
 use crate::api::server::Db;
 use crate::models::users;
@@ -12,7 +8,7 @@ use crate::models::users::User;
 pub(crate) async fn delete(
     Path(id): Path<String>,
     current_user: User,
-    State(pool): State<Db>
+    State(pool): State<Db>,
 ) -> impl IntoResponse {
     if current_user.id == id {
         return StatusCode::FORBIDDEN;
@@ -22,28 +18,24 @@ pub(crate) async fn delete(
 
     match option {
         Ok(Some(user)) => {
-            if let Err(_) = users::delete(&pool, &user).await {
+            if users::delete(&pool, &user).await.is_err() {
                 return StatusCode::INTERNAL_SERVER_ERROR;
             }
 
             StatusCode::NO_CONTENT
         }
-        Ok(None) => {
-            StatusCode::NOT_FOUND
-        }
+        Ok(None) => StatusCode::NOT_FOUND,
 
-        Err(_) => {
-            StatusCode::NO_CONTENT
-        }
+        Err(_) => StatusCode::NO_CONTENT,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn delete() {

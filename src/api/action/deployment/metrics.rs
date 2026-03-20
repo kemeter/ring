@@ -1,10 +1,6 @@
-use axum::{
-    extract::Path,
-    response::IntoResponse,
-    Json,
-};
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::{Json, extract::Path, response::IntoResponse};
 
 use crate::api::dto::stats::*;
 use crate::api::server::Db;

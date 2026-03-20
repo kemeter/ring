@@ -1,18 +1,21 @@
 use axum::extract::State;
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::models::namespace as NamespaceModel;
 use crate::models::users::User;
 
-pub(crate) async fn list(
-    State(pool): State<Db>,
-    _user: User,
-) -> impl IntoResponse {
+pub(crate) async fn list(State(pool): State<Db>, _user: User) -> impl IntoResponse {
     let mut namespaces: Vec<NamespaceOutput> = Vec::new();
 
-    let list_namespaces = NamespaceModel::find_all(&pool).await;
+    let list_namespaces = match NamespaceModel::find_all(&pool).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list namespaces: {}", e);
+            return Json(namespaces);
+        }
+    };
 
     for namespace in list_namespaces.into_iter() {
         let output = NamespaceOutput::from_to_model(namespace);

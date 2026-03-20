@@ -1,16 +1,12 @@
-use axum::{
-    extract::{State},
-    http::StatusCode,
-    Json
-};
-use serde_json::json;
-use serde::{Serialize, Deserialize};
-use validator::Validate;
+use crate::api::dto::user::UserOutput;
 use crate::api::server::Db;
+use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::models::users::User;
-use crate::api::dto::user::UserOutput;
-use crate::config::config::{Config};
+use axum::{Json, extract::State, http::StatusCode};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use validator::Validate;
 
 pub(crate) async fn create(
     State(pool): State<Db>,
@@ -19,27 +15,40 @@ pub(crate) async fn create(
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, Json<UserOutput>), (StatusCode, Json<serde_json::Value>)> {
     if let Err(errors) = input.validate() {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "errors": errors }))));
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "errors": errors })),
+        ));
     }
 
-    let password_hash = users_model::hash_password(&input.password, &configuration.user.salt).map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "errors": ["Password hashing failed"] }))
-    ))?;
+    let password_hash = users_model::hash_password(&input.password, &configuration.user.salt)
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["Password hashing failed"] })),
+            )
+        })?;
 
-    users_model::create(&pool, &input.username, &password_hash).await.map_err(|_| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "errors": ["User creation failed"] }))
-    ))?;
+    users_model::create(&pool, &input.username, &password_hash)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["User creation failed"] })),
+            )
+        })?;
 
-    let user = users_model::find_by_username(&pool, &input.username).await
-        .map_err(|_| (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Failed to retrieve created user"] }))
-        ))?
+    let user = users_model::find_by_username(&pool, &input.username)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["Failed to retrieve created user"] })),
+            )
+        })?
         .ok_or((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Created user not found"] }))
+            Json(json!({ "errors": ["Created user not found"] })),
         ))?;
 
     let output = UserOutput {
@@ -59,15 +68,15 @@ pub(crate) struct UserInput {
     #[validate(length(min = 2, max = 50))]
     username: String,
     #[validate(length(min = 8, max = 128))]
-    password: String
+    password: String,
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::api::server::tests::{login, new_test_app};
     use axum_test::{TestResponse, TestServer};
     use http::StatusCode;
     use serde_json::json;
-    use crate::api::server::tests::{login, new_test_app};
 
     #[tokio::test]
     async fn create() {
@@ -76,7 +85,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/users")
+            .post("/users")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "ring",
@@ -94,7 +103,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/users")
+            .post("/users")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "a",
@@ -112,7 +121,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .post(&"/users")
+            .post("/users")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "validuser",

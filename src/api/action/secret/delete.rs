@@ -1,12 +1,12 @@
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use axum::Json;
 use http::StatusCode;
 use serde::Deserialize;
 
 use crate::api::server::Db;
-use crate::models::secret as SecretModel;
 use crate::models::deployments;
+use crate::models::secret as SecretModel;
 use crate::models::users::User;
 
 #[derive(Deserialize)]
@@ -25,28 +25,41 @@ pub(crate) async fn delete(
     let secret = match SecretModel::find(&pool, &id).await {
         Ok(Some(s)) => s,
         Ok(None) => {
-            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
-                "error": "Secret not found"
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": "Secret not found"
+                })),
+            )
+                .into_response();
         }
         Err(e) => {
             log::error!("Failed to find secret {}: {}", id, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": "Failed to find secret"
-            }))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to find secret"
+                })),
+            )
+                .into_response();
         }
     };
 
     // Check for deployments referencing this secret
-    let referencing = match deployments::find_referencing_secret(&pool, &secret.namespace, &secret.name).await {
-        Ok(deps) => deps,
-        Err(e) => {
-            log::error!("Failed to check secret references: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": "Failed to check references"
-            }))).into_response();
-        }
-    };
+    let referencing =
+        match deployments::find_referencing_secret(&pool, &secret.namespace, &secret.name).await {
+            Ok(deps) => deps,
+            Err(e) => {
+                log::error!("Failed to check secret references: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "Failed to check references"
+                    })),
+                )
+                    .into_response();
+            }
+        };
 
     if !referencing.is_empty() && !query.force {
         let deployment_names: Vec<String> = referencing
@@ -54,20 +67,95 @@ pub(crate) async fn delete(
             .map(|d| format!("{}/{}", d.namespace, d.name))
             .collect();
 
-        return (StatusCode::CONFLICT, Json(serde_json::json!({
-            "error": "Secret is referenced by deployments",
-            "deployments": deployment_names,
-            "hint": "Use ?force=true to delete anyway"
-        }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "Secret is referenced by deployments",
+                "deployments": deployment_names,
+                "hint": "Use ?force=true to delete anyway"
+            })),
+        )
+            .into_response();
     }
 
     match SecretModel::delete(&pool, &id).await {
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             log::error!("Failed to delete secret with ID {}: {}", id, e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
-                "error": "Failed to delete secret"
-            }))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": "Failed to delete secret"
+                })),
+            )
+                .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::api::server::tests::{login, new_test_app};
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use serde_json::json;
+
+    fn set_test_key() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+        let key = [0u8; 32];
+        let key_b64 = BASE64.encode(key);
+        unsafe { std::env::set_var("RING_SECRET_KEY", key_b64) };
+    }
+
+    #[tokio::test]
+    async fn delete_not_found() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .delete("/secrets/00000000-0000-0000-0000-000000000000")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_secret_success() {
+        set_test_key();
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Create a namespace first
+        server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({"name": "test-delete"}))
+            .await;
+
+        // Create a secret
+        let create_response = server
+            .post("/secrets")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "namespace": "test-delete",
+                "name": "my-secret",
+                "value": "secret-value"
+            }))
+            .await;
+
+        assert_eq!(create_response.status_code(), StatusCode::CREATED);
+        let secret: serde_json::Value = create_response.json();
+        let secret_id = secret["id"].as_str().unwrap();
+
+        // Delete it
+        let response = server
+            .delete(&format!("/secrets/{}", secret_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
     }
 }

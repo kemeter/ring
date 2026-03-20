@@ -1,18 +1,13 @@
-use axum::{
-    extract::{Path},
-    response::IntoResponse,
-    Json
-};
-use serde::{Serialize, Deserialize};
-use serde_json::json;
-use axum::extract::State;
-use http::StatusCode;
-use validator::Validate;
 use crate::api::server::Db;
+use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::models::users::User;
-
-use crate::config::config::{Config};
+use axum::extract::State;
+use axum::{Json, extract::Path, response::IntoResponse};
+use http::StatusCode;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use validator::Validate;
 
 pub(crate) async fn update(
     State(pool): State<Db>,
@@ -21,9 +16,12 @@ pub(crate) async fn update(
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-
     if let Err(errors) = input.validate() {
-        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "errors": errors }))).into_response());
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "errors": errors })),
+        )
+            .into_response());
     }
 
     let mut user = match users_model::find(&pool, id).await.ok().flatten() {
@@ -37,19 +35,23 @@ pub(crate) async fn update(
 
     if let Some(password) = input.password {
         let password_hash = users_model::hash_password(&password, &configuration.user.salt)
-            .map_err(|_| (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "errors": ["Password hashing failed"] }))
-            ).into_response())?;
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "errors": ["Password hashing failed"] })),
+                )
+                    .into_response()
+            })?;
 
         user.password = password_hash;
     }
 
-    if let Err(_) = users_model::update(&pool, &user).await {
+    if users_model::update(&pool, &user).await.is_err() {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Failed to update user"] }))
-        ).into_response());
+            Json(json!({ "errors": ["Failed to update user"] })),
+        )
+            .into_response());
     }
 
     Ok(StatusCode::OK.into_response())
@@ -60,15 +62,15 @@ pub(crate) struct UserInput {
     #[validate(length(min = 2, max = 50))]
     username: Option<String>,
     #[validate(length(min = 8, max = 128))]
-    password: Option<String>
+    password: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::api::server::tests::{login, new_test_app};
     use axum_test::{TestResponse, TestServer};
     use http::StatusCode;
     use serde_json::json;
-    use crate::api::server::tests::{login, new_test_app};
 
     #[tokio::test]
     async fn update_not_found() {
@@ -77,7 +79,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .put(&"/users/non-existent-id")
+            .put("/users/non-existent-id")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "newname"
@@ -94,7 +96,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .put(&"/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "username": "newadmin"
@@ -119,7 +121,7 @@ mod tests {
         let server = TestServer::new(app).unwrap();
 
         let response: TestResponse = server
-            .put(&"/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "password": "newpassword"

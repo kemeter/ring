@@ -1,5 +1,5 @@
+use crate::models::config::Config;
 use serde::{Deserialize, Serialize};
-use crate::models::config::{Config};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub(crate) struct ConfigOutput {

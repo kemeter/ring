@@ -1,19 +1,15 @@
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::config::config::load_auth_config;
 use crate::config::config::Config;
+use crate::config::config::load_auth_config;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{print_stdout, Table, WithTitle};
+use cli_table::{Table, WithTitle, print_stdout};
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("inspect")
         .about("Show information on a deployment")
-        .arg(
-            Arg::new("id")
-                .help("Deployment ID")
-                .required(true)
-        )
+        .arg(Arg::new("id").help("Deployment ID").required(true))
 }
 
 #[derive(Table)]
@@ -27,7 +23,7 @@ struct VolumeTable {
     #[table(title = "Destination")]
     destination: String,
 
-    #[table(title = "Key",)]
+    #[table(title = "Key")]
     key: String,
 
     #[table(title = "Driver")]
@@ -37,13 +33,17 @@ struct VolumeTable {
     permission: String,
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
     let request = client
-        .get(&format!("{}/deployments/{}", api_url, id))
+        .get(format!("{}/deployments/{}", api_url, id))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;

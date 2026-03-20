@@ -1,15 +1,11 @@
-use axum::{
-    extract::{Path},
-    response::IntoResponse,
-    Json
-};
 use axum::extract::State;
+use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
 use crate::models::config;
 use crate::models::users::User;
 use axum::http::StatusCode;
-use crate::api::dto::config::ConfigOutput;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
@@ -22,16 +18,16 @@ pub(crate) async fn get(
             Json(output).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn not_fount() {

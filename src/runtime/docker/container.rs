@@ -1,25 +1,26 @@
+use super::{DockerImage, tiny_id};
+use crate::api::dto::deployment::DeploymentVolume;
+use crate::models::config::Config;
+use crate::models::deployments::{Deployment, EnvValue, parse_cpu_string, parse_memory_string};
+use crate::runtime::error::RuntimeError;
 use bollard::{
     Docker,
-    models::{HostConfig, Mount, MountTypeEnum, EndpointSettings, ContainerCreateBody, NetworkCreateRequest, NetworkConnectRequest},
-    query_parameters::{
-        CreateImageOptionsBuilder,
-        CreateContainerOptionsBuilder,
-        StartContainerOptionsBuilder,
-        StopContainerOptionsBuilder,
-        RemoveContainerOptionsBuilder,
-        InspectNetworkOptionsBuilder,
-    },
     auth::DockerCredentials,
+    models::{
+        ContainerCreateBody, EndpointSettings, HostConfig, Mount, MountTypeEnum,
+        NetworkConnectRequest, NetworkCreateRequest,
+    },
+    query_parameters::{
+        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectNetworkOptionsBuilder,
+        RemoveContainerOptionsBuilder, StartContainerOptionsBuilder, StopContainerOptionsBuilder,
+    },
 };
 use futures::StreamExt;
 use std::collections::HashMap;
-use crate::models::deployments::{Deployment, EnvValue, parse_memory_string, parse_cpu_string};
-use crate::api::dto::deployment::DeploymentVolume;
-use crate::models::config::Config;
-use crate::runtime::error::RuntimeError;
-use super::{DockerImage, tiny_id};
 
-fn build_user_config(deployment_config: &Option<crate::models::deployments::DeploymentConfig>) -> Option<String> {
+fn build_user_config(
+    deployment_config: &Option<crate::models::deployments::DeploymentConfig>,
+) -> Option<String> {
     let user = deployment_config.as_ref()?.user.as_ref()?;
     match (user.id, user.group) {
         (Some(uid), Some(gid)) => Some(format!("{}:{}", uid, gid)),
@@ -28,7 +29,9 @@ fn build_user_config(deployment_config: &Option<crate::models::deployments::Depl
     }
 }
 
-fn get_privileged_config(deployment_config: &Option<crate::models::deployments::DeploymentConfig>) -> Option<bool> {
+fn get_privileged_config(
+    deployment_config: &Option<crate::models::deployments::DeploymentConfig>,
+) -> Option<bool> {
     deployment_config
         .as_ref()
         .and_then(|c| c.user.as_ref())
@@ -42,7 +45,10 @@ fn extract_digest(repo_digests: &Option<Vec<String>>) -> Option<String> {
         .and_then(|d| d.split_once('@').map(|(_, digest)| digest.to_string()))
 }
 
-async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<Option<String>, RuntimeError> {
+async fn pull_image(
+    docker: Docker,
+    image_config: DockerImage,
+) -> Result<Option<String>, RuntimeError> {
     let image = image_config.name.clone();
     let tag = image_config.tag.clone();
     let image_name = format!("{}:{}", image, tag);
@@ -63,14 +69,14 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<Option<
         .tag(&tag)
         .build();
 
-    let credentials = image_config.auth.map(|(server, username, password)| {
-        DockerCredentials {
+    let credentials = image_config
+        .auth
+        .map(|(server, username, password)| DockerCredentials {
             username: Some(username),
             password: Some(password),
             serveraddress: Some(server),
             ..Default::default()
-        }
-    });
+        });
 
     let mut stream = docker.create_image(Some(create_image_options), None, credentials);
 
@@ -86,7 +92,10 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<Option<
                 has_error = true;
                 last_error = error_msg.clone();
 
-                if error_msg.contains("404") || error_msg.contains("not found") || error_msg.contains("manifest unknown") {
+                if error_msg.contains("404")
+                    || error_msg.contains("not found")
+                    || error_msg.contains("manifest unknown")
+                {
                     return Err(RuntimeError::ImageNotFound(last_error));
                 }
             }
@@ -103,30 +112,44 @@ async fn pull_image(docker: Docker, image_config: DockerImage) -> Result<Option<
             Ok(extract_digest(&inspect.repo_digests))
         }
         Err(e) => {
-            error!("Docker image {} still not available after pull: {}", image_name, e);
-            Err(RuntimeError::ImageNotFound(format!("Image {} not available after pull", image_name)))
+            error!(
+                "Docker image {} still not available after pull: {}",
+                image_name, e
+            );
+            Err(RuntimeError::ImageNotFound(format!(
+                "Image {} not available after pull",
+                image_name
+            )))
         }
     }
 }
 
-pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docker, configs: HashMap<String, Config>) -> Result<(), RuntimeError> {
+pub(crate) async fn create_container(
+    deployment: &mut Deployment,
+    docker: &Docker,
+    configs: HashMap<String, Config>,
+) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
         Some((image, tag)) => (image.to_string(), tag.to_string()),
         None => (deployment.image.clone(), "latest".to_string()),
     };
 
-    let mut image_config = DockerImage { name: image, tag, auth: None };
+    let mut image_config = DockerImage {
+        name: image,
+        tag,
+        auth: None,
+    };
 
-    if let Some(config) = &deployment.config {
-        if let (Some(server), Some(username), Some(password)) =
+    if let Some(config) = &deployment.config
+        && let (Some(server), Some(username), Some(password)) =
             (&config.server, &config.username, &config.password)
-        {
-            image_config.auth = Some((server.clone(), username.clone(), password.clone()));
-        }
+    {
+        image_config.auth = Some((server.clone(), username.clone(), password.clone()));
     }
 
-    let should_pull = deployment.config
+    let should_pull = deployment
+        .config
         .as_ref()
         .map(|config| config.image_pull_policy.as_str() != "Never")
         .unwrap_or(true);
@@ -140,7 +163,10 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
     create_network(docker.clone(), network_name.clone()).await?;
 
     let temporary_id = tiny_id();
-    let container_name = format!("{}_{}_{}", &deployment.namespace, &deployment.name, temporary_id);
+    let container_name = format!(
+        "{}_{}_{}",
+        &deployment.namespace, &deployment.name, temporary_id
+    );
 
     let mut labels = HashMap::new();
     labels.insert("ring_deployment".to_string(), deployment.id.clone());
@@ -163,11 +189,17 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
         .collect();
 
     let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
-        .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Failed to parse volumes: {}", e)))?;
+        .map_err(|e| {
+            RuntimeError::InstanceCreationFailed(format!("Failed to parse volumes: {}", e))
+        })?;
 
     let mut mounts: Vec<Mount> = vec![];
     for volume in volumes_collection {
-        mounts.push(create_mount_from_volume(volume, configs.clone(), deployment.id.to_string())?);
+        mounts.push(create_mount_from_volume(
+            volume,
+            configs.clone(),
+            deployment.id.to_string(),
+        )?);
     }
 
     let user_config = build_user_config(&deployment.config);
@@ -176,15 +208,21 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
     let host_config = HostConfig {
         mounts: Some(mounts),
         privileged: privileged_config,
-        nano_cpus: deployment.resources.as_ref()
+        nano_cpus: deployment
+            .resources
+            .as_ref()
             .and_then(|r| r.limits.as_ref())
             .and_then(|l| l.cpu.as_ref())
             .and_then(|cpu| parse_cpu_string(cpu).ok()),
-        memory: deployment.resources.as_ref()
+        memory: deployment
+            .resources
+            .as_ref()
             .and_then(|r| r.limits.as_ref())
             .and_then(|l| l.memory.as_ref())
             .and_then(|m| parse_memory_string(m).ok()),
-        memory_reservation: deployment.resources.as_ref()
+        memory_reservation: deployment
+            .resources
+            .as_ref()
             .and_then(|r| r.requests.as_ref())
             .and_then(|req| req.memory.as_ref())
             .and_then(|m| parse_memory_string(m).ok()),
@@ -223,15 +261,28 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
             docker
                 .connect_network(&network_name, connect_request)
                 .await
-                .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Docker failed to connect to network: {}", e)))?;
+                .map_err(|e| {
+                    RuntimeError::InstanceCreationFailed(format!(
+                        "Docker failed to connect to network: {}",
+                        e
+                    ))
+                })?;
 
             let start_options = StartContainerOptionsBuilder::new().build();
             docker
                 .start_container(&container.id, Some(start_options))
                 .await
-                .map_err(|e| RuntimeError::InstanceCreationFailed(format!("Docker failed to start container: {}", e)))?;
+                .map_err(|e| {
+                    RuntimeError::InstanceCreationFailed(format!(
+                        "Docker failed to start container: {}",
+                        e
+                    ))
+                })?;
 
-            info!("Docker container {} created and started successfully", container_name);
+            info!(
+                "Docker container {} created and started successfully",
+                container_name
+            );
             Ok(())
         }
         Err(e) => {
@@ -241,11 +292,20 @@ pub(crate) async fn create_container(deployment: &mut Deployment, docker: &Docke
     }
 }
 
-pub(super) fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMap<String, Config>, deployment_id: String) -> Result<Mount, RuntimeError> {
+pub(super) fn create_mount_from_volume(
+    volume: DeploymentVolume,
+    configs: HashMap<String, Config>,
+    deployment_id: String,
+) -> Result<Mount, RuntimeError> {
     let mount = if volume.r#type.as_str() == "bind" {
-        let volume_source = volume.source.ok_or_else(||
-            RuntimeError::InstanceCreationFailed("Bind volume requires a source".to_string()))?;
-        let type_mount = if volume_source.starts_with('/') { Some(MountTypeEnum::BIND) } else { Some(MountTypeEnum::VOLUME) };
+        let volume_source = volume.source.ok_or_else(|| {
+            RuntimeError::InstanceCreationFailed("Bind volume requires a source".to_string())
+        })?;
+        let type_mount = if volume_source.starts_with('/') {
+            Some(MountTypeEnum::BIND)
+        } else {
+            Some(MountTypeEnum::VOLUME)
+        };
 
         Mount {
             target: Some(volume.destination),
@@ -255,8 +315,9 @@ pub(super) fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMa
             ..Default::default()
         }
     } else if volume.r#type.as_str() == "volume" {
-        let volume_name = volume.source.ok_or_else(||
-            RuntimeError::InstanceCreationFailed("Named volume requires a source".to_string()))?;
+        let volume_name = volume.source.ok_or_else(|| {
+            RuntimeError::InstanceCreationFailed("Named volume requires a source".to_string())
+        })?;
 
         Mount {
             target: Some(volume.destination),
@@ -266,19 +327,26 @@ pub(super) fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMa
             ..Default::default()
         }
     } else {
-        let config_name = volume.source.as_ref().ok_or_else(||
-            RuntimeError::InstanceCreationFailed("Config volume requires a source".to_string()))?;
+        let config_name = volume.source.as_ref().ok_or_else(|| {
+            RuntimeError::InstanceCreationFailed("Config volume requires a source".to_string())
+        })?;
 
-        let config = configs.get(config_name)
-            .ok_or_else(|| RuntimeError::ConfigNotFound(format!("Config '{}' not found", config_name)))?;
+        let config = configs.get(config_name).ok_or_else(|| {
+            RuntimeError::ConfigNotFound(format!("Config '{}' not found", config_name))
+        })?;
 
         let config_data: HashMap<String, String> = serde_json::from_str(&config.data)?;
 
-        let key = volume.key.as_ref()
-            .ok_or_else(|| RuntimeError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string()))?;
+        let key = volume.key.as_ref().ok_or_else(|| {
+            RuntimeError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string())
+        })?;
 
-        let content = config_data.get(key)
-            .ok_or_else(|| RuntimeError::ConfigKeyNotFound(format!("Key '{}' not found in config '{}'", key, config_name)))?;
+        let content = config_data.get(key).ok_or_else(|| {
+            RuntimeError::ConfigKeyNotFound(format!(
+                "Key '{}' not found in config '{}'",
+                key, config_name
+            ))
+        })?;
 
         let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
         std::fs::create_dir_all(&temp_dir)?;
@@ -287,7 +355,10 @@ pub(super) fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMa
         let temp_file = format!("{}/{}", temp_dir, temporary_id);
         std::fs::write(&temp_file, content)?;
 
-        debug!("Created temporary config file: {} -> {}", temp_file, volume.destination);
+        debug!(
+            "Created temporary config file: {} -> {}",
+            temp_file, volume.destination
+        );
 
         Mount {
             target: Some(volume.destination),
@@ -303,13 +374,19 @@ pub(super) fn create_mount_from_volume(volume: DeploymentVolume, configs: HashMa
 pub(crate) async fn remove_container(docker: Docker, container_id: String) {
     let stop_options = StopContainerOptionsBuilder::new().build();
 
-    match docker.stop_container(&container_id, Some(stop_options)).await {
+    match docker
+        .stop_container(&container_id, Some(stop_options))
+        .await
+    {
         Ok(_) => debug!("Container {} stopped successfully", container_id),
         Err(e) => debug!("Error stopping container {}: {:?}", container_id, e),
     }
 
     let remove_options = RemoveContainerOptionsBuilder::new().build();
-    match docker.remove_container(&container_id, Some(remove_options)).await {
+    match docker
+        .remove_container(&container_id, Some(remove_options))
+        .await
+    {
         Ok(_) => info!("Container {} removed successfully", container_id),
         Err(e) => error!("Error removing container {}: {:?}", container_id, e),
     }
@@ -323,7 +400,10 @@ async fn create_network(docker: Docker, network_name: String) -> Result<(), Runt
     debug!("Start Docker create network: {}", network_name);
 
     let inspect_options = InspectNetworkOptionsBuilder::new().build();
-    match docker.inspect_network(&network_name, Some(inspect_options)).await {
+    match docker
+        .inspect_network(&network_name, Some(inspect_options))
+        .await
+    {
         Ok(_) => {
             debug!("Docker network {} already exists", network_name);
             Ok(())
@@ -343,7 +423,10 @@ async fn create_network(docker: Docker, network_name: String) -> Result<(), Runt
                 }
                 Err(e) => {
                     error!("Docker network create error: {}", e);
-                    Err(RuntimeError::NetworkCreationFailed(format!("Failed to create network {}: {}", network_name, e)))
+                    Err(RuntimeError::NetworkCreationFailed(format!(
+                        "Failed to create network {}: {}",
+                        network_name, e
+                    )))
                 }
             }
         }
@@ -362,7 +445,11 @@ mod tests {
             server: None,
             username: None,
             password: None,
-            user: Some(UserConfig { id: Some(1000), group: Some(1000), privileged: Some(false) }),
+            user: Some(UserConfig {
+                id: Some(1000),
+                group: Some(1000),
+                privileged: Some(false),
+            }),
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -374,7 +461,11 @@ mod tests {
             server: None,
             username: None,
             password: None,
-            user: Some(UserConfig { id: Some(1000), group: None, privileged: Some(false) }),
+            user: Some(UserConfig {
+                id: Some(1000),
+                group: None,
+                privileged: Some(false),
+            }),
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -391,7 +482,11 @@ mod tests {
             server: None,
             username: None,
             password: None,
-            user: Some(UserConfig { id: Some(0), group: Some(0), privileged: Some(true) }),
+            user: Some(UserConfig {
+                id: Some(0),
+                group: Some(0),
+                privileged: Some(true),
+            }),
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }
@@ -406,7 +501,8 @@ mod tests {
             permission: "rw".to_string(),
             key: None,
         };
-        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string()).unwrap();
+        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string())
+            .unwrap();
         assert_eq!(mount.target, Some("/container/path".to_string()));
         assert_eq!(mount.source, Some("/host/path".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::BIND));
@@ -433,24 +529,33 @@ mod tests {
             permission: "ro".to_string(),
             key: Some("nginx.conf".to_string()),
         };
-        let mount = create_mount_from_volume(volume, configs, "test-deployment".to_string()).unwrap();
+        let mount =
+            create_mount_from_volume(volume, configs, "test-deployment".to_string()).unwrap();
         assert_eq!(mount.target, Some("/app/nginx.conf".to_string()));
-        assert!(mount.source.unwrap().contains("/tmp/ring_configs/test-deployment"));
+        assert!(
+            mount
+                .source
+                .unwrap()
+                .contains("/tmp/ring_configs/test-deployment")
+        );
         assert_eq!(mount.read_only, Some(true));
     }
 
     #[test]
     fn test_config_volume_with_missing_key_should_fail() {
         let mut configs = HashMap::new();
-        configs.insert("test-config".to_string(), Config {
-            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            created_at: "2010-03-15 11:41:00".to_string(),
-            updated_at: None,
-            namespace: "kemeter".to_string(),
-            name: "".to_string(),
-            data: r#"{"existing_key": "value"}"#.to_string(),
-            labels: "".to_string(),
-        });
+        configs.insert(
+            "test-config".to_string(),
+            Config {
+                id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                created_at: "2010-03-15 11:41:00".to_string(),
+                updated_at: None,
+                namespace: "kemeter".to_string(),
+                name: "".to_string(),
+                data: r#"{"existing_key": "value"}"#.to_string(),
+                labels: "".to_string(),
+            },
+        );
         let volume = DeploymentVolume {
             r#type: "config".to_string(),
             source: Some("test-config".to_string()),
@@ -459,7 +564,10 @@ mod tests {
             driver: "local".to_string(),
             permission: "ro".to_string(),
         };
-        assert!(matches!(create_mount_from_volume(volume, configs, "test-deployment".to_string()), Err(RuntimeError::ConfigKeyNotFound(_))));
+        assert!(matches!(
+            create_mount_from_volume(volume, configs, "test-deployment".to_string()),
+            Err(RuntimeError::ConfigKeyNotFound(_))
+        ));
     }
 
     #[test]
@@ -472,7 +580,8 @@ mod tests {
             permission: "rw".to_string(),
             key: None,
         };
-        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string()).unwrap();
+        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string())
+            .unwrap();
         assert_eq!(mount.target, Some("/app/data".to_string()));
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
@@ -481,10 +590,11 @@ mod tests {
 
     #[test]
     fn test_extract_digest_from_repo_digests() {
-        let repo_digests = Some(vec![
-            "nginx@sha256:abc123def456".to_string(),
-        ]);
-        assert_eq!(extract_digest(&repo_digests), Some("sha256:abc123def456".to_string()));
+        let repo_digests = Some(vec!["nginx@sha256:abc123def456".to_string()]);
+        assert_eq!(
+            extract_digest(&repo_digests),
+            Some("sha256:abc123def456".to_string())
+        );
     }
 
     #[test]

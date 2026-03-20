@@ -1,4 +1,4 @@
-use crate::config::config::{load_auth_config, Config};
+use crate::config::config::{Config, load_auth_config};
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -7,11 +7,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) fn command_config() -> Command {
     Command::new("create")
         .about("Create a namespace")
-        .arg(
-            Arg::new("name")
-                .required(true)
-                .help("Namespace name"),
-        )
+        .arg(Arg::new("name").required(true).help("Namespace name"))
 }
 
 #[derive(Serialize)]
@@ -30,18 +26,20 @@ struct ErrorResponse {
     error: String,
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let name = args.get_one::<String>("name").unwrap();
 
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let input = NamespaceInput {
-        name: name.clone(),
-    };
+    let input = NamespaceInput { name: name.clone() };
 
     let request = client
-        .post(&format!("{}/namespaces", api_url))
+        .post(format!("{}/namespaces", api_url))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .json(&input)
         .send()
@@ -52,7 +50,10 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
             let status = response.status();
             if status == 201 {
                 let namespace: NamespaceOutput = response.json().await.unwrap();
-                println!("Namespace '{}' created (id: {})", namespace.name, namespace.id);
+                println!(
+                    "Namespace '{}' created (id: {})",
+                    namespace.name, namespace.id
+                );
             } else if status == 409 {
                 let error: ErrorResponse = response.json().await.unwrap();
                 println!("Error: {}", error.error);

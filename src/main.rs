@@ -1,46 +1,49 @@
-use std::process::Command as BaseCommand;
+#![allow(clippy::module_inception)]
+
+use clap::{Arg, Command};
 use std::env;
-use clap::{Command, Arg};
+use std::process::Command as BaseCommand;
 
 #[macro_use]
 extern crate log;
 extern crate env_logger;
 mod commands {
-  pub(crate) mod context;
-  pub(crate) mod init;
-  pub(crate) mod server;
-  pub(crate) mod apply;
-  pub(crate) mod deployment;
+    pub(crate) mod apply;
+    pub(crate) mod context;
+    pub(crate) mod deployment;
+    pub(crate) mod init;
+    pub(crate) mod server;
 
-  pub(crate) mod namespace;
-  pub(crate) mod node;
-  pub(crate) mod login;
-  pub(crate) mod user;
-  pub(crate) mod config;
-  pub(crate) mod secret;
+    pub(crate) mod config;
+    pub(crate) mod login;
+    pub(crate) mod namespace;
+    pub(crate) mod node;
+    pub(crate) mod secret;
+    pub(crate) mod user;
 }
 
 mod scheduler {
-  pub(crate) mod scheduler;
-  pub(crate) mod health_checker;
+    pub(crate) mod health_checker;
+    pub(crate) mod scheduler;
 }
 
 mod runtime {
-  pub(crate) mod docker;
-  pub(crate) mod error;
-  pub(crate) mod runtime;
-  pub(crate) mod types;
+    pub(crate) mod docker;
+    pub(crate) mod error;
+    pub(crate) mod runtime;
+    pub(crate) mod types;
 }
 
 mod models {
-  pub(crate) mod deployments;
-  pub(crate) mod users;
-  pub(crate) mod config;
-  pub(crate) mod namespace;
-  pub(crate) mod secret;
-  pub(crate) mod deployment_event;
-  pub(crate) mod health_check;
-  pub(crate) mod health_check_logs;
+    pub(crate) mod config;
+    pub(crate) mod deployment_event;
+    pub(crate) mod deployments;
+    pub(crate) mod health_check;
+    pub(crate) mod health_check_logs;
+    pub(crate) mod namespace;
+    pub(crate) mod query;
+    pub(crate) mod secret;
+    pub(crate) mod users;
 }
 
 mod api;
@@ -71,122 +74,73 @@ async fn main() {
                 .required(false)
                 .help("Sets the context to use (e.g., development, staging, production)")
                 .long("context")
-                .short('c')
+                .short('c'),
         )
-        .subcommand(
-            commands::context::command_config(),
-        )
-        .subcommand(
-            commands::init::command_config(),
-        )
+        .subcommand(commands::context::command_config())
+        .subcommand(commands::init::command_config())
         .subcommand(
             Command::new("server")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::server::command_config(),
-                )
+                .subcommand(commands::server::command_config()),
         )
-        .subcommand(
-            commands::apply::command_config(),
-        )
-        .subcommand(
-            commands::login::command_config(),
-        )
+        .subcommand(commands::apply::command_config())
+        .subcommand(commands::login::command_config())
         .subcommand(
             Command::new("deployment")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
                 // .args(push_args())
-                .subcommand(
-                    commands::deployment::list::command_config(),
-                )
-                .subcommand(
-                    commands::deployment::inspect::command_config(),
-                )
-                .subcommand(
-                    commands::deployment::delete::command_config(),
-                )
-                .subcommand(
-                    commands::deployment::logs::command_config(),
-                )
-                .subcommand(
-                    commands::deployment::events::command_config(),
-                )
-                .subcommand(
-                    commands::deployment::metrics::command_config(),
-                )
+                .subcommand(commands::deployment::list::command_config())
+                .subcommand(commands::deployment::inspect::command_config())
+                .subcommand(commands::deployment::delete::command_config())
+                .subcommand(commands::deployment::logs::command_config())
+                .subcommand(commands::deployment::events::command_config())
+                .subcommand(commands::deployment::metrics::command_config()),
         )
         .subcommand(
             Command::new("namespace")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::namespace::create::command_config(),
-                )
-                .subcommand(
-                    commands::namespace::list::command_config(),
-                )
-                .subcommand(
-                    commands::namespace::prune::command_config(),
-                )
+                .subcommand(commands::namespace::create::command_config())
+                .subcommand(commands::namespace::list::command_config())
+                .subcommand(commands::namespace::prune::command_config()),
         )
         .subcommand(
             Command::new("node")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::node::get::command_config()
-                )
+                .subcommand(commands::node::get::command_config()),
         )
         .subcommand(
             Command::new("config")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::config::list::command_config(),
-                )
-                .subcommand(
-                    commands::config::inspect::command_config(),
-                )
-                .subcommand(
-                    commands::config::delete::command_config(),
-                )
+                .subcommand(commands::config::list::command_config())
+                .subcommand(commands::config::inspect::command_config())
+                .subcommand(commands::config::delete::command_config()),
         )
         .subcommand(
             Command::new("user")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::user::list::command_config(),
-                )
-                .subcommand(
-                    commands::user::create::command_config(),
-                )
-                .subcommand(
-                    commands::user::update::command_config(),
-                )
-                .subcommand(
-                    commands::user::delete::command_config(),
-                )
+                .subcommand(commands::user::list::command_config())
+                .subcommand(commands::user::create::command_config())
+                .subcommand(commands::user::update::command_config())
+                .subcommand(commands::user::delete::command_config()),
         )
         .subcommand(
             Command::new("secret")
                 .args_conflicts_with_subcommands(true)
                 .flatten_help(true)
-                .subcommand(
-                    commands::secret::list::command_config(),
-                )
-                .subcommand(
-                    commands::secret::create::command_config(),
-                )
-                .subcommand(
-                    commands::secret::delete::command_config(),
-                )
+                .subcommand(commands::secret::list::command_config())
+                .subcommand(commands::secret::create::command_config())
+                .subcommand(commands::secret::delete::command_config()),
         );
 
     let matches = app.get_matches();
-    let context = matches.get_one::<String>("context")
+    let context = matches
+        .get_one::<String>("context")
         .map(|s| s.as_str())
         .unwrap_or("default");
 
@@ -203,78 +157,41 @@ async fn main() {
 
     match subcommand_name {
         Some(("context", sub_matches)) => {
-            commands::context::execute(
-                sub_matches,
-                config,
-            );
+            commands::context::execute(sub_matches, config);
         }
         Some(("init", sub_matches)) => {
             commands::init::init(sub_matches);
         }
         Some(("server", sub_matches)) => {
             let server_command = sub_matches.subcommand().unwrap_or(("start", sub_matches));
-            match server_command {
-                ("start", sub_matches) => {
-                    commands::server::execute(
-                        sub_matches,
-                        config,
-                    ).await
-                }
-                _ => {}
+            if let ("start", sub_matches) = server_command {
+                commands::server::execute(sub_matches, config).await
             }
         }
         Some(("apply", sub_matches)) => {
-          commands::apply::apply(
-              sub_matches,
-              config,
-              &client,
-          ).await;
+            commands::apply::apply(sub_matches, config, &client).await;
         }
         Some(("deployment", sub_matches)) => {
             let deployment_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match deployment_command {
                 ("list", sub_matches) => {
-                    commands::deployment::list::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::list::execute(sub_matches, config, &client).await;
                 }
                 ("inspect", sub_matches) => {
-                    commands::deployment::inspect::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::inspect::execute(sub_matches, config, &client).await;
                 }
                 ("delete", sub_matches) => {
-                    commands::deployment::delete::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::delete::execute(sub_matches, config, &client).await;
                 }
 
                 ("logs", sub_matches) => {
-                    commands::deployment::logs::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::logs::execute(sub_matches, config, &client).await;
                 }
                 ("events", sub_matches) => {
-                    commands::deployment::events::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::events::execute(sub_matches, config, &client).await;
                 }
                 ("metrics", sub_matches) => {
-                    commands::deployment::metrics::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::deployment::metrics::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
@@ -283,106 +200,55 @@ async fn main() {
             let namespace_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match namespace_command {
                 ("create", sub_matches) => {
-                    commands::namespace::create::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::namespace::create::execute(sub_matches, config, &client).await;
                 }
                 ("list", sub_matches) => {
-                    commands::namespace::list::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::namespace::list::execute(sub_matches, config, &client).await;
                 }
                 ("prune", sub_matches) => {
-                    commands::namespace::prune::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::namespace::prune::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
         }
         Some(("node", sub_matches)) => {
             let node_command = sub_matches.subcommand().unwrap_or(("get", sub_matches));
-            match node_command {
-                ("get", sub_matches) => {
-                    commands::node::get::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
-                }
-                _ => {}
+            if let ("get", sub_matches) = node_command {
+                commands::node::get::execute(sub_matches, config, &client).await;
             }
         }
         Some(("config", sub_matches)) => {
             let config_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match config_command {
                 ("list", sub_matches) => {
-                    commands::config::list::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::config::list::execute(sub_matches, config, &client).await;
                 }
                 ("inspect", sub_matches) => {
-                    commands::config::inspect::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::config::inspect::execute(sub_matches, config, &client).await;
                 }
                 ("delete", sub_matches) => {
-                    commands::config::delete::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::config::delete::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
         }
         Some(("login", sub_matches)) => {
-            commands::login::execute(
-                sub_matches,
-                config,
-                &client,
-            ).await;
+            commands::login::execute(sub_matches, config, &client).await;
         }
         Some(("user", sub_matches)) => {
             let user_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match user_command {
                 ("list", sub_matches) => {
-                    commands::user::list::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::user::list::execute(sub_matches, config, &client).await;
                 }
                 ("create", sub_matches) => {
-                    commands::user::create::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::user::create::execute(sub_matches, config, &client).await;
                 }
                 ("update", sub_matches) => {
-                    commands::user::update::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::user::update::execute(sub_matches, config, &client).await;
                 }
                 ("delete", sub_matches) => {
-                    commands::user::delete::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::user::delete::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
@@ -391,25 +257,13 @@ async fn main() {
             let secret_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
             match secret_command {
                 ("list", sub_matches) => {
-                    commands::secret::list::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::secret::list::execute(sub_matches, config, &client).await;
                 }
                 ("create", sub_matches) => {
-                    commands::secret::create::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::secret::create::execute(sub_matches, config, &client).await;
                 }
                 ("delete", sub_matches) => {
-                    commands::secret::delete::execute(
-                        sub_matches,
-                        config,
-                        &client,
-                    ).await;
+                    commands::secret::delete::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
@@ -424,9 +278,7 @@ async fn main() {
                 .spawn()
                 .expect("failed to execute process");
 
-            subprocess
-                .wait()
-                .expect("failed to wait for process");
+            subprocess.wait().expect("failed to wait for process");
         }
     }
 }

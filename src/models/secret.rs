@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::env;
+use aes_gcm::aead::rand_core::RngCore;
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, OsRng},
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
-use aes_gcm::aead::rand_core::RngCore;
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use std::collections::HashMap;
+use std::env;
 
 const NONCE_SIZE: usize = 12;
 
@@ -15,7 +15,8 @@ fn get_encryption_key() -> [u8; 32] {
     let key_str = env::var("RING_SECRET_KEY")
         .expect("RING_SECRET_KEY environment variable must be set (32 bytes, base64 encoded)");
 
-    let key_bytes = BASE64.decode(&key_str)
+    let key_bytes = BASE64
+        .decode(&key_str)
         .expect("RING_SECRET_KEY must be valid base64");
 
     if key_bytes.len() != 32 {
@@ -60,8 +61,7 @@ pub(crate) fn decrypt_value(encrypted: &[u8]) -> Result<String, String> {
         .decrypt(nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
-    String::from_utf8(plaintext)
-        .map_err(|e| format!("Invalid UTF-8: {}", e))
+    String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -106,43 +106,28 @@ impl Secret {
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Secret> {
-    let mut query = String::from("SELECT id, created_at, updated_at, namespace, name, value FROM secret");
-    let mut all_values: Vec<String> = Vec::new();
-
-    if !filters.is_empty() {
-        let conditions: Vec<String> = filters
-            .iter()
-            .filter(|(k, v)| !v.is_empty() && ALLOWED_FILTER_COLUMNS.contains(&k.as_str()))
-            .map(|(column, values)| {
-                let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                all_values.extend(values.clone());
-                format!("{} IN({})", column, placeholders)
-            })
-            .collect();
-
-        if !conditions.is_empty() {
-            query += &format!(" WHERE {}", conditions.join(" AND "));
-        }
-    }
+pub(crate) async fn find_all(
+    pool: &SqlitePool,
+    filters: HashMap<String, Vec<String>>,
+) -> Result<Vec<Secret>, sqlx::Error> {
+    let (query, values) = crate::models::query::build_filtered_query(
+        "SELECT id, created_at, updated_at, namespace, name, value FROM secret",
+        &filters,
+        ALLOWED_FILTER_COLUMNS,
+    );
 
     let mut q = sqlx::query_as::<_, SecretRow>(&query);
-    for val in &all_values {
+    for val in &values {
         q = q.bind(val);
     }
 
-    match q.fetch_all(pool).await {
-        Ok(rows) => rows.into_iter().map(Secret::from).collect(),
-        Err(e) => {
-            log::error!("Failed to execute secret query: {}", e);
-            vec![]
-        }
-    }
+    let rows = q.fetch_all(pool).await?;
+    Ok(rows.into_iter().map(Secret::from).collect())
 }
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Secret>, sqlx::Error> {
     let row = sqlx::query_as::<_, SecretRow>(
-        "SELECT id, created_at, updated_at, namespace, name, value FROM secret WHERE id = ?"
+        "SELECT id, created_at, updated_at, namespace, name, value FROM secret WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Debug, Clone, sqlx::FromRow)]
 pub(crate) struct Config {
@@ -14,49 +14,38 @@ pub(crate) struct Config {
 }
 
 pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Config>, sqlx::Error> {
-    sqlx::query_as::<_, Config>("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Config>(
+        "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(pool)
+    .await
 }
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
 
-pub(crate) async fn find_all(pool: &SqlitePool, filters: HashMap<String, Vec<String>>) -> Vec<Config> {
-    let mut query = String::from("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config");
-    let mut all_values: Vec<String> = Vec::new();
-
-    if !filters.is_empty() {
-        let conditions: Vec<String> = filters
-            .iter()
-            .filter(|(k, v)| !v.is_empty() && ALLOWED_FILTER_COLUMNS.contains(&k.as_str()))
-            .map(|(column, values)| {
-                let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                all_values.extend(values.clone());
-                format!("{} IN({})", column, placeholders)
-            })
-            .collect();
-
-        if !conditions.is_empty() {
-            query += &format!(" WHERE {}", conditions.join(" AND "));
-        }
-    }
+pub(crate) async fn find_all(
+    pool: &SqlitePool,
+    filters: HashMap<String, Vec<String>>,
+) -> Result<Vec<Config>, sqlx::Error> {
+    let (query, values) = crate::models::query::build_filtered_query(
+        "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config",
+        &filters,
+        ALLOWED_FILTER_COLUMNS,
+    );
 
     let mut q = sqlx::query_as::<_, Config>(&query);
-    for val in &all_values {
+    for val in &values {
         q = q.bind(val);
     }
 
-    match q.fetch_all(pool).await {
-        Ok(configs) => configs,
-        Err(e) => {
-            log::error!("Failed to execute config query: {}", e);
-            vec![]
-        }
-    }
+    q.fetch_all(pool).await
 }
 
-pub(crate) async fn find_by_namespace(pool: &SqlitePool, namespace: String) -> Result<Vec<Config>, sqlx::Error> {
+pub(crate) async fn find_by_namespace(
+    pool: &SqlitePool,
+    namespace: String,
+) -> Result<Vec<Config>, sqlx::Error> {
     sqlx::query_as::<_, Config>("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE namespace = ?")
         .bind(&namespace)
         .fetch_all(pool)
@@ -69,7 +58,7 @@ pub(crate) async fn create(pool: &SqlitePool, config: Config) -> Result<(), sqlx
     )
     .bind(&config.id)
     .bind(&config.created_at)
-    .bind(&config.updated_at.unwrap_or_default())
+    .bind(config.updated_at.unwrap_or_default())
     .bind(&config.namespace)
     .bind(&config.name)
     .bind(&config.data)
@@ -95,7 +84,7 @@ pub(crate) async fn delete(pool: &SqlitePool, id: String) -> Result<(), sqlx::Er
 
 pub(crate) async fn update(pool: &SqlitePool, config: Config) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE config SET updated_at = ?, name = ?, data = ?, labels = ? WHERE id = ?")
-        .bind(&config.updated_at.unwrap_or_default())
+        .bind(config.updated_at.unwrap_or_default())
         .bind(&config.name)
         .bind(&config.data)
         .bind(&config.labels)

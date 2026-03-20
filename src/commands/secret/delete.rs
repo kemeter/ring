@@ -1,6 +1,6 @@
-use clap::Command;
 use clap::Arg;
 use clap::ArgMatches;
+use clap::Command;
 use serde::Deserialize;
 use std::io::{self, Write};
 
@@ -10,17 +10,13 @@ use crate::config::config::load_auth_config;
 pub(crate) fn command_config() -> Command {
     Command::new("delete")
         .about("Delete a secret")
-        .arg(
-            Arg::new("id")
-                .required(true)
-                .help("Secret ID")
-        )
+        .arg(Arg::new("id").required(true).help("Secret ID"))
         .arg(
             Arg::new("force")
                 .short('f')
                 .long("force")
                 .help("Force deletion even if referenced by deployments")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
 }
 
@@ -31,7 +27,11 @@ struct ConflictResponse {
     deployments: Vec<String>,
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let id = args.get_one::<String>("id").unwrap();
     let force = args.get_flag("force");
     let api_url = configuration.get_api_url();
@@ -73,7 +73,10 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                                 let force_url = format!("{}/secrets/{}?force=true", api_url, id);
                                 let retry = client
                                     .delete(&force_url)
-                                    .header("Authorization", format!("Bearer {}", auth_config.token))
+                                    .header(
+                                        "Authorization",
+                                        format!("Bearer {}", auth_config.token),
+                                    )
                                     .send()
                                     .await;
 

@@ -1,20 +1,16 @@
-use axum::{
-    http::StatusCode,
-    response::IntoResponse,
-    Json
-};
-use axum::extract::State;
-use serde::{Serialize, Deserialize};
-use serde_json::json;
 use crate::api::server::Db;
 use crate::models::users as users_model;
+use axum::extract::State;
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use rand::Rng;
-use rand::rng;
 use rand::distr::Alphanumeric;
+use rand::rng;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 pub(crate) async fn login(
     State(pool): State<Db>,
-    Json(input): Json<LoginInput>
+    Json(input): Json<LoginInput>,
 ) -> impl IntoResponse {
     debug!("Login attempt");
 
@@ -24,16 +20,18 @@ pub(crate) async fn login(
         Ok(Some(mut user)) => {
             let matches = match argon2::verify_encoded(&user.password, input.password.as_bytes()) {
                 Ok(m) => m,
-                Err(_) => return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": ["Internal server error"] }))
-                ),
+                Err(_) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "errors": ["Internal server error"] })),
+                    );
+                }
             };
 
             if !matches {
                 return (
                     StatusCode::UNAUTHORIZED,
-                    Json(json!({ "errors": ["Invalid credentials"] }))
+                    Json(json!({ "errors": ["Invalid credentials"] })),
                 );
             }
 
@@ -43,25 +41,22 @@ pub(crate) async fn login(
 
             let token: String = user.token.clone();
 
-            if let Err(_) = users_model::login(&pool, user).await {
+            if users_model::login(&pool, user).await.is_err() {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": ["Internal server error"] }))
+                    Json(json!({ "errors": ["Internal server error"] })),
                 );
             }
 
-            (
-                StatusCode::OK,
-                Json(json!({ "token": token }))
-            )
+            (StatusCode::OK, Json(json!({ "token": token })))
         }
         Ok(None) => (
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "errors": ["Invalid credentials"] }))
+            Json(json!({ "errors": ["Invalid credentials"] })),
         ),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Internal server error"] }))
+            Json(json!({ "errors": ["Internal server error"] })),
         ),
     }
 }
@@ -80,13 +75,13 @@ fn generate_token() -> String {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub(crate) struct LoginInput {
     username: String,
-    password: String
+    password: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::ErrorResponse;
+    use crate::api::server::tests::new_test_app;
     use axum_test::{TestResponse, TestServer};
     use serde::Deserialize;
     use serde_json::json;
@@ -101,7 +96,7 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
 
         let response: TestResponse = server
-            .post(&"/login")
+            .post("/login")
             .json(&json!({
                 "username": "admin",
                 "password": "changeme",
@@ -109,7 +104,10 @@ mod tests {
             .await;
 
         let response_body: ResponseBody = response.json::<ResponseBody>();
-        assert!(!response_body.token.is_empty(), "Token key is missing in the response");
+        assert!(
+            !response_body.token.is_empty(),
+            "Token key is missing in the response"
+        );
     }
 
     #[tokio::test]
@@ -117,7 +115,7 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
 
         let response: TestResponse = server
-            .post(&"/login")
+            .post("/login")
             .json(&json!({
                 "username": "coucou",
                 "password": "changeme",
@@ -125,6 +123,10 @@ mod tests {
             .await;
 
         let response_body: ErrorResponse = response.json::<ErrorResponse>();
-        assert!(response_body.errors.contains(&"Invalid credentials".to_string()));
+        assert!(
+            response_body
+                .errors
+                .contains(&"Invalid credentials".to_string())
+        );
     }
 }

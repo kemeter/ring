@@ -1,5 +1,5 @@
 use axum::extract::{Path, State};
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 use http::StatusCode;
 use serde::Deserialize;
 use validator::Validate;
@@ -46,16 +46,18 @@ pub(crate) async fn update(
             Json(serde_json::json!({
                 "error": "Validation failed",
                 "details": errors
-            }))
-        ).into_response();
+            })),
+        )
+            .into_response();
     }
 
     // Validate JSON data
     if serde_json::from_str::<serde_json::Value>(&request.data).is_err() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid JSON format in data field"}))
-        ).into_response();
+            Json(serde_json::json!({"error": "Invalid JSON format in data field"})),
+        )
+            .into_response();
     }
 
     // Find existing config
@@ -71,30 +73,26 @@ pub(crate) async fn update(
                 Ok(_) => {
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
-                },
-                Err(_) => {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": "Failed to update configuration"}))
-                    ).into_response()
                 }
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Failed to update configuration"})),
+                )
+                    .into_response(),
             }
-        },
-        Ok(None) => {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Configuration not found"}))
-            ).into_response()
-        },
-        Err(_) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Database error"}))
-            ).into_response()
         }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Configuration not found"})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Database error"})),
+        )
+            .into_response(),
     }
 }
-
 
 #[cfg(test)]
 mod tests {

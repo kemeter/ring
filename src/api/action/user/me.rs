@@ -1,6 +1,6 @@
 use crate::api::dto::user::UserOutput;
 use crate::models::users::User;
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 
 pub(crate) async fn me(user: User) -> impl IntoResponse {
     let output = UserOutput {
@@ -17,10 +17,10 @@ pub(crate) async fn me(user: User) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use axum_test::TestServer;
-    use axum::http::StatusCode;
-    use crate::api::server::tests::new_test_app;
     use crate::api::server::tests::login;
+    use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
 
     #[tokio::test]
     async fn me() {

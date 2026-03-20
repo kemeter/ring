@@ -35,27 +35,25 @@ pub async fn get_deployment_events(
             &pool,
             &deployment_id,
             level,
-            Some(params.limit)
-        ).await
+            Some(params.limit),
+        )
+        .await
     } else {
-        deployment_event::find_events_by_deployment(
-            &pool,
-            &deployment_id,
-            Some(params.limit)
-        ).await
+        deployment_event::find_events_by_deployment(&pool, &deployment_id, Some(params.limit)).await
     };
 
     match events {
-        Ok(events) => {
-            Ok(Json(events))
-        }
+        Ok(events) => Ok(Json(events)),
         Err(e) => {
-            error!("Failed to fetch events for deployment {}: {}", deployment_id, e);
+            error!(
+                "Failed to fetch events for deployment {}: {}",
+                deployment_id, e
+            );
             Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "Failed to fetch deployment events"
-                }))
+                })),
             ))
         }
     }
@@ -64,8 +62,8 @@ pub async fn get_deployment_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::server::tests::{login, new_test_app};
     use axum_test::TestServer;
-    use crate::api::server::tests::{new_test_app, login};
 
     #[tokio::test]
     async fn test_get_deployment_events_success() {

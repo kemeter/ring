@@ -1,19 +1,17 @@
-use crate::config::config::{load_auth_config, Config};
+use crate::config::config::{Config, load_auth_config};
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{print_stdout, Table, WithTitle};
+use cli_table::{Table, WithTitle, print_stdout};
 use serde::Deserialize;
 
 pub(crate) fn command_config() -> Command {
-    Command::new("list")
-        .about("List secrets")
-        .arg(
-            Arg::new("namespace")
-                .short('n')
-                .long("namespace")
-                .help("Filter by namespace")
-        )
+    Command::new("list").about("List secrets").arg(
+        Arg::new("namespace")
+            .short('n')
+            .long("namespace")
+            .help("Filter by namespace"),
+    )
 }
 
 #[derive(Deserialize)]
@@ -39,16 +37,20 @@ struct SecretTableItem {
     updated_at: String,
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
     let mut params: Vec<String> = Vec::new();
 
-    if args.contains_id("namespace") {
-        if let Some(namespaces) = args.get_many::<String>("namespace") {
-            for namespace in namespaces {
-                params.push(format!("namespace[]={}", namespace));
-            }
+    if args.contains_id("namespace")
+        && let Some(namespaces) = args.get_many::<String>("namespace")
+    {
+        for namespace in namespaces {
+            params.push(format!("namespace[]={}", namespace));
         }
     }
 

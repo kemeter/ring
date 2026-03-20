@@ -67,13 +67,13 @@ pub(crate) enum HealthCheckStatus {
 
 impl HealthCheck {
     pub(crate) fn parse_duration(duration_str: &str) -> Result<Duration, String> {
-        if duration_str.ends_with("ms") {
-            let millis = duration_str[..duration_str.len() - 2]
+        if let Some(stripped) = duration_str.strip_suffix("ms") {
+            let millis = stripped
                 .parse::<u64>()
                 .map_err(|_| format!("Invalid duration format: {}", duration_str))?;
             Ok(Duration::from_millis(millis))
-        } else if duration_str.ends_with('s') {
-            let seconds = duration_str[..duration_str.len() - 1]
+        } else if let Some(stripped) = duration_str.strip_suffix('s') {
+            let seconds = stripped
                 .parse::<u64>()
                 .map_err(|_| format!("Invalid duration format: {}", duration_str))?;
             Ok(Duration::from_secs(seconds))
@@ -81,7 +81,6 @@ impl HealthCheck {
             Err(format!("Invalid duration format: {}", duration_str))
         }
     }
-
 
     pub(crate) fn timeout(&self) -> &str {
         match self {

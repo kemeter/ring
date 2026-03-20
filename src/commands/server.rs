@@ -1,13 +1,13 @@
-use clap::{Command};
-use clap::ArgMatches;
 use crate::api::server as ApiServer;
+use clap::ArgMatches;
+use clap::Command;
 use tokio::task;
 
-use crate::scheduler::scheduler::schedule;
 use crate::config::config::Config;
 use crate::database::{get_database_pool, migrate_from_refinery_if_needed};
+use crate::scheduler::scheduler::schedule;
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("start")
 }
 

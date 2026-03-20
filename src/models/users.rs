@@ -1,7 +1,7 @@
+use argon2::{self, Config as Argon2Config};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
-use argon2::{self, Config as Argon2Config};
 
 use crate::serializer::deserialize_null_default;
 
@@ -33,7 +33,8 @@ struct UserRow {
     login_at: Option<String>,
 }
 
-const SELECT_COLUMNS: &str = "id, created_at, updated_at, status, username, password, token, login_at";
+const SELECT_COLUMNS: &str =
+    "id, created_at, updated_at, status, username, password, token, login_at";
 
 impl From<UserRow> for User {
     fn from(row: UserRow) -> Self {
@@ -60,7 +61,10 @@ pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<User>, 
     Ok(row.map(User::from))
 }
 
-pub(crate) async fn find_by_username(pool: &SqlitePool, username: &str) -> Result<Option<User>, sqlx::Error> {
+pub(crate) async fn find_by_username(
+    pool: &SqlitePool,
+    username: &str,
+) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE username = ?", SELECT_COLUMNS);
     let row = sqlx::query_as::<_, UserRow>(&sql)
         .bind(username)
@@ -82,9 +86,7 @@ pub(crate) async fn find_by_token(pool: &SqlitePool, token: &str) -> Result<User
 
 pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user", SELECT_COLUMNS);
-    let rows = sqlx::query_as::<_, UserRow>(&sql)
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query_as::<_, UserRow>(&sql).fetch_all(pool).await?;
 
     Ok(rows.into_iter().map(User::from).collect())
 }
@@ -99,7 +101,11 @@ pub(crate) async fn login(pool: &SqlitePool, user: User) -> Result<(), sqlx::Err
     Ok(())
 }
 
-pub(crate) async fn create(pool: &SqlitePool, username: &str, password: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn create(
+    pool: &SqlitePool,
+    username: &str,
+    password: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO user (id, created_at, status, username, password, token) VALUES (?, datetime(), ?, ?, ?, ?)"
     )
@@ -147,9 +153,5 @@ pub(crate) fn hash_password(password: &str, salt: &str) -> Result<String, argon2
         hash_length: 32,
     };
 
-    argon2::hash_encoded(
-        password.as_bytes(),
-        salt.as_bytes(),
-        &argon2_config
-    )
+    argon2::hash_encoded(password.as_bytes(), salt.as_bytes(), &argon2_config)
 }

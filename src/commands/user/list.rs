@@ -1,13 +1,12 @@
-use crate::config::config::load_auth_config;
 use crate::config::config::Config;
+use crate::config::config::load_auth_config;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{format::Justify, print_stdout, Table, WithTitle};
+use cli_table::{Table, WithTitle, format::Justify, print_stdout};
 use serde::{Deserialize, Serialize};
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
-    Command::new("list")
-        .about("List users")
+pub(crate) fn command_config() -> Command {
+    Command::new("list").about("List users")
 }
 
 #[derive(Table)]
@@ -31,14 +30,18 @@ struct UserTableItem {
     login_at: String,
 }
 
-pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    _args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let mut users = vec![];
     let api_url = configuration.get_api_url();
 
     let auth_config = load_auth_config(configuration.name.clone());
 
     let request = client
-        .get(&format!("{}/users", api_url))
+        .get(format!("{}/users", api_url))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;
@@ -53,16 +56,14 @@ pub(crate) async fn execute(_args: &ArgMatches, mut configuration: Config, clien
             let users_list: Vec<UserDto> = response.json().await.unwrap_or(vec![]);
 
             for user in users_list {
-                users.push(
-                    UserTableItem {
-                        id: user.id,
-                        created_at: user.created_at,
-                        updated_at: user.updated_at,
-                        status: user.status,
-                        username: user.username,
-                        login_at: user.login_at
-                    },
-                )
+                users.push(UserTableItem {
+                    id: user.id,
+                    created_at: user.created_at,
+                    updated_at: user.updated_at,
+                    status: user.status,
+                    username: user.username,
+                    login_at: user.login_at,
+                })
             }
 
             print_stdout(users.with_title()).expect("");

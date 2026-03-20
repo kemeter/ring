@@ -1,11 +1,11 @@
-use clap::{Command};
 use clap::Arg;
 use clap::ArgMatches;
+use clap::Command;
 use serde_json::json;
 
 use crate::config::config::{Config, load_auth_config};
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("create")
         .about("create user")
         .arg(
@@ -13,19 +13,22 @@ pub(crate) fn command_config<'a, 'b>() -> Command {
                 .short('u')
                 .long("username")
                 .help("Your username")
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::new("password")
                 .short('p')
                 .long("password")
                 .help("Your password")
-                .required(true)
+                .required(true),
         )
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
-
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let username = args.get_one::<String>("username");
     let password = args.get_one::<String>("password");
 

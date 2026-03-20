@@ -1,23 +1,25 @@
-use clap::{Arg, ArgMatches, Command};
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::runtime::runtime::Log;
+use clap::{Arg, ArgMatches, Command};
 
-pub(crate) fn command_config<'a, 'b>() -> Command {
+pub(crate) fn command_config() -> Command {
     Command::new("logs")
         .about("Show information on a deployment")
-        .arg(
-            Arg::new("id")
-        )
+        .arg(Arg::new("id"))
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client: &reqwest::Client) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    client: &reqwest::Client,
+) {
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
     let request = client
-        .get(&format!("{}/deployments/{}/logs", api_url, id))
+        .get(format!("{}/deployments/{}/logs", api_url, id))
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;
@@ -42,7 +44,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config, client
                     eprintln!("Error parsing logs response");
                 }
             }
-        },
+        }
         Err(_) => {
             eprintln!("Error fetching deployment logs");
         }

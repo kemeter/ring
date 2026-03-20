@@ -1,10 +1,9 @@
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions, SqliteConnectOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::env;
 use std::str::FromStr;
 
 pub(crate) async fn get_database_pool() -> SqlitePool {
-    let database_path = env::var("RING_DATABASE_PATH")
-        .unwrap_or_else(|_| "ring.db".to_string());
+    let database_path = env::var("RING_DATABASE_PATH").unwrap_or_else(|_| "ring.db".to_string());
 
     let connect_options = SqliteConnectOptions::from_str(&format!("sqlite:{}", database_path))
         .expect("Invalid database path")
@@ -41,7 +40,7 @@ pub(crate) async fn migrate_from_refinery_if_needed(pool: &SqlitePool) {
     }
 
     let has_sqlx: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'"
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='_sqlx_migrations'",
     )
     .fetch_one(pool)
     .await
@@ -54,12 +53,10 @@ pub(crate) async fn migrate_from_refinery_if_needed(pool: &SqlitePool) {
     info!("Detected refinery migration history, transitioning to sqlx...");
 
     // Get the number of migrations applied by refinery
-    let refinery_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM refinery_schema_history"
-    )
-    .fetch_one(pool)
-    .await
-    .unwrap_or(0);
+    let refinery_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM refinery_schema_history")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
 
     // Use sqlx's embedded migrations to get the correct checksums
     let migrator = sqlx::migrate!("./migrations");
@@ -72,7 +69,7 @@ pub(crate) async fn migrate_from_refinery_if_needed(pool: &SqlitePool) {
             success BOOLEAN NOT NULL,
             checksum BLOB NOT NULL,
             execution_time BIGINT NOT NULL
-        )"
+        )",
     )
     .execute(pool)
     .await
@@ -92,5 +89,8 @@ pub(crate) async fn migrate_from_refinery_if_needed(pool: &SqlitePool) {
         .expect("Failed to insert migration record");
     }
 
-    info!("Refinery to sqlx migration transition complete ({} migrations marked as applied)", refinery_count);
+    info!(
+        "Refinery to sqlx migration transition complete ({} migrations marked as applied)",
+        refinery_count
+    );
 }

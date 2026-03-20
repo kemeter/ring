@@ -1,5 +1,5 @@
 use axum::extract::{FromRequestParts, State};
-use axum::{response::IntoResponse, Json};
+use axum::{Json, response::IntoResponse};
 use std::collections::HashMap;
 
 use http::request::Parts;
@@ -26,8 +26,8 @@ pub(crate) struct QueryParameters {
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
-    where
-        S: Send + Sync,
+where
+    S: Send + Sync,
 {
     type Rejection = (StatusCode, axum::Json<serde_json::Value>);
 
@@ -53,10 +53,10 @@ impl<S> FromRequestParts<S> for QueryParameters
             }
         }
 
-        Ok(QueryParameters{
+        Ok(QueryParameters {
             namespaces,
             status,
-            kind
+            kind,
         })
     }
 }
@@ -64,9 +64,8 @@ impl<S> FromRequestParts<S> for QueryParameters
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User
+    _user: User,
 ) -> impl IntoResponse {
-
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
 
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
@@ -83,7 +82,13 @@ pub(crate) async fn list(
         filters.insert(String::from("kind"), query_parameters.kind);
     }
 
-    let list_deployments = deployments::find_all(&pool, filters).await;
+    let list_deployments = match deployments::find_all(&pool, filters).await {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("Failed to list deployments: {}", e);
+            return Json(deployments);
+        }
+    };
 
     let docker = match docker::connect() {
         Ok(d) => d,
@@ -91,9 +96,9 @@ pub(crate) async fn list(
     };
 
     for deployment in list_deployments.into_iter() {
-        let mut output = DeploymentOutput::from_to_model(deployment.clone());
-        let instances = docker::list_instances(&docker, deployment.id.to_string(), "running").await;
-        output.instances = instances;
+        let id = deployment.id.clone();
+        let mut output = DeploymentOutput::from_to_model(deployment);
+        output.instances = docker::list_instances(&docker, id, "running").await;
 
         deployments.push(output);
     }
@@ -124,7 +129,6 @@ mod tests {
         let deployments = response.json::<Vec<DeploymentOutput>>();
         assert_eq!(2, deployments.len());
     }
-
 
     #[tokio::test]
     async fn list_by_namespace() {
