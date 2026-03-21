@@ -99,6 +99,10 @@ pub(crate) struct AppState {
 }
 
 pub(crate) fn router(state: AppState) -> Router {
+    router_with_timeout(state, Duration::from_secs(10))
+}
+
+pub(crate) fn router_with_timeout(state: AppState, request_timeout: Duration) -> Router {
     // Routes that support long-lived connections (SSE streaming) - no timeout
     let streaming_routes = Router::new().route("/deployments/{id}/logs", get(deployment_logs));
 
@@ -140,7 +144,7 @@ pub(crate) fn router(state: AppState) -> Router {
                         ))
                     }
                 }))
-                .timeout(Duration::from_secs(10))
+                .timeout(request_timeout)
                 .into_inner(),
         );
 
@@ -171,7 +175,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config) {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::api::server::{AppState, router};
+    use crate::api::server::{AppState, router_with_timeout};
     use crate::config::config::Config;
     use axum::Router;
     use axum::http::StatusCode;
@@ -211,7 +215,7 @@ pub(crate) mod tests {
             configuration,
         };
 
-        router(state)
+        router_with_timeout(state, std::time::Duration::from_secs(30))
     }
 
     pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {

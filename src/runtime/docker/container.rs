@@ -8,7 +8,7 @@ use bollard::{
     auth::DockerCredentials,
     models::{
         ContainerCreateBody, EndpointSettings, HostConfig, Mount, MountTypeEnum,
-        NetworkConnectRequest, NetworkCreateRequest,
+        NetworkConnectRequest, NetworkCreateRequest, PortBinding,
     },
     query_parameters::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectNetworkOptionsBuilder,
@@ -205,9 +205,27 @@ pub(crate) async fn create_container(
     let user_config = build_user_config(&deployment.config);
     let privileged_config = get_privileged_config(&deployment.config);
 
+    let port_bindings: HashMap<String, Option<Vec<PortBinding>>> = deployment
+        .ports
+        .iter()
+        .map(|p| {
+            let key = format!("{}/tcp", p.target);
+            let binding = PortBinding {
+                host_ip: Some("0.0.0.0".to_string()),
+                host_port: Some(p.published.to_string()),
+            };
+            (key, Some(vec![binding]))
+        })
+        .collect();
+
     let host_config = HostConfig {
         mounts: Some(mounts),
         privileged: privileged_config,
+        port_bindings: if port_bindings.is_empty() {
+            None
+        } else {
+            Some(port_bindings)
+        },
         nano_cpus: deployment
             .resources
             .as_ref()

@@ -1,4 +1,4 @@
-use crate::models::deployments::{Deployment, DeploymentConfig, EnvValue, Resource};
+use crate::models::deployments::{Deployment, DeploymentConfig, DeploymentPort, EnvValue, Resource};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
@@ -35,7 +35,7 @@ pub(crate) struct DeploymentOutput {
     #[serde(serialize_with = "serialize_option_deployment_config")]
     pub(crate) config: Option<DeploymentConfig>,
     pub(crate) replicas: u32,
-    pub(crate) ports: Vec<String>,
+    pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
     pub(crate) instances: Vec<String>,
     pub(crate) environment: HashMap<String, EnvValue>,
@@ -77,7 +77,7 @@ impl DeploymentOutput {
             command: deployment.command,
             config: deployment.config,
             replicas: deployment.replicas,
-            ports: [].to_vec(),
+            ports: deployment.ports,
             labels,
             environment,
             volumes,
