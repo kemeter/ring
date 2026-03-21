@@ -365,6 +365,7 @@ mod tests {
             health_checks,
             resources: None,
             image_digest: None,
+            ports: vec![],
             pending_events: vec![],
         }
     }
