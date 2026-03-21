@@ -414,6 +414,7 @@ mod tests {
             health_checks: vec![],
             resources: None,
             image_digest: None,
+            ports: vec![],
             pending_events: vec![],
             parent_id: None,
         };
@@ -452,6 +453,7 @@ mod tests {
                 requests: None,
             }),
             image_digest: None,
+            ports: vec![],
             pending_events: vec![],
             parent_id: None,
         };

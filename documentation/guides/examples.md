@@ -58,6 +58,9 @@ deployments:
 
     command: ["npm", "start"]
 
+    ports:
+      - { published: 3000, target: 3000 }
+
     labels:
       app: nodejs-api
       tier: backend

@@ -95,6 +95,12 @@ pub(crate) struct DeploymentConfig {
     pub(crate) user: Option<UserConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct DeploymentPort {
+    pub(crate) published: u16,
+    pub(crate) target: u16,
+}
+
 fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
@@ -201,6 +207,8 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) image_digest: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) ports: Vec<DeploymentPort>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -248,6 +256,7 @@ struct DeploymentRow {
     resources: Option<String>,
     image_digest: Option<String>,
     parent_id: Option<String>,
+    ports: Option<String>,
 }
 
 fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
@@ -319,6 +328,20 @@ impl From<DeploymentRow> for Deployment {
                 .filter(|s| !s.is_empty())
                 .and_then(|s| serde_json::from_str(&s).ok()),
             image_digest: row.image_digest,
+            ports: row
+                .ports
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    serde_json::from_str(&s).unwrap_or_else(|e| {
+                        log::warn!(
+                            "Failed to deserialize ports for deployment {}: {}",
+                            id,
+                            e
+                        );
+                        Vec::new()
+                    })
+                })
+                .unwrap_or_default(),
             pending_events: vec![],
             parent_id: row.parent_id,
         }
@@ -328,7 +351,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id
+    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -400,12 +423,14 @@ pub(crate) async fn create(
         .resources
         .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
+    let ports_json =
+        serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -426,6 +451,7 @@ pub(crate) async fn create(
     .bind(&resources_json)
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
+    .bind(&ports_json)
     .execute(pool)
     .await?;
 

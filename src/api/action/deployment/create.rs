@@ -12,7 +12,7 @@ use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::models::deployment_event;
 use crate::models::deployments;
-use crate::models::deployments::{DeploymentConfig, DeploymentStatus, EnvValue, Resource};
+use crate::models::deployments::{DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, Resource};
 use crate::models::namespace;
 use crate::models::users::User;
 
@@ -210,6 +210,8 @@ pub(crate) struct DeploymentInput {
     health_checks: Option<Vec<crate::models::health_check::HealthCheck>>,
     #[serde(default)]
     resources: Option<Resource>,
+    #[serde(default)]
+    ports: Vec<DeploymentPort>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -375,6 +377,7 @@ pub(crate) async fn create(
                 health_checks: input.health_checks.unwrap_or_default(),
                 resources: input.resources,
                 image_digest: None,
+                ports: input.ports,
                 pending_events: vec![],
                 parent_id: rolling_parent_id,
             };
@@ -1709,5 +1712,59 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
         let parent: serde_json::Value = response.json();
         assert_eq!(parent["status"], "deleted");
+    }
+
+    #[tokio::test]
+    async fn create_with_ports() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [
+                    { "published": 8080, "target": 80 },
+                    { "published": 3000, "target": 3000 }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        let ports = body["ports"].as_array().unwrap();
+        assert_eq!(ports.len(), 2);
+        assert_eq!(ports[0]["published"], 8080);
+        assert_eq!(ports[0]["target"], 80);
+        assert_eq!(ports[1]["published"], 3000);
+        assert_eq!(ports[1]["target"], 3000);
+    }
+
+    #[tokio::test]
+    async fn create_without_ports_defaults_to_empty() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        let ports = body["ports"].as_array().unwrap();
+        assert!(ports.is_empty());
     }
 }

@@ -20,6 +20,8 @@ deployments:
     labels:
       app: nginx
       version: latest
+    ports:
+      - { published: 8080, target: 80 }
 ```
 
 ### Apply
@@ -99,17 +101,17 @@ docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 
 ## Test the application
 
-Find the container's exposed port (Ring does not publish ports automatically; this assumes the image exposes one or that you've added a port mapping in your manifest):
+The manifest above publishes the container's port 80 on the host as `8080`:
+
+```bash
+curl http://localhost:8080
+```
+
+If you didn't set `ports:`, the container is reachable only from other containers in the same namespace. To inspect what is actually published:
 
 ```bash
 docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID" \
   --format '{{.Ports}}'
-```
-
-Then test it:
-
-```bash
-curl http://localhost:PORT
 ```
 
 You should see the default Nginx welcome page.
