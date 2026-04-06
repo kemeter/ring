@@ -167,20 +167,14 @@ async fn handle_worker_deployment(
     docker: Docker,
     configs: HashMap<String, Config>,
 ) -> Deployment {
-    if deployment.restart_count >= MAX_RESTART_COUNT
-        && deployment.status != DeploymentStatus::Deleted
-    {
-        deployment.status = DeploymentStatus::CrashLoopBackOff;
-        return deployment;
-    }
-
-    if deployment.status == DeploymentStatus::CrashLoopBackOff {
-        return deployment;
-    }
-
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
         remove_all_instances(&mut deployment, &docker, "worker").await;
+    } else if deployment.restart_count >= MAX_RESTART_COUNT {
+        deployment.status = DeploymentStatus::CrashLoopBackOff;
+        return deployment;
+    } else if deployment.status == DeploymentStatus::CrashLoopBackOff {
+        return deployment;
     } else {
         let current_count: usize = deployment.instances.len();
         let target_count: usize = match deployment.replicas.try_into() {
