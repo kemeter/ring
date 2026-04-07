@@ -362,15 +362,21 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     } else {
         // Remove one instance from the parent — one step per scheduler cycle.
         let container_id = parent.instances[0].clone();
-        docker::remove_container_by_id(&docker, container_id.clone()).await;
-        parent.instances.remove(0);
-
-        info!(
-            "Rolling update: removed container {} from parent {} ({} remaining)",
-            container_id,
-            parent.id,
-            parent.instances.len()
-        );
+        if docker::remove_container_by_id(&docker, container_id.clone()).await {
+            parent.instances.remove(0);
+            info!(
+                "Rolling update: removed container {} from parent {} ({} remaining)",
+                container_id,
+                parent.id,
+                parent.instances.len()
+            );
+        } else {
+            warn!(
+                "Rolling update: failed to remove container {} from parent {}, will retry next cycle",
+                container_id, parent.id
+            );
+            return;
+        }
 
         if let Err(e) = deployment_event::log_event(
             pool,

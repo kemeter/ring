@@ -392,8 +392,24 @@ pub(crate) async fn remove_container(docker: Docker, container_id: String) {
     }
 }
 
-pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String) {
-    remove_container(docker.clone(), container_id).await;
+pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String) -> bool {
+    let stop_options = StopContainerOptionsBuilder::new().build();
+    let _ = docker.stop_container(&container_id, Some(stop_options)).await;
+
+    let remove_options = RemoveContainerOptionsBuilder::new().build();
+    match docker
+        .remove_container(&container_id, Some(remove_options))
+        .await
+    {
+        Ok(_) => {
+            info!("Container {} removed successfully", container_id);
+            true
+        }
+        Err(e) => {
+            error!("Error removing container {}: {:?}", container_id, e);
+            false
+        }
+    }
 }
 
 async fn create_network(docker: Docker, network_name: String) -> Result<(), RuntimeError> {
