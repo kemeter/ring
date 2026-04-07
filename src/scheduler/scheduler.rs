@@ -7,6 +7,7 @@ use crate::models::secret as SecretModel;
 use crate::runtime::docker;
 use crate::runtime::runtime::Runtime;
 use crate::scheduler::health_checker::HealthChecker;
+use bollard::Docker;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
@@ -264,6 +265,133 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
     }
 }
 
+/// Handle rolling update coordination for deployments that have a `parent_id`.
+///
+/// Called after `apply_docker` + `run_health_checks` for each child deployment.
+/// - If the child is `Running` (healthy): remove one instance from the parent.
+///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
+/// - If the child is `Failed`: stop the rollout — parent containers keep running.
+async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, deleted: &mut Vec<String>) {
+    let parent_id = match &child.parent_id {
+        Some(id) => id.clone(),
+        None => return,
+    };
+
+    // If child failed health checks, stop the rollout — leave parent alone.
+    if child.status == DeploymentStatus::Failed || child.status == DeploymentStatus::Deleted {
+        warn!(
+            "Rolling update failed for deployment {} (parent: {}): child health checks failed",
+            child.id, parent_id
+        );
+        if let Err(e) = deployment_event::log_event(
+            pool,
+            child.id.clone(),
+            "error",
+            format!("Rolling update failed: health checks did not pass. Parent deployment {} is still running.", parent_id),
+            "scheduler",
+            Some("RollingUpdateFailed"),
+        )
+        .await
+        {
+            warn!("Failed to log rolling update failure event: {}", e);
+        }
+        return;
+    }
+
+    // Only proceed when the child has at least one running instance.
+    if child.status != DeploymentStatus::Running || child.instances.is_empty() {
+        return;
+    }
+
+    // Load the parent deployment.
+    let mut parent = match deployments::find(pool, parent_id.clone()).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            // Parent is already gone — just clear parent_id on the child.
+            info!(
+                "Rolling update: parent {} no longer exists, clearing parent_id on child {}",
+                parent_id, child.id
+            );
+            child.parent_id = None;
+            return;
+        }
+        Err(e) => {
+            error!("Failed to load parent deployment {}: {}", parent_id, e);
+            return;
+        }
+    };
+
+    // Refresh parent's live instance list from Docker.
+    let docker = match Docker::connect_with_local_defaults() {
+        Ok(d) => d,
+        Err(e) => {
+            error!("Failed to connect to Docker during rolling update: {}", e);
+            return;
+        }
+    };
+
+    parent.instances = docker::list_instances(&docker, parent.id.clone(), "active").await;
+
+    if parent.instances.is_empty() {
+        // All parent instances are gone — finalize the rollout.
+        info!(
+            "Rolling update complete: parent {} has 0 instances, marking as deleted",
+            parent.id
+        );
+        parent.status = DeploymentStatus::Deleted;
+        if let Err(e) = deployments::update(pool, &parent).await {
+            error!("Failed to mark parent {} as deleted: {}", parent.id, e);
+        }
+        // Parent will be cleaned up in the next cleanup_deleted pass — add it to the list.
+        deleted.push(parent.id.clone());
+
+        child.parent_id = None;
+
+        if let Err(e) = deployment_event::log_event(
+            pool,
+            child.id.clone(),
+            "info",
+            format!("Rolling update complete: replaced parent deployment {}", parent_id),
+            "scheduler",
+            Some("RollingUpdateComplete"),
+        )
+        .await
+        {
+            warn!("Failed to log rolling update complete event: {}", e);
+        }
+    } else {
+        // Remove one instance from the parent — one step per scheduler cycle.
+        let container_id = parent.instances[0].clone();
+        docker::remove_container_by_id(&docker, container_id.clone()).await;
+        parent.instances.remove(0);
+
+        info!(
+            "Rolling update: removed container {} from parent {} ({} remaining)",
+            container_id,
+            parent.id,
+            parent.instances.len()
+        );
+
+        if let Err(e) = deployment_event::log_event(
+            pool,
+            child.id.clone(),
+            "info",
+            format!(
+                "Rolling update: removed container {} from parent {} ({} remaining)",
+                container_id,
+                parent_id,
+                parent.instances.len()
+            ),
+            "scheduler",
+            Some("RollingUpdateStep"),
+        )
+        .await
+        {
+            warn!("Failed to log rolling update step event: {}", e);
+        }
+    }
+}
+
 pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
@@ -341,6 +469,7 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             persist_pending_events(&pool, &mut result).await;
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker).await;
+            handle_rolling_update(&pool, &mut result, &mut deleted).await;
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);

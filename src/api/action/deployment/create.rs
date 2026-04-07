@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use std::borrow::Cow;
 use uuid::Uuid;
 
-use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use axum::{Json, extract::{Query, State}, http::StatusCode, response::IntoResponse};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -193,9 +193,16 @@ struct Message {
     message: String,
 }
 
+#[derive(Deserialize, Debug, Default)]
+pub(crate) struct CreateQueryParams {
+    #[serde(default)]
+    force: bool,
+}
+
 pub(crate) async fn create(
     State(pool): State<Db>,
     _user: User,
+    Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
     let mut filters = Vec::new();
@@ -241,6 +248,12 @@ pub(crate) async fn create(
             )
             .await;
 
+            // Determine whether rolling update is possible:
+            // - only when there is exactly one active deployment (the current one)
+            // - it has health checks configured
+            // - --force flag is not set
+            let mut rolling_parent_id: Option<String> = None;
+
             match active_deployments {
                 Ok(deployments_list) => {
                     info!(
@@ -256,16 +269,33 @@ pub(crate) async fn create(
                             deployments_list.len()
                         );
 
-                        for mut deployment in deployments_list {
-                            info!("Marking deployment {} as deleted", deployment.id);
-                            deployment.status = DeploymentStatus::Deleted;
-                            deployment.updated_at = Some(Utc::now().to_string());
-                            if let Err(e) = deployments::update(&pool, &deployment).await {
-                                log::error!(
-                                    "Failed to mark deployment {} as deleted: {}",
-                                    deployment.id,
-                                    e
-                                );
+                        let has_health_checks = input
+                            .health_checks
+                            .as_ref()
+                            .map(|hc| !hc.is_empty())
+                            .unwrap_or(false);
+
+                        // Rolling update: keep old deployment running if conditions are met
+                        if !params.force && has_health_checks && deployments_list.len() == 1 {
+                            let existing = &deployments_list[0];
+                            info!(
+                                "Rolling update: keeping deployment {} running as parent",
+                                existing.id
+                            );
+                            rolling_parent_id = Some(existing.id.clone());
+                        } else {
+                            // Immediate replace (force, no health checks, or multiple active)
+                            for mut deployment in deployments_list {
+                                info!("Marking deployment {} as deleted", deployment.id);
+                                deployment.status = DeploymentStatus::Deleted;
+                                deployment.updated_at = Some(Utc::now().to_string());
+                                if let Err(e) = deployments::update(&pool, &deployment).await {
+                                    log::error!(
+                                        "Failed to mark deployment {} as deleted: {}",
+                                        deployment.id,
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
@@ -317,6 +347,7 @@ pub(crate) async fn create(
                 resources: input.resources,
                 image_digest: None,
                 pending_events: vec![],
+                parent_id: rolling_parent_id,
             };
 
             match deployments::create(&pool, &deployment).await {
@@ -358,7 +389,7 @@ pub(crate) async fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::server::tests::{login, new_test_app};
+    use crate::api::server::tests::{login, new_test_app, new_test_app_with_pool};
     use axum_test::{TestResponse, TestServer};
     use serde_json::json;
 
@@ -1393,5 +1424,162 @@ mod tests {
         let namespaces: Vec<crate::api::dto::namespace::NamespaceOutput> = response.json();
         assert_eq!(namespaces.len(), 1);
         assert_eq!(namespaces[0].name, "auto-created-ns");
+    }
+
+    #[tokio::test]
+    async fn rolling_update_sets_parent_id_with_health_checks() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Create initial deployment with health checks
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "rolling-app",
+                "namespace": "rolling-ns",
+                "image": "nginx:1.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+
+        // Manually set status to running so it qualifies as active
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Re-apply with new image and health checks → should trigger rolling update
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "rolling-app",
+                "namespace": "rolling-ns",
+                "image": "nginx:2.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Check parent deployment is still running (not deleted)
+        let response = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let parent: serde_json::Value = response.json();
+        assert_eq!(parent["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn force_flag_bypasses_rolling_update() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Create initial deployment with health checks
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "force-app",
+                "namespace": "force-ns",
+                "image": "nginx:1.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+
+        // Set status to running
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Re-apply with --force → should NOT do rolling update
+        let response = server
+            .post("/deployments?force=true")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "force-app",
+                "namespace": "force-ns",
+                "image": "nginx:2.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Check parent deployment was marked as deleted
+        let response = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let parent: serde_json::Value = response.json();
+        assert_eq!(parent["status"], "deleted");
+    }
+
+    #[tokio::test]
+    async fn no_health_checks_bypasses_rolling_update() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Create initial deployment WITHOUT health checks
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nohc-app",
+                "namespace": "nohc-ns",
+                "image": "nginx:1.0"
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+
+        // Set status to running
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Re-apply without health checks → should NOT do rolling update
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nohc-app",
+                "namespace": "nohc-ns",
+                "image": "nginx:2.0"
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Check parent deployment was marked as deleted
+        let response = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let parent: serde_json::Value = response.json();
+        assert_eq!(parent["status"], "deleted");
     }
 }

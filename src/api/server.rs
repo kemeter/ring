@@ -191,6 +191,11 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn new_test_app() -> Router {
+        let (_, router) = new_test_app_with_pool().await;
+        router
+    }
+
+    pub(crate) async fn new_test_app_with_pool() -> (sqlx::SqlitePool, Router) {
         let configuration = Config::default();
 
         let pool = SqlitePoolOptions::new()
@@ -207,11 +212,11 @@ pub(crate) mod tests {
         load_fixtures(&pool).await;
 
         let state = AppState {
-            connection: pool,
+            connection: pool.clone(),
             configuration,
         };
 
-        router(state)
+        (pool, router(state))
     }
 
     pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {

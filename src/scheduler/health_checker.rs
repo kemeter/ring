@@ -366,6 +366,7 @@ mod tests {
             resources: None,
             image_digest: None,
             pending_events: vec![],
+            parent_id: None,
         }
     }
 

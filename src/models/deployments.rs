@@ -203,6 +203,8 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) parent_id: Option<String>,
 }
 
 impl Deployment {
@@ -245,6 +247,7 @@ struct DeploymentRow {
     health_checks: Option<String>,
     resources: Option<String>,
     image_digest: Option<String>,
+    parent_id: Option<String>,
 }
 
 fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
@@ -317,6 +320,7 @@ impl From<DeploymentRow> for Deployment {
                 .and_then(|s| serde_json::from_str(&s).ok()),
             image_digest: row.image_digest,
             pending_events: vec![],
+            parent_id: row.parent_id,
         }
     }
 }
@@ -324,7 +328,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, image_digest
+    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -400,8 +404,8 @@ pub(crate) async fn create(
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -421,6 +425,7 @@ pub(crate) async fn create(
     .bind(&health_checks_json)
     .bind(&resources_json)
     .bind(&deployment.image_digest)
+    .bind(&deployment.parent_id)
     .execute(pool)
     .await?;
 
@@ -429,11 +434,12 @@ pub(crate) async fn create(
 
 pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ?, image_digest = ? WHERE id = ?"
+        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ?, image_digest = ?, parent_id = ? WHERE id = ?"
     )
     .bind(deployment.status.to_string())
     .bind(deployment.restart_count as i32)
     .bind(&deployment.image_digest)
+    .bind(&deployment.parent_id)
     .bind(&deployment.id)
     .execute(pool)
     .await?;
