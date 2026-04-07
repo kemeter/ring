@@ -1,6 +1,6 @@
 # Ring
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.4.0)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.5.0)
 
 A simple container orchestrator with declarative service deployment using containers.
 
