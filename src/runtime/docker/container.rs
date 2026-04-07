@@ -351,9 +351,14 @@ pub(super) fn create_mount_from_volume(
         let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
         std::fs::create_dir_all(&temp_dir)?;
 
-        let temporary_id = tiny_id();
-        let temp_file = format!("{}/{}", temp_dir, temporary_id);
-        std::fs::write(&temp_file, content)?;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        content.hash(&mut hasher);
+        let hash = format!("{:x}", hasher.finish());
+        let temp_file = format!("{}/{}", temp_dir, hash);
+        if !std::path::Path::new(&temp_file).exists() {
+            std::fs::write(&temp_file, content)?;
+        }
 
         debug!(
             "Created temporary config file: {} -> {}",
