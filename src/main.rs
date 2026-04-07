@@ -30,6 +30,7 @@ mod scheduler {
 mod runtime {
     pub(crate) mod docker;
     pub(crate) mod error;
+    pub(crate) mod lifecycle_trait;
     pub(crate) mod runtime;
     pub(crate) mod types;
 }

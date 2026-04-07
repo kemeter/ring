@@ -1,4 +1,5 @@
 mod container;
+pub(crate) mod docker_lifecycle;
 mod health_check;
 mod instances;
 mod lifecycle;

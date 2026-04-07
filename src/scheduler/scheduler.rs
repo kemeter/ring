@@ -4,13 +4,14 @@ use crate::models::deployment_event;
 use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
-use crate::runtime::docker;
+use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use crate::runtime::runtime::Runtime;
 use crate::scheduler::health_checker::HealthChecker;
 use bollard::Docker;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
 use tokio::time::{Duration, Instant, sleep};
 
 async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
@@ -108,16 +109,16 @@ async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Optio
     Some(resolved)
 }
 
-async fn apply_docker(
+async fn apply_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
     resolved: Deployment,
     configs: HashMap<String, Config>,
     apply_timeout: Duration,
     apply_timeout_secs: u64,
-    docker: Docker,
+    runtime: &dyn RuntimeLifecycle,
 ) -> Option<Deployment> {
-    match tokio::time::timeout(apply_timeout, docker::apply(resolved, configs, docker)).await {
+    match tokio::time::timeout(apply_timeout, runtime.apply(resolved, configs)).await {
         Ok(result) => Some(result),
         Err(_) => {
             error!("docker::apply timed out for deployment {}", deployment.id);
@@ -270,7 +271,7 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
 /// - If the child is `Running` (healthy): remove one instance from the parent.
 ///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
 /// - If the child is `Failed`: stop the rollout — parent containers keep running.
-async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, deleted: &mut Vec<String>, docker: &Docker) {
+async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, deleted: &mut Vec<String>, runtime: &dyn RuntimeLifecycle) {
     let parent_id = match &child.parent_id {
         Some(id) => id.clone(),
         None => return,
@@ -320,8 +321,8 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
         }
     };
 
-    // Refresh parent's live instance list from Docker.
-    parent.instances = docker::list_instances(docker, parent.id.clone(), "active").await;
+    // Refresh parent's live instance list.
+    parent.instances = runtime.list_instances(parent.id.clone(), "active").await;
 
     if parent.instances.is_empty() {
         // All parent instances are gone — finalize the rollout.
@@ -353,7 +354,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     } else {
         // Remove one instance from the parent — one step per scheduler cycle.
         let container_id = parent.instances[0].clone();
-        if docker::remove_container_by_id(&docker, container_id.clone()).await {
+        if runtime.remove_instance(container_id.clone()).await {
             parent.instances.remove(0);
             info!(
                 "Rolling update: removed container {} from parent {} ({} remaining)",
@@ -389,7 +390,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 }
 
-pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, docker: Docker) {
+pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtime: Arc<dyn RuntimeLifecycle>, docker: Docker) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -449,14 +450,14 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 None => continue,
             };
 
-            let mut result = match apply_docker(
+            let mut result = match apply_runtime(
                 &pool,
                 &deployment,
                 resolved,
                 configs,
                 apply_timeout,
                 apply_timeout_secs,
-                docker.clone(),
+                runtime.as_ref(),
             )
             .await
             {
@@ -467,7 +468,7 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             persist_pending_events(&pool, &mut result).await;
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, &docker).await;
-            handle_rolling_update(&pool, &mut result, &mut deleted, &docker).await;
+            handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);
