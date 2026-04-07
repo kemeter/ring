@@ -326,7 +326,7 @@ pub(super) fn create_mount_from_volume(
             read_only: Some(volume.permission == "ro"),
             ..Default::default()
         }
-    } else {
+    } else if volume.r#type.as_str() == "config" {
         let config_name = volume.source.as_ref().ok_or_else(|| {
             RuntimeError::InstanceCreationFailed("Config volume requires a source".to_string())
         })?;
@@ -372,6 +372,11 @@ pub(super) fn create_mount_from_volume(
             read_only: Some(volume.permission == "ro"),
             ..Default::default()
         }
+    } else {
+        return Err(RuntimeError::InstanceCreationFailed(format!(
+            "Unknown volume type '{}'",
+            volume.r#type
+        )));
     };
     Ok(mount)
 }
