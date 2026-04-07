@@ -32,11 +32,11 @@ pub enum DockerEvent {
 }
 
 /// Start listening to Docker events and send them to the scheduler via channel
-pub async fn start_event_listener(tx: mpsc::Sender<DockerEvent>) {
+pub async fn start_event_listener(tx: mpsc::Sender<DockerEvent>, docker: Docker) {
     info!("Starting Docker event listener");
 
     loop {
-        match listen_events(tx.clone()).await {
+        match listen_events(tx.clone(), docker.clone()).await {
             Ok(_) => {
                 warn!("Docker event stream ended, reconnecting in 5s...");
             }
@@ -50,9 +50,7 @@ pub async fn start_event_listener(tx: mpsc::Sender<DockerEvent>) {
     }
 }
 
-async fn listen_events(tx: mpsc::Sender<DockerEvent>) -> Result<(), Box<dyn std::error::Error>> {
-    let docker = Docker::connect_with_local_defaults()?;
-
+async fn listen_events(tx: mpsc::Sender<DockerEvent>, docker: Docker) -> Result<(), Box<dyn std::error::Error>> {
     // Filter for container events with ring_deployment label
     let filters = HashMap::from([
         ("type".to_string(), vec!["container".to_string()]),

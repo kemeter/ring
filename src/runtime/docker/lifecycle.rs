@@ -12,16 +12,8 @@ use std::convert::TryInto;
 pub(crate) async fn apply(
     mut deployment: Deployment,
     configs: HashMap<String, Config>,
+    docker: Docker,
 ) -> Deployment {
-    let docker = match Docker::connect_with_local_defaults() {
-        Ok(docker) => docker,
-        Err(e) => {
-            error!("Failed to connect to Docker: {}", e);
-            deployment.status = DeploymentStatus::Error;
-            return deployment;
-        }
-    };
-
     deployment.instances = list_instances(&docker, deployment.id.to_string(), "active").await;
 
     if deployment.kind == "job" {

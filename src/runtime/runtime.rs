@@ -52,6 +52,13 @@ impl Runtime {
         let docker = docker::connect()?;
         Ok(Box::new(DockerRuntime { docker, deployment }))
     }
+
+    pub fn with_docker(
+        deployment: Deployment,
+        docker: Docker,
+    ) -> Box<dyn RuntimeInterface + Send + Sync> {
+        Box::new(DockerRuntime { docker, deployment })
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]

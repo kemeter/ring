@@ -8,6 +8,7 @@ use serde::Deserialize;
 
 use url::form_urlencoded::parse;
 
+use bollard::Docker;
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::models::deployments;
@@ -64,6 +65,7 @@ where
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
+    State(docker): State<Docker>,
     _user: User,
 ) -> impl IntoResponse {
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
@@ -88,11 +90,6 @@ pub(crate) async fn list(
             log::error!("Failed to list deployments: {}", e);
             return Json(deployments);
         }
-    };
-
-    let docker = match docker::connect() {
-        Ok(d) => d,
-        Err(_) => return Json(deployments),
     };
 
     for deployment in list_deployments.into_iter() {

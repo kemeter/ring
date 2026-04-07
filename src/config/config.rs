@@ -28,6 +28,28 @@ impl Default for Scheduler {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+pub(crate) struct DockerConfig {
+    /// Docker host URL. Examples:
+    /// - "unix:///var/run/docker.sock" (default)
+    /// - "tcp://192.168.1.100:2375"
+    /// - "tcp://192.168.1.100:2376" (with TLS)
+    #[serde(default = "default_docker_host")]
+    pub(crate) host: String,
+}
+
+fn default_docker_host() -> String {
+    "unix:///var/run/docker.sock".to_string()
+}
+
+impl Default for DockerConfig {
+    fn default() -> Self {
+        DockerConfig {
+            host: default_docker_host(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) current: bool,
     #[serde(skip_deserializing)]
@@ -37,6 +59,8 @@ pub(crate) struct Config {
     pub(crate) user: config::user::User,
     #[serde(default)]
     pub(crate) scheduler: Scheduler,
+    #[serde(default)]
+    pub(crate) docker: DockerConfig,
 }
 
 impl Config {
@@ -64,6 +88,7 @@ impl Default for Config {
                 salt: "changeme".to_string(),
             },
             scheduler: Scheduler::default(),
+            docker: DockerConfig::default(),
         }
     }
 }

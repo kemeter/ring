@@ -14,6 +14,7 @@ use axum_extra::{
 use axum_macros::FromRef;
 use log::info;
 use serde_json::json;
+use bollard::Docker;
 use sqlx::SqlitePool;
 use std::time::Duration;
 
@@ -92,10 +93,11 @@ where
     }
 }
 
-#[derive(Clone, FromRef, Debug)]
+#[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
     pub(crate) configuration: Config,
+    pub(crate) docker: Docker,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -150,7 +152,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-pub(crate) async fn start(pool: SqlitePool, mut configuration: Config) {
+pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: Docker) {
     info!("Starting server on {}", configuration.get_api_url());
 
     let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
@@ -158,6 +160,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config) {
     let state = AppState {
         connection: pool,
         configuration,
+        docker,
     };
 
     let app = router(state);
@@ -174,6 +177,7 @@ pub(crate) mod tests {
     use crate::api::server::{AppState, router};
     use crate::config::config::Config;
     use axum::Router;
+    use bollard::Docker;
     use axum::http::StatusCode;
     use axum_test::TestServer;
     use serde::Deserialize;
@@ -211,9 +215,13 @@ pub(crate) mod tests {
 
         load_fixtures(&pool).await;
 
+        let docker = Docker::connect_with_local_defaults()
+            .expect("Could not connect to Docker for tests");
+
         let state = AppState {
             connection: pool.clone(),
             configuration,
+            docker,
         };
 
         (pool, router(state))

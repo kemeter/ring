@@ -1,4 +1,5 @@
 use crate::api::server as ApiServer;
+use crate::runtime::docker;
 use clap::ArgMatches;
 use clap::Command;
 use tokio::task;
@@ -21,8 +22,11 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         .await
         .expect("Could not execute database migrations.");
 
-    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone()));
-    let scheduler_handler = task::spawn(schedule(pool, configuration));
+    let docker = docker::connect().expect("Failed to connect to Docker");
+    info!("Connected to Docker");
+
+    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), docker.clone()));
+    let scheduler_handler = task::spawn(schedule(pool, configuration, docker));
 
     if let Err(e) = api_server_handler.await {
         eprintln!("API server task failed: {}", e);
