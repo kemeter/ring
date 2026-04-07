@@ -8,7 +8,8 @@ use bollard::{
     auth::DockerCredentials,
     models::{
         ContainerCreateBody, EndpointSettings, HostConfig, Mount, MountTypeEnum,
-        NetworkConnectRequest, NetworkCreateRequest,
+        MountVolumeOptions, MountVolumeOptionsDriverConfig, NetworkConnectRequest,
+        NetworkCreateRequest,
     },
     query_parameters::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectNetworkOptionsBuilder,
@@ -319,11 +320,24 @@ pub(super) fn create_mount_from_volume(
             RuntimeError::InstanceCreationFailed("Named volume requires a source".to_string())
         })?;
 
+        let volume_options = if !volume.driver.is_empty() && volume.driver != "local" {
+            Some(MountVolumeOptions {
+                driver_config: Some(MountVolumeOptionsDriverConfig {
+                    name: Some(volume.driver.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
         Mount {
             target: Some(volume.destination),
             source: Some(volume_name),
             typ: Some(MountTypeEnum::VOLUME),
             read_only: Some(volume.permission == "ro"),
+            volume_options,
             ..Default::default()
         }
     } else if volume.r#type.as_str() == "config" {

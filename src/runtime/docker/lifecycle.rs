@@ -128,6 +128,23 @@ async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind
             debug!("Cleaned up config temp files at {}", temp_dir);
         }
     }
+
+    // Clean up named Docker volumes
+    let volumes: Vec<crate::api::dto::deployment::DeploymentVolume> =
+        serde_json::from_str(&deployment.volumes).unwrap_or_default();
+    for volume in volumes {
+        if volume.r#type == "volume" {
+            if let Some(name) = volume.source {
+                match docker
+                    .remove_volume(&name, None::<bollard::query_parameters::RemoveVolumeOptions>)
+                    .await
+                {
+                    Ok(_) => info!("Removed Docker volume '{}'", name),
+                    Err(e) => debug!("Failed to remove Docker volume '{}': {}", name, e),
+                }
+            }
+        }
+    }
 }
 
 async fn handle_job_deployment(
