@@ -1,7 +1,6 @@
-use crate::models::config::Config;
 use crate::models::deployments::Deployment;
+use crate::models::volume::ResolvedMount;
 use async_trait::async_trait;
-use std::collections::HashMap;
 
 #[async_trait]
 pub trait RuntimeLifecycle: Send + Sync {
@@ -9,7 +8,7 @@ pub trait RuntimeLifecycle: Send + Sync {
     async fn apply(
         &self,
         deployment: Deployment,
-        configs: HashMap<String, Config>,
+        resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment;
 
     /// List active instance IDs for a deployment.

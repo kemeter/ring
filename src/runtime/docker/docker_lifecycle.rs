@@ -1,9 +1,8 @@
-use crate::models::config::Config;
 use crate::models::deployments::Deployment;
+use crate::models::volume::ResolvedMount;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use async_trait::async_trait;
 use bollard::Docker;
-use std::collections::HashMap;
 
 pub struct DockerLifecycle {
     docker: Docker,
@@ -20,9 +19,9 @@ impl RuntimeLifecycle for DockerLifecycle {
     async fn apply(
         &self,
         deployment: Deployment,
-        configs: HashMap<String, Config>,
+        resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
-        super::lifecycle::apply(deployment, configs, self.docker.clone()).await
+        super::lifecycle::apply(deployment, self.docker.clone(), resolved_mounts).await
     }
 
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {

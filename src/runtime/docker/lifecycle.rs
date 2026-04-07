@@ -1,25 +1,24 @@
 use super::container::{create_container, remove_container};
 use super::instances::list_instances;
-use crate::models::config::Config;
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
+use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::types::InstanceStatus;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
-use std::collections::HashMap;
 use std::convert::TryInto;
 
 pub(crate) async fn apply(
     mut deployment: Deployment,
-    configs: HashMap<String, Config>,
     docker: Docker,
+    resolved_mounts: Vec<ResolvedMount>,
 ) -> Deployment {
     deployment.instances = list_instances(&docker, deployment.id.to_string(), "active").await;
 
     if deployment.kind == "job" {
-        handle_job_deployment(deployment, docker, configs).await
+        handle_job_deployment(deployment, docker, resolved_mounts).await
     } else {
-        handle_worker_deployment(deployment, docker, configs).await
+        handle_worker_deployment(deployment, docker, resolved_mounts).await
     }
 }
 
@@ -142,7 +141,7 @@ async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind
 async fn handle_job_deployment(
     mut deployment: Deployment,
     docker: Docker,
-    configs: HashMap<String, Config>,
+    resolved_mounts: Vec<ResolvedMount>,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
@@ -167,7 +166,7 @@ async fn handle_job_deployment(
     } else if deployment.status == DeploymentStatus::Creating
         || deployment.status == DeploymentStatus::Pending
     {
-        match create_container(&mut deployment, &docker, configs).await {
+        match create_container(&mut deployment, &docker, &resolved_mounts).await {
             Ok(_) => {
                 deployment.status = DeploymentStatus::Running;
             }
@@ -184,7 +183,7 @@ async fn handle_job_deployment(
 async fn handle_worker_deployment(
     mut deployment: Deployment,
     docker: Docker,
-    configs: HashMap<String, Config>,
+    resolved_mounts: Vec<ResolvedMount>,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
@@ -220,7 +219,7 @@ async fn handle_worker_deployment(
                     current_count, target_count
                 );
 
-                match create_container(&mut deployment, &docker, configs).await {
+                match create_container(&mut deployment, &docker, &resolved_mounts).await {
                     Ok(_) => {
                         deployment.emit_event(
                             "info",

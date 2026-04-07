@@ -113,12 +113,12 @@ async fn apply_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
     resolved: Deployment,
-    configs: HashMap<String, Config>,
+    resolved_mounts: Vec<crate::models::volume::ResolvedMount>,
     apply_timeout: Duration,
     apply_timeout_secs: u64,
     runtime: &dyn RuntimeLifecycle,
 ) -> Option<Deployment> {
-    match tokio::time::timeout(apply_timeout, runtime.apply(resolved, configs)).await {
+    match tokio::time::timeout(apply_timeout, runtime.apply(resolved, resolved_mounts)).await {
         Ok(result) => Some(result),
         Err(_) => {
             error!("docker::apply timed out for deployment {}", deployment.id);
@@ -450,11 +450,23 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
                 None => continue,
             };
 
+            let resolved_mounts =
+                match crate::models::volume::resolve_volumes(&deployment.volumes, &configs) {
+                    Ok(mounts) => mounts,
+                    Err(e) => {
+                        error!(
+                            "Failed to resolve volumes for deployment {}: {}",
+                            deployment.id, e
+                        );
+                        continue;
+                    }
+                };
+
             let mut result = match apply_runtime(
                 &pool,
                 &deployment,
                 resolved,
-                configs,
+                resolved_mounts,
                 apply_timeout,
                 apply_timeout_secs,
                 runtime.as_ref(),

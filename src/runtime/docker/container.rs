@@ -1,8 +1,8 @@
 use super::{DockerImage, tiny_id};
-use crate::api::dto::deployment::DeploymentVolume;
-use crate::models::config::Config;
 use crate::models::deployments::{Deployment, EnvValue, parse_cpu_string, parse_memory_string};
+use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
+use std::hash::{Hash, Hasher};
 use bollard::{
     Docker,
     auth::DockerCredentials,
@@ -128,7 +128,7 @@ async fn pull_image(
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
-    configs: HashMap<String, Config>,
+    resolved_mounts: &[crate::models::volume::ResolvedMount],
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
     let (image, tag) = match deployment.image.split_once(':') {
@@ -189,18 +189,9 @@ pub(crate) async fn create_container(
         })
         .collect();
 
-    let volumes_collection: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
-        .map_err(|e| {
-            RuntimeError::InstanceCreationFailed(format!("Failed to parse volumes: {}", e))
-        })?;
-
     let mut mounts: Vec<Mount> = vec![];
-    for volume in volumes_collection {
-        mounts.push(create_mount_from_volume(
-            volume,
-            configs.clone(),
-            deployment.id.to_string(),
-        )?);
+    for resolved in resolved_mounts {
+        mounts.push(create_mount_from_resolved(resolved, &deployment.id)?);
     }
 
     let user_config = build_user_config(&deployment.config);
@@ -293,107 +284,86 @@ pub(crate) async fn create_container(
     }
 }
 
-pub(super) fn create_mount_from_volume(
-    volume: DeploymentVolume,
-    configs: HashMap<String, Config>,
-    deployment_id: String,
+fn create_mount_from_resolved(
+    resolved: &ResolvedMount,
+    deployment_id: &str,
 ) -> Result<Mount, RuntimeError> {
-    let mount = if volume.r#type.as_str() == "bind" {
-        let volume_source = volume.source.ok_or_else(|| {
-            RuntimeError::InstanceCreationFailed("Bind volume requires a source".to_string())
-        })?;
-        let type_mount = if volume_source.starts_with('/') {
-            Some(MountTypeEnum::BIND)
-        } else {
-            Some(MountTypeEnum::VOLUME)
-        };
-
-        Mount {
-            target: Some(volume.destination),
-            source: Some(volume_source),
-            typ: type_mount,
-            read_only: Some(volume.permission == "ro"),
-            ..Default::default()
-        }
-    } else if volume.r#type.as_str() == "volume" {
-        let volume_name = volume.source.ok_or_else(|| {
-            RuntimeError::InstanceCreationFailed("Named volume requires a source".to_string())
-        })?;
-
-        let volume_options = if !volume.driver.is_empty() && volume.driver != "local" {
-            Some(MountVolumeOptions {
-                driver_config: Some(MountVolumeOptionsDriverConfig {
-                    name: Some(volume.driver.clone()),
-                    ..Default::default()
-                }),
+    match resolved {
+        ResolvedMount::Bind {
+            source,
+            destination,
+            read_only,
+        } => {
+            let type_mount = if source.starts_with('/') {
+                Some(MountTypeEnum::BIND)
+            } else {
+                Some(MountTypeEnum::VOLUME)
+            };
+            Ok(Mount {
+                target: Some(destination.clone()),
+                source: Some(source.clone()),
+                typ: type_mount,
+                read_only: Some(*read_only),
                 ..Default::default()
             })
-        } else {
-            None
-        };
-
-        Mount {
-            target: Some(volume.destination),
-            source: Some(volume_name),
-            typ: Some(MountTypeEnum::VOLUME),
-            read_only: Some(volume.permission == "ro"),
-            volume_options,
-            ..Default::default()
         }
-    } else if volume.r#type.as_str() == "config" {
-        let config_name = volume.source.as_ref().ok_or_else(|| {
-            RuntimeError::InstanceCreationFailed("Config volume requires a source".to_string())
-        })?;
-
-        let config = configs.get(config_name).ok_or_else(|| {
-            RuntimeError::ConfigNotFound(format!("Config '{}' not found", config_name))
-        })?;
-
-        let config_data: HashMap<String, String> = serde_json::from_str(&config.data)?;
-
-        let key = volume.key.as_ref().ok_or_else(|| {
-            RuntimeError::ConfigKeyNotFound("Missing 'key' field for config volume".to_string())
-        })?;
-
-        let content = config_data.get(key).ok_or_else(|| {
-            RuntimeError::ConfigKeyNotFound(format!(
-                "Key '{}' not found in config '{}'",
-                key, config_name
-            ))
-        })?;
-
-        let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
-        std::fs::create_dir_all(&temp_dir)?;
-
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        content.hash(&mut hasher);
-        let hash = format!("{:x}", hasher.finish());
-        let temp_file = format!("{}/{}", temp_dir, hash);
-        if !std::path::Path::new(&temp_file).exists() {
-            std::fs::write(&temp_file, content)?;
+        ResolvedMount::Named {
+            name,
+            destination,
+            read_only,
+            driver,
+        } => {
+            let volume_options = if !driver.is_empty() && driver != "local" {
+                Some(MountVolumeOptions {
+                    driver_config: Some(MountVolumeOptionsDriverConfig {
+                        name: Some(driver.clone()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            } else {
+                None
+            };
+            Ok(Mount {
+                target: Some(destination.clone()),
+                source: Some(name.clone()),
+                typ: Some(MountTypeEnum::VOLUME),
+                read_only: Some(*read_only),
+                volume_options,
+                ..Default::default()
+            })
         }
+        ResolvedMount::Content {
+            content,
+            destination,
+        } => {
+            let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
+            std::fs::create_dir_all(&temp_dir)?;
 
-        debug!(
-            "Created temporary config file: {} -> {}",
-            temp_file, volume.destination
-        );
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            content.hash(&mut hasher);
+            let hash = format!("{:x}", hasher.finish());
+            let temp_file = format!("{}/{}", temp_dir, hash);
+            if !std::path::Path::new(&temp_file).exists() {
+                std::fs::write(&temp_file, content)?;
+            }
 
-        Mount {
-            target: Some(volume.destination),
-            source: Some(temp_file),
-            typ: Some(MountTypeEnum::BIND),
-            read_only: Some(volume.permission == "ro"),
-            ..Default::default()
+            debug!(
+                "Created temporary config file: {} -> {}",
+                temp_file, destination
+            );
+
+            Ok(Mount {
+                target: Some(destination.clone()),
+                source: Some(temp_file),
+                typ: Some(MountTypeEnum::BIND),
+                read_only: Some(true),
+                ..Default::default()
+            })
         }
-    } else {
-        return Err(RuntimeError::InstanceCreationFailed(format!(
-            "Unknown volume type '{}'",
-            volume.r#type
-        )));
-    };
-    Ok(mount)
+    }
 }
+
 
 pub(crate) async fn remove_container(docker: Docker, container_id: String) {
     let stop_options = StopContainerOptionsBuilder::new().build();
@@ -532,17 +502,13 @@ mod tests {
     }
 
     #[test]
-    fn test_bind_volume_creation() {
-        let volume = DeploymentVolume {
-            r#type: "bind".to_string(),
-            source: Some("/host/path".to_string()),
+    fn test_bind_mount_from_resolved() {
+        let resolved = ResolvedMount::Bind {
+            source: "/host/path".to_string(),
             destination: "/container/path".to_string(),
-            driver: "local".to_string(),
-            permission: "rw".to_string(),
-            key: None,
+            read_only: false,
         };
-        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string())
-            .unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
         assert_eq!(mount.target, Some("/container/path".to_string()));
         assert_eq!(mount.source, Some("/host/path".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::BIND));
@@ -550,82 +516,44 @@ mod tests {
     }
 
     #[test]
-    fn test_config_volume_creation() {
-        let mut configs = HashMap::new();
-        configs.insert("test-config".to_string(), Config {
-            id: "9d74dfba-f6ad-4e67-a24d-4041b9b709d4 ".to_string(),
-            created_at: "2010-03-15 11:41:00".to_string(),
-            updated_at: None,
-            namespace: "kemeter".to_string(),
-            name: "secret_de_la_mort_qui_tue".to_string(),
-            data: r#"{"nginx.conf":"server { listen 80; server_name localhost; location / { root /usr/share/nginx/html; index index.html index.htm; } }"}"#.to_string(),
-            labels: "[]".to_string(),
-        });
-        let volume = DeploymentVolume {
-            r#type: "config".to_string(),
-            source: Some("test-config".to_string()),
+    fn test_content_mount_from_resolved() {
+        let resolved = ResolvedMount::Content {
+            content: "server { listen 80; }".to_string(),
             destination: "/app/nginx.conf".to_string(),
-            driver: "local".to_string(),
-            permission: "ro".to_string(),
-            key: Some("nginx.conf".to_string()),
         };
-        let mount =
-            create_mount_from_volume(volume, configs, "test-deployment".to_string()).unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
         assert_eq!(mount.target, Some("/app/nginx.conf".to_string()));
-        assert!(
-            mount
-                .source
-                .unwrap()
-                .contains("/tmp/ring_configs/test-deployment")
-        );
+        assert!(mount.source.unwrap().contains("/tmp/ring_configs/test-deployment"));
         assert_eq!(mount.read_only, Some(true));
     }
 
     #[test]
-    fn test_config_volume_with_missing_key_should_fail() {
-        let mut configs = HashMap::new();
-        configs.insert(
-            "test-config".to_string(),
-            Config {
-                id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-                created_at: "2010-03-15 11:41:00".to_string(),
-                updated_at: None,
-                namespace: "kemeter".to_string(),
-                name: "".to_string(),
-                data: r#"{"existing_key": "value"}"#.to_string(),
-                labels: "".to_string(),
-            },
-        );
-        let volume = DeploymentVolume {
-            r#type: "config".to_string(),
-            source: Some("test-config".to_string()),
-            key: Some("missing_key".to_string()),
-            destination: "/tmp/toto".to_string(),
-            driver: "local".to_string(),
-            permission: "ro".to_string(),
-        };
-        assert!(matches!(
-            create_mount_from_volume(volume, configs, "test-deployment".to_string()),
-            Err(RuntimeError::ConfigKeyNotFound(_))
-        ));
-    }
-
-    #[test]
-    fn test_docker_volume_creation() {
-        let volume = DeploymentVolume {
-            r#type: "volume".to_string(),
-            source: Some("my-docker-volume".to_string()),
+    fn test_named_volume_from_resolved() {
+        let resolved = ResolvedMount::Named {
+            name: "my-docker-volume".to_string(),
             destination: "/app/data".to_string(),
+            read_only: false,
             driver: "local".to_string(),
-            permission: "rw".to_string(),
-            key: None,
         };
-        let mount = create_mount_from_volume(volume, HashMap::new(), "test-deployment".to_string())
-            .unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
         assert_eq!(mount.target, Some("/app/data".to_string()));
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
         assert_eq!(mount.read_only, Some(false));
+        assert!(mount.volume_options.is_none());
+    }
+
+    #[test]
+    fn test_named_volume_with_nfs_driver() {
+        let resolved = ResolvedMount::Named {
+            name: "shared".to_string(),
+            destination: "/mnt".to_string(),
+            read_only: true,
+            driver: "nfs".to_string(),
+        };
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
+        let driver_name = mount.volume_options.unwrap().driver_config.unwrap().name;
+        assert_eq!(driver_name, Some("nfs".to_string()));
     }
 
     #[test]
