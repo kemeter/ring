@@ -24,7 +24,7 @@ pub(crate) async fn update(
             .into_response());
     }
 
-    let mut user = match users_model::find(&pool, id).await.ok().flatten() {
+    let mut user = match users_model::find(&pool, &id).await.ok().flatten() {
         Some(user) => user,
         None => return Err((StatusCode::NOT_FOUND, "User not found").into_response()),
     };

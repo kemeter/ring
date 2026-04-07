@@ -56,7 +56,7 @@ async fn load_configs(
     pool: &SqlitePool,
     deployment: &Deployment,
 ) -> Option<HashMap<String, Config>> {
-    match config::find_by_namespace(pool, deployment.namespace.clone()).await {
+    match config::find_by_namespace(pool, &deployment.namespace).await {
         Ok(configs_vec) => Some(
             configs_vec
                 .into_iter()
@@ -304,7 +304,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 
     // Load the parent deployment.
-    let mut parent = match deployments::find(pool, parent_id.clone()).await {
+    let mut parent = match deployments::find(pool, &parent_id).await {
         Ok(Some(d)) => d,
         Ok(None) => {
             // Parent is already gone — just clear parent_id on the child.

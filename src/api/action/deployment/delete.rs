@@ -10,7 +10,7 @@ pub(crate) async fn delete(
     State(pool): State<Db>,
     _user: User,
 ) -> impl IntoResponse {
-    let option = deployments::find(&pool, id).await;
+    let option = deployments::find(&pool, &id).await;
 
     match option {
         Ok(Some(mut deployment)) => {

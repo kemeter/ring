@@ -9,7 +9,7 @@ pub(crate) struct Namespace {
     pub(crate) name: String,
 }
 
-pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Namespace>, sqlx::Error> {
+pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Namespace>, sqlx::Error> {
     sqlx::query_as::<_, Namespace>(
         "SELECT id, created_at, updated_at, name FROM namespace WHERE id = ?",
     )

@@ -243,8 +243,8 @@ pub(crate) async fn create(
 
             let active_deployments = deployments::find_active_by_namespace_name(
                 &pool,
-                input.namespace.clone(),
-                input.name.clone(),
+                &input.namespace,
+                &input.name,
             )
             .await;
 

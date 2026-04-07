@@ -13,7 +13,7 @@ pub(crate) async fn metrics(
     _user: User,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
-    match deployments::find(&pool, id.clone()).await {
+    match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => match Runtime::new(deployment.clone()) {
             Ok(runtime) => {
                 let container_stats = runtime.get_instance_stats().await;

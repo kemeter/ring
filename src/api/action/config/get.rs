@@ -12,7 +12,7 @@ pub(crate) async fn get(
     _user: User,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
-    match config::find(&pool, id.clone()).await {
+    match config::find(&pool, &id).await {
         Ok(Some(deployment)) => {
             let output = ConfigOutput::from_to_model(deployment);
             Json(output).into_response()

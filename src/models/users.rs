@@ -51,7 +51,7 @@ impl From<UserRow> for User {
     }
 }
 
-pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<User>, sqlx::Error> {
+pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE id = ?", SELECT_COLUMNS);
     let row = sqlx::query_as::<_, UserRow>(&sql)
         .bind(&id)

@@ -61,7 +61,7 @@ pub(crate) async fn update(
     }
 
     // Find existing config
-    match ConfigModel::find(&pool, id.clone()).await {
+    match ConfigModel::find(&pool, &id).await {
         Ok(Some(mut config)) => {
             // PUT behavior: Full replacement (like create but keeping id, created_at, namespace)
             config.name = request.name;

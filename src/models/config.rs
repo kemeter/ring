@@ -13,7 +13,7 @@ pub(crate) struct Config {
     pub(crate) labels: String,
 }
 
-pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Config>, sqlx::Error> {
+pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Config>, sqlx::Error> {
     sqlx::query_as::<_, Config>(
         "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?",
     )
@@ -44,10 +44,10 @@ pub(crate) async fn find_all(
 
 pub(crate) async fn find_by_namespace(
     pool: &SqlitePool,
-    namespace: String,
+    namespace: &str,
 ) -> Result<Vec<Config>, sqlx::Error> {
     sqlx::query_as::<_, Config>("SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE namespace = ?")
-        .bind(&namespace)
+        .bind(namespace)
         .fetch_all(pool)
         .await
 }
@@ -69,7 +69,7 @@ pub(crate) async fn create(pool: &SqlitePool, config: Config) -> Result<(), sqlx
     Ok(())
 }
 
-pub(crate) async fn delete(pool: &SqlitePool, id: String) -> Result<(), sqlx::Error> {
+pub(crate) async fn delete(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
     let result = sqlx::query("DELETE FROM config WHERE id = ?")
         .bind(&id)
         .execute(pool)

@@ -12,7 +12,7 @@ pub(crate) async fn get(
     _user: User,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
-    match namespace::find(&pool, id.clone()).await {
+    match namespace::find(&pool, &id).await {
         Ok(Some(ns)) => {
             let output = NamespaceOutput::from_to_model(ns);
             Json(output).into_response()

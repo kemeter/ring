@@ -352,8 +352,8 @@ pub(crate) async fn find_all(
 
 pub(crate) async fn find_active_by_namespace_name(
     pool: &SqlitePool,
-    namespace: String,
-    name: String,
+    namespace: &str,
+    name: &str,
 ) -> Result<Vec<Deployment>, sqlx::Error> {
     let sql = format!(
         "SELECT {} FROM deployment WHERE namespace = ? AND name = ? AND status <> 'deleted' ORDER BY created_at DESC",
@@ -369,7 +369,7 @@ pub(crate) async fn find_active_by_namespace_name(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
-pub(crate) async fn find(pool: &SqlitePool, id: String) -> Result<Option<Deployment>, sqlx::Error> {
+pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Deployment>, sqlx::Error> {
     let sql = format!("SELECT {} FROM deployment WHERE id = ?", SELECT_COLUMNS);
 
     let row = sqlx::query_as::<_, DeploymentRow>(&sql)

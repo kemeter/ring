@@ -10,7 +10,7 @@ pub(crate) async fn delete(
     State(pool): State<Db>,
     _user: User,
 ) -> StatusCode {
-    let result = ConfigModel::delete(&pool, id.clone()).await;
+    let result = ConfigModel::delete(&pool, &id).await;
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
         return StatusCode::NOT_FOUND;

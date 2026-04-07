@@ -27,7 +27,7 @@ pub(crate) async fn get_health_checks(
     State(pool): State<Db>,
     _user: User,
 ) -> impl IntoResponse {
-    match deployments::find(&pool, deployment_id.clone()).await {
+    match deployments::find(&pool, &deployment_id).await {
         Ok(Some(_)) => {}
         Ok(None) => {
             let message = Message {

@@ -191,7 +191,7 @@ pub(crate) async fn create_container(
 
     let mut mounts: Vec<Mount> = vec![];
     for resolved in resolved_mounts {
-        mounts.push(create_mount_from_resolved(resolved, &deployment.id)?);
+        mounts.push(create_mount_from_resolved(resolved, &deployment.id).await?);
     }
 
     let user_config = build_user_config(&deployment.config);
@@ -284,7 +284,7 @@ pub(crate) async fn create_container(
     }
 }
 
-fn create_mount_from_resolved(
+async fn create_mount_from_resolved(
     resolved: &ResolvedMount,
     deployment_id: &str,
 ) -> Result<Mount, RuntimeError> {
@@ -338,14 +338,14 @@ fn create_mount_from_resolved(
             destination,
         } => {
             let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
-            std::fs::create_dir_all(&temp_dir)?;
+            tokio::fs::create_dir_all(&temp_dir).await?;
 
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             content.hash(&mut hasher);
             let hash = format!("{:x}", hasher.finish());
             let temp_file = format!("{}/{}", temp_dir, hash);
-            if !std::path::Path::new(&temp_file).exists() {
-                std::fs::write(&temp_file, content)?;
+            if !tokio::fs::try_exists(&temp_file).await.unwrap_or(false) {
+                tokio::fs::write(&temp_file, content).await?;
             }
 
             debug!(
@@ -501,41 +501,41 @@ mod tests {
         assert_eq!(get_privileged_config(&config), Some(true));
     }
 
-    #[test]
-    fn test_bind_mount_from_resolved() {
+    #[tokio::test]
+    async fn test_bind_mount_from_resolved() {
         let resolved = ResolvedMount::Bind {
             source: "/host/path".to_string(),
             destination: "/container/path".to_string(),
             read_only: false,
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
         assert_eq!(mount.target, Some("/container/path".to_string()));
         assert_eq!(mount.source, Some("/host/path".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::BIND));
         assert_eq!(mount.read_only, Some(false));
     }
 
-    #[test]
-    fn test_content_mount_from_resolved() {
+    #[tokio::test]
+    async fn test_content_mount_from_resolved() {
         let resolved = ResolvedMount::Content {
             content: "server { listen 80; }".to_string(),
             destination: "/app/nginx.conf".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
         assert_eq!(mount.target, Some("/app/nginx.conf".to_string()));
         assert!(mount.source.unwrap().contains("/tmp/ring_configs/test-deployment"));
         assert_eq!(mount.read_only, Some(true));
     }
 
-    #[test]
-    fn test_named_volume_from_resolved() {
+    #[tokio::test]
+    async fn test_named_volume_from_resolved() {
         let resolved = ResolvedMount::Named {
             name: "my-docker-volume".to_string(),
             destination: "/app/data".to_string(),
             read_only: false,
             driver: "local".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
         assert_eq!(mount.target, Some("/app/data".to_string()));
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
@@ -543,15 +543,15 @@ mod tests {
         assert!(mount.volume_options.is_none());
     }
 
-    #[test]
-    fn test_named_volume_with_nfs_driver() {
+    #[tokio::test]
+    async fn test_named_volume_with_nfs_driver() {
         let resolved = ResolvedMount::Named {
             name: "shared".to_string(),
             destination: "/mnt".to_string(),
             read_only: true,
             driver: "nfs".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
         let driver_name = mount.volume_options.unwrap().driver_config.unwrap().name;
         assert_eq!(driver_name, Some("nfs".to_string()));
     }

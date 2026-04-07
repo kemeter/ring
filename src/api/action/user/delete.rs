@@ -14,7 +14,7 @@ pub(crate) async fn delete(
         return StatusCode::FORBIDDEN;
     }
 
-    let option = users::find(&pool, id).await;
+    let option = users::find(&pool, &id).await;
 
     match option {
         Ok(Some(user)) => {

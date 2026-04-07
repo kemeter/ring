@@ -61,7 +61,7 @@ pub(crate) async fn logs(
     _user: User,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
-    let deployment_result = deployments::find(&pool, id.clone()).await;
+    let deployment_result = deployments::find(&pool, &id).await;
 
     match deployment_result {
         Ok(Some(deployment)) => {
