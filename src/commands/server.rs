@@ -38,10 +38,10 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     );
     info!("Registered runtimes: {:?}", runtimes_map.keys().collect::<Vec<_>>());
 
-    let runtimes = std::sync::Arc::new(runtimes_map.clone());
+    let runtimes = std::sync::Arc::new(runtimes_map);
 
     let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), docker.clone(), runtimes.clone()));
-    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes_map, docker));
+    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes, docker));
 
     if let Err(e) = api_server_handler.await {
         eprintln!("API server task failed: {}", e);

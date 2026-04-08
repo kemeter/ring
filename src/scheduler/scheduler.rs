@@ -121,7 +121,7 @@ async fn apply_runtime(
     match tokio::time::timeout(apply_timeout, runtime.apply(resolved, resolved_mounts)).await {
         Ok(result) => Some(result),
         Err(_) => {
-            error!("docker::apply timed out for deployment {}", deployment.id);
+            error!("runtime apply timed out for deployment {}", deployment.id);
             if let Err(e) = deployment_event::log_event(
                 pool,
                 deployment.id.clone(),
@@ -390,7 +390,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 }
 
-pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: HashMap<String, Arc<dyn RuntimeLifecycle>>, docker: Docker) {
+pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>, docker: Docker) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
