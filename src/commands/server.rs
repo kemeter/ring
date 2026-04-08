@@ -30,16 +30,18 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     let docker = docker::connect().expect("Failed to connect to Docker");
     info!("Connected to Docker");
 
-    let mut runtimes: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
-    runtimes.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker.clone())));
-    runtimes.insert(
+    let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
+    runtimes_map.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker.clone())));
+    runtimes_map.insert(
         "cloud-hypervisor".to_string(),
         Arc::new(CloudHypervisorLifecycle::new(Default::default())),
     );
-    info!("Registered runtimes: {:?}", runtimes.keys().collect::<Vec<_>>());
+    info!("Registered runtimes: {:?}", runtimes_map.keys().collect::<Vec<_>>());
 
-    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), docker.clone()));
-    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes, docker));
+    let runtimes = std::sync::Arc::new(runtimes_map.clone());
+
+    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), docker.clone(), runtimes.clone()));
+    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes_map, docker));
 
     if let Err(e) = api_server_handler.await {
         eprintln!("API server task failed: {}", e);

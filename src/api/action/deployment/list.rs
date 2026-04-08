@@ -8,9 +8,8 @@ use serde::Deserialize;
 
 use url::form_urlencoded::parse;
 
-use bollard::Docker;
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::api::server::Db;
+use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use crate::models::users::User;
 use crate::runtime::docker;
@@ -65,7 +64,7 @@ where
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    State(docker): State<Docker>,
+    State(runtimes): State<RuntimeMap>,
     _user: User,
 ) -> impl IntoResponse {
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
@@ -94,8 +93,12 @@ pub(crate) async fn list(
 
     for deployment in list_deployments.into_iter() {
         let id = deployment.id.clone();
+        let runtime_name = deployment.runtime.clone();
         let mut output = DeploymentOutput::from_to_model(deployment);
-        output.instances = docker::list_instances(&docker, id, "running").await;
+
+        if let Some(rt) = runtimes.get(&runtime_name) {
+            output.instances = rt.list_instances(id, "running").await;
+        }
 
         deployments.push(output);
     }

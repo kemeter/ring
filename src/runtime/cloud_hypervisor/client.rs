@@ -59,6 +59,8 @@ pub(crate) struct DiskConfig {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub readonly: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]

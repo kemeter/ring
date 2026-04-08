@@ -65,7 +65,7 @@ impl CloudHypervisorLifecycle {
             .map_err(|e| format!("Failed to create socket dir: {}", e))?;
 
         // Image is a path to a raw disk image.
-        // Each instance needs its own copy because Cloud Hypervisor takes a write lock.
+        // Each instance gets its own copy (COW via reflink if filesystem supports it).
         let base_image = std::path::PathBuf::from(&deployment.image);
         if !base_image.exists() {
             return Err(format!("VM image not found: {}", deployment.image));
@@ -74,9 +74,20 @@ impl CloudHypervisorLifecycle {
         let instance_image = std::path::PathBuf::from(&self.config.socket_dir)
             .join(format!("{}.raw", instance_id));
         if !instance_image.exists() {
-            tokio::fs::copy(&base_image, &instance_image)
+            let output = tokio::process::Command::new("cp")
+                .args([
+                    "--sparse=always",
+                    base_image.to_str().unwrap_or_default(),
+                    instance_image.to_str().unwrap_or_default(),
+                ])
+                .output()
                 .await
-                .map_err(|e| format!("Failed to copy VM image for instance: {}", e))?;
+                .map_err(|e| format!("Failed to copy VM image: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(format!("Failed to copy VM image: {}", stderr));
+            }
         }
         let rootfs = instance_image;
 
@@ -126,6 +137,7 @@ impl CloudHypervisorLifecycle {
             disks: Some(vec![DiskConfig {
                 path: rootfs.to_str().unwrap_or_default().to_string(),
                 readonly: Some(false),
+                image_type: None,
             }]),
             net: Some(super::network::build_net_config()),
             serial: Some(ConsoleConfig {

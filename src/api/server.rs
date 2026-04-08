@@ -92,11 +92,14 @@ where
     }
 }
 
+pub(crate) type RuntimeMap = std::sync::Arc<std::collections::HashMap<String, std::sync::Arc<dyn crate::runtime::lifecycle_trait::RuntimeLifecycle>>>;
+
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
     pub(crate) configuration: Config,
     pub(crate) docker: Docker,
+    pub(crate) runtimes: RuntimeMap,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -181,7 +184,7 @@ pub(crate) fn router(state: AppState) -> Router {
     app
 }
 
-pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: Docker) {
+pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: Docker, runtimes: RuntimeMap) {
     info!("Starting server on {}", configuration.get_api_url());
 
     let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
@@ -190,6 +193,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: D
         connection: pool,
         configuration,
         docker,
+        runtimes,
     };
 
     let app = router(state);
@@ -203,7 +207,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: D
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::api::server::{AppState, router};
+    use crate::api::server::{AppState, RuntimeMap, router};
     use crate::config::config::Config;
     use axum::Router;
     use bollard::Docker;
@@ -247,10 +251,13 @@ pub(crate) mod tests {
         let docker = Docker::connect_with_local_defaults()
             .expect("Could not connect to Docker for tests");
 
+        let runtimes: RuntimeMap = std::sync::Arc::new(std::collections::HashMap::new());
+
         let state = AppState {
             connection: pool.clone(),
             configuration,
             docker,
+            runtimes,
         };
 
         (pool, router(state))
