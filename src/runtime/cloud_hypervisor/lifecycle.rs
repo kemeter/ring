@@ -244,22 +244,24 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             return deployment;
         }
 
-        // Refresh instances: only keep those with a running VM
+        // Refresh instances by scanning sockets for this deployment
+        let prefix = format!("ch-{}-", &deployment.id[..8.min(deployment.id.len())]);
         let mut alive = Vec::new();
-        for instance_id in &deployment.instances {
-            let socket = self.socket_path(instance_id);
-            if socket.exists() {
-                let client = super::client::CloudHypervisorClient::new(
-                    socket.to_str().unwrap_or_default(),
-                );
-                if let Ok(info) = client.info().await {
-                    if info.state == "Running" {
-                        alive.push(instance_id.clone());
-                        continue;
+        if let Ok(mut entries) = tokio::fs::read_dir(&self.config.socket_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&prefix) && name.ends_with(".sock") {
+                    let instance_id = name.trim_end_matches(".sock").to_string();
+                    let client = super::client::CloudHypervisorClient::new(
+                        entry.path().to_str().unwrap_or_default(),
+                    );
+                    if let Ok(info) = client.info().await {
+                        if info.state == "Running" || info.state == "Created" || info.state == "Booting" {
+                            alive.push(instance_id);
+                        }
                     }
                 }
             }
-            debug!("Instance {} is not running, removing from list", instance_id);
         }
         deployment.instances = alive;
 
@@ -317,8 +319,25 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
     }
 
     async fn list_instances(&self, deployment_id: String, _status: &str) -> Vec<String> {
-        let map = self.instances.read().await;
-        map.get(&deployment_id).cloned().unwrap_or_default()
+        let prefix = format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())]);
+        let mut instances = Vec::new();
+        if let Ok(mut entries) = tokio::fs::read_dir(&self.config.socket_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&prefix) && name.ends_with(".sock") {
+                    let instance_id = name.trim_end_matches(".sock").to_string();
+                    let client = super::client::CloudHypervisorClient::new(
+                        entry.path().to_str().unwrap_or_default(),
+                    );
+                    if let Ok(info) = client.info().await {
+                        if info.state == "Running" {
+                            instances.push(instance_id);
+                        }
+                    }
+                }
+            }
+        }
+        instances
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {
