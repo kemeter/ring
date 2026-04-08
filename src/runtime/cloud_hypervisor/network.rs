@@ -1,5 +1,15 @@
 use tokio::process::Command;
 
+/// Generate a short TAP name (max 15 chars for Linux interface names).
+fn tap_name_for(instance_id: &str) -> String {
+    let short_id: String = instance_id
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .take(11)
+        .collect();
+    format!("tap{}", short_id)
+}
+
 /// Set up networking for a Cloud Hypervisor VM instance.
 ///
 /// Creates a TAP device and bridges it to the namespace network bridge.
@@ -8,7 +18,7 @@ pub(crate) async fn setup_network(
     instance_id: &str,
     namespace: &str,
 ) -> Result<NetworkConfig, String> {
-    let tap_name = format!("tap-{}", &instance_id[..12.min(instance_id.len())]);
+    let tap_name = tap_name_for(instance_id);
     let bridge_name = format!("ring_{}", namespace);
 
     // Create TAP device
@@ -37,7 +47,7 @@ pub(crate) async fn setup_network(
 
 /// Tear down networking for a VM instance.
 pub(crate) async fn teardown_network(instance_id: &str) {
-    let tap_name = format!("tap-{}", &instance_id[..12.min(instance_id.len())]);
+    let tap_name = tap_name_for(instance_id);
 
     if let Err(e) = run_command("ip", &["link", "delete", &tap_name]).await {
         debug!("Failed to delete TAP {}: {}", tap_name, e);
@@ -61,5 +71,24 @@ async fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         Err(format!("{} {:?} failed: {}", cmd, args, stderr))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tap_name_is_valid_ifname() {
+        let name = tap_name_for("ch-e8285bfc-8adc9d87");
+        assert!(name.len() <= 15, "tap name too long: {} ({})", name, name.len());
+        assert!(name.chars().all(|c| c.is_alphanumeric()), "tap name has invalid chars: {}", name);
+    }
+
+    #[test]
+    fn tap_name_max_length() {
+        let name = tap_name_for("ch-abcdefghijklmnopqrstuvwxyz-12345678");
+        assert!(name.len() <= 15);
+        assert!(name.starts_with("tap"));
     }
 }

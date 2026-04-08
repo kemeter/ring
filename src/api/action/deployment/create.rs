@@ -22,8 +22,10 @@ fn default_replicas() -> u32 {
 
 fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     match runtime {
-        "docker" => Ok(()),
-        _ => Err(ValidationError::new("invalid runtime values use [docker]")),
+        "docker" | "cloud-hypervisor" => Ok(()),
+        _ => Err(ValidationError::new(
+            "invalid runtime, supported: [docker, cloud-hypervisor]",
+        )),
     }
 }
 

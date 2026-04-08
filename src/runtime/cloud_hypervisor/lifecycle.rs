@@ -64,11 +64,21 @@ impl CloudHypervisorLifecycle {
             .await
             .map_err(|e| format!("Failed to create socket dir: {}", e))?;
 
-        // Image is a path to a raw disk image
-        let rootfs = std::path::PathBuf::from(&deployment.image);
-        if !rootfs.exists() {
+        // Image is a path to a raw disk image.
+        // Each instance needs its own copy because Cloud Hypervisor takes a write lock.
+        let base_image = std::path::PathBuf::from(&deployment.image);
+        if !base_image.exists() {
             return Err(format!("VM image not found: {}", deployment.image));
         }
+
+        let instance_image = std::path::PathBuf::from(&self.config.socket_dir)
+            .join(format!("{}.raw", instance_id));
+        if !instance_image.exists() {
+            tokio::fs::copy(&base_image, &instance_image)
+                .await
+                .map_err(|e| format!("Failed to copy VM image for instance: {}", e))?;
+        }
+        let rootfs = instance_image;
 
         // Parse resource limits
         let (vcpus, memory_mb) = parse_resources(deployment);
@@ -97,10 +107,15 @@ impl CloudHypervisorLifecycle {
         let client =
             CloudHypervisorClient::new(socket.to_str().unwrap_or_default());
 
-        // Set up networking
-        let net_config = super::network::setup_network(instance_id, &deployment.namespace)
-            .await
-            .map_err(|e| format!("Failed to setup network: {}", e))?;
+        // Set up networking (best-effort, requires CAP_NET_ADMIN)
+        let tap_name = match super::network::setup_network(instance_id, &deployment.namespace).await
+        {
+            Ok(net_config) => Some(net_config.tap_name),
+            Err(e) => {
+                warn!("Network setup failed (VM will run without network): {}", e);
+                None
+            }
+        };
 
         // Create VM configuration
         let vm_config = VmConfig {
@@ -121,17 +136,19 @@ impl CloudHypervisorLifecycle {
                 path: rootfs.to_str().unwrap_or_default().to_string(),
                 readonly: Some(false),
             }]),
-            net: Some(vec![NetConfig {
-                tap: Some(net_config.tap_name),
-                ip: None,
-                mask: None,
-                mac: None,
-            }]),
+            net: tap_name.map(|tap| {
+                vec![NetConfig {
+                    tap: Some(tap),
+                    ip: None,
+                    mask: None,
+                    mac: None,
+                }]
+            }),
             serial: Some(ConsoleConfig {
-                mode: "tty".to_string(),
+                mode: "Tty".to_string(),
             }),
             console: Some(ConsoleConfig {
-                mode: "off".to_string(),
+                mode: "Off".to_string(),
             }),
         };
 
@@ -184,6 +201,13 @@ impl CloudHypervisorLifecycle {
         // Tear down networking
         super::network::teardown_network(instance_id).await;
 
+        // Clean up instance disk image copy
+        let instance_image = std::path::PathBuf::from(&self.config.socket_dir)
+            .join(format!("{}.raw", instance_id));
+        if let Err(e) = tokio::fs::remove_file(&instance_image).await {
+            debug!("Failed to remove instance image {:?}: {}", instance_image, e);
+        }
+
         info!("Cloud Hypervisor VM {} stopped", instance_id);
         true
     }
@@ -219,18 +243,32 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         if deployment.status == DeploymentStatus::Deleted {
-            // Stop all instances
-            let instances = {
-                let map = self.instances.read().await;
-                map.get(&deployment.id).cloned().unwrap_or_default()
-            };
-            for instance_id in &instances {
-                self.stop_vm(instance_id).await;
+            for instance_id in deployment.instances.clone() {
+                self.stop_vm(&instance_id).await;
             }
             self.instances.write().await.remove(&deployment.id);
             deployment.instances.clear();
             return deployment;
         }
+
+        // Refresh instances: only keep those with a running VM
+        let mut alive = Vec::new();
+        for instance_id in &deployment.instances {
+            let socket = self.socket_path(instance_id);
+            if socket.exists() {
+                let client = super::client::CloudHypervisorClient::new(
+                    socket.to_str().unwrap_or_default(),
+                );
+                if let Ok(info) = client.info().await {
+                    if info.state == "Running" {
+                        alive.push(instance_id.clone());
+                        continue;
+                    }
+                }
+            }
+            debug!("Instance {} is not running, removing from list", instance_id);
+        }
+        deployment.instances = alive;
 
         let current_count = deployment.instances.len();
         let target_count = deployment.replicas as usize;

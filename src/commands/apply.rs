@@ -187,9 +187,9 @@ impl Deployment {
             ));
         }
 
-        if self.runtime != "docker" {
+        if self.runtime != "docker" && self.runtime != "cloud-hypervisor" {
             return Err(ApplyError::Validation(format!(
-                "Runtime '{}' not supported. Only 'docker' is supported.",
+                "Runtime '{}' not supported. Supported runtimes: docker, cloud-hypervisor.",
                 self.runtime
             )));
         }
