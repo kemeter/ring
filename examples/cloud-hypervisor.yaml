@@ -1,0 +1,17 @@
+deployments:
+    nginx-vm:
+        name: nginx-vm
+        namespace: default
+        runtime: cloud-hypervisor
+        image: "nginx:alpine"
+        replicas: 1
+        health_checks:
+            - type: tcp
+              port: 80
+              interval: "10s"
+              timeout: "5s"
+              on_failure: restart
+        resources:
+            limits:
+                cpu: "1"
+                memory: "256Mi"
