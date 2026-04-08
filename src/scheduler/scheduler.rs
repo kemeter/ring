@@ -390,7 +390,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 }
 
-pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtime: Arc<dyn RuntimeLifecycle>, docker: Docker) {
+pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: HashMap<String, Arc<dyn RuntimeLifecycle>>, docker: Docker) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -436,9 +436,13 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
         let mut deleted: Vec<String> = Vec::new();
 
         for deployment in list_deployments.into_iter() {
-            if deployment.runtime != "docker" {
-                continue;
-            }
+            let runtime = match runtimes.get(&deployment.runtime) {
+                Some(rt) => rt.clone(),
+                None => {
+                    debug!("No runtime registered for '{}', skipping deployment {}", deployment.runtime, deployment.id);
+                    continue;
+                }
+            };
 
             let configs = match load_configs(&pool, &deployment).await {
                 Some(c) => c,

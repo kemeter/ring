@@ -65,20 +65,16 @@ impl CloudHypervisorLifecycle {
         _resolved_mounts: &[ResolvedMount],
     ) -> Result<(), String> {
         let socket = self.socket_path(instance_id);
-        let rootfs = self.rootfs_path(&deployment.image);
 
         // Ensure directories exist
         tokio::fs::create_dir_all(&self.config.socket_dir)
             .await
             .map_err(|e| format!("Failed to create socket dir: {}", e))?;
 
-        // TODO: Convert Docker image to rootfs if not cached
-        if !rootfs.exists() {
-            return Err(format!(
-                "Rootfs not found for image '{}'. Image conversion not yet implemented.",
-                deployment.image
-            ));
-        }
+        // Convert Docker image to rootfs if not cached
+        let rootfs = super::image::ensure_rootfs(&deployment.image, &self.config.rootfs_dir)
+            .await
+            .map_err(|e| format!("Failed to prepare rootfs for image '{}': {}", deployment.image, e))?;
 
         // Parse resource limits
         let (vcpus, memory_mb) = parse_resources(deployment);
