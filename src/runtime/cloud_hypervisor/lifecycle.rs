@@ -103,6 +103,11 @@ impl CloudHypervisorLifecycle {
         let client =
             CloudHypervisorClient::new(socket.to_str().unwrap_or_default());
 
+        // Set up networking
+        let net_config = super::network::setup_network(instance_id, &deployment.namespace)
+            .await
+            .map_err(|e| format!("Failed to setup network: {}", e))?;
+
         // Create VM configuration
         let vm_config = VmConfig {
             payload: PayloadConfig {
@@ -123,7 +128,7 @@ impl CloudHypervisorLifecycle {
                 readonly: Some(false),
             }]),
             net: Some(vec![NetConfig {
-                tap: None,
+                tap: Some(net_config.tap_name),
                 ip: None,
                 mask: None,
                 mac: None,
@@ -181,6 +186,9 @@ impl CloudHypervisorLifecycle {
         if let Err(e) = tokio::fs::remove_file(&socket).await {
             debug!("Failed to remove socket {}: {}", socket_str, e);
         }
+
+        // Tear down networking
+        super::network::teardown_network(instance_id).await;
 
         info!("Cloud Hypervisor VM {} stopped", instance_id);
         true
