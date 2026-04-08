@@ -28,6 +28,7 @@ mod scheduler {
 }
 
 mod runtime {
+    pub(crate) mod cloud_hypervisor;
     pub(crate) mod docker;
     pub(crate) mod error;
     pub(crate) mod lifecycle_trait;

@@ -37,6 +37,10 @@ serde_yaml = "0.9.25"
 http = "1.0.0"
 url = "2.5.0"
 async-trait = "0.1.77"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
+hyperlocal = "0.9"
+http-body-util = "0.1"
 validator = { version = "0.20.0", features = ["derive"] }
 rand = "0.9.1"
 aes-gcm = "0.10"
