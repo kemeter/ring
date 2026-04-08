@@ -107,17 +107,8 @@ impl CloudHypervisorLifecycle {
         let client =
             CloudHypervisorClient::new(socket.to_str().unwrap_or_default());
 
-        // Set up networking (best-effort, requires CAP_NET_ADMIN)
-        let tap_name = match super::network::setup_network(instance_id, &deployment.namespace).await
-        {
-            Ok(net_config) => Some(net_config.tap_name),
-            Err(e) => {
-                warn!("Network setup failed (VM will run without network): {}", e);
-                None
-            }
-        };
-
         // Create VM configuration
+        // Cloud Hypervisor creates TAP devices itself (requires CAP_NET_ADMIN on the binary)
         let vm_config = VmConfig {
             payload: PayloadConfig {
                 kernel: None,
@@ -136,14 +127,7 @@ impl CloudHypervisorLifecycle {
                 path: rootfs.to_str().unwrap_or_default().to_string(),
                 readonly: Some(false),
             }]),
-            net: tap_name.map(|tap| {
-                vec![NetConfig {
-                    tap: Some(tap),
-                    ip: None,
-                    mask: None,
-                    mac: None,
-                }]
-            }),
+            net: Some(super::network::build_net_config()),
             serial: Some(ConsoleConfig {
                 mode: "Tty".to_string(),
             }),
@@ -197,9 +181,6 @@ impl CloudHypervisorLifecycle {
         if let Err(e) = tokio::fs::remove_file(&socket).await {
             debug!("Failed to remove socket {}: {}", socket_str, e);
         }
-
-        // Tear down networking
-        super::network::teardown_network(instance_id).await;
 
         // Clean up instance disk image copy
         let instance_image = std::path::PathBuf::from(&self.config.socket_dir)

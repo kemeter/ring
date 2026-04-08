@@ -199,7 +199,6 @@ impl RuntimeInterface for CloudHypervisorRuntime {
             let _ = tokio::fs::remove_file(&socket).await;
         }
 
-        super::network::teardown_network(instance_id).await;
     }
 
     async fn get_instance_stats(&self) -> Vec<ContainerStatsOutput> {
