@@ -25,11 +25,12 @@ pub(crate) struct CloudHypervisorConfig {
 
 impl Default for CloudHypervisorConfig {
     fn default() -> Self {
+        let base_dir = crate::config::config::get_config_dir();
         Self {
             binary_path: "cloud-hypervisor".to_string(),
-            kernel_path: "/opt/ring/vmlinux".to_string(),
-            socket_dir: "/var/run/ring/ch".to_string(),
-            rootfs_dir: "/var/lib/ring/rootfs".to_string(),
+            kernel_path: format!("{}/cloud-hypervisor/vmlinux", base_dir),
+            socket_dir: format!("{}/cloud-hypervisor/sockets", base_dir),
+            rootfs_dir: format!("{}/cloud-hypervisor/rootfs", base_dir),
         }
     }
 }
