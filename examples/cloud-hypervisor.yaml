@@ -3,7 +3,7 @@ deployments:
         name: nginx-vm
         namespace: default
         runtime: cloud-hypervisor
-        image: "nginx:alpine"
+        image: "/path/to/your-image.raw"
         replicas: 1
         health_checks:
             - type: tcp

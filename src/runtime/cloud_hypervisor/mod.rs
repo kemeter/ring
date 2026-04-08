@@ -1,5 +1,4 @@
 mod client;
-mod image;
 mod lifecycle;
 mod network;
 mod runtime_impl;

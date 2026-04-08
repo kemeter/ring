@@ -15,12 +15,10 @@ use tokio::process::Command;
 pub(crate) struct CloudHypervisorConfig {
     /// Path to the cloud-hypervisor binary.
     pub binary_path: String,
-    /// Path to the Linux kernel (vmlinux).
+    /// Path to the firmware (hypervisor-fw).
     pub kernel_path: String,
     /// Directory for VM API sockets.
     pub socket_dir: String,
-    /// Directory for VM rootfs images.
-    pub rootfs_dir: String,
 }
 
 impl Default for CloudHypervisorConfig {
@@ -30,7 +28,6 @@ impl Default for CloudHypervisorConfig {
             binary_path: "cloud-hypervisor".to_string(),
             kernel_path: format!("{}/cloud-hypervisor/vmlinux", base_dir),
             socket_dir: format!("{}/cloud-hypervisor/sockets", base_dir),
-            rootfs_dir: format!("{}/cloud-hypervisor/rootfs", base_dir),
         }
     }
 }
@@ -53,11 +50,6 @@ impl CloudHypervisorLifecycle {
         PathBuf::from(&self.config.socket_dir).join(format!("{}.sock", instance_id))
     }
 
-    fn rootfs_path(&self, image: &str) -> PathBuf {
-        let safe_name = image.replace(['/', ':'], "_");
-        PathBuf::from(&self.config.rootfs_dir).join(format!("{}.img", safe_name))
-    }
-
     /// Start the cloud-hypervisor process for a VM instance.
     async fn start_vm_process(
         &self,
@@ -67,15 +59,16 @@ impl CloudHypervisorLifecycle {
     ) -> Result<(), String> {
         let socket = self.socket_path(instance_id);
 
-        // Ensure directories exist
+        // Ensure socket directory exists
         tokio::fs::create_dir_all(&self.config.socket_dir)
             .await
             .map_err(|e| format!("Failed to create socket dir: {}", e))?;
 
-        // Convert Docker image to rootfs if not cached
-        let rootfs = super::image::ensure_rootfs(&deployment.image, &self.config.rootfs_dir)
-            .await
-            .map_err(|e| format!("Failed to prepare rootfs for image '{}': {}", deployment.image, e))?;
+        // Image is a path to a raw disk image
+        let rootfs = std::path::PathBuf::from(&deployment.image);
+        if !rootfs.exists() {
+            return Err(format!("VM image not found: {}", deployment.image));
+        }
 
         // Parse resource limits
         let (vcpus, memory_mb) = parse_resources(deployment);
@@ -112,9 +105,9 @@ impl CloudHypervisorLifecycle {
         // Create VM configuration
         let vm_config = VmConfig {
             payload: PayloadConfig {
-                kernel: Some(self.config.kernel_path.clone()),
-                cmdline: Some("console=ttyS0 root=/dev/vda rw".to_string()),
-                firmware: None,
+                kernel: None,
+                cmdline: None,
+                firmware: Some(self.config.kernel_path.clone()),
                 initramfs: None,
             },
             cpus: Some(CpuConfig {
