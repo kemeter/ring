@@ -86,11 +86,15 @@ ring apply -f <FILE>
 
 **Options:**
 - `-f <FILE>`, `--file <FILE>` : YAML/JSON configuration file
+- `--force` : Force immediate replacement, bypassing rolling update
 
 **Examples:**
 ```bash
 ring apply -f deployment.yaml
 ring apply -f config.json
+
+# Force immediate replacement (skip rolling update)
+ring apply -f deployment.yaml --force
 ```
 
 ### `ring deployment list`

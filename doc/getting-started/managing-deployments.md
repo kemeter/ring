@@ -47,11 +47,76 @@ deployments:
 ring apply -f app.yaml
 ```
 
-Ring will automatically:
-1. Stop the old containers
-2. Start new ones with the new image
-3. Verify that the new containers are working
-4. Maintain the number of replicas
+Ring supports two update strategies depending on whether health checks are configured.
+
+### Rolling Update (Zero-Downtime)
+
+When a deployment has **health checks configured**, `ring apply` performs a rolling update automatically. Containers are replaced one by one with no service interruption:
+
+1. A new container with the new image is started
+2. Ring waits for it to pass health checks
+3. One old container is removed
+4. Steps 1-3 repeat until all replicas run the new image
+
+During the rollout, the old deployment stays in `Running` status — traffic continues to be served by the old containers until new ones are confirmed healthy.
+
+```yaml title="app.yaml"
+deployments:
+  web-app:
+    name: web-app
+    namespace: production
+    runtime: docker
+    image: "nginx:1.21"
+    replicas: 3
+
+    health_checks:
+      - type: http
+        url: "http://localhost:80/"
+        interval: "10s"
+        timeout: "5s"
+        threshold: 3
+        on_failure: restart
+```
+
+```bash
+ring apply -f app.yaml
+```
+
+You can follow the rollout progress in real-time:
+
+```bash
+ring deployment events web-app --follow
+```
+
+#### Automatic Rollback on Failure
+
+If a new container fails its health checks, the rollout **stops immediately**. The old containers remain running and unaffected — no manual intervention is needed to keep the service available. The new deployment is marked as `Failed`.
+
+#### Prerequisites
+
+Rolling updates require **all** of the following:
+
+- At least one health check configured on the deployment
+- Exactly one active deployment with the same name and namespace
+- The `--force` flag is **not** used
+
+If any condition is not met, Ring falls back to immediate replacement.
+
+### Immediate Replacement
+
+Without health checks, or when the `--force` flag is used, Ring performs an immediate replacement:
+
+1. All old containers are stopped
+2. New containers are created with the new image
+3. The number of replicas is maintained
+
+```bash
+# Force immediate replacement even with health checks
+ring apply -f app.yaml --force
+```
+
+!!! warning "Service Interruption"
+    Immediate replacement causes a brief downtime between old containers stopping and new ones becoming ready. Use health checks to enable rolling updates and avoid this.
 
 ### Image Pull Strategies
 
