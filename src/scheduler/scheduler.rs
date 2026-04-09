@@ -478,6 +478,18 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             };
 
             persist_pending_events(&pool, &mut result).await;
+
+            // Re-read current status from DB to detect concurrent changes (e.g. API delete)
+            if let Ok(Some(current)) = deployments::find(&pool, &result.id).await {
+                if current.status == DeploymentStatus::Deleted && result.status != DeploymentStatus::Deleted {
+                    info!(
+                        "Deployment {} was deleted externally during scheduler cycle, skipping update",
+                        result.id
+                    );
+                    continue;
+                }
+            }
+
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, &docker).await;
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
