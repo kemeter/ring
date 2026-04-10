@@ -150,15 +150,34 @@ ring deployment delete old-app --force
 ```
 
 ### `ring deployment logs`
-Displays deployment logs.
+Displays logs for a deployment.
 
 ```bash
-ring deployment logs <DEPLOYMENT_ID>
+ring deployment logs <DEPLOYMENT_ID> [OPTIONS]
 ```
+
+**Options:**
+- `-f`, `--follow` : Follow log output in real time (polls every 2s)
+- `--tail <N>` : Number of lines to show from the end of the logs (default: 100)
+- `--since <DURATION>` : Show logs since a relative duration (e.g. `30s`, `10m`, `2h`) or RFC3339 timestamp
+- `-c`, `--container <NAME>` : Filter logs by container/instance name
 
 **Examples:**
 ```bash
+# Show recent logs
 ring deployment logs web-app
+
+# Follow logs in real time
+ring deployment logs web-app --follow
+
+# Last 50 lines
+ring deployment logs web-app --tail 50
+
+# Logs from the last 10 minutes
+ring deployment logs web-app --since 10m
+
+# Logs from a specific container
+ring deployment logs web-app --container web-app-1
 ```
 
 ### `ring deployment events`
