@@ -29,6 +29,14 @@ pub(crate) fn command_config() -> Command {
                 .help("Filter by type (worker or job)")
                 .value_parser(["worker", "job"]),
         )
+        .arg(
+            Arg::new("output")
+                .short('o')
+                .long("output")
+                .help("Output format")
+                .value_parser(["table", "json"])
+                .default_value("table"),
+        )
 }
 
 #[derive(Table)]
@@ -104,8 +112,26 @@ pub(crate) async fn execute(
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
+            let body = match response.text().await {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Failed to read deployment list response: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
+            };
+
+            let output_format = args
+                .get_one::<String>("output")
+                .map(String::as_str)
+                .unwrap_or("table");
+
+            if output_format == "json" {
+                println!("{}", body);
+                return;
+            }
+
             let deployments_list: Vec<DeploymentOutput> =
-                match response.json::<Vec<DeploymentOutput>>().await {
+                match serde_json::from_str(&body) {
                     Ok(list) => list,
                     Err(e) => {
                         eprintln!("Failed to parse deployment list: {}", e);
