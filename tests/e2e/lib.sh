@@ -130,6 +130,9 @@ wait_deployment_status() {
 }
 
 # Usage: get_deployment_id <namespace> <name>
+# Returns the first deployment id matching <namespace>/<name>. When multiple
+# deployments share the same name (e.g. during a rolling update), prefer
+# get_deployment_id_by_image or get_running_deployment_id.
 get_deployment_id() {
   local namespace="$1"
   local name="$2"
@@ -137,6 +140,41 @@ get_deployment_id() {
     | jq -r --arg ns "$namespace" --arg n "$name" \
         '.[] | select(.namespace==$ns and .name==$n) | .id' \
     | head -n1
+}
+
+# Usage: get_deployment_id_by_image <namespace> <name> <image>
+get_deployment_id_by_image() {
+  local namespace="$1"
+  local name="$2"
+  local image="$3"
+  "$RING_BIN" deployment list --output json \
+    | jq -r --arg ns "$namespace" --arg n "$name" --arg img "$image" \
+        '.[] | select(.namespace==$ns and .name==$n and .image==$img) | .id' \
+    | head -n1
+}
+
+# Usage: wait_deployment_by_image <namespace> <name> <image> <expected_status> [timeout]
+wait_deployment_by_image() {
+  local namespace="$1"
+  local name="$2"
+  local image="$3"
+  local want="$4"
+  local timeout="${5:-60}"
+  local got=""
+
+  for _ in $(seq 1 "$timeout"); do
+    got=$("$RING_BIN" deployment list --output json 2>/dev/null \
+      | jq -r --arg ns "$namespace" --arg n "$name" --arg img "$image" \
+          '.[] | select(.namespace==$ns and .name==$n and .image==$img) | .status' \
+      | head -n1)
+    if [ "$got" = "$want" ]; then
+      log "deployment $namespace/$name ($image) reached status '$want'"
+      return 0
+    fi
+    sleep 1
+  done
+
+  fail "deployment $namespace/$name ($image) did not reach status '$want' in ${timeout}s (last: '${got:-<none>}')"
 }
 
 # Usage: assert_docker_container_exists <deployment_id>

@@ -1,0 +1,14 @@
+deployments:
+  nginx-rolling:
+    name: nginx-rolling
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:1.25-alpine
+    replicas: 1
+    health_checks:
+      - type: tcp
+        port: 80
+        interval: 2s
+        timeout: 1s
+        threshold: 2
+        on_failure: restart
