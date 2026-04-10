@@ -392,8 +392,11 @@ Error: Cannot start container
 ### Namespace Cleanup
 
 ```bash
-# Remove all deployments from a namespace
+# Remove only stopped/failed deployments (safe default)
 ring namespace prune development
+
+# Remove everything, including running deployments
+ring namespace prune development --all
 
 # Confirm deletion
 ring deployment list --namespace development
@@ -451,8 +454,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Deploy to Ring
+        env:
+          RING_TOKEN: ${{ secrets.RING_TOKEN }}
         run: |
-          ring login --username ${{ secrets.RING_USER }} --password ${{ secrets.RING_PASSWORD }}
           ring apply -f deployment.yaml
 ```
 

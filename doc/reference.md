@@ -396,22 +396,29 @@ ring namespace list
 ```
 
 ### `ring namespace prune`
-Cleans a namespace by removing unused resources.
+Removes inactive deployments from a namespace. By default, only deployments in a terminal or failed state are deleted — running and pending deployments are preserved.
 
 ```bash
-ring namespace prune <NAMESPACE>
+ring namespace prune <NAMESPACE> [--all]
 ```
+
+**Options:**
+- `-a`, `--all` : Delete **all** deployments in the namespace, including running ones. Destructive.
+
+**Prunable statuses (default):**
+`completed`, `failed`, `deleted`, `CrashLoopBackOff`, `ImagePullBackOff`, `CreateContainerError`, `NetworkError`, `ConfigError`, `FileSystemError`, `Error`
+
+**Preserved statuses (default):**
+`pending`, `creating`, `running`
 
 **Examples:**
 ```bash
+# Clean up failed and completed deployments only
 ring namespace prune development
-ring namespace prune staging
-```
 
-**Function:**
-- Removes stopped deployments
-- Cleans unused containers
-- Removes empty networks
+# Wipe the entire namespace, including running deployments
+ring namespace prune development --all
+```
 
 !!! tip "Auto-creation"
     Namespaces are automatically created when you deploy to a namespace that doesn't exist yet. You don't need to create them manually before deploying.
