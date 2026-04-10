@@ -252,15 +252,15 @@ ring user update --username alice --password newsecretpass
 Deletes a user.
 
 ```bash
-ring user delete --username <USERNAME>
+ring user delete <ID>
 ```
 
-**Required options:**
-- `--username <USERNAME>` : Username to delete
+**Required arguments:**
+- `<ID>` : User ID (UUID) to delete. Use `ring user list` to find the ID.
 
 **Examples:**
 ```bash
-ring user delete --username alice
+ring user delete 550e8400-e29b-41d4-a716-446655440000
 ```
 
 ## Secret Management
