@@ -1,0 +1,7 @@
+deployments:
+  nginx-scaled:
+    name: nginx-scaled
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 3

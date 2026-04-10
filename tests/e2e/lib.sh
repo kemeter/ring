@@ -188,6 +188,23 @@ assert_docker_container_exists() {
   log "container exists for deployment $id (count=$count)"
 }
 
+# Usage: wait_docker_container_count <deployment_id> <expected_count> [timeout_seconds]
+wait_docker_container_count() {
+  local id="$1"
+  local expected="$2"
+  local timeout="${3:-30}"
+  local count=0
+  for _ in $(seq 1 "$timeout"); do
+    count=$(docker ps -q --filter "label=ring_deployment=$id" | wc -l | tr -d ' ')
+    if [ "$count" -eq "$expected" ]; then
+      log "deployment $id has $expected container(s) as expected"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "deployment $id has $count container(s), expected $expected (timeout ${timeout}s)"
+}
+
 # Usage: assert_docker_bind_mount <deployment_id> <host_path> <container_path> <ro|rw>
 assert_docker_bind_mount() {
   local id="$1"
