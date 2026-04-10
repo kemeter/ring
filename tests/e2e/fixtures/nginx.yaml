@@ -1,0 +1,7 @@
+deployments:
+  nginx:
+    name: nginx
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 1
