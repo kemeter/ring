@@ -62,6 +62,72 @@ struct Deployment {
 
     #[serde(default)]
     config: HashMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    command: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resources: Option<Resources>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    health_checks: Vec<HealthCheck>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Resources {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limits: Option<ResourceSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    requests: Option<ResourceSpec>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ResourceSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cpu: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum HealthCheck {
+    Tcp {
+        port: u16,
+        interval: String,
+        timeout: String,
+        #[serde(default = "default_hc_threshold")]
+        threshold: u32,
+        on_failure: FailureAction,
+    },
+    Http {
+        url: String,
+        interval: String,
+        timeout: String,
+        #[serde(default = "default_hc_threshold")]
+        threshold: u32,
+        on_failure: FailureAction,
+    },
+    Command {
+        command: String,
+        interval: String,
+        timeout: String,
+        #[serde(default = "default_hc_threshold")]
+        threshold: u32,
+        on_failure: FailureAction,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+enum FailureAction {
+    Restart,
+    Stop,
+    Alert,
+}
+
+fn default_hc_threshold() -> u32 {
+    3
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -137,6 +203,10 @@ impl Deployment {
 
         for (_, value) in self.config.iter_mut() {
             *value = env_resolver(value, env_vars);
+        }
+
+        for arg in self.command.iter_mut() {
+            *arg = env_resolver(arg, env_vars);
         }
     }
 }
@@ -494,6 +564,9 @@ mod tests {
             environment: HashMap::new(),
             volumes: Vec::new(),
             config: HashMap::new(),
+            command: Vec::new(),
+            resources: None,
+            health_checks: Vec::new(),
         };
 
         assert!(deployment.validate().is_ok());
@@ -627,6 +700,99 @@ deployments:
         assert_eq!(config.namespaces["production"].name, "production");
         assert_eq!(config.namespaces["staging"].name, "staging");
         assert_eq!(config.deployments.len(), 1);
+    }
+
+    #[test]
+    fn test_config_file_with_command_resources_health_checks() {
+        let yaml_content = r#"
+deployments:
+  api:
+    name: api
+    image: myapp:latest
+    runtime: docker
+    command:
+      - "/bin/sh"
+      - "-c"
+      - "exec myapp --port $PORT"
+    resources:
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+    health_checks:
+      - type: http
+        url: http://localhost:8080/health
+        interval: 30s
+        timeout: 5s
+        on_failure: restart
+      - type: tcp
+        port: 5432
+        interval: 10s
+        timeout: 2s
+        threshold: 5
+        on_failure: alert
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let api = &config.deployments["api"];
+
+        assert_eq!(api.command.len(), 3);
+        assert_eq!(api.command[2], "exec myapp --port $PORT");
+
+        let resources = api.resources.as_ref().expect("resources should parse");
+        let limits = resources.limits.as_ref().expect("limits should parse");
+        assert_eq!(limits.cpu.as_deref(), Some("500m"));
+        assert_eq!(limits.memory.as_deref(), Some("512Mi"));
+        let requests = resources.requests.as_ref().expect("requests should parse");
+        assert_eq!(requests.cpu.as_deref(), Some("100m"));
+
+        assert_eq!(api.health_checks.len(), 2);
+        match &api.health_checks[0] {
+            HealthCheck::Http { url, .. } => {
+                assert_eq!(url, "http://localhost:8080/health");
+            }
+            _ => panic!("expected http health check"),
+        }
+        match &api.health_checks[1] {
+            HealthCheck::Tcp {
+                port, threshold, ..
+            } => {
+                assert_eq!(*port, 5432);
+                assert_eq!(*threshold, 5);
+            }
+            _ => panic!("expected tcp health check"),
+        }
+    }
+
+    #[test]
+    fn test_command_env_resolution() {
+        let mut deployment = Deployment {
+            namespace: "test".to_string(),
+            runtime: "docker".to_string(),
+            kind: "worker".to_string(),
+            image: "nginx:latest".to_string(),
+            name: "test".to_string(),
+            replicas: 1,
+            labels: HashMap::new(),
+            environment: HashMap::new(),
+            volumes: Vec::new(),
+            config: HashMap::new(),
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "serve --port $PORT".to_string(),
+            ],
+            resources: None,
+            health_checks: Vec::new(),
+        };
+
+        let mut env_vars = HashMap::new();
+        env_vars.insert("PORT".to_string(), "8080".to_string());
+        deployment.resolve_env_vars(&env_vars);
+
+        assert_eq!(deployment.command[2], "serve --port 8080");
     }
 
     #[test]

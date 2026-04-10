@@ -608,7 +608,53 @@ deployments:
       - "/host:/container"
     labels:
       - "key=value"
+    # Optional: override the image entrypoint/command
+    command:
+      - "/bin/sh"
+      - "-c"
+      - "exec myapp --port $PORT"
+    # Optional: CPU and memory limits/requests (Kubernetes-like)
+    resources:
+      limits:
+        cpu: "500m"        # 500 millicores = 0.5 CPU
+        memory: "512Mi"
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+    # Optional: health checks (tcp, http, or command)
+    health_checks:
+      - type: http
+        url: "http://localhost:8080/health"
+        interval: "30s"
+        timeout: "5s"
+        threshold: 3          # default: 3
+        on_failure: restart   # restart | stop | alert
+      - type: tcp
+        port: 5432
+        interval: "10s"
+        timeout: "2s"
+        on_failure: alert
+      - type: command
+        command: "pg_isready -U postgres"
+        interval: "15s"
+        timeout: "3s"
+        on_failure: restart
 ```
+
+**`resources` details:**
+- `limits` : hard cap the container cannot exceed (CPU throttled, OOM-killed on memory overage)
+- `requests` : minimum the scheduler guarantees
+- CPU values accept millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`)
+- Memory values accept raw bytes or suffixes (`Ki`, `Mi`, `Gi`, ...)
+- Both `limits` and `requests` are optional; within each, `cpu` and `memory` are also optional
+
+**`health_checks` details:**
+- `type: tcp` : checks a TCP port is open (requires `port`)
+- `type: http` : issues an HTTP GET and expects a 2xx response (requires `url`)
+- `type: command` : runs a shell command inside the container and expects exit code 0 (requires `command`)
+- `interval` and `timeout` use duration suffixes (`ms`, `s`)
+- `threshold` : consecutive failures before `on_failure` triggers (default: 3)
+- `on_failure` : `restart` (restart the container), `stop` (stop it), or `alert` (log an event only)
 
 !!! info "Namespaces in YAML"
     The `namespaces` section is optional. When present, namespaces are created before deployments are processed. If a namespace already exists, it is silently skipped.
