@@ -1,0 +1,13 @@
+deployments:
+  nginx-bind:
+    name: nginx-bind
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 1
+    volumes:
+      - type: bind
+        source: /tmp/ring-e2e-t2
+        destination: /usr/share/nginx/html
+        driver: local
+        permission: ro

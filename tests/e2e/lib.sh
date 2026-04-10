@@ -150,6 +150,40 @@ assert_docker_container_exists() {
   log "container exists for deployment $id (count=$count)"
 }
 
+# Usage: assert_docker_bind_mount <deployment_id> <host_path> <container_path> <ro|rw>
+assert_docker_bind_mount() {
+  local id="$1"
+  local source="$2"
+  local destination="$3"
+  local mode="$4"
+
+  local container_id
+  container_id=$(docker ps -q --filter "label=ring_deployment=$id" | head -n1)
+  if [ -z "$container_id" ]; then
+    fail "no container found for deployment $id"
+  fi
+
+  local want_rw="true"
+  if [ "$mode" = "ro" ]; then
+    want_rw="false"
+  fi
+
+  local match
+  match=$(docker inspect "$container_id" \
+    | jq -r --arg src "$source" --arg dst "$destination" --argjson rw "$want_rw" '
+        .[0].Mounts[]
+        | select(.Type=="bind" and .Source==$src and .Destination==$dst and .RW==$rw)
+        | .Destination' \
+    | head -n1)
+
+  if [ -z "$match" ]; then
+    echo "[e2e] container $container_id mounts:" >&2
+    docker inspect "$container_id" | jq '.[0].Mounts' >&2
+    fail "bind mount $source:$destination ($mode) not found on container $container_id"
+  fi
+  log "bind mount verified: $source -> $destination ($mode)"
+}
+
 # Usage: wait_docker_container_gone <deployment_id> [timeout_seconds]
 wait_docker_container_gone() {
   local id="$1"
