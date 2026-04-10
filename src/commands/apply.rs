@@ -260,11 +260,15 @@ fn load_config_file(file_path: &str) -> Result<ConfigFile, ApplyError> {
 }
 
 fn check_auth(config_dir: &str) -> Result<(), ApplyError> {
+    if env::var("RING_TOKEN").ok().is_some_and(|t| !t.is_empty()) {
+        return Ok(());
+    }
+
     let auth_config_file = format!("{}/auth.json", config_dir);
 
     if !Path::new(&auth_config_file).exists() {
         return Err(ApplyError::Auth(
-            "Account not found. Login first".to_string(),
+            "Account not found. Login first or set RING_TOKEN".to_string(),
         ));
     }
 

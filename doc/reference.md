@@ -554,6 +554,19 @@ export RING_SCHEDULER_INTERVAL=30
 export RING_APPLY_TIMEOUT=600
 ```
 
+### Authentication variables
+
+```bash
+# Bearer token used to authenticate CLI requests. When set, it takes
+# precedence over the token stored in auth.json by `ring login`.
+# Intended for CI pipelines and stateless environments.
+export RING_TOKEN="your-token-here"
+```
+
+When `RING_TOKEN` is set and non-empty, the CLI skips reading `auth.json`
+entirely — useful when running `ring apply` in CI without calling `ring login`
+first.
+
 ## Exit Codes
 
 Ring uses standard exit codes:
