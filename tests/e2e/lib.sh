@@ -184,6 +184,34 @@ assert_docker_bind_mount() {
   log "bind mount verified: $source -> $destination ($mode)"
 }
 
+# Usage: wait_health_check_success <deployment_id> [timeout_seconds]
+wait_health_check_success() {
+  local id="$1"
+  local timeout="${2:-20}"
+  local count=0
+
+  for _ in $(seq 1 "$timeout"); do
+    count=$("$RING_BIN" deployment health-checks "$id" --output json 2>/dev/null \
+      | jq '[.[] | select(.status=="success")] | length')
+    if [ "${count:-0}" -ge 1 ]; then
+      log "deployment $id has $count successful health check(s)"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "no successful health check for deployment $id after ${timeout}s (last count: ${count:-0})"
+}
+
+# Usage: get_restart_count <namespace> <name>
+get_restart_count() {
+  local namespace="$1"
+  local name="$2"
+  "$RING_BIN" deployment list --output json \
+    | jq -r --arg ns "$namespace" --arg n "$name" \
+        '.[] | select(.namespace==$ns and .name==$n) | .restart_count' \
+    | head -n1
+}
+
 # Usage: wait_docker_container_gone <deployment_id> [timeout_seconds]
 wait_docker_container_gone() {
   local id="$1"

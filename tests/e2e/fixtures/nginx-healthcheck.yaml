@@ -1,0 +1,14 @@
+deployments:
+  nginx-hc:
+    name: nginx-hc
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 1
+    health_checks:
+      - type: tcp
+        port: 80
+        interval: 2s
+        timeout: 1s
+        threshold: 2
+        on_failure: restart
