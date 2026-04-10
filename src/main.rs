@@ -99,7 +99,8 @@ async fn main() {
                 .subcommand(commands::deployment::delete::command_config())
                 .subcommand(commands::deployment::logs::command_config())
                 .subcommand(commands::deployment::events::command_config())
-                .subcommand(commands::deployment::metrics::command_config()),
+                .subcommand(commands::deployment::metrics::command_config())
+                .subcommand(commands::deployment::health_checks::command_config()),
         )
         .subcommand(
             Command::new("namespace")
@@ -195,6 +196,10 @@ async fn main() {
                 }
                 ("metrics", sub_matches) => {
                     commands::deployment::metrics::execute(sub_matches, config, &client).await;
+                }
+                ("health-checks", sub_matches) => {
+                    commands::deployment::health_checks::execute(sub_matches, config, &client)
+                        .await;
                 }
                 _ => {}
             }
