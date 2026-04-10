@@ -3,7 +3,8 @@ current = true
 host = "127.0.0.1"
 
 api.scheme = "http"
-api.port = 3000
+api.port = 3030
+api.cors_origins = ["http://localhost:5172", "http://127.0.0.1:5172"]
 
 user.salt = "changeme"
 

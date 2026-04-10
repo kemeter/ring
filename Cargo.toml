@@ -29,6 +29,7 @@ cli-table = "0.5.0"
 axum = { version = "0.8.4" }
 axum-extra = { version = "0.10.1", features = ["typed-header", "query", "json-deserializer"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
+tower-http = { version = "0.6", features = ["cors"] }
 axum-macros = "0.5.0"
 rust-argon2 = "2.0.0"
 regex = "1.6.0"

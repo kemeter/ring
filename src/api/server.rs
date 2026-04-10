@@ -1,10 +1,8 @@
-use axum::extract::FromRef;
-use axum::http::request::Parts;
 use axum::{
     Json, RequestPartsExt, Router,
     error_handling::HandleErrorLayer,
-    extract::FromRequestParts,
-    http::StatusCode,
+    extract::{FromRef, FromRequestParts},
+    http::{HeaderValue, Method, StatusCode, header, request::Parts},
     routing::{delete, get, post, put},
 };
 use axum_extra::{
@@ -12,13 +10,14 @@ use axum_extra::{
     headers::{Authorization, authorization::Bearer},
 };
 use axum_macros::FromRef;
-use log::info;
+use log::{info, warn};
 use serde_json::json;
 use bollard::Docker;
 use sqlx::SqlitePool;
 use std::time::Duration;
 
 use tower::{BoxError, ServiceBuilder};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::api::action::login::login;
 use crate::config::config::Config;
@@ -146,10 +145,40 @@ pub(crate) fn router(state: AppState) -> Router {
                 .into_inner(),
         );
 
-    Router::new()
+    let cors_origins = state.configuration.api.cors_origins.clone();
+
+    let mut app = Router::new()
         .merge(streaming_routes)
         .merge(api_routes)
-        .with_state(state)
+        .with_state(state);
+
+    if !cors_origins.is_empty() {
+        let origins: Vec<HeaderValue> = cors_origins
+            .iter()
+            .filter_map(|o| match HeaderValue::from_str(o) {
+                Ok(value) => Some(value),
+                Err(err) => {
+                    warn!("Ignoring invalid CORS origin '{}': {}", o, err);
+                    None
+                }
+            })
+            .collect();
+
+        let cors = CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::DELETE,
+                Method::OPTIONS,
+            ])
+            .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT]);
+
+        app = app.layer(cors);
+    }
+
+    app
 }
 
 pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, docker: Docker) {

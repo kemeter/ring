@@ -83,6 +83,7 @@ impl Default for Config {
             api: config::api::Api {
                 scheme: "http".to_string(),
                 port: 3030,
+                cors_origins: Vec::new(),
             },
             user: config::user::User {
                 salt: "changeme".to_string(),
