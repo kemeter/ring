@@ -1,0 +1,22 @@
+{
+  "name": "ring-website",
+  "private": true,
+  "scripts": {
+    "dev": "aplos server",
+    "build": "aplos build"
+  },
+  "dependencies": {
+    "aplos": "github:alpac0de/aplos",
+    "prismjs": "^1.29.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "7.9.5",
+    "rehype-raw": "^7.0.0",
+    "remark-gfm": "^4.0.1",
+    "babel-plugin-react-compiler": "19.1.0-rc.3"
+  },
+  "devDependencies": {
+    "@types/prismjs": "^1.26.0"
+  }
+}

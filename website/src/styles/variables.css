@@ -1,0 +1,94 @@
+:root {
+  /* Colors - Light theme (default) */
+  --color-bg: #ffffff;
+  --color-bg-alt: #f8f9fb;
+  --color-surface: #f1f3f5;
+  --color-surface-hover: #e9ecef;
+  --color-border: #dee2e6;
+  --color-border-light: #ced4da;
+
+  --color-text: #1a1a2e;
+  --color-text-secondary: #495057;
+  --color-text-muted: #868e96;
+
+  --color-accent: #16a34a;
+  --color-accent-hover: #15803d;
+  --color-accent-soft: rgba(22, 163, 74, 0.08);
+
+  --color-code-bg: #f4f5f7;
+  --color-code-border: #dee2e6;
+  --color-inline-code-bg: #edf0f3;
+
+  --header-bg: rgba(255, 255, 255, 0.8);
+
+  /* Typography */
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 2rem;
+  --text-4xl: 2.5rem;
+  --text-5xl: 3.5rem;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.6;
+  --leading-relaxed: 1.8;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+
+  /* Layout */
+  --max-width: 1200px;
+  --max-width-narrow: 780px;
+  --sidebar-width: 260px;
+  --header-height: 64px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+}
+
+[data-theme="dark"] {
+  --color-bg: #0b0d0f;
+  --color-bg-alt: #0e1117;
+  --color-surface: #151820;
+  --color-surface-hover: #1a1f2e;
+  --color-border: #1e2330;
+  --color-border-light: #2a3040;
+
+  --color-text: #e4e8ef;
+  --color-text-secondary: #8892a4;
+  --color-text-muted: #5a6478;
+
+  --color-accent: #22c55e;
+  --color-accent-hover: #16a34a;
+  --color-accent-soft: rgba(34, 197, 94, 0.1);
+
+  --color-code-bg: #111318;
+  --color-code-border: #1e2330;
+  --color-inline-code-bg: #1a1f2e;
+
+  --header-bg: rgba(11, 13, 15, 0.8);
+}

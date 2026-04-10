@@ -1,0 +1,148 @@
+.code-block {
+  position: relative;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-code-border);
+  background: var(--color-code-bg);
+  overflow: hidden;
+
+  .code-block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid var(--color-code-border);
+    background: var(--color-surface);
+
+    .code-block-filename {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      color: var(--color-text-secondary);
+    }
+  }
+
+  pre {
+    margin: 0;
+    padding: var(--space-4) var(--space-6);
+    overflow-x: auto;
+    font-size: var(--text-sm);
+    line-height: var(--leading-relaxed);
+
+    code {
+      font-family: var(--font-mono);
+      background: none;
+      padding: 0;
+    }
+  }
+
+  .copy-btn {
+    position: absolute;
+    top: var(--space-2);
+    right: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
+    transition: all var(--transition-fast);
+    opacity: 0;
+    z-index: 1;
+
+    &:hover {
+      color: var(--color-text);
+      background: var(--color-surface-hover);
+    }
+
+    &.copied {
+      color: var(--color-accent);
+    }
+  }
+
+  &:hover .copy-btn {
+    opacity: 1;
+  }
+
+  &.has-header .copy-btn {
+    opacity: 1;
+    position: static;
+  }
+}
+
+/* Prism theme - light */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata { color: #6b7280; }
+
+.token.punctuation { color: #374151; }
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted { color: #dc2626; }
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted { color: #16a34a; }
+
+.token.operator,
+.token.entity,
+.token.url { color: #0284c7; }
+
+.token.atrule,
+.token.attr-value,
+.token.keyword { color: #7c3aed; }
+
+.token.function,
+.token.class-name { color: #2563eb; }
+
+.token.regex,
+.token.important,
+.token.variable { color: #d97706; }
+
+.token.important,
+.token.bold { font-weight: bold; }
+.token.italic { font-style: italic; }
+
+/* Prism theme - dark */
+[data-theme="dark"] {
+  .token.comment,
+  .token.prolog,
+  .token.doctype,
+  .token.cdata { color: #5a6478; }
+
+  .token.punctuation { color: #8892a4; }
+
+  .token.property,
+  .token.tag,
+  .token.boolean,
+  .token.number,
+  .token.constant,
+  .token.symbol,
+  .token.deleted { color: #f87171; }
+
+  .token.selector,
+  .token.attr-name,
+  .token.string,
+  .token.char,
+  .token.builtin,
+  .token.inserted { color: #22c55e; }
+
+  .token.operator,
+  .token.entity,
+  .token.url { color: #38bdf8; }
+
+  .token.atrule,
+  .token.attr-value,
+  .token.keyword { color: #c084fc; }
+
+  .token.function,
+  .token.class-name { color: #60a5fa; }
+
+  .token.regex,
+  .token.important,
+  .token.variable { color: #fbbf24; }
+}
