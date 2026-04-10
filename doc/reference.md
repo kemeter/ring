@@ -252,18 +252,25 @@ ring user create --username bob --password anotherpass
 ```
 
 ### `ring user update`
-Updates an existing user.
+Updates the currently authenticated user (the one used for `ring login`). At least one of `--username` or `--password` must be provided.
 
 ```bash
-ring user update --username <USERNAME> --password <NEW_PASSWORD>
+ring user update [--username <USERNAME>] [--password <NEW_PASSWORD>]
 ```
 
-**Required options:**
-- `--username <USERNAME>` : Username to modify
-- `--password <NEW_PASSWORD>` : New password
+**Options (at least one required):**
+- `-u`, `--username <USERNAME>` : New username
+- `-p`, `--password <NEW_PASSWORD>` : New password
 
 **Examples:**
 ```bash
+# Change password only
+ring user update --password newsecretpass
+
+# Change username only
+ring user update --username alice2
+
+# Change both
 ring user update --username alice --password newsecretpass
 ```
 

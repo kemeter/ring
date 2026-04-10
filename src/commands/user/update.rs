@@ -31,6 +31,16 @@ pub(crate) async fn execute(
     mut configuration: Config,
     client: &reqwest::Client,
 ) {
+    let username_arg = args.get_one::<String>("username");
+    let password_arg = args.get_one::<String>("password");
+
+    if username_arg.is_none() && password_arg.is_none() {
+        eprintln!(
+            "Error: at least one of --username or --password must be provided"
+        );
+        return;
+    }
+
     let auth_config = load_auth_config(configuration.name.clone());
 
     let user_request = client
