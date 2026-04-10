@@ -105,12 +105,13 @@ ring deployment list [OPTIONS]
 ```
 
 **Options:**
-- `--namespace <NAMESPACE>`, `-n` : Filter by namespace
-- `--status <STATUS>`, `-s` : Filter by status
+- `-n`, `--namespace <NAMESPACE>` : Filter by namespace
+- `-s`, `--status <STATUS>` : Filter by status (can be repeated to match multiple values)
+- `--type <TYPE>` : Filter by deployment type (`worker` or `job`)
 
 **Examples:**
 ```bash
-# All deployments
+# All deployments (all namespaces by default)
 ring deployment list
 
 # Specific namespace
@@ -118,6 +119,15 @@ ring deployment list --namespace production
 
 # Specific status
 ring deployment list --status running
+
+# Multiple statuses
+ring deployment list --status running --status pending
+
+# Only jobs
+ring deployment list --type job
+
+# Only workers in production
+ring deployment list --namespace production --type worker
 ```
 
 ### `ring deployment inspect`
