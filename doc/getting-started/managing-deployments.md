@@ -242,8 +242,8 @@ ring deployment metrics web-app
 # Node-level information
 ring node get
 
-# Status of all deployments
-ring deployment list --all-namespaces
+# Status of all deployments (all namespaces by default)
+ring deployment list
 ```
 
 ## Advanced Configuration

@@ -741,8 +741,8 @@ docker network ls | grep ring_
 ### Reset
 
 ```bash
-# Stop all deployments
-ring deployment list --all-namespaces | awk 'NR>1{print $1}' | xargs -I {} ring deployment delete {}
+# Stop all deployments (list returns all namespaces by default)
+ring deployment list | awk 'NR>1{print $1}' | xargs -I {} ring deployment delete {}
 
 # Clean Ring containers
 docker ps -a --filter "label=ring_deployment" -q | xargs docker rm -f
