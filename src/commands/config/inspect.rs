@@ -1,5 +1,6 @@
 use crate::api::dto::config::ConfigOutput;
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -45,16 +46,17 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                println!("Error: Failed to retrieve configuration details");
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Error: Failed to retrieve configuration details: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let config: ConfigOutput = match response.json::<ConfigOutput>().await {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Failed to parse config: {}", e);
-                    return;
+                    exit_code::ExitCode::General.exit();
                 }
             };
 
@@ -86,8 +88,9 @@ pub(crate) async fn execute(
                 println!();
             }
         }
-        Err(_) => {
-            println!("Error: Failed to retrieve configuration details");
+        Err(err) => {
+            eprintln!("Error: Failed to retrieve configuration details: {}", err);
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }

@@ -1,4 +1,5 @@
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -68,16 +69,17 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                println!("Unable to fetch secrets list: {}", response.status());
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Unable to fetch secrets list: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let secret_list: Vec<SecretOutput> = match response.json().await {
                 Ok(list) => list,
                 Err(e) => {
-                    println!("Failed to parse secret list: {}", e);
-                    return;
+                    eprintln!("Failed to parse secret list: {}", e);
+                    exit_code::ExitCode::General.exit();
                 }
             };
 
@@ -95,7 +97,8 @@ pub(crate) async fn execute(
             print_stdout(secrets.with_title()).expect("Failed to print table");
         }
         Err(error) => {
-            println!("Failed to fetch secrets: {}", error);
+            eprintln!("Failed to fetch secrets: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

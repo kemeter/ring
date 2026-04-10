@@ -1,4 +1,5 @@
 use crate::config::config::Config;
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -52,45 +53,50 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() == 200 {
-                let auth = match response.json::<AuthToken>().await {
-                    Ok(a) => a,
-                    Err(e) => {
-                        println!("Failed to parse authentication response: {}", e);
-                        return;
-                    }
-                };
-
-                let auth_file_content =
-                    fs::read_to_string(config_file.clone()).unwrap_or_else(|_| "{}".to_string());
-
-                let mut context_auth: HashMap<String, AuthToken> =
-                    serde_json::from_str(&auth_file_content).unwrap_or_default();
-
-                context_auth.insert(configuration.name, auth);
-
-                let serialized_data = match serde_json::to_string(&context_auth) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        println!("Failed to serialize auth data: {}", e);
-                        return;
-                    }
-                };
-
-                if let Err(e) = fs::create_dir_all(&config_directory) {
-                    println!("Failed to create config directory: {}", e);
-                    return;
-                }
-
-                if let Err(e) = fs::write(config_file, serialized_data) {
-                    println!("Failed to write auth file: {}", e);
-                    return;
-                }
-                println!("Logging in as {}", username)
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Login failed: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
+
+            let auth = match response.json::<AuthToken>().await {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("Failed to parse authentication response: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
+            };
+
+            let auth_file_content =
+                fs::read_to_string(config_file.clone()).unwrap_or_else(|_| "{}".to_string());
+
+            let mut context_auth: HashMap<String, AuthToken> =
+                serde_json::from_str(&auth_file_content).unwrap_or_default();
+
+            context_auth.insert(configuration.name, auth);
+
+            let serialized_data = match serde_json::to_string(&context_auth) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Failed to serialize auth data: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
+            };
+
+            if let Err(e) = fs::create_dir_all(&config_directory) {
+                eprintln!("Failed to create config directory: {}", e);
+                exit_code::ExitCode::General.exit();
+            }
+
+            if let Err(e) = fs::write(config_file, serialized_data) {
+                eprintln!("Failed to write auth file: {}", e);
+                exit_code::ExitCode::General.exit();
+            }
+            println!("Logging in as {}", username);
         }
-        Err(_err) => {
-            println!("Wrong credentials");
+        Err(err) => {
+            eprintln!("Connection failed: {}", err);
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }

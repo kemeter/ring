@@ -6,6 +6,7 @@ use std::io::{self, Write};
 
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 
 pub(crate) fn command_config() -> Command {
     Command::new("delete")
@@ -51,9 +52,13 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            match response.status().as_u16() {
+            let status = response.status();
+            match status.as_u16() {
                 204 => println!("Secret {} deleted", id),
-                404 => println!("Secret {} not found", id),
+                404 => {
+                    eprintln!("Secret {} not found", id);
+                    exit_code::from_http_status(404).exit();
+                }
                 409 => {
                     // Secret is referenced by deployments
                     if let Ok(conflict) = response.json::<ConflictResponse>().await {
@@ -81,24 +86,41 @@ pub(crate) async fn execute(
                                     .await;
 
                                 match retry {
-                                    Ok(resp) if resp.status().as_u16() == 204 => {
-                                        println!("Secret {} deleted", id);
+                                    Ok(resp) => {
+                                        let retry_status = resp.status();
+                                        if retry_status.as_u16() == 204 {
+                                            println!("Secret {} deleted", id);
+                                        } else {
+                                            eprintln!("Failed to delete secret: {}", retry_status);
+                                            exit_code::from_http_status(retry_status.as_u16())
+                                                .exit();
+                                        }
                                     }
-                                    _ => println!("Failed to delete secret"),
+                                    Err(err) => {
+                                        eprintln!("Failed to delete secret: {}", err);
+                                        exit_code::from_reqwest_error(&err).exit();
+                                    }
                                 }
                             } else {
                                 println!("Cancelled");
                             }
                         }
                     } else {
-                        println!("Secret is referenced by deployments. Use -f to force deletion.");
+                        eprintln!(
+                            "Secret is referenced by deployments. Use -f to force deletion."
+                        );
+                        exit_code::from_http_status(409).exit();
                     }
                 }
-                _ => println!("Failed to delete secret: {}", response.status()),
+                _ => {
+                    eprintln!("Failed to delete secret: {}", status);
+                    exit_code::from_http_status(status.as_u16()).exit();
+                }
             }
         }
         Err(error) => {
-            println!("Failed to delete secret: {}", error);
+            eprintln!("Failed to delete secret: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

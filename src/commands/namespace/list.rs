@@ -1,4 +1,5 @@
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::ArgMatches;
 use clap::Command;
 use cli_table::{Table, WithTitle, print_stdout};
@@ -41,17 +42,18 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                println!("Unable to fetch namespaces: {}", response.status());
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Unable to fetch namespaces: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let namespace_list: Vec<NamespaceOutput> =
                 match response.json::<Vec<NamespaceOutput>>().await {
                     Ok(list) => list,
                     Err(e) => {
-                        println!("Failed to parse namespace list: {}", e);
-                        return;
+                        eprintln!("Failed to parse namespace list: {}", e);
+                        exit_code::ExitCode::General.exit();
                     }
                 };
 
@@ -68,7 +70,8 @@ pub(crate) async fn execute(
             print_stdout(namespaces.with_title()).expect("");
         }
         Err(error) => {
-            println!("Failed to fetch namespaces: {}", error);
+            eprintln!("Failed to fetch namespaces: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

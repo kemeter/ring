@@ -1,8 +1,33 @@
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 use crate::runtime::runtime::Log;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::collections::HashSet;
+
+enum FetchLogsError {
+    Http(reqwest::Error),
+    Status(u16, String),
+    Parse(String),
+}
+
+impl std::fmt::Display for FetchLogsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchLogsError::Http(e) => write!(f, "Error fetching deployment logs: {}", e),
+            FetchLogsError::Status(_, msg) => write!(f, "{}", msg),
+            FetchLogsError::Parse(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+fn exit_from_fetch_error(err: &FetchLogsError) -> ! {
+    match err {
+        FetchLogsError::Http(e) => exit_code::from_reqwest_error(e).exit(),
+        FetchLogsError::Status(status, _) => exit_code::from_http_status(*status).exit(),
+        FetchLogsError::Parse(_) => exit_code::ExitCode::General.exit(),
+    }
+}
 
 pub(crate) fn command_config() -> Command {
     Command::new("logs")
@@ -80,7 +105,10 @@ pub(crate) async fn execute(
                     }
                 }
             }
-            Err(e) => eprintln!("{}", e),
+            Err(e) => {
+                eprintln!("{}", e);
+                exit_from_fetch_error(&e);
+            }
         }
     }
 }
@@ -118,7 +146,7 @@ async fn fetch_logs(
     api_url: &str,
     token: &str,
     client: &reqwest::Client,
-) -> Result<Vec<Log>, String> {
+) -> Result<Vec<Log>, FetchLogsError> {
     let url = build_url(api_url, id, tail, since, container);
 
     let response = client
@@ -126,19 +154,20 @@ async fn fetch_logs(
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
-        .map_err(|e| format!("Error fetching deployment logs: {}", e))?;
+        .map_err(FetchLogsError::Http)?;
 
-    if response.status() != 200 {
-        return Err(format!(
-            "Unable to fetch deployment logs: {}",
-            response.status()
+    let status = response.status();
+    if status != 200 {
+        return Err(FetchLogsError::Status(
+            status.as_u16(),
+            format!("Unable to fetch deployment logs: {}", status),
         ));
     }
 
     response
         .json::<Vec<Log>>()
         .await
-        .map_err(|e| format!("Error parsing logs response: {}", e))
+        .map_err(|e| FetchLogsError::Parse(format!("Error parsing logs response: {}", e)))
 }
 
 async fn follow_logs(
@@ -172,7 +201,7 @@ async fn follow_logs(
         }
         Err(e) => {
             eprintln!("{}", e);
-            return;
+            exit_from_fetch_error(&e);
         }
     }
 

@@ -57,6 +57,7 @@ mod config {
 }
 
 mod database;
+mod exit_code;
 mod serializer;
 mod utils;
 

@@ -1,4 +1,5 @@
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -56,13 +57,16 @@ pub(crate) async fn execute(
                 );
             } else if status == 409 {
                 let error: ErrorResponse = response.json().await.unwrap();
-                println!("Error: {}", error.error);
+                eprintln!("Error: {}", error.error);
+                exit_code::from_http_status(status.as_u16()).exit();
             } else {
-                println!("Failed to create namespace: {}", status);
+                eprintln!("Failed to create namespace: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
         }
         Err(error) => {
-            println!("Failed to create namespace: {}", error);
+            eprintln!("Failed to create namespace: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

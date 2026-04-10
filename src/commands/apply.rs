@@ -1,4 +1,5 @@
 use crate::config::config::{Config, get_config_dir, load_auth_config};
+use crate::exit_code;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::{debug, info};
 use regex::Regex;
@@ -17,6 +18,7 @@ enum ApplyError {
     YamlParse(serde_yaml::Error),
     Validation(String),
     Http(reqwest::Error),
+    HttpStatus(u16, String),
     Auth(String),
 }
 
@@ -27,6 +29,9 @@ impl fmt::Display for ApplyError {
             ApplyError::YamlParse(e) => write!(f, "Invalid YAML: {}", e),
             ApplyError::Validation(msg) => write!(f, "Validation error: {}", msg),
             ApplyError::Http(e) => write!(f, "HTTP error: {}", e),
+            ApplyError::HttpStatus(status, msg) => {
+                write!(f, "HTTP {} error: {}", status, msg)
+            }
             ApplyError::Auth(msg) => write!(f, "Auth error: {}", msg),
         }
     }
@@ -326,10 +331,13 @@ async fn create_namespace_on_server(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::Validation(format!(
-            "Failed to create namespace '{}': {} {}",
-            namespace.name, status, error_body
-        )))
+        Err(ApplyError::HttpStatus(
+            status.as_u16(),
+            format!(
+                "Failed to create namespace '{}': {} {}",
+                namespace.name, status, error_body
+            ),
+        ))
     }
 }
 
@@ -370,17 +378,23 @@ async fn deploy_to_server(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::Validation(format!(
-            "API returned status {}: {}",
-            status, error_body
-        )))
+        Err(ApplyError::HttpStatus(
+            status.as_u16(),
+            format!("API returned status {}: {}", status, error_body),
+        ))
     }
 }
 
 pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &reqwest::Client) {
     if let Err(e) = apply_internal(args, configuration, client).await {
         eprintln!("Error: {}", e);
-        std::process::exit(1);
+        match e {
+            ApplyError::Http(err) => exit_code::from_reqwest_error(&err).exit(),
+            ApplyError::HttpStatus(status, _) => exit_code::from_http_status(status).exit(),
+            ApplyError::Auth(_) => exit_code::ExitCode::Auth.exit(),
+            ApplyError::Validation(_) => exit_code::ExitCode::General.exit(),
+            _ => exit_code::ExitCode::General.exit(),
+        }
     }
 }
 
@@ -408,6 +422,8 @@ async fn apply_internal(
     let is_verbose = args.get_flag("verbose");
     let is_force = args.get_flag("force");
 
+    let mut first_error: Option<ApplyError> = None;
+
     // Create namespaces first
     for (key, namespace) in &config_file.namespaces {
         if is_dry_run {
@@ -416,6 +432,9 @@ async fn apply_internal(
             create_namespace_on_server(namespace, &api_url, &auth_config.token, client).await
         {
             eprintln!("Failed to create namespace '{}': {}", key, e);
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
         }
     }
 
@@ -428,6 +447,9 @@ async fn apply_internal(
         if let Err(e) = deployment.validate() {
             eprintln!("Warning: Skipping '{}': {}", deployment_name, e);
             error_count += 1;
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
             continue;
         }
 
@@ -453,6 +475,9 @@ async fn apply_internal(
                 Err(e) => {
                     eprintln!("Failed to deploy '{}': {}", deployment_name, e);
                     error_count += 1;
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
                 }
             }
         }
@@ -467,6 +492,10 @@ async fn apply_internal(
     if is_dry_run {
         println!("\nDRY RUN COMPLETE - No actual changes were made");
         println!("To deploy for real, remove the --dry-run flag");
+    }
+
+    if let Some(e) = first_error {
+        return Err(e);
     }
 
     Ok(())

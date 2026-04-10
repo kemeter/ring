@@ -1,5 +1,6 @@
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -28,12 +29,17 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() == 204 {
+            let status = response.status();
+            if status == 204 {
                 println!("User {} deleted ", id)
+            } else {
+                eprintln!("Cannot delete user: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
         }
-        Err(_) => {
-            println!("Cannot delete user config");
+        Err(err) => {
+            eprintln!("Cannot delete user: {}", err);
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }

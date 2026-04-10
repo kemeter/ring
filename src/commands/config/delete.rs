@@ -4,6 +4,7 @@ use clap::Command;
 
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 
 pub(crate) fn command_config() -> Command {
     Command::new("delete")
@@ -31,14 +32,17 @@ pub(crate) async fn execute(
 
         match request {
             Ok(response) => {
-                if response.status() == 204 {
-                    return println!("Config {} deleted ", id);
+                let status = response.status();
+                if status == 204 {
+                    println!("Config {} deleted ", deployment);
+                } else {
+                    eprintln!("Cannot delete Config {}: {}", deployment, status);
+                    exit_code::from_http_status(status.as_u16()).exit();
                 }
-
-                println!("Cannot delete Config {}", id);
             }
-            Err(_) => {
-                println!("Cannot delete Config {}", id);
+            Err(err) => {
+                eprintln!("Cannot delete Config {}: {}", deployment, err);
+                exit_code::from_reqwest_error(&err).exit();
             }
         }
     }

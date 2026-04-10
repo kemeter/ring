@@ -1,5 +1,6 @@
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 use clap::ArgMatches;
 use clap::Command;
 use cli_table::{Table, WithTitle, format::Justify, print_stdout};
@@ -48,9 +49,10 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                eprintln!("Unable to fetch users: {}", response.status());
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Unable to fetch users: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let users_list: Vec<UserDto> = response.json().await.unwrap_or(vec![]);
@@ -70,6 +72,7 @@ pub(crate) async fn execute(
         }
         Err(err) => {
             eprintln!("Error fetching users: {}", err);
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }

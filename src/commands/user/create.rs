@@ -4,6 +4,7 @@ use clap::Command;
 use serde_json::json;
 
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 
 pub(crate) fn command_config() -> Command {
     Command::new("create")
@@ -47,13 +48,18 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() == 201 {
+            let status = response.status();
+            if status == 201 {
                 println!("user creates")
+            } else {
+                eprintln!("Unable to create user: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
         }
         Err(err) => {
             debug!("{}", err);
-            println!("Unable to create user");
+            eprintln!("Unable to create user: {}", err);
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }

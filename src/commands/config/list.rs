@@ -1,5 +1,6 @@
 use crate::api::dto::config::ConfigOutput;
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
@@ -63,16 +64,17 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                println!("Unable to fetch configurations list: {}", response.status());
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Unable to fetch configurations list: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let config_list: Vec<ConfigOutput> = match response.json::<Vec<ConfigOutput>>().await {
                 Ok(list) => list,
                 Err(e) => {
-                    println!("Failed to parse config list: {}", e);
-                    return;
+                    eprintln!("Failed to parse config list: {}", e);
+                    exit_code::ExitCode::General.exit();
                 }
             };
 
@@ -101,7 +103,8 @@ pub(crate) async fn execute(
             print_stdout(configs.with_title()).expect("");
         }
         Err(error) => {
-            println!("Failed to fetch configurations: {}", error);
+            eprintln!("Failed to fetch configurations: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

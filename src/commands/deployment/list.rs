@@ -1,6 +1,7 @@
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
+use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::{ArgAction, Command};
@@ -97,9 +98,10 @@ pub(crate) async fn execute(
 
     match request {
         Ok(response) => {
-            if response.status() != 200 {
-                eprintln!("Unable to fetch deployments: {}", response.status());
-                return;
+            let status = response.status();
+            if status != 200 {
+                eprintln!("Unable to fetch deployments: {}", status);
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             let deployments_list: Vec<DeploymentOutput> =
@@ -107,7 +109,7 @@ pub(crate) async fn execute(
                     Ok(list) => list,
                     Err(e) => {
                         eprintln!("Failed to parse deployment list: {}", e);
-                        return;
+                        exit_code::ExitCode::General.exit();
                     }
                 };
 
@@ -131,6 +133,7 @@ pub(crate) async fn execute(
         }
         Err(error) => {
             eprintln!("Error fetching deployments: {}", error);
+            exit_code::from_reqwest_error(&error).exit();
         }
     }
 }

@@ -579,14 +579,36 @@ first.
 
 ## Exit Codes
 
-Ring uses standard exit codes:
+Every Ring CLI command exits with a code that describes what happened, so
+scripts and CI pipelines can react accordingly:
 
-- `0` : Success
-- `1` : General error
-- `2` : Authentication error
-- `3` : Connection error
-- `4` : Resource not found
-- `5` : Conflict (resource already exists)
+| Code | Name            | Triggered when                                                    |
+|------|-----------------|-------------------------------------------------------------------|
+| `0`  | Success         | The command completed successfully (HTTP 2xx)                     |
+| `1`  | General error   | Validation error, parsing error, or any non-categorized failure   |
+| `2`  | Auth            | The API responded with `401 Unauthorized` or `403 Forbidden`      |
+| `3`  | Connection      | The CLI could not reach the API (network, DNS, timeout, refused)  |
+| `4`  | Not found       | The API responded with `404 Not Found`                            |
+| `5`  | Conflict        | The API responded with `409 Conflict` (e.g. resource exists)      |
+
+**Example — conditional create in a shell script:**
+
+```bash
+ring deployment inspect my-app > /dev/null 2>&1
+case $? in
+  0) echo "already deployed, skipping" ;;
+  4) ring apply -f deployment.yaml ;;          # not found → create
+  2) echo "auth expired"; exit 1 ;;
+  3) echo "API unreachable"; exit 1 ;;
+  *) echo "unexpected error"; exit 1 ;;
+esac
+```
+
+**Notes:**
+- `ring apply` processes multiple deployments; if any fail, the command exits
+  with the code of the *first* failure encountered.
+- Follow modes (`ring deployment logs --follow`) keep running on transient
+  errors and only exit if the initial request fails.
 
 ## File Formats
 
