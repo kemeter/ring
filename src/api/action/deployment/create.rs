@@ -29,6 +29,28 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     }
 }
 
+fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
+    if input.runtime == "cloud-hypervisor" {
+        if !input.volumes.is_empty() {
+            return Err(
+                "volumes are not supported on cloud-hypervisor runtime (alpha)".to_string(),
+            );
+        }
+
+        if let Some(hcs) = &input.health_checks
+            && hcs
+                .iter()
+                .any(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }))
+        {
+            return Err(
+                "command health checks are not supported on cloud-hypervisor runtime (alpha); use tcp or http"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
@@ -213,6 +235,11 @@ pub(crate) async fn create(
 
     match input.validate() {
         Ok(()) => {
+            if let Err(msg) = validate_runtime_constraints(&input) {
+                let message = Message { message: msg };
+                return (StatusCode::BAD_REQUEST, Json(message)).into_response();
+            }
+
             // Auto-create namespace if it doesn't exist
             match namespace::find_by_name(&pool, &input.namespace).await {
                 Ok(None) => {
@@ -413,6 +440,105 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_rejects_volumes() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-vol",
+                "namespace": "ring",
+                "image": "/tmp/fake.raw",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/host",
+                        "destination": "/guest",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message
+                .contains("volumes are not supported on cloud-hypervisor runtime")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_rejects_command_health_check() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-cmd-hc",
+                "namespace": "ring",
+                "image": "/tmp/fake.raw",
+                "health_checks": [
+                    {
+                        "type": "command",
+                        "command": "/bin/true",
+                        "interval": "10s",
+                        "timeout": "2s",
+                        "on_failure": "restart"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message
+                .contains("command health checks are not supported on cloud-hypervisor runtime")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_accepts_tcp_health_check() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-tcp-hc",
+                "namespace": "ring",
+                "image": "/tmp/fake.raw",
+                "health_checks": [
+                    {
+                        "type": "tcp",
+                        "port": 80,
+                        "interval": "10s",
+                        "timeout": "2s",
+                        "on_failure": "restart"
+                    }
+                ]
+            }))
+            .await;
+
+        // Accepted at validation. Runtime-level failures (missing image, etc.)
+        // happen later in the scheduler, not in the API handler.
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]
