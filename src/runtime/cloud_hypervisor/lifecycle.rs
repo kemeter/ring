@@ -10,8 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Configuration for the Cloud Hypervisor runtime.
-pub(crate) struct CloudHypervisorConfig {
+/// Resolved runtime configuration for Cloud Hypervisor.
+///
+/// Built from the user-facing `config::config::CloudHypervisorConfig` with
+/// defaults filled in. Paths here are always absolute and ready to use.
+pub(crate) struct CloudHypervisorRuntimeConfig {
     /// Path to the cloud-hypervisor binary.
     pub binary_path: String,
     /// Path to the firmware (hypervisor-fw).
@@ -20,7 +23,7 @@ pub(crate) struct CloudHypervisorConfig {
     pub socket_dir: String,
 }
 
-impl Default for CloudHypervisorConfig {
+impl Default for CloudHypervisorRuntimeConfig {
     fn default() -> Self {
         let base_dir = crate::config::config::get_config_dir();
         Self {
@@ -31,12 +34,33 @@ impl Default for CloudHypervisorConfig {
     }
 }
 
+impl CloudHypervisorRuntimeConfig {
+    /// Merge a user-facing config section with the defaults. Any field left
+    /// unset in `user` falls back to `CloudHypervisorRuntimeConfig::default`.
+    pub(crate) fn from_user_config(
+        user: &crate::config::config::CloudHypervisorConfig,
+    ) -> Self {
+        let defaults = Self::default();
+        Self {
+            binary_path: user
+                .binary_path
+                .clone()
+                .unwrap_or(defaults.binary_path),
+            firmware_path: user
+                .firmware_path
+                .clone()
+                .unwrap_or(defaults.firmware_path),
+            socket_dir: user.socket_dir.clone().unwrap_or(defaults.socket_dir),
+        }
+    }
+}
+
 pub struct CloudHypervisorLifecycle {
-    config: CloudHypervisorConfig,
+    config: CloudHypervisorRuntimeConfig,
 }
 
 impl CloudHypervisorLifecycle {
-    pub fn new(config: CloudHypervisorConfig) -> Self {
+    pub fn new(config: CloudHypervisorRuntimeConfig) -> Self {
         Self { config }
     }
 

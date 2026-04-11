@@ -32,9 +32,19 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
 
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
     runtimes_map.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker.clone())));
+
+    let ch_runtime_config = crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
+        &configuration.runtime.cloud_hypervisor,
+    );
+    info!(
+        "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}",
+        ch_runtime_config.binary_path,
+        ch_runtime_config.firmware_path,
+        ch_runtime_config.socket_dir,
+    );
     runtimes_map.insert(
         "cloud-hypervisor".to_string(),
-        Arc::new(CloudHypervisorLifecycle::new(Default::default())),
+        Arc::new(CloudHypervisorLifecycle::new(ch_runtime_config)),
     );
     info!("Registered runtimes: {:?}", runtimes_map.keys().collect::<Vec<_>>());
 

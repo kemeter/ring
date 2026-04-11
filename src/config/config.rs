@@ -49,6 +49,25 @@ impl Default for DockerConfig {
     }
 }
 
+/// User-facing configuration for the Cloud Hypervisor runtime. Parsed from the
+/// `[contexts.<name>.runtime.cloud_hypervisor]` section of `config.toml`.
+///
+/// All fields are optional; when unset, `CloudHypervisorRuntimeConfig::default`
+/// falls back to `$RING_CONFIG_DIR/cloud-hypervisor/...` for backward
+/// compatibility.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub(crate) struct CloudHypervisorConfig {
+    pub(crate) binary_path: Option<String>,
+    pub(crate) firmware_path: Option<String>,
+    pub(crate) socket_dir: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub(crate) struct RuntimesConfig {
+    #[serde(default)]
+    pub(crate) cloud_hypervisor: CloudHypervisorConfig,
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) current: bool,
@@ -61,6 +80,8 @@ pub(crate) struct Config {
     pub(crate) scheduler: Scheduler,
     #[serde(default)]
     pub(crate) docker: DockerConfig,
+    #[serde(default)]
+    pub(crate) runtime: RuntimesConfig,
 }
 
 impl Config {
@@ -90,6 +111,7 @@ impl Default for Config {
             },
             scheduler: Scheduler::default(),
             docker: DockerConfig::default(),
+            runtime: RuntimesConfig::default(),
         }
     }
 }
