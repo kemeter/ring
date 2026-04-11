@@ -1,3 +1,23 @@
+# Cloud Hypervisor runtime (ALPHA)
+#
+# This runtime is experimental. Differences with the Docker runtime:
+#
+#   - `image` must point to a pre-built raw disk image on the host
+#     filesystem. Docker image references are not supported.
+#   - Volumes are not supported yet (virtio-fs integration pending).
+#     Declaring any `volumes:` entry on a cloud-hypervisor deployment will
+#     be rejected at the API level.
+#   - Health checks: only `tcp` and `http` are supported. `command` health
+#     checks require exec'ing inside the container and are not available
+#     on VM runtimes.
+#   - Environment variables and custom commands are not propagated to the
+#     guest yet. Put your configuration directly in the image for now.
+#
+# Prerequisites:
+#   - `cloud-hypervisor` binary on PATH (or configured via CloudHypervisorConfig)
+#   - `hypervisor-fw` firmware at $RING_CONFIG_DIR/cloud-hypervisor/vmlinux
+#   - A bootable raw disk image (see the Ring docs for building one)
+
 deployments:
     nginx-vm:
         name: nginx-vm
