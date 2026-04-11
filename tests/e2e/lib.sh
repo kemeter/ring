@@ -49,6 +49,13 @@ user.salt = "e2e-test-salt"
 scheduler.interval = 1
 EOF
 
+  # Optional per-test config snippet injected via RING_EXTRA_CONFIG (multi-line
+  # TOML). Useful to enable runtime-specific settings like the Cloud Hypervisor
+  # firmware path without polluting the base config shared by all tests.
+  if [ -n "${RING_EXTRA_CONFIG:-}" ]; then
+    printf '\n%s\n' "$RING_EXTRA_CONFIG" >> "$RING_TEST_DIR/config.toml"
+  fi
+
   log "starting ring on port $RING_PORT (config dir: $RING_TEST_DIR)"
   "$RING_BIN" server start > "$RING_TEST_DIR/ring.log" 2>&1 &
   RING_PID=$!
