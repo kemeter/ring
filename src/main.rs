@@ -11,6 +11,7 @@ mod commands {
     pub(crate) mod apply;
     pub(crate) mod context;
     pub(crate) mod deployment;
+    pub(crate) mod doctor;
     pub(crate) mod init;
     pub(crate) mod server;
 
@@ -90,6 +91,7 @@ async fn main() {
                 .subcommand(commands::server::command_config()),
         )
         .subcommand(commands::apply::command_config())
+        .subcommand(commands::doctor::command_config())
         .subcommand(commands::login::command_config())
         .subcommand(
             Command::new("deployment")
@@ -176,6 +178,9 @@ async fn main() {
         }
         Some(("apply", sub_matches)) => {
             commands::apply::apply(sub_matches, config, &client).await;
+        }
+        Some(("doctor", sub_matches)) => {
+            commands::doctor::execute(sub_matches, config);
         }
         Some(("deployment", sub_matches)) => {
             let deployment_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
