@@ -211,6 +211,7 @@ async fn run_health_checks(
     deployment: &mut Deployment,
     health_checker: &HealthChecker,
     docker: &Docker,
+    runtime: &dyn RuntimeLifecycle,
 ) {
     if deployment.status != DeploymentStatus::Running || deployment.health_checks.is_empty() {
         return;
@@ -239,7 +240,7 @@ async fn run_health_checks(
     }
 
     for instance_id in &outcome.instances_to_remove {
-        rt.remove_instance(instance_id).await;
+        runtime.remove_instance(instance_id.clone()).await;
         deployment.instances.retain(|id| id != instance_id);
     }
 }
@@ -267,7 +268,7 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
 
 /// Handle rolling update coordination for deployments that have a `parent_id`.
 ///
-/// Called after `apply_docker` + `run_health_checks` for each child deployment.
+/// Called after `apply_runtime` + `run_health_checks` for each child deployment.
 /// - If the child is `Running` (healthy): remove one instance from the parent.
 ///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
 /// - If the child is `Failed`: stop the rollout — parent containers keep running.
@@ -495,7 +496,7 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             }
 
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
-            run_health_checks(&pool, &mut result, &health_checker, &docker).await;
+            run_health_checks(&pool, &mut result, &health_checker, &docker, runtime.as_ref()).await;
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
 
             if let Err(e) = deployments::update(&pool, &result).await {
