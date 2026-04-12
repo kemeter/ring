@@ -2,30 +2,25 @@ use axum::extract::State;
 use axum::{Json, extract::Path, response::IntoResponse};
 
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::api::server::Db;
+use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use crate::models::users::User;
-use crate::runtime::runtime::Runtime;
 use axum::http::StatusCode;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
     _user: User,
     State(pool): State<Db>,
+    State(runtimes): State<RuntimeMap>,
 ) -> impl IntoResponse {
     match deployments::find(&pool, &id).await {
-        Ok(Some(deployment)) => match Runtime::new(deployment.clone()) {
-            Ok(runtime) => {
-                let instances = runtime.list_instances().await;
-                let mut output = DeploymentOutput::from_to_model(deployment);
-                output.instances = instances;
-                Json(output).into_response()
+        Ok(Some(deployment)) => {
+            let mut output = DeploymentOutput::from_to_model(deployment.clone());
+            if let Some(rt) = runtimes.get(&deployment.runtime) {
+                output.instances = rt.list_instances(deployment.id, "running").await;
             }
-            Err(_) => {
-                let output = DeploymentOutput::from_to_model(deployment);
-                Json(output).into_response()
-            }
-        },
+            Json(output).into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

@@ -65,6 +65,10 @@ pub(crate) async fn logs(
 
     match deployment_result {
         Ok(Some(deployment)) => {
+            if deployment.runtime != "docker" {
+                return Json(Vec::<crate::runtime::runtime::Log>::new()).into_response();
+            }
+
             let runtime = match Runtime::new(deployment) {
                 Ok(r) => r,
                 Err(_) => return Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
