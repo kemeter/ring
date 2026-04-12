@@ -31,7 +31,7 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     info!("Connected to Docker");
 
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
-    runtimes_map.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker.clone())));
+    runtimes_map.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker)));
 
     let ch_runtime_config = crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
         &configuration.runtime.cloud_hypervisor,
@@ -51,7 +51,7 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     let runtimes = std::sync::Arc::new(runtimes_map);
 
     let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), runtimes.clone()));
-    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes, docker));
+    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes));
 
     if let Err(e) = api_server_handler.await {
         eprintln!("API server task failed: {}", e);

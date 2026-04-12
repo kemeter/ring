@@ -46,7 +46,7 @@ pub(crate) async fn execute(
                 Ok(stats) => {
                     println!("DEPLOYMENT METRICS: {}", stats.deployment_name);
                     println!("===================");
-                    println!("Containers    : {}", stats.container_count);
+                    println!("Instances     : {}", stats.instance_count);
                     println!("Total CPU     : {:.2}%", stats.total_cpu_usage_percent);
                     println!(
                         "Total Memory  : {} / {} ({:.1}%)",
@@ -67,8 +67,8 @@ pub(crate) async fn execute(
                     println!("Total PIDs    : {}", stats.total_pids);
                     println!();
 
-                    for c in &stats.containers {
-                        println!("  Container: {} ({})", c.container_name, c.container_id);
+                    for c in &stats.instances {
+                        println!("  Instance: {} ({})", c.instance_name, c.instance_id);
                         println!("    CPU       : {:.2}%", c.cpu_usage_percent);
                         println!(
                             "    Memory    : {} / {} ({:.1}%)",

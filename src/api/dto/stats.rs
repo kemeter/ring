@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct ContainerStatsOutput {
-    pub container_id: String,
-    pub container_name: String,
+pub(crate) struct InstanceStatsOutput {
+    pub instance_id: String,
+    pub instance_name: String,
     pub cpu_usage_percent: f64,
     pub memory: MemoryStats,
     pub network: NetworkStats,
@@ -43,11 +43,11 @@ pub(crate) struct PidStats {
 pub(crate) struct DeploymentStatsOutput {
     pub deployment_id: String,
     pub deployment_name: String,
-    pub container_count: usize,
+    pub instance_count: usize,
     pub total_cpu_usage_percent: f64,
     pub total_memory: MemoryStats,
     pub total_network: NetworkStats,
     pub total_disk_io: DiskIoStats,
     pub total_pids: u64,
-    pub containers: Vec<ContainerStatsOutput>,
+    pub instances: Vec<InstanceStatsOutput>,
 }

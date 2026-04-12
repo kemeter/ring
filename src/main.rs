@@ -32,7 +32,8 @@ mod runtime {
     pub(crate) mod docker;
     pub(crate) mod error;
     pub(crate) mod lifecycle_trait;
-    pub(crate) mod runtime;
+    #[cfg(test)]
+    pub(crate) mod mock;
     pub(crate) mod types;
 }
 

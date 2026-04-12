@@ -34,7 +34,7 @@ impl HealthChecker {
     pub(crate) async fn execute_checks(
         &self,
         deployment: &Deployment,
-        runtime: &(dyn crate::runtime::runtime::RuntimeInterface + Send + Sync),
+        runtime: &dyn crate::runtime::lifecycle_trait::RuntimeLifecycle,
     ) -> HealthCheckOutcome {
         let mut outcome = HealthCheckOutcome {
             results: Vec::new(),
@@ -89,7 +89,7 @@ impl HealthChecker {
 
     async fn execute_single_check_with_runtime(
         &self,
-        runtime: &(dyn crate::runtime::runtime::RuntimeInterface + Send + Sync),
+        runtime: &dyn crate::runtime::lifecycle_trait::RuntimeLifecycle,
         deployment: &Deployment,
         health_check: &HealthCheck,
         instance_id: &str,
@@ -278,12 +278,7 @@ impl HealthChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bollard::Docker;
-    use bollard::models::ContainerCreateBody;
-    use bollard::query_parameters::{
-        CreateContainerOptionsBuilder, RemoveContainerOptionsBuilder, StartContainerOptionsBuilder,
-        StopContainerOptionsBuilder,
-    };
+    use crate::runtime::mock::MockRuntime;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn new_test_pool() -> SqlitePool {
@@ -301,44 +296,6 @@ mod tests {
         pool
     }
 
-    async fn create_test_container(docker: &Docker, image: &str) -> String {
-        let config = ContainerCreateBody {
-            image: Some(image.to_string()),
-            ..Default::default()
-        };
-
-        let options = CreateContainerOptionsBuilder::new().build();
-        let response = docker
-            .create_container(Some(options), config)
-            .await
-            .expect("Failed to create test container");
-
-        let container_id = response.id;
-
-        let start_options = StartContainerOptionsBuilder::new().build();
-        docker
-            .start_container(&container_id, Some(start_options))
-            .await
-            .expect("Failed to start test container");
-
-        // Wait for the container to be fully started
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-        container_id
-    }
-
-    async fn cleanup_container(docker: &Docker, container_id: &str) {
-        let stop_options = StopContainerOptionsBuilder::new().build();
-        let _ = docker
-            .stop_container(container_id, Some(stop_options))
-            .await;
-
-        let remove_options = RemoveContainerOptionsBuilder::new().force(true).build();
-        let _ = docker
-            .remove_container(container_id, Some(remove_options))
-            .await;
-    }
-
     fn make_deployment(
         id: &str,
         instances: Vec<String>,
@@ -354,7 +311,7 @@ mod tests {
             name: "test-deployment".to_string(),
             image: "nginx:alpine".to_string(),
             config: None,
-            runtime: "docker".to_string(),
+            runtime: "mock".to_string(),
             kind: "deployment".to_string(),
             replicas: 1,
             command: vec![],
@@ -372,15 +329,13 @@ mod tests {
 
     #[tokio::test]
     async fn tcp_health_check_success() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
 
         let deployment = make_deployment(
             "test-tcp-success",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Tcp {
                 port: 80,
                 interval: "5s".to_string(),
@@ -390,9 +345,7 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -401,22 +354,17 @@ mod tests {
         ));
         assert!(outcome.instances_to_remove.is_empty());
         assert!(outcome.proposed_status.is_none());
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn tcp_health_check_failure_triggers_restart() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
 
-        // TCP check on port 9999 which nginx doesn't listen on
         let deployment = make_deployment(
             "test-tcp-fail",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Tcp {
                 port: 9999,
                 interval: "5s".to_string(),
@@ -426,37 +374,31 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
             outcome.results[0].status,
             HealthCheckStatus::Failed
         ));
-        assert_eq!(outcome.instances_to_remove, vec![container_id.clone()]);
+        assert_eq!(outcome.instances_to_remove, vec!["instance-1".to_string()]);
         assert!(
             outcome
                 .events
                 .iter()
                 .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
         );
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn http_health_check_success() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
 
         let deployment = make_deployment(
             "test-http-success",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Http {
                 url: "http://localhost:80/".to_string(),
                 interval: "5s".to_string(),
@@ -466,9 +408,7 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -476,21 +416,17 @@ mod tests {
             HealthCheckStatus::Success
         ));
         assert!(outcome.instances_to_remove.is_empty());
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn command_health_check_success() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
 
         let deployment = make_deployment(
             "test-cmd-success",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Command {
                 command: "true".to_string(),
                 interval: "5s".to_string(),
@@ -500,9 +436,7 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -510,22 +444,17 @@ mod tests {
             HealthCheckStatus::Success
         ));
         assert!(outcome.instances_to_remove.is_empty());
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn threshold_counting() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
 
-        // TCP on closed port with threshold=3
         let deployment = make_deployment(
             "test-threshold",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Tcp {
                 port: 9999,
                 interval: "5s".to_string(),
@@ -535,43 +464,36 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-
         // Call 1: failure count = 1/3, no action
-        let outcome1 = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome1 = checker.execute_checks(&deployment, &runtime).await;
         assert!(outcome1.instances_to_remove.is_empty());
         assert!(outcome1.events.is_empty());
 
         // Call 2: failure count = 2/3, no action
-        let outcome2 = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome2 = checker.execute_checks(&deployment, &runtime).await;
         assert!(outcome2.instances_to_remove.is_empty());
         assert!(outcome2.events.is_empty());
 
         // Call 3: failure count = 3/3, triggers restart
-        let outcome3 = checker.execute_checks(&deployment, runtime.as_ref()).await;
-        assert_eq!(outcome3.instances_to_remove, vec![container_id.clone()]);
+        let outcome3 = checker.execute_checks(&deployment, &runtime).await;
+        assert_eq!(outcome3.instances_to_remove, vec!["instance-1".to_string()]);
         assert!(
             outcome3
                 .events
                 .iter()
                 .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
         );
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn failure_action_stop() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
 
         let deployment = make_deployment(
             "test-stop",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Tcp {
                 port: 9999,
                 interval: "5s".to_string(),
@@ -581,9 +503,7 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert_eq!(outcome.proposed_status, Some(DeploymentStatus::Deleted));
         assert!(
@@ -593,21 +513,17 @@ mod tests {
                 .any(|e| e.reason.as_deref() == Some("HealthCheckStop"))
         );
         assert!(outcome.instances_to_remove.is_empty());
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]
     async fn failure_action_alert() {
-        let docker = Docker::connect_with_local_defaults().expect("Failed to connect to Docker");
-        let container_id = create_test_container(&docker, "nginx:alpine").await;
-
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
 
         let deployment = make_deployment(
             "test-alert",
-            vec![container_id.clone()],
+            vec!["instance-1".to_string()],
             vec![HealthCheck::Tcp {
                 port: 9999,
                 interval: "5s".to_string(),
@@ -617,9 +533,7 @@ mod tests {
             }],
         );
 
-        let runtime = crate::runtime::runtime::Runtime::new(deployment.clone())
-            .expect("Failed to create runtime");
-        let outcome = checker.execute_checks(&deployment, runtime.as_ref()).await;
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
 
         assert!(outcome.proposed_status.is_none());
         assert!(outcome.instances_to_remove.is_empty());
@@ -630,8 +544,6 @@ mod tests {
                 .any(|e| e.reason.as_deref() == Some("HealthCheckAlert"))
         );
         assert!(outcome.events.iter().any(|e| e.level == "error"));
-
-        cleanup_container(&docker, &container_id).await;
     }
 
     #[tokio::test]

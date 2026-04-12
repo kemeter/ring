@@ -1,6 +1,7 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::StatusCode,
     response::{
         IntoResponse,
         sse::{KeepAlive, Sse},
@@ -11,10 +12,10 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-use crate::api::server::Db;
+use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use crate::models::users::User;
-use crate::runtime::runtime::Runtime;
+use crate::runtime::lifecycle_trait::Log;
 
 #[derive(Debug, Deserialize)]
 pub struct LogsQuery {
@@ -60,18 +61,13 @@ pub(crate) async fn logs(
     Query(params): Query<LogsQuery>,
     _user: User,
     State(pool): State<Db>,
+    State(runtimes): State<RuntimeMap>,
 ) -> impl IntoResponse {
-    let deployment_result = deployments::find(&pool, &id).await;
-
-    match deployment_result {
+    match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => {
-            if deployment.runtime != "docker" {
-                return Json(Vec::<crate::runtime::runtime::Log>::new()).into_response();
-            }
-
-            let runtime = match Runtime::new(deployment) {
-                Ok(r) => r,
-                Err(_) => return Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
+            let runtime = match runtimes.get(&deployment.runtime) {
+                Some(rt) => rt,
+                None => return StatusCode::NOT_FOUND.into_response(),
             };
 
             let tail = params.tail.map(|t| t.to_string());
@@ -79,7 +75,7 @@ pub(crate) async fn logs(
 
             if params.follow {
                 let stream = runtime
-                    .stream_logs(tail.as_deref(), since, params.container.as_deref())
+                    .stream_logs(&deployment.id, tail.as_deref(), since, params.container.as_deref())
                     .await;
 
                 Sse::new(stream)
@@ -87,13 +83,13 @@ pub(crate) async fn logs(
                     .into_response()
             } else {
                 let logs = runtime
-                    .get_logs(tail.as_deref(), since, params.container.as_deref())
+                    .get_logs(&deployment.id, tail.as_deref(), since, params.container.as_deref())
                     .await;
                 Json(logs).into_response()
             }
         }
-        Ok(None) => Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
-        Err(_) => Json(Vec::<crate::runtime::runtime::Log>::new()).into_response(),
+        Ok(None) => Json(Vec::<Log>::new()).into_response(),
+        Err(_) => Json(Vec::<Log>::new()).into_response(),
     }
 }
 
@@ -126,16 +122,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_since_iso8601() {
-        let result = parse_since("2024-01-01T00:00:00Z");
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), 1704067200);
+    fn test_parse_since_invalid() {
+        assert!(parse_since("invalid").is_none());
+        assert!(parse_since("5d").is_none());
+        assert!(parse_since("").is_none());
     }
 
     #[test]
-    fn test_parse_since_invalid() {
-        assert!(parse_since("invalid").is_none());
-        assert!(parse_since("30x").is_none());
-        assert!(parse_since("abc123").is_none());
+    fn test_parse_since_rfc3339() {
+        let result = parse_since("2024-01-15T10:30:00Z");
+        assert!(result.is_some());
+        let expected = chrono::DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z")
+            .unwrap()
+            .timestamp() as i32;
+        assert_eq!(result.unwrap(), expected);
     }
 }

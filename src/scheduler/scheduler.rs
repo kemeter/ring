@@ -5,9 +5,7 @@ use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
-use crate::runtime::runtime::Runtime;
 use crate::scheduler::health_checker::HealthChecker;
-use bollard::Docker;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
@@ -210,7 +208,6 @@ async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     health_checker: &HealthChecker,
-    docker: &Docker,
     runtime: &dyn RuntimeLifecycle,
 ) {
     if deployment.status != DeploymentStatus::Running || deployment.health_checks.is_empty() {
@@ -218,9 +215,8 @@ async fn run_health_checks(
     }
 
     debug!("Executing health checks for deployment {}", deployment.id);
-    let rt = Runtime::with_docker(deployment.clone(), docker.clone());
 
-    let outcome = health_checker.execute_checks(deployment, rt.as_ref()).await;
+    let outcome = health_checker.execute_checks(deployment, runtime).await;
 
     for result in &outcome.results {
         health_checker.store_result(result).await;
@@ -354,19 +350,19 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
         }
     } else {
         // Remove one instance from the parent — one step per scheduler cycle.
-        let container_id = parent.instances[0].clone();
-        if runtime.remove_instance(container_id.clone()).await {
+        let instance_id = parent.instances[0].clone();
+        if runtime.remove_instance(instance_id.clone()).await {
             parent.instances.remove(0);
             info!(
-                "Rolling update: removed container {} from parent {} ({} remaining)",
-                container_id,
+                "Rolling update: removed instance {} from parent {} ({} remaining)",
+                instance_id,
                 parent.id,
                 parent.instances.len()
             );
         } else {
             warn!(
-                "Rolling update: failed to remove container {} from parent {}, will retry next cycle",
-                container_id, parent.id
+                "Rolling update: failed to remove instance {} from parent {}, will retry next cycle",
+                instance_id, parent.id
             );
             return;
         }
@@ -376,8 +372,8 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
             child.id.clone(),
             "info",
             format!(
-                "Rolling update: removed container {} from parent {} ({} remaining)",
-                container_id,
+                "Rolling update: removed instance {} from parent {} ({} remaining)",
+                instance_id,
                 parent_id,
                 parent.instances.len()
             ),
@@ -391,7 +387,7 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 }
 
-pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>, docker: Docker) {
+pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -496,7 +492,7 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
             }
 
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
-            run_health_checks(&pool, &mut result, &health_checker, &docker, runtime.as_ref()).await;
+            run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
 
             if let Err(e) = deployments::update(&pool, &result).await {

@@ -2,10 +2,10 @@ pub mod cloud_hypervisor;
 pub mod docker;
 pub mod error;
 pub mod lifecycle_trait;
-pub mod runtime;
+#[cfg(test)]
+pub mod mock;
 pub mod types;
 
 pub use error::RuntimeError;
-pub use lifecycle_trait::RuntimeLifecycle;
-pub use runtime::{Log, Runtime, RuntimeInterface};
+pub use lifecycle_trait::{Log, RuntimeLifecycle};
 pub use types::InstanceStatus;
