@@ -50,7 +50,7 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
 
     let runtimes = std::sync::Arc::new(runtimes_map);
 
-    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), docker.clone(), runtimes.clone()));
+    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), runtimes.clone()));
     let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes, docker));
 
     if let Err(e) = api_server_handler.await {
