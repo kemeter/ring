@@ -10,7 +10,7 @@ use axum_extra::{
     headers::{Authorization, authorization::Bearer},
 };
 use axum_macros::FromRef;
-use log::{info, warn};
+use log::{error, info, warn};
 use serde_json::json;
 use sqlx::SqlitePool;
 use std::time::Duration;
@@ -194,12 +194,23 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes:
     };
 
     let app = router(state);
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .unwrap_or_else(|_| panic!("Failed to bind to {}", bind_addr));
-    axum::serve(listener, app)
-        .await
-        .expect("Server failed unexpectedly");
+    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+        Ok(listener) => listener,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            error!(
+                "Cannot start API server: address {} is already in use. Is another ring instance running?",
+                bind_addr
+            );
+            return;
+        }
+        Err(e) => {
+            error!("Cannot start API server: failed to bind to {}: {}", bind_addr, e);
+            return;
+        }
+    };
+    if let Err(e) = axum::serve(listener, app).await {
+        error!("API server stopped unexpectedly: {}", e);
+    }
 }
 
 #[cfg(test)]
