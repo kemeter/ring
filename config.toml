@@ -1,6 +1,6 @@
 [contexts.default]
 current = true
-host = "127.0.0.1"
+host = "0.0.0.0"
 
 api.scheme = "http"
 api.port = 3030
