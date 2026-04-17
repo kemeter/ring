@@ -78,6 +78,7 @@ impl CloudHypervisorLifecycle {
 
     /// Scan sockets directory for instances belonging to a deployment.
     /// Returns instance IDs whose VMs are in one of the given states.
+    /// An empty `accepted_states` slice matches any state (including unreachable VMs).
     async fn scan_instances(&self, deployment_id: &str, accepted_states: &[&str]) -> Vec<String> {
         let prefix = Self::deployment_prefix(deployment_id);
         let mut instances = Vec::new();
@@ -98,6 +99,11 @@ impl CloudHypervisorLifecycle {
                 Some(s) => s.to_string(),
                 None => continue,
             };
+
+            if accepted_states.is_empty() {
+                instances.push(instance_id);
+                continue;
+            }
 
             let client = CloudHypervisorClient::new(&socket_str);
             if let Ok(info) = client.info().await {
@@ -316,9 +322,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         if deployment.status == DeploymentStatus::Deleted {
-            let instances = self
-                .scan_instances(&deployment.id, &["Running", "Created", "Booting"])
-                .await;
+            let instances = self.scan_instances(&deployment.id, &[]).await;
             for instance_id in &instances {
                 if !self.stop_vm(instance_id).await {
                     warn!("Failed to stop VM {} during deletion", instance_id);

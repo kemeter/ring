@@ -13,7 +13,12 @@ pub(crate) async fn apply(
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
 ) -> Deployment {
-    deployment.instances = list_instances(&docker, deployment.id.to_string(), "active").await;
+    let status_filter = if deployment.status == DeploymentStatus::Deleted {
+        "all"
+    } else {
+        "active"
+    };
+    deployment.instances = list_instances(&docker, deployment.id.to_string(), status_filter).await;
 
     if deployment.kind == "job" {
         handle_job_deployment(deployment, docker, resolved_mounts).await
