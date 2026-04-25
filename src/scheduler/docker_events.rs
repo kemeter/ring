@@ -133,3 +133,125 @@ fn parse_docker_event(event: &bollard::models::EventMessage) -> Option<DockerEve
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bollard::models::{EventActor, EventMessage};
+
+    fn make_event(action: &str, attrs: &[(&str, &str)], id: Option<&str>) -> EventMessage {
+        let attributes = attrs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<HashMap<_, _>>();
+        EventMessage {
+            action: Some(action.to_string()),
+            actor: Some(EventActor {
+                id: id.map(String::from),
+                attributes: Some(attributes),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn parses_die_with_exit_code() {
+        let event = make_event(
+            "die",
+            &[("ring_deployment", "dep-1"), ("exitCode", "137")],
+            Some("container-abc"),
+        );
+        match parse_docker_event(&event) {
+            Some(DockerEvent::ContainerDied { deployment_id, container_id, exit_code }) => {
+                assert_eq!(deployment_id, "dep-1");
+                assert_eq!(container_id, "container-abc");
+                assert_eq!(exit_code, Some(137));
+            }
+            other => panic!("expected ContainerDied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_die_without_exit_code() {
+        let event = make_event(
+            "die",
+            &[("ring_deployment", "dep-1")],
+            Some("container-abc"),
+        );
+        match parse_docker_event(&event) {
+            Some(DockerEvent::ContainerDied { exit_code, .. }) => {
+                assert_eq!(exit_code, None);
+            }
+            other => panic!("expected ContainerDied with no exit code, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_oom() {
+        let event = make_event(
+            "oom",
+            &[("ring_deployment", "dep-1")],
+            Some("container-abc"),
+        );
+        assert!(matches!(
+            parse_docker_event(&event),
+            Some(DockerEvent::ContainerOom { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_kill_with_signal() {
+        let event = make_event(
+            "kill",
+            &[("ring_deployment", "dep-1"), ("signal", "15")],
+            Some("container-abc"),
+        );
+        match parse_docker_event(&event) {
+            Some(DockerEvent::ContainerKilled { signal, .. }) => {
+                assert_eq!(signal, Some("15".to_string()));
+            }
+            other => panic!("expected ContainerKilled, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_start() {
+        let event = make_event(
+            "start",
+            &[("ring_deployment", "dep-1")],
+            Some("container-abc"),
+        );
+        assert!(matches!(
+            parse_docker_event(&event),
+            Some(DockerEvent::ContainerStarted { .. })
+        ));
+    }
+
+    #[test]
+    fn ignores_event_without_ring_deployment_label() {
+        // Containers managed by something other than Ring must be ignored, even
+        // if they emit the same actions on the same Docker daemon.
+        let event = make_event("die", &[("exitCode", "1")], Some("container-abc"));
+        assert!(parse_docker_event(&event).is_none());
+    }
+
+    #[test]
+    fn ignores_unknown_action() {
+        let event = make_event(
+            "rename",
+            &[("ring_deployment", "dep-1")],
+            Some("container-abc"),
+        );
+        assert!(parse_docker_event(&event).is_none());
+    }
+
+    #[test]
+    fn ignores_event_without_actor() {
+        let event = EventMessage {
+            action: Some("die".to_string()),
+            actor: None,
+            ..Default::default()
+        };
+        assert!(parse_docker_event(&event).is_none());
+    }
+}

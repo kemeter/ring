@@ -5,11 +5,13 @@ use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, sleep};
 
 async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
@@ -387,7 +389,137 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
     }
 }
 
-pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Config, runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>) {
+/// Drain all Docker events currently in the channel and apply their effects to
+/// the database. Non-blocking: returns as soon as the channel is empty so the
+/// scheduler can proceed to its reconciliation pass.
+///
+/// On every event that signals an instance has died (die / oom / kill), bump
+/// `restart_count` for the deployment and log a deployment_event so the user
+/// can see the crash trace. Once `restart_count` reaches `MAX_RESTART_COUNT`,
+/// the existing logic in `lifecycle::handle_worker_deployment` flips the
+/// status to `CrashLoopBackOff` and stops respawning — that's what bounds the
+/// loop and prevents disk saturation.
+async fn drain_docker_events(pool: &SqlitePool, event_rx: &mut mpsc::Receiver<DockerEvent>) {
+    loop {
+        match event_rx.try_recv() {
+            Ok(event) => apply_docker_event(pool, event).await,
+            Err(mpsc::error::TryRecvError::Empty) => return,
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                error!("Docker event channel disconnected — listener task likely died");
+                return;
+            }
+        }
+    }
+}
+
+async fn apply_docker_event(pool: &SqlitePool, event: DockerEvent) {
+    match event {
+        DockerEvent::ContainerDied { deployment_id, container_id, exit_code } => {
+            bump_restart_count(
+                pool,
+                &deployment_id,
+                format!(
+                    "Container {} died (exit_code={})",
+                    container_id,
+                    exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
+                ),
+                "ContainerDied",
+            )
+            .await;
+        }
+        DockerEvent::ContainerOom { deployment_id, container_id } => {
+            // Docker emits `oom` then `die`; we count on `die` so we don't double-count.
+            // This branch only logs the OOM cause for traceability.
+            if let Err(e) = deployment_event::log_event(
+                pool,
+                deployment_id,
+                "warn",
+                format!("Container {} killed by OOM", container_id),
+                "docker-events",
+                Some("ContainerOom"),
+            )
+            .await
+            {
+                warn!("Failed to log OOM event: {}", e);
+            }
+        }
+        DockerEvent::ContainerKilled { deployment_id, container_id, signal } => {
+            // A `kill` event is fired for any signal sent to the container,
+            // including the SIGTERM Ring itself sends on scale-down or delete.
+            // We only log it for traceability and let `die` carry the count.
+            if let Err(e) = deployment_event::log_event(
+                pool,
+                deployment_id,
+                "info",
+                format!(
+                    "Container {} received signal {}",
+                    container_id,
+                    signal.unwrap_or_else(|| "?".to_string()),
+                ),
+                "docker-events",
+                Some("ContainerKilled"),
+            )
+            .await
+            {
+                warn!("Failed to log kill event: {}", e);
+            }
+        }
+        DockerEvent::ContainerStarted { .. } => {
+            // No-op for now: the scheduler already detects healthy containers
+            // via `list_instances` on the next reconciliation pass.
+        }
+    }
+}
+
+async fn bump_restart_count(pool: &SqlitePool, deployment_id: &str, message: String, reason: &str) {
+    let mut deployment = match deployments::find(pool, deployment_id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            // Container belonged to a deployment that has since been deleted — ignore.
+            debug!("Ignoring event for unknown deployment {}", deployment_id);
+            return;
+        }
+        Err(e) => {
+            error!("Failed to load deployment {} on event: {}", deployment_id, e);
+            return;
+        }
+    };
+
+    // Don't keep counting once we've already given up — saves DB writes when a
+    // doomed deployment keeps emitting events.
+    if deployment.status == DeploymentStatus::CrashLoopBackOff {
+        return;
+    }
+
+    deployment.restart_count += 1;
+    if let Err(e) = deployments::update(pool, &deployment).await {
+        error!(
+            "Failed to persist restart_count for deployment {}: {}",
+            deployment_id, e
+        );
+        return;
+    }
+
+    if let Err(e) = deployment_event::log_event(
+        pool,
+        deployment_id.to_string(),
+        "warn",
+        format!("{} — restart_count={}", message, deployment.restart_count),
+        "docker-events",
+        Some(reason),
+    )
+    .await
+    {
+        warn!("Failed to log crash event for {}: {}", deployment_id, e);
+    }
+}
+
+pub(crate) async fn schedule(
+    pool: SqlitePool,
+    config: crate::config::config::Config,
+    runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>,
+    mut event_rx: mpsc::Receiver<DockerEvent>,
+) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -411,6 +543,12 @@ pub(crate) async fn schedule(pool: SqlitePool, config: crate::config::config::Co
     );
 
     loop {
+        // Apply any crash events received from Docker since the last cycle.
+        // Doing this before `find_all` ensures that the deployments we load
+        // already reflect the latest restart_count, so the worker scaler can
+        // hit CrashLoopBackOff in the same cycle as the crash that caused it.
+        drain_docker_events(&pool, &mut event_rx).await;
+
         let mut filters = HashMap::new();
         filters.insert(
             String::from("status"),
