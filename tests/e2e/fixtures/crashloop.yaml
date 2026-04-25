@@ -1,0 +1,8 @@
+deployments:
+  crashloop:
+    name: crashloop
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    command: ["sh", "-c", "exit 1"]
+    replicas: 1
