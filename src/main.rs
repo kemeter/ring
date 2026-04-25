@@ -24,6 +24,7 @@ mod commands {
 }
 
 mod scheduler {
+    pub(crate) mod docker_events;
     pub(crate) mod health_checker;
     pub(crate) mod scheduler;
 }
