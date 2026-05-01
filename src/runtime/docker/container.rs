@@ -246,7 +246,7 @@ pub(crate) async fn create_container(
             };
 
             let connect_request = NetworkConnectRequest {
-                container: Some(container.id.clone()),
+                container: container.id.clone(),
                 endpoint_config: Some(endpoint_config),
             };
 
