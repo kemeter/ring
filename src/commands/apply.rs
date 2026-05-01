@@ -1,5 +1,6 @@
 use crate::config::config::{Config, get_config_dir, load_auth_config};
 use crate::exit_code;
+use crate::models::deployments::EnvValue;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::{debug, info};
 use regex::Regex;
@@ -60,7 +61,7 @@ struct Deployment {
     labels: HashMap<String, String>,
 
     #[serde(default)]
-    environment: HashMap<String, String>,
+    environment: HashMap<String, EnvValue>,
 
     #[serde(default)]
     volumes: Vec<Volume>,
@@ -203,7 +204,9 @@ impl Deployment {
         self.image = env_resolver(&self.image, env_vars);
 
         for (_, value) in self.environment.iter_mut() {
-            *value = env_resolver(value, env_vars);
+            if let EnvValue::Plain(s) = value {
+                *s = env_resolver(s, env_vars);
+            }
         }
 
         for (_, value) in self.config.iter_mut() {
