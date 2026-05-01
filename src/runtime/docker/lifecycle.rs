@@ -125,22 +125,11 @@ async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind
         }
     }
 
-    // Clean up named Docker volumes
-    let volumes: Vec<crate::api::dto::deployment::DeploymentVolume> =
-        serde_json::from_str(&deployment.volumes).unwrap_or_default();
-    for volume in volumes {
-        if volume.r#type == "volume" {
-            if let Some(name) = volume.source {
-                match docker
-                    .remove_volume(&name, None::<bollard::query_parameters::RemoveVolumeOptions>)
-                    .await
-                {
-                    Ok(_) => info!("Removed Docker volume '{}'", name),
-                    Err(e) => debug!("Failed to remove Docker volume '{}': {}", name, e),
-                }
-            }
-        }
-    }
+    // Named Docker volumes are intentionally preserved across deployment deletions.
+    // A volume's lifecycle is independent of any single deployment: deleting one
+    // deployment must never destroy data that other deployments (or future
+    // redeployments under the same name) may rely on. Volume removal is an
+    // explicit operation, not a side effect of deployment cleanup.
 }
 
 async fn handle_job_deployment(

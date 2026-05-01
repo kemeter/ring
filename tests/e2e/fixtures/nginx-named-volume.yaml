@@ -1,0 +1,13 @@
+deployments:
+  nginx-named-volume:
+    name: nginx-named-volume
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 1
+    volumes:
+      - type: volume
+        source: ring-e2e-named-vol
+        destination: /usr/share/nginx/html
+        driver: local
+        permission: rw
