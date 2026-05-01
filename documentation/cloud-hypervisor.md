@@ -2,8 +2,7 @@
 
 Ring supports running workloads inside lightweight virtual machines using [Cloud Hypervisor](https://www.cloudhypervisor.org/). Each deployment gets its own dedicated VM with full kernel isolation, providing stronger security boundaries than containers.
 
-!!! warning "Alpha Feature"
-    The Cloud Hypervisor runtime is experimental. Some features available on the Docker runtime are not yet supported. See [Current Limitations](#current-limitations) below.
+> **Alpha** — the Cloud Hypervisor runtime is experimental. Several features available on the Docker runtime are not yet supported. See [Current limitations](#current-limitations) below.
 
 ## Prerequisites
 
@@ -27,11 +26,14 @@ Before using the Cloud Hypervisor runtime, you need:
     sudo usermod -aG kvm $USER
     ```
 
-3. **Firmware** (`hypervisor-fw`) placed at the default location:
+3. **Firmware** (`hypervisor-fw`) placed at the default location.
+
+    Despite the filename `vmlinux` below, this is the EFI firmware binary, not a Linux kernel. The path is what `firmware_path` resolves to by default.
 
     ```bash
     mkdir -p ~/.config/kemeter/ring/cloud-hypervisor
-    curl -L https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw -o ~/.config/kemeter/ring/cloud-hypervisor/vmlinux
+    curl -L https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/latest/download/hypervisor-fw \
+      -o ~/.config/kemeter/ring/cloud-hypervisor/vmlinux
     ```
 
 4. **A bootable raw disk image** for your VM. See [Preparing a VM Image](#preparing-a-vm-image).
@@ -40,7 +42,8 @@ Before using the Cloud Hypervisor runtime, you need:
 
 Add a `runtime.cloud_hypervisor` section to your `config.toml` to customize paths:
 
-```toml title="config.toml"
+```toml
+# config.toml
 [contexts.default]
 current = true
 host = "127.0.0.1"
@@ -68,7 +71,8 @@ All fields are optional. When omitted, Ring uses these defaults:
 
 Use `runtime: cloud-hypervisor` in your deployment YAML. The `image` field must point to a raw disk image on the host filesystem (not a Docker image reference).
 
-```yaml title="my-vm.yaml"
+```yaml
+# my-vm.yaml
 deployments:
   my-app:
     name: my-app
@@ -101,12 +105,12 @@ Ring will:
 
 ## Resource Limits
 
-CPU and memory limits are translated to VM hardware:
+CPU and memory limits are translated to VM hardware. When `resources` is not set, the VM defaults to 1 vCPU and 256 MiB of RAM.
 
-| YAML Field | VM Setting |
+| YAML field | VM setting |
 |---|---|
 | `resources.limits.cpu` | Number of vCPUs (minimum 1) |
-| `resources.limits.memory` | VM RAM in bytes (minimum 128Mi) |
+| `resources.limits.memory` | VM RAM in bytes (minimum 128 MiB) |
 
 ```yaml
 resources:
@@ -151,8 +155,7 @@ curl -LO https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd
 qemu-img convert -p -f qcow2 -O raw focal-server-cloudimg-amd64.img /var/lib/ring/images/ubuntu-focal.raw
 ```
 
-!!! note
-    Ubuntu Jammy (22.04) and Noble (24.04) have known boot issues with `hypervisor-fw`. Use Focal (20.04) for best compatibility.
+> Ubuntu Jammy (22.04) and Noble (24.04) have known boot issues with `hypervisor-fw`. Use Focal (20.04) for best compatibility.
 
 ## Current Limitations
 

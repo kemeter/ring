@@ -1,56 +1,54 @@
-# Your First Deployment
+# Your first deployment
 
-Now that Ring is configured, let's deploy your first application! We'll use a simple Nginx web server.
+This guide walks through deploying a simple Nginx server with Ring, from YAML to running container.
 
-## Method 1: Deployment with YAML File
+## With a YAML file
 
-### Creating the Configuration File
+### Write the manifest
 
-Create a file called `my-first-app.yaml`:
+Create `my-first-app.yaml`:
 
-```yaml title="my-first-app.yaml"
+```yaml
 deployments:
   nginx-demo:
     name: nginx-demo
     namespace: default
     runtime: docker
-    kind: worker  # Long-running service (default)
+    kind: worker            # long-running service (default)
     image: "nginx:latest"
     replicas: 1
     labels:
-      - "app=nginx"
-      - "version=latest"
+      app: nginx
+      version: latest
 ```
 
-### Deployment
+### Apply
 
 ```bash
 ring apply -f my-first-app.yaml
 ```
 
-You should see:
+Output:
 
 ```
-✅ Deployment nginx-demo created successfully
-📦 Container nginx-demo-1 starting
-🚀 Deployment nginx-demo is now running
+Processing deployment 'nginx-demo'
+Deployment 'nginx-demo' created
+
+Summary:
+  Successful: 1
 ```
 
-## Method 2: Deployment via REST API
+The scheduler then picks the deployment up on its next tick (default: every second), pulls the image if needed, and starts the container. Watch progress with `ring deployment events`.
 
-### Getting the Token
+## With the REST API
+
+The CLI is a client over the REST API, so the same operation can be done with `curl`. The token saved by `ring login` lives in `~/.config/kemeter/ring/auth.json`.
 
 ```bash
-# The token is automatically saved after login
-# You can check it worked by listing deployments
-ring deployment list
-```
+TOKEN=$(jq -r '.token' ~/.config/kemeter/ring/auth.json)
 
-### Sending the Request
-
-```bash
 curl -X POST http://localhost:3030/deployments \
-  -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "name": "nginx-api",
@@ -65,96 +63,90 @@ curl -X POST http://localhost:3030/deployments \
   }'
 ```
 
-## Verifying the Deployment
+The response is `201 Created` with the new deployment object — including its UUID `id`, which most other endpoints expect.
 
-### List Deployments
+## Inspect the deployment
+
+### List
 
 ```bash
 ring deployment list
 ```
 
-Expected result:
-```
-┌─────────────┬───────────┬───────────┬─────────┬────────────┐
-│ ID          │ Name      │ Namespace │ Replicas│ Status     │
-├─────────────┼───────────┼───────────┼─────────┼────────────┤
-│ nginx-demo  │ nginx-demo│ default   │ 1       │ Running    │
-└─────────────┴───────────┴───────────┴─────────┴────────────┘
-```
-
-### Detailed Inspection
+The default `table` output includes ten columns: id, created at, updated at, namespace, name, image, runtime, kind, replicas (`instances/replicas`), and status. Use `-o json` for machine-readable output:
 
 ```bash
-ring deployment inspect nginx-demo
+ring deployment list -o json
 ```
 
-### Verification with Docker
+### Inspect
+
+`inspect` takes the deployment **UUID**, not the name:
 
 ```bash
-# List Ring containers
+DEPLOYMENT_ID=$(ring deployment list -o json | jq -r '.[] | select(.name=="nginx-demo") | .id')
+ring deployment inspect "$DEPLOYMENT_ID"
+```
+
+### Find Ring containers in Docker
+
+Every Ring container is labelled `ring_deployment=<deployment-id>`:
+
+```bash
 docker ps --filter "label=ring_deployment"
+docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 ```
 
-## Testing the Application
+## Test the application
 
-### Identifying the Port
+Find the container's exposed port (Ring does not publish ports automatically; this assumes the image exposes one or that you've added a port mapping in your manifest):
 
 ```bash
-# Find the port exposed by the container
-docker port $(docker ps -q --filter "label=ring.deployment=nginx-demo")
+docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID" \
+  --format '{{.Ports}}'
 ```
 
-### HTTP Test
+Then test it:
 
 ```bash
-# Test the application (replace PORT with the found port)
 curl http://localhost:PORT
 ```
 
-You should see the default Nginx welcome page!
+You should see the default Nginx welcome page.
 
-## Scaling the Application
+## Scale the application
 
-### Modifying the YAML File
+Edit the manifest and bump `replicas`:
 
-Edit `my-first-app.yaml` to increase the number of replicas:
-
-```yaml title="my-first-app.yaml"
+```yaml
 deployments:
   nginx-demo:
     name: nginx-demo
     namespace: default
     runtime: docker
     image: "nginx:latest"
-    replicas: 3  # ← Changed from 1 to 3
+    replicas: 3            # was 1
     labels:
-      - "app=nginx"
-      - "version=latest"
+      app: nginx
+      version: latest
 ```
 
-### Redeployment
+Re-apply:
 
 ```bash
 ring apply -f my-first-app.yaml
 ```
 
-Ring will automatically:
-- Detect the difference (1 → 3 replicas)
-- Create 2 additional containers
-- Maintain the desired state
-
-### Verification
+The scheduler diffs the desired state against running containers and creates the two extra instances. Verify:
 
 ```bash
 ring deployment list
-docker ps --filter "label=ring.deployment=nginx-demo"
+docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 ```
 
-## Adding Advanced Configuration
+## A more complete manifest
 
-### Example with Volumes and Environment Variables
-
-```yaml title="nginx-advanced.yaml"
+```yaml
 deployments:
   nginx-advanced:
     name: nginx-advanced
@@ -163,22 +155,24 @@ deployments:
     image: "nginx:1.21"
     replicas: 2
 
-    # Environment variables
+    # Environment variables. Plain strings or { secretRef: <name> }.
     environment:
-      NGINX_PORT: "80"
+      NGINX_HOST: "example.com"
       CUSTOM_CONFIG: "production"
 
-    # Volume mounts
+    # Volumes are objects with type / source / destination / driver / permission.
     volumes:
-      - "/tmp/nginx-logs:/var/log/nginx"
+      - type: bind
+        source: /tmp/nginx-logs
+        destination: /var/log/nginx
+        driver: local
+        permission: rw
 
-    # Labels for identification
     labels:
-      - "app=nginx"
-      - "environment=production"
-      - "version=1.21"
+      app: nginx
+      environment: production
+      version: "1.21"
 
-    # Image configuration
     config:
       image_pull_policy: "IfNotPresent"
 ```
@@ -187,63 +181,47 @@ deployments:
 ring apply -f nginx-advanced.yaml
 ```
 
-## Monitoring the Application
+## Observe
 
-### Real-time Logs
+Logs:
 
 ```bash
-# Follow deployment logs
-ring deployment logs nginx-demo --follow
+ring deployment logs "$DEPLOYMENT_ID"
+ring deployment logs "$DEPLOYMENT_ID" --follow
 ```
 
-### Deployment Events
+Scheduler events:
 
 ```bash
-# View event history
-ring deployment events nginx-demo
+ring deployment events "$DEPLOYMENT_ID"
+ring deployment events "$DEPLOYMENT_ID" --level error
 ```
 
-## Cleanup
+## Clean up
 
-### Deleting a Deployment
+Delete the deployment:
 
 ```bash
-ring deployment delete nginx-demo
+ring deployment delete "$DEPLOYMENT_ID"
 ```
 
-### Verification
+Confirm:
 
 ```bash
-# Verify the deployment has been deleted
 ring deployment list
-
-# Verify containers have been stopped
-docker ps --filter "label=ring.deployment=nginx-demo"
+docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 ```
 
-## Summary
+## Next steps
 
-🎉 **Congratulations!** You have:
+- [Managing deployments](managing-deployments.md)
+- [Examples](../examples.md)
+- [REST API reference](../api-reference.md)
 
-- ✅ Deployed your first application with Ring
-- ✅ Learned to use YAML files and the REST API
-- ✅ Tested automatic scaling
-- ✅ Explored monitoring and logs
-- ✅ Cleaned up your resources
+## Best practices
 
-## Next Steps
-
-Now that you master the basics, you can:
-
-- Explore more [advanced examples](../examples.md)
-- Learn complete [deployment management](managing-deployments.md)
-- Discover the [REST API](../api-reference.md)
-
-## Best Practices
-
-!!! tip "Tips"
-    - Use **namespaces** to organize your environments
-    - Always specify an explicit **image version** in production
-    - Add descriptive **labels** to facilitate management
-    - Use **secret references** for sensitive information
-    - Test your deployments in a development environment first
+- Use namespaces to separate environments.
+- Pin image tags in production (`nginx:1.21`, not `nginx:latest`).
+- Add labels that match how your team filters and groups deployments.
+- Keep secrets out of the YAML — store them via `ring secret create` and reference them with `secretRef`.
+- Test deployments in a development namespace first.

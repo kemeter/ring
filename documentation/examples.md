@@ -1,12 +1,13 @@
-# Practical Examples
+# Examples
 
-This page presents concrete examples of using Ring for different types of applications and use cases.
+Real-world Ring manifests for common use cases. Every example uses the formats Ring's deserializer actually accepts: structured volume objects, map-style labels, `secretRef` for sensitive environment values.
 
-## Simple Web Applications
+## Simple web apps
 
-### Static Web Server with Nginx
+### Static site with Nginx
 
-```yaml title="static-website.yaml"
+```yaml
+# static-website.yaml
 deployments:
   static-site:
     name: static-site
@@ -15,52 +16,59 @@ deployments:
     image: "nginx:1.21-alpine"
     replicas: 2
 
-    # Static content mounting
     volumes:
-      - "/var/www/html:/usr/share/nginx/html:ro"
+      - type: bind
+        source: /var/www/html
+        destination: /usr/share/nginx/html
+        driver: local
+        permission: ro
 
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.static.rule=Host(`www.example.com`)"
-      - "app=static-website"
+      app: static-website
+      "traefik.enable": "true"
+      "traefik.http.routers.static.rule": "Host(`www.example.com`)"
 ```
 
-### Node.js Application
+### Node.js API
 
-```yaml title="nodejs-app.yaml"
+```yaml
+# nodejs-app.yaml
 deployments:
   nodejs-api:
     name: nodejs-api
     namespace: backend
     runtime: docker
-    image: "node:16-alpine"
+    image: "node:18-alpine"
     replicas: 3
 
-    # Environment variables
     environment:
       NODE_ENV: "production"
       PORT: "3000"
-      DATABASE_URL: "$DATABASE_URL"
-      JWT_SECRET: "$JWT_SECRET"
+      DATABASE_URL:
+        secretRef: "database-url"
+      JWT_SECRET:
+        secretRef: "jwt-secret"
 
-    # Source code mounting (for development)
     volumes:
-      - "./app:/usr/src/app"
-      - "/usr/src/app/node_modules"  # Anonymous volume for node_modules
+      - type: bind
+        source: /opt/nodejs-api
+        destination: /usr/src/app
+        driver: local
+        permission: ro
 
-    # Custom command
     command: ["npm", "start"]
 
     labels:
-      - "app=nodejs-api"
-      - "tier=backend"
+      app: nodejs-api
+      tier: backend
 ```
 
 ## Databases
 
-### PostgreSQL with Persistence
+### PostgreSQL with persistence
 
-```yaml title="postgres.yaml"
+```yaml
+# postgres.yaml
 deployments:
   postgres-db:
     name: postgres-db
@@ -69,7 +77,6 @@ deployments:
     image: "postgres:13"
     replicas: 1
 
-    # PostgreSQL configuration
     environment:
       POSTGRES_DB: "myapp"
       POSTGRES_USER: "appuser"
@@ -77,64 +84,116 @@ deployments:
         secretRef: "postgres-password"
       PGDATA: "/var/lib/postgresql/data/pgdata"
 
-    # Persistent storage
     volumes:
-      - "/var/lib/ring/postgres/data:/var/lib/postgresql/data"
-      - "/var/lib/ring/postgres/backup:/backup"
+      - type: bind
+        source: /var/lib/ring/postgres/data
+        destination: /var/lib/postgresql/data
+        driver: local
+        permission: rw
+      - type: bind
+        source: /var/lib/ring/postgres/backup
+        destination: /backup
+        driver: local
+        permission: rw
 
     labels:
-      - "app=postgres"
-      - "type=database"
-      - "backup=enabled"
+      app: postgres
+      type: database
+      backup: enabled
 ```
 
-Create the secret before deploying:
+Create the secret before applying:
 
 ```bash
 ring secret create postgres-password -n database -v "secure-pg-password"
 ```
 
-### Redis Cache
+### Redis cache
 
-```yaml title="redis.yaml"
+```yaml
+# redis.yaml
 deployments:
   redis-cache:
     name: redis-cache
     namespace: cache
     runtime: docker
-    image: "redis:6-alpine"
+    image: "redis:7-alpine"
     replicas: 1
 
-    # Redis configuration
     environment:
-      REDIS_PASSWORD: "$REDIS_PASSWORD"
+      REDIS_PASSWORD:
+        secretRef: "redis-password"
 
-    # Redis persistence
     volumes:
-      - "/var/lib/ring/redis:/data"
+      - type: bind
+        source: /var/lib/ring/redis
+        destination: /data
+        driver: local
+        permission: rw
 
-    # Custom Redis configuration
     command: ["redis-server", "--requirepass", "$REDIS_PASSWORD", "--appendonly", "yes"]
 
     labels:
-      - "app=redis"
-      - "type=cache"
+      app: redis
+      type: cache
 ```
 
-## Applications with Complex Configuration
+> The `command:` interpolation `$REDIS_PASSWORD` is resolved at apply time from the **shell** environment of `ring apply`, not from the deployment's environment. To inject a Ring-managed secret into the command, run `ring apply` in a shell where `REDIS_PASSWORD` is set, or use `--env-file`.
 
-### WordPress Application
+## Configs and named volumes
 
-```yaml title="wordpress.yaml"
-configs:
-  wp-config:
-    namespace: cms
-    name: "wordpress-config"
-    data: |
-      {
-        "wp-config.php": "<?php\ndefine('WP_DEBUG', false);\ndefine('WP_CACHE', true);\n?>"
-      }
+Ring supports three volume types: `bind` (host path), `volume` (named Docker volume), and `config` (mount a file from a `ring config` entry).
 
+### Named volume
+
+```yaml
+deployments:
+  app:
+    name: app
+    namespace: default
+    runtime: docker
+    image: "myapp:latest"
+    replicas: 1
+
+    volumes:
+      - type: volume
+        source: app-data           # named Docker volume
+        destination: /data
+        driver: local              # or "nfs"
+        permission: rw
+```
+
+### Config-mounted file
+
+First create the config:
+
+```bash
+ring config create nginx-config -n web -f ./custom.conf
+```
+
+Then mount it:
+
+```yaml
+deployments:
+  nginx:
+    name: nginx
+    namespace: web
+    runtime: docker
+    image: "nginx:1.21"
+    replicas: 1
+
+    volumes:
+      - type: config
+        source: nginx-config       # config name in the same namespace
+        destination: /etc/nginx/conf.d/custom.conf
+        driver: local
+        permission: ro
+```
+
+## WordPress + MySQL
+
+```yaml
+# wordpress.yaml
 deployments:
   wordpress:
     name: wordpress
@@ -147,23 +206,19 @@ deployments:
       WORDPRESS_DB_HOST: "mysql.database:3306"
       WORDPRESS_DB_NAME: "wordpress"
       WORDPRESS_DB_USER: "wp_user"
-      WORDPRESS_DB_PASSWORD: "$WP_DB_PASSWORD"
+      WORDPRESS_DB_PASSWORD:
+        secretRef: "wp-db-password"
 
     volumes:
-      # Persistent WordPress content
-      - "/var/lib/ring/wordpress/wp-content:/var/www/html/wp-content"
-      # Custom configuration
-      - type: config
-        source: wordpress-config
-        key: "wp-config.php"
-        destination: /var/www/html/wp-config-custom.php
+      - type: bind
+        source: /var/lib/ring/wordpress/wp-content
+        destination: /var/www/html/wp-content
         driver: local
+        permission: rw
 
     labels:
-      - "app=wordpress"
-      - "type=cms"
-      - "traefik.enable=true"
-      - "traefik.http.routers.wp.rule=Host(`blog.example.com`)"
+      app: wordpress
+      type: cms
 
   mysql:
     name: mysql
@@ -173,25 +228,31 @@ deployments:
     replicas: 1
 
     environment:
-      MYSQL_ROOT_PASSWORD: "$MYSQL_ROOT_PASSWORD"
+      MYSQL_ROOT_PASSWORD:
+        secretRef: "mysql-root-password"
       MYSQL_DATABASE: "wordpress"
       MYSQL_USER: "wp_user"
-      MYSQL_PASSWORD: "$WP_DB_PASSWORD"
+      MYSQL_PASSWORD:
+        secretRef: "wp-db-password"
 
     volumes:
-      - "/var/lib/ring/mysql:/var/lib/mysql"
+      - type: bind
+        source: /var/lib/ring/mysql
+        destination: /var/lib/mysql
+        driver: local
+        permission: rw
 
     labels:
-      - "app=mysql"
-      - "type=database"
+      app: mysql
+      type: database
 ```
+
+> Cross-namespace networking is not automatic in Ring — `mysql.database` resolves only if both deployments share a namespace, or if MySQL is reachable through external routing. For the example above, put both deployments in the same namespace.
 
 ## Microservices
 
-### Complete Microservices Architecture
-
-```yaml title="microservices.yaml"
-# Frontend
+```yaml
+# microservices.yaml
 deployments:
   frontend:
     name: frontend
@@ -201,16 +262,21 @@ deployments:
     replicas: 2
 
     volumes:
-      - "./frontend/dist:/usr/share/nginx/html:ro"
-      - "./frontend/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - type: bind
+        source: /opt/frontend/dist
+        destination: /usr/share/nginx/html
+        driver: local
+        permission: ro
+      - type: bind
+        source: /opt/frontend/nginx.conf
+        destination: /etc/nginx/nginx.conf
+        driver: local
+        permission: ro
 
     labels:
-      - "app=frontend"
-      - "tier=presentation"
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`app.example.com`)"
+      app: frontend
+      tier: presentation
 
-  # API Gateway
   api-gateway:
     name: api-gateway
     namespace: microservices
@@ -219,13 +285,16 @@ deployments:
     replicas: 2
 
     volumes:
-      - "./gateway/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - type: bind
+        source: /opt/gateway/nginx.conf
+        destination: /etc/nginx/nginx.conf
+        driver: local
+        permission: ro
 
     labels:
-      - "app=api-gateway"
-      - "tier=gateway"
+      app: api-gateway
+      tier: gateway
 
-  # User service
   user-service:
     name: user-service
     namespace: microservices
@@ -234,16 +303,17 @@ deployments:
     replicas: 3
 
     environment:
-      DATABASE_URL: "$USER_DB_URL"
-      JWT_SECRET: "$JWT_SECRET"
+      DATABASE_URL:
+        secretRef: "user-db-url"
+      JWT_SECRET:
+        secretRef: "jwt-secret"
       SERVICE_PORT: "8001"
 
     labels:
-      - "app=user-service"
-      - "tier=backend"
-      - "service=users"
+      app: user-service
+      tier: backend
+      service: users
 
-  # Order service
   order-service:
     name: order-service
     namespace: microservices
@@ -252,40 +322,21 @@ deployments:
     replicas: 2
 
     environment:
-      DATABASE_URL: "$ORDER_DB_URL"
-      REDIS_URL: "redis://redis.cache:6379"
+      DATABASE_URL:
+        secretRef: "order-db-url"
+      REDIS_URL: "redis://redis-cache:6379"
       SERVICE_PORT: "8002"
 
     labels:
-      - "app=order-service"
-      - "tier=backend"
-      - "service=orders"
-
-  # Notification service
-  notification-service:
-    name: notification-service
-    namespace: microservices
-    runtime: docker
-    image: "mycompany/notification-service:v1.0.3"
-    replicas: 1
-
-    environment:
-      SMTP_HOST: "$SMTP_HOST"
-      SMTP_USER: "$SMTP_USER"
-      SMTP_PASSWORD: "$SMTP_PASSWORD"
-      SLACK_WEBHOOK: "$SLACK_WEBHOOK"
-
-    labels:
-      - "app=notification-service"
-      - "tier=backend"
-      - "service=notifications"
+      app: order-service
+      tier: backend
+      service: orders
 ```
 
-## Applications with Private Registries
+## Private image registry
 
-### Enterprise Application
-
-```yaml title="enterprise-app.yaml"
+```yaml
+# enterprise-app.yaml
 deployments:
   internal-app:
     name: internal-app
@@ -294,41 +345,33 @@ deployments:
     image: "registry.company.com/internal/myapp:v2.1.0"
     replicas: 5
 
-    # Private registry authentication
     config:
+      server: "registry.company.com"
       username: "registry-user"
       password: "$REGISTRY_PASSWORD"
       image_pull_policy: "Always"
 
     environment:
-      # Application configuration
       APP_ENV: "production"
       LOG_LEVEL: "info"
-
-      # Database
       DB_HOST: "db.company.internal"
       DB_NAME: "production_db"
       DB_USER: "app_user"
-      DB_PASSWORD: "$DB_PASSWORD"
-
-      # External services
-      LDAP_URL: "$LDAP_URL"
-      LDAP_BIND_DN: "$LDAP_BIND_DN"
-      LDAP_PASSWORD: "$LDAP_PASSWORD"
+      DB_PASSWORD:
+        secretRef: "app-db-password"
 
     labels:
-      - "app=internal-app"
-      - "environment=production"
-      - "team=platform"
-      - "compliance=required"
+      app: internal-app
+      environment: production
+      team: platform
 ```
 
-## Multiple Environments
+`$REGISTRY_PASSWORD` is interpolated by `ring apply` from your shell environment (or from a file passed with `--env-file`).
 
-### Environment-based Configuration
+## Multiple environments in one file
 
-```yaml title="multi-env.yaml"
-# Declare namespaces upfront
+```yaml
+# multi-env.yaml
 namespaces:
   development:
     name: development
@@ -337,7 +380,6 @@ namespaces:
   production:
     name: production
 
-# Development
 deployments:
   dev-api:
     name: api
@@ -349,17 +391,14 @@ deployments:
     environment:
       NODE_ENV: "development"
       LOG_LEVEL: "debug"
-      DATABASE_URL: "postgres://dev-db:5432/myapp_dev"
-      REDIS_URL: "redis://dev-redis:6379"
 
     config:
-      image_pull_policy: "Always"  # Always fetch latest
+      image_pull_policy: "Always"
 
     labels:
-      - "app=api"
-      - "environment=development"
+      app: api
+      environment: development
 
-  # Test/Staging
   staging-api:
     name: api
     namespace: staging
@@ -370,75 +409,76 @@ deployments:
     environment:
       NODE_ENV: "staging"
       LOG_LEVEL: "info"
-      DATABASE_URL: "$STAGING_DATABASE_URL"
-      REDIS_URL: "$STAGING_REDIS_URL"
+      DATABASE_URL:
+        secretRef: "staging-database-url"
 
     config:
       image_pull_policy: "IfNotPresent"
 
     labels:
-      - "app=api"
-      - "environment=staging"
+      app: api
+      environment: staging
 
-  # Production
   prod-api:
     name: api
     namespace: production
     runtime: docker
-    image: "myapp:v1.5.2"  # Fixed version in production
+    image: "myapp:v1.5.2"
     replicas: 5
 
     environment:
       NODE_ENV: "production"
       LOG_LEVEL: "warn"
-      DATABASE_URL: "$PRODUCTION_DATABASE_URL"
-      REDIS_URL: "$PRODUCTION_REDIS_URL"
+      DATABASE_URL:
+        secretRef: "production-database-url"
 
     config:
       image_pull_policy: "IfNotPresent"
 
     labels:
-      - "app=api"
-      - "environment=production"
-      - "criticality=high"
+      app: api
+      environment: production
+      criticality: high
 ```
 
-## Deployment Types
+## Workers vs jobs
 
-Ring supports two types of deployments:
+### Worker (default)
 
-### Workers (default)
-Services that run continuously with automatic restart and replica management.
+Long-running services with replica management.
 
 ```yaml
 deployments:
   web-server:
     name: web-server
+    namespace: default
     runtime: docker
-    kind: worker  # Optional (default)
+    kind: worker            # default; can be omitted
     image: "nginx:latest"
-    replicas: 3   # Scaling supported
+    replicas: 3
 ```
 
-### Jobs
-Tasks that execute once and terminate. No automatic restart.
+### Job
+
+One-shot task. Always one instance, no respawn after exit.
 
 ```yaml
 deployments:
   migration:
     name: migration
+    namespace: default
     runtime: docker
-    kind: job     # Required for jobs
+    kind: job
     image: "myapp:latest"
-    replicas: 1   # Always 1 for jobs
+    replicas: 1
     command: ["npm", "run", "migrate"]
 ```
 
-## Applications with Workers and Jobs
+## Mixed workers and a scheduler
 
-```yaml title="workers.yaml"
+```yaml
+# workers.yaml
 deployments:
-  # Main API
   web-api:
     name: web-api
     namespace: workers
@@ -449,14 +489,14 @@ deployments:
     environment:
       ROLE: "web"
       PORT: "8000"
-      REDIS_URL: "redis://redis.workers:6379"
-      DATABASE_URL: "$DATABASE_URL"
+      REDIS_URL: "redis://redis-cache:6379"
+      DATABASE_URL:
+        secretRef: "database-url"
 
     labels:
-      - "app=myapp"
-      - "component=web"
+      app: myapp
+      component: web
 
-  # Workers for heavy tasks
   background-worker:
     name: background-worker
     namespace: workers
@@ -466,18 +506,17 @@ deployments:
 
     environment:
       ROLE: "worker"
-      REDIS_URL: "redis://redis.workers:6379"
-      DATABASE_URL: "$DATABASE_URL"
+      REDIS_URL: "redis://redis-cache:6379"
+      DATABASE_URL:
+        secretRef: "database-url"
       WORKER_CONCURRENCY: "4"
 
-    # Specific command for the worker
     command: ["python", "worker.py"]
 
     labels:
-      - "app=myapp"
-      - "component=worker"
+      app: myapp
+      component: worker
 
-  # Scheduler for periodic tasks
   scheduler:
     name: scheduler
     namespace: workers
@@ -487,93 +526,92 @@ deployments:
 
     environment:
       ROLE: "scheduler"
-      REDIS_URL: "redis://redis.workers:6379"
-      DATABASE_URL: "$DATABASE_URL"
+      REDIS_URL: "redis://redis-cache:6379"
+      DATABASE_URL:
+        secretRef: "database-url"
 
     command: ["python", "scheduler.py"]
 
     labels:
-      - "app=myapp"
-      - "component=scheduler"
+      app: myapp
+      component: scheduler
 ```
 
-## Monitoring Tools
+## Monitoring stack
 
-You can deploy your own monitoring tools with Ring:
-
-```yaml title="monitoring.yaml"
+```yaml
+# monitoring.yaml
 deployments:
-  # Prometheus to monitor your applications
   prometheus:
     name: prometheus
     namespace: monitoring
     runtime: docker
     image: "prom/prometheus:latest"
     replicas: 1
-    volumes:
-      - "./prometheus.yml:/etc/prometheus/prometheus.yml:ro"
 
-  # Grafana for visualization
+    volumes:
+      - type: bind
+        source: /opt/monitoring/prometheus.yml
+        destination: /etc/prometheus/prometheus.yml
+        driver: local
+        permission: ro
+
   grafana:
     name: grafana
     namespace: monitoring
     runtime: docker
     image: "grafana/grafana:latest"
     replicas: 1
+
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: "$GRAFANA_PASSWORD"
+      GF_SECURITY_ADMIN_PASSWORD:
+        secretRef: "grafana-admin-password"
 ```
 
-!!! note "Ring Health Check"
-    Ring exposes a simple health endpoint:
-    ```bash
-    curl http://localhost:3030/healthz
-    # {"state":"UP"}
-    ```
+Ring itself exposes a health endpoint:
 
+```bash
+curl http://localhost:3030/healthz
+# {"state":"UP"}
+```
 
-## Best Practices Illustrated
+## Patterns
 
-### Labels and Organization
+### Labels for service discovery
+
+Labels are a key/value map. They flow into Docker container labels, so any tool that reads container labels (Traefik, Prometheus relabel, custom scripts) can use them.
 
 ```yaml
-# ✅ Good example with organized labels
 deployments:
   app:
     labels:
-      # Application identification
-      - "app=myapp"
-      - "component=frontend"
-      - "version=v1.2.3"
-
-      # Environment and team
-      - "environment=production"
-      - "team=web"
-
-      # Technical metadata
-      - "monitoring=prometheus"
-      - "backup=enabled"
-      - "criticality=high"
-
-      # Service discovery (e.g., Traefik)
-      - "traefik.enable=true"
-      - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+      app: myapp
+      component: frontend
+      version: v1.2.3
+      environment: production
+      team: web
+      monitoring: prometheus
+      backup: enabled
+      criticality: high
+      "traefik.enable": "true"
+      "traefik.http.routers.app.rule": "Host(`app.example.com`)"
 ```
 
-### Secret Management
+Quote keys that contain dots — YAML treats them as strings only when quoted.
+
+### Secrets
+
+Sensitive values should be created as Ring secrets and referenced by name. They are stored AES-256-GCM-encrypted and decrypted only at deployment time.
 
 ```yaml
-# ✅ Good example with encrypted secret references
 deployments:
   secure-app:
     namespace: production
     environment:
-      # Application configuration (non-sensitive, plain values)
       NODE_ENV: "production"
       LOG_LEVEL: "info"
       PORT: "3000"
 
-      # Sensitive values (encrypted, managed via ring secret create)
       DATABASE_PASSWORD:
         secretRef: "database-password"
       JWT_SECRET:
@@ -582,7 +620,7 @@ deployments:
         secretRef: "external-api-key"
 ```
 
-Create the secrets first:
+Create them once:
 
 ```bash
 ring secret create database-password -n production -v "$DATABASE_PASSWORD"
@@ -590,4 +628,28 @@ ring secret create jwt-secret -n production -v "$JWT_SECRET"
 ring secret create external-api-key -n production -v "$EXTERNAL_API_KEY"
 ```
 
-These examples cover most common use cases. Feel free to adapt them according to your specific needs!
+The server must be started with `RING_SECRET_KEY` set; without it, all secret operations return `500 Internal Server Error`.
+
+### Health checks for rolling updates
+
+Adding a health check is what unlocks the zero-downtime rolling update path. See [managing deployments](getting-started/managing-deployments.md#rolling-update-zero-downtime) for the full lifecycle.
+
+```yaml
+deployments:
+  app:
+    name: app
+    namespace: production
+    runtime: docker
+    image: "myapp:v1.2.3"
+    replicas: 3
+
+    health_checks:
+      - type: http
+        url: "http://localhost:8080/health"
+        interval: "10s"
+        timeout: "5s"
+        threshold: 3
+        on_failure: restart
+```
+
+Health-check duration suffixes: `ms` and `s`. Larger suffixes (`m`, `h`) are not parsed.

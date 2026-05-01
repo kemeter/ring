@@ -1,122 +1,84 @@
-# Getting Started with Ring
+# Getting started with Ring
 
-This guide will help you get Ring up and running on your system and teach you the fundamentals of container orchestration with Ring.
+This guide gets Ring up and running and walks through the fundamentals of orchestration with Ring.
 
 ## Prerequisites
 
-Before starting, make sure you have:
+- Docker installed and running
+- The `ring` binary installed and in your `PATH`
+- Basic familiarity with containers
 
-- ✅ **Docker** installed and running
-- ✅ **Ring** installed and accessible via command line
-- ✅ Basic familiarity with containers and Docker
+If Ring is not installed yet, follow the [installation guide](../installation.md) first.
 
-!!! tip "Not installed yet?"
-    If you haven't installed Ring yet, follow our [installation guide](../installation.md).
+## Initial setup
 
-## System Initialization
-
-### Initialize Ring
-
-The first step is to initialize Ring's database and create the admin user:
+### 1. Initialize the config directory
 
 ```bash
 ring init
 ```
 
-This command will:
-- Create the SQLite database (`ring.db` in the current directory)
-- Set up the database schema
-- Create the default admin user (`admin` / `changeme`)
+This creates `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`) and writes an empty `auth.json`. The command produces no output on success.
 
-Expected output:
-```
-✅ Database initialized successfully
-👤 Admin user created (username: admin, password: changeme)
-🚀 Ring is ready to use!
-```
+> `ring init` does **not** create the database or seed the admin user. That happens when the server runs for the first time.
 
-!!! warning "Security Note"
-    Remember to change the default admin password after initialization!
-
-### Start the Ring Server
-
-Now start the Ring orchestration server:
+### 2. Start the server
 
 ```bash
 ring server start
 ```
 
-The server will:
-- Start on port `3030` by default
-- Use the SQLite database in the current directory
-- Display logs in the console
+On first start, the server runs SQLite migrations, creates `ring.db` in the working directory, and seeds the default admin user `admin` / `changeme`. Set `RUST_LOG=info` to see logs:
 
-Expected output:
-```
-🚀 Ring server starting...
-📊 Database loaded: ring.db
-🌐 Server listening on http://localhost:3030
-✅ Ring server ready!
+```bash
+RUST_LOG=info ring server start
 ```
 
-Keep this terminal open as the server needs to run continuously.
+Keep this terminal open. The server has to stay running.
 
-## Authentication
+### 3. Log in
 
-### Login to Ring
-
-Open a new terminal and authenticate with Ring:
+In another terminal:
 
 ```bash
 ring login --username admin --password changeme
 ```
 
-Expected output:
-```
-✅ Authentication successful
-🔑 Token saved for future commands
-```
+The token is saved to `~/.config/kemeter/ring/auth.json` and reused by subsequent commands.
 
-### Verify Authentication
-
-Test that everything is working:
+### 4. Verify everything works
 
 ```bash
-# Check server health
 curl http://localhost:3030/healthz
+# {"state":"UP"}
 
-# List deployments (should be empty initially)
 ring deployment list
+# (empty list)
 ```
 
-## Basic Concepts
-
-Before creating your first deployment, let's understand Ring's key concepts:
+## Core concepts
 
 ### Deployments
-A **deployment** describes how to run your application:
-- Which container image to use
-- How many replicas (instances) to run
-- Which namespace to deploy to
-- Environment variables and volumes
+
+A deployment describes how to run an application: image, replicas, namespace, environment, volumes, health checks.
 
 ### Namespaces
-**Namespaces** provide logical isolation:
-- Each namespace gets its own Docker network
-- Applications in different namespaces are isolated
-- Common namespaces: `development`, `staging`, `production`
 
-### Workers vs Jobs
-Ring supports two types of deployments:
-- **Workers**: Long-running services (default)
-- **Jobs**: One-time tasks that exit when complete
+Namespaces are logical groups. Each one gets its own Docker network, so deployments in different namespaces are network-isolated by default. Typical names: `development`, `staging`, `production`.
 
-## Configuration Management
+### Workers vs jobs
 
-Ring can be configured using:
+- **Worker** (default) — long-running service. Ring keeps `replicas` instances alive.
+- **Job** — one-shot task. Ring runs it once and records the result.
 
-### YAML Files (Recommended)
+Set `kind: job` to run a job.
+
+## Two ways to drive Ring
+
+### YAML + `ring apply` (recommended)
+
 ```yaml
+# app.yaml
 deployments:
   my-app:
     name: my-app
@@ -126,110 +88,101 @@ deployments:
     namespace: production
 ```
 
+```bash
+ring apply -f app.yaml
+```
+
 ### REST API
+
+The CLI is a thin client over the REST API. You can talk to it directly:
+
 ```bash
 curl -X POST http://localhost:3030/deployments \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name": "my-app", "image": "nginx:latest"}'
+  -d '{"name": "my-app", "image": "nginx:latest", "namespace": "default", "runtime": "docker"}'
 ```
 
-## Understanding Ring's Architecture
+See the [API reference](../api-reference.md) for the full surface.
 
-Ring follows an **API-first design**:
+## Architecture overview
 
-```mermaid
-graph TB
-    CLI[Ring CLI] --> API[REST API]
-    UI[Web UI] --> API
-    Scripts[CI/CD Scripts] --> API
-    API --> Engine[Ring Engine]
-    Engine --> Docker[Docker Runtime]
-    Engine --> DB[(SQLite DB)]
-```
+Ring is a single process that exposes a REST API and runs a reconciliation loop:
 
-- **Ring CLI**: Command-line interface (what you're using)
-- **REST API**: Complete API for all operations
-- **Ring Engine**: Core orchestration logic
-- **Docker Runtime**: Manages actual containers
-- **SQLite Database**: Stores state and configuration
+- **Ring CLI** — command-line client
+- **REST API** — control surface, used by the CLI and any external client
+- **Scheduler** — reconciliation loop that creates, removes and health-checks containers; listens to Docker events to detect crashes
+- **Docker runtime** — default runtime
+- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs
+- **SQLite database** — stores deployments, users, secrets, configs, events
 
-## Your Development Workflow
+## Typical workflow
 
-A typical Ring workflow looks like this:
+1. **Describe** the deployment in YAML
+2. **Apply** with `ring apply -f app.yaml`
+3. **Watch** with `ring deployment list` and `ring deployment events`
+4. **Update** by editing the YAML and re-applying — Ring performs a rolling update
+5. **Scale** by changing `replicas` and re-applying
+6. **Delete** with `ring deployment delete <id>`
 
-1. **Describe** your application in a YAML file
-2. **Deploy** using `ring apply -f app.yaml`
-3. **Monitor** with `ring deployment list`
-4. **Update** by modifying the YAML and re-applying
-5. **Scale** by changing the `replicas` field
-6. **Clean up** with `ring deployment delete`
+## Network isolation
 
-## Network Isolation
-
-Ring automatically creates isolated networks:
+Each namespace gets its own Docker bridge network:
 
 ```bash
-# Each namespace gets its own network
 docker network ls | grep ring
-
-# Example output:
-# ring_development    bridge    local
-# ring_production     bridge    local
-# ring_staging        bridge    local
+# ring-development    bridge    local
+# ring-production     bridge    local
+# ring-staging        bridge    local
 ```
 
-Applications can communicate within the same namespace using container names:
-- `http://web-server:80` (within same namespace)
-- Cross-namespace communication requires external routing
+Containers in the same namespace reach each other by container name (e.g. `http://web-server`). Cross-namespace traffic requires external routing.
 
-## Next Steps
-
-Now that Ring is set up and you understand the basics:
-
-1. **Create your first deployment**: Follow the [first deployment guide](first-deployment.md)
-2. **Learn deployment management**: Read the [managing deployments guide](managing-deployments.md)
-3. **Explore examples**: Check out [practical examples](../examples.md)
-
-## Quick Reference Commands
+## Quick command reference
 
 ```bash
-# Server management
-ring init                    # Initialize Ring
-ring server start           # Start Ring server
+# Server
+ring server start
+ring doctor                        # check Docker / Cloud Hypervisor prerequisites
 
 # Authentication
 ring login --username admin --password changeme
 
-# Deployment management
-ring apply -f app.yaml      # Deploy application
-ring deployment list        # List all deployments
-ring deployment inspect <name>  # Get deployment details
-ring deployment delete <name>   # Delete deployment
+# Deployments
+ring apply -f app.yaml             # create or update from YAML
+ring deployment list               # list deployments
+ring deployment list -o json       # list as JSON for scripting
+ring deployment inspect <id>       # get deployment details
+ring deployment delete <id>        # delete a deployment
 
-# Monitoring
-ring deployment logs <name>     # View logs
-ring deployment events <name>   # View events
+# Observability
+ring deployment logs <id>          # tail logs
+ring deployment events <id>        # show scheduler events
+ring deployment health-checks <id> # show recent health-check results
+ring deployment metrics <id>       # CPU / memory / network stats
 
-# User management
-ring user list              # List users
+# Users
+ring user list
 ring user create --username <name> --password <pass>
 ```
 
 ## Troubleshooting
 
 ### Server won't start
-- Check if port 3030 is available: `sudo ss -tlnp | grep 3030`
-- Verify Docker is running: `docker ps`
-- Check database permissions: `ls -la ring.db`
+
+- Port 3030 already in use: `sudo ss -tlnp | grep 3030` — change the port in `config.toml` (`api.port = 3031`).
+- Docker not running: `docker ps`.
+- Database file permissions: `ls -la ring.db`.
 
 ### Authentication fails
-- Verify server is running: `curl http://localhost:3030/healthz`
-- Check credentials: default is `admin` / `changeme`
-- Re-initialize if needed: `ring init`
+
+- Server running? `curl http://localhost:3030/healthz` should return `{"state":"UP"}`.
+- Default credentials are `admin` / `changeme` — only valid on the first start before they're changed.
 
 ### Commands not found
-- Verify Ring is installed: `ring --version`
-- Check PATH includes Ring binary location
 
-**Ready to deploy your first application?** Continue to the [first deployment guide](first-deployment.md)! 🚀
+- `ring --version` should print the installed version. If not, the binary isn't on `PATH`.
+
+---
+
+**Ready to deploy?** Continue with the [first deployment guide](first-deployment.md).

@@ -1,515 +1,444 @@
-# Command Reference
+# CLI reference
 
-This page documents all available commands in Ring CLI.
+This page documents every Ring CLI subcommand. Run `ring <command> --help` for the canonical list of flags on your installed version.
 
-## Global Commands
+## Global
 
 ### `ring --help`
-Displays general help and the list of available commands.
 
-```bash
-ring --help
-```
+Print the list of subcommands.
 
 ### `ring --version`
-Displays the installed Ring version.
 
-```bash
-ring --version
-```
+Print the installed Ring version.
 
-### Global Options
+### Global options
 
 #### `--context` / `-c`
-Specifies the context to use (environment).
+
+Use a specific context from `config.toml`.
 
 ```bash
 ring --context production deployment list
 ring -c staging deployment list
 ```
 
-## System Management
+## System
 
 ### `ring init`
-Initializes Ring on the local system.
+
+Initialize the Ring config directory.
 
 ```bash
 ring init
 ```
 
-**Function:**
-- Creates the SQLite database
-- Configures necessary directories
-- Creates the default administrator user (`admin` / `changeme`)
+Creates `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`) and writes an empty `auth.json`. Produces no output on success.
 
-**Files created:**
-- `ring.db` - SQLite database (current directory)
+> `ring init` does **not** create the SQLite database or seed the admin user. That happens automatically the first time `ring server start` runs the migrations.
 
-## Server Management
+### `ring doctor`
+
+Run diagnostic checks against the host:
+
+- Docker daemon connectivity
+- Cloud Hypervisor binary (for the alpha runtime)
+- KVM availability (`/dev/kvm`)
+- EFI firmware presence
+- `virtiofsd` binary presence
+
+```bash
+ring doctor
+```
+
+Use this as the first step when something doesn't work as expected.
+
+## Server
 
 ### `ring server start`
-Starts the Ring server.
+
+Start the Ring server.
 
 ```bash
 ring server start
 ```
 
-The server uses the configuration defined in the config files.
+On first start the server runs SQLite migrations, creates `ring.db` in the working directory (override with `RING_DATABASE_PATH`), and seeds the default `admin` / `changeme` user. Set `RUST_LOG=info` to see logs.
 
 ## Authentication
 
 ### `ring login`
-Connects to the Ring server.
+
+Log in to a Ring server. The token is saved in `~/.config/kemeter/ring/auth.json` and reused by subsequent commands.
 
 ```bash
 ring login --username <USERNAME> --password <PASSWORD>
 ```
 
-**Required options:**
-- `--username <USERNAME>` : Username
-- `--password <PASSWORD>` : Password
+**Required:**
+
+- `--username <USERNAME>` / `-u`
+- `--password <PASSWORD>` / `-p`
 
 **Examples:**
+
 ```bash
 ring login --username admin --password changeme
-ring login --username john --password secretpassword
+ring login -u alice -p secret
 ```
 
-## Deployment Management
+## Deployments
 
 ### `ring apply`
-Applies a deployment configuration.
+
+Apply a deployment manifest.
 
 ```bash
-ring apply -f <FILE>
+ring apply -f <FILE> [OPTIONS]
 ```
 
 **Options:**
-- `-f <FILE>`, `--file <FILE>` : YAML/JSON configuration file
-- `--force` : Force immediate replacement, bypassing rolling update
+
+- `-f <FILE>` / `--file <FILE>` — YAML or JSON manifest
+- `-e <FILE>` / `--env-file <FILE>` — load `KEY=VALUE` pairs from a file and use them to interpolate `$VAR` references in the manifest
+- `-d` / `--dry-run` — print what would be sent, without contacting the API
+- `--verbose` — print the full JSON of every deployment that will be sent
+- `--force` — skip the rolling-update path; do an immediate replacement even when health checks are configured
 
 **Examples:**
+
 ```bash
 ring apply -f deployment.yaml
 ring apply -f config.json
-
-# Force immediate replacement (skip rolling update)
-ring apply -f deployment.yaml --force
+ring apply -f app.yaml --env-file .env
+ring apply -f app.yaml --dry-run --verbose
+ring apply -f app.yaml --force
 ```
 
+The manifest can contain a top-level `namespaces:` map and a `deployments:` map. See [the file format section](#file-formats) below.
+
 ### `ring deployment list`
-Lists all deployments.
+
+List deployments. Defaults to all namespaces.
 
 ```bash
 ring deployment list [OPTIONS]
 ```
 
 **Options:**
-- `-n`, `--namespace <NAMESPACE>` : Filter by namespace
-- `-s`, `--status <STATUS>` : Filter by status (can be repeated to match multiple values)
-- `--type <TYPE>` : Filter by deployment type (`worker` or `job`)
+
+- `-n` / `--namespace <NAMESPACE>` — filter by namespace
+- `-s` / `--status <STATUS>` — filter by status (repeatable)
+- `--type <TYPE>` — filter by deployment kind: `worker` or `job`
+- `-o` / `--output <FORMAT>` — `table` (default) or `json`
+
+**Output (table):**
+
+The table has ten columns: `Id`, `Created at`, `Updated at`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
 
 **Examples:**
+
 ```bash
-# All deployments (all namespaces by default)
 ring deployment list
-
-# Specific namespace
 ring deployment list --namespace production
-
-# Specific status
 ring deployment list --status running
-
-# Multiple statuses
 ring deployment list --status running --status pending
-
-# Only jobs
 ring deployment list --type job
-
-# Only workers in production
-ring deployment list --namespace production --type worker
+ring deployment list -o json | jq -r '.[].id'
 ```
 
 ### `ring deployment inspect`
-Displays deployment details.
+
+Show the full state of a deployment.
 
 ```bash
 ring deployment inspect <DEPLOYMENT_ID>
 ```
 
-**Examples:**
-```bash
-ring deployment inspect nginx-demo
-ring deployment inspect web-app-prod
-```
+`<DEPLOYMENT_ID>` is the UUID printed by `ring deployment list`.
 
 ### `ring deployment delete`
-Deletes a deployment.
+
+Delete a deployment. The deployment is marked `deleted` and the scheduler removes its containers on the next tick.
 
 ```bash
 ring deployment delete <DEPLOYMENT_ID>
 ```
 
-**Options:**
-- `--force` : Force deletion without confirmation
-
-**Examples:**
-```bash
-ring deployment delete nginx-demo
-ring deployment delete old-app --force
-```
-
 ### `ring deployment logs`
-Displays logs for a deployment.
+
+Tail the logs of a deployment's containers.
 
 ```bash
 ring deployment logs <DEPLOYMENT_ID> [OPTIONS]
 ```
 
 **Options:**
-- `-f`, `--follow` : Follow log output in real time (polls every 2s)
-- `--tail <N>` : Number of lines to show from the end of the logs (default: 100)
-- `--since <DURATION>` : Show logs since a relative duration (e.g. `30s`, `10m`, `2h`) or RFC3339 timestamp
-- `-c`, `--container <NAME>` : Filter logs by container/instance name
+
+- `-f` / `--follow` — stream new lines (polls every 2 s)
+- `--tail <N>` — last N lines (default: 100)
+- `--since <DURATION>` — relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
+- `-c` / `--container <NAME>` — filter to one instance/container name
 
 **Examples:**
+
 ```bash
-# Show recent logs
 ring deployment logs web-app
-
-# Follow logs in real time
 ring deployment logs web-app --follow
-
-# Last 50 lines
 ring deployment logs web-app --tail 50
-
-# Logs from the last 10 minutes
 ring deployment logs web-app --since 10m
-
-# Logs from a specific container
 ring deployment logs web-app --container web-app-1
 ```
 
 ### `ring deployment events`
-Displays deployment events.
+
+Show scheduler events for a deployment.
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> [OPTIONS]
 ```
 
 **Options:**
-- `--follow`, `-f` : Follow events in real time
-- `--level <LEVEL>`, `-l` : Filter by level (info, warning, error)
-- `--limit <N>` : Limit the number of events (default: 50)
+
+- `-f` / `--follow` — stream new events
+- `-l` / `--level <LEVEL>` — filter by `info`, `warning`, or `error`
+- `--limit <N>` — maximum number of events (default: 50)
 
 **Examples:**
+
 ```bash
-# All events
 ring deployment events web-app
-
-# Follow in real time
 ring deployment events web-app --follow
-
-# Filter errors
 ring deployment events web-app --level error
-
-# Limit to 10 events
 ring deployment events web-app --limit 10
 ```
 
 ### `ring deployment metrics`
-Displays resource usage metrics for a deployment.
+
+Show CPU / memory / network / disk / pid stats for each instance of a deployment.
 
 ```bash
 ring deployment metrics <DEPLOYMENT_ID>
 ```
 
-**Examples:**
+> Metrics are only available for the Docker runtime. Cloud Hypervisor deployments return an empty list.
+
+### `ring deployment health-checks`
+
+Show the most recent health-check results for a deployment.
+
 ```bash
-ring deployment metrics web-app
+ring deployment health-checks <DEPLOYMENT_ID> [OPTIONS]
 ```
 
-**Information displayed:**
-- CPU and memory usage (total and per container)
-- Network I/O (rx/tx bytes and packets)
-- Disk I/O (read/write bytes)
-- Process count per container
+**Options:**
 
-## User Management
+- `--latest` — only the most recent result per instance
+- `--limit <N>` — maximum number of results
+
+## Users
 
 ### `ring user list`
-Lists all users.
 
 ```bash
 ring user list
 ```
 
 ### `ring user create`
-Creates a new user.
 
 ```bash
 ring user create --username <USERNAME> --password <PASSWORD>
 ```
 
-**Required options:**
-- `--username <USERNAME>` : Username
-- `--password <PASSWORD>` : Password
+**Required:**
 
-**Examples:**
-```bash
-ring user create --username alice --password secretpass
-ring user create --username bob --password anotherpass
-```
+- `--username <USERNAME>`
+- `--password <PASSWORD>`
 
 ### `ring user update`
-Updates the currently authenticated user (the one used for `ring login`). At least one of `--username` or `--password` must be provided.
+
+Update the **currently authenticated** user (the one whose token is in `auth.json`). At least one of `--username` or `--password` must be provided. There is no CLI command to update another user; for that, call `PUT /users/{id}` against the API directly.
 
 ```bash
 ring user update [--username <USERNAME>] [--password <NEW_PASSWORD>]
 ```
 
-**Options (at least one required):**
-- `-u`, `--username <USERNAME>` : New username
-- `-p`, `--password <NEW_PASSWORD>` : New password
-
 **Examples:**
+
 ```bash
-# Change password only
-ring user update --password newsecretpass
-
-# Change username only
-ring user update --username alice2
-
-# Change both
-ring user update --username alice --password newsecretpass
+ring user update --password newsecret
+ring user update --username alice
+ring user update --username alice --password newsecret
 ```
 
 ### `ring user delete`
-Deletes a user.
 
 ```bash
 ring user delete <ID>
 ```
 
-**Required arguments:**
-- `<ID>` : User ID (UUID) to delete. Use `ring user list` to find the ID.
+`<ID>` is the user's UUID. Find it with `ring user list`.
 
-**Examples:**
-```bash
-ring user delete 550e8400-e29b-41d4-a716-446655440000
-```
+## Secrets
 
-## Secret Management
+Secrets are AES-256-GCM-encrypted values stored per-namespace. The server must be started with `RING_SECRET_KEY` (a base64-encoded 32-byte key) for any secret operation to succeed; without it, the API returns `500 Internal Server Error`.
 
 ### `ring secret create`
-Creates a new encrypted secret.
 
 ```bash
 ring secret create <NAME> -n <NAMESPACE> -v <VALUE>
 ```
 
-**Required options:**
-- `<NAME>` : Secret name (positional argument)
-- `-n <NAMESPACE>`, `--namespace <NAMESPACE>` : Namespace
-- `-v <VALUE>`, `--value <VALUE>` : Secret value (will be encrypted at rest)
+**Required:**
+
+- `<NAME>` — secret name (positional)
+- `-n` / `--namespace <NAMESPACE>`
+- `-v` / `--value <VALUE>`
 
 **Examples:**
+
 ```bash
 ring secret create database-password -n production -v "s3cret!"
 ring secret create api-key -n staging -v "sk-1234567890"
 ```
 
 ### `ring secret list`
-Lists all secrets (metadata only, values are never displayed).
+
+Lists secret metadata. Values are never returned through the API or the CLI.
 
 ```bash
 ring secret list [OPTIONS]
 ```
 
 **Options:**
-- `-n <NAMESPACE>`, `--namespace <NAMESPACE>` : Filter by namespace
 
-**Examples:**
-```bash
-# All secrets
-ring secret list
-
-# Filter by namespace
-ring secret list -n production
-```
+- `-n` / `--namespace <NAMESPACE>` — filter by namespace
 
 ### `ring secret delete`
-Deletes a secret.
 
 ```bash
 ring secret delete <ID> [OPTIONS]
 ```
 
-**Required options:**
-- `<ID>` : Secret ID (positional argument)
-
 **Options:**
-- `-f`, `--force` : Force deletion even if referenced by deployments
 
-**Examples:**
-```bash
-ring secret delete 550e8400-e29b-41d4-a716-446655440000
-ring secret delete 550e8400-e29b-41d4-a716-446655440000 -f
-```
+- `-f` / `--force` — delete even if referenced by active deployments
 
-If the secret is referenced by active deployments, Ring will list them and ask for confirmation before deleting.
+If the secret is referenced and `--force` is not set, Ring lists the referencing deployments and aborts.
 
-## Configuration Management
+## Configs
+
+A `config` is a named blob (typically a config file or a JSON document) that can be mounted into a deployment via a volume of `type: config`.
+
+The CLI exposes `list`, `inspect`, and `delete`. Creation goes through the REST API (`POST /configs`).
 
 ### `ring config list`
-Lists all configurations.
 
 ```bash
-ring config list
+ring config list [OPTIONS]
 ```
+
+**Options:**
+
+- `-n` / `--namespace <NAMESPACE>`
 
 ### `ring config inspect`
-Displays configuration details.
 
 ```bash
-ring config inspect <CONFIG_KEY>
-```
-
-**Examples:**
-```bash
-ring config inspect database-config
-ring config inspect nginx-conf
+ring config inspect <CONFIG_ID>
 ```
 
 ### `ring config delete`
-Deletes a configuration.
 
 ```bash
-ring config delete <CONFIG_KEY>
+ring config delete <CONFIG_ID>
 ```
 
-**Examples:**
-```bash
-ring config delete old-config
-ring config delete unused-secret
-```
-
-
-## Namespace Management
+## Namespaces
 
 ### `ring namespace create`
-Creates a new namespace.
 
 ```bash
 ring namespace create <NAME>
 ```
 
-**Examples:**
-```bash
-ring namespace create production
-ring namespace create staging
-```
-
-**Function:**
-- Creates a new namespace for isolating deployments
-- Each namespace gets its own Docker network (`ring_<name>`)
+Each namespace gets a dedicated Docker network (`ring-<name>`). Namespaces are also auto-created when a deployment is applied to a non-existent namespace.
 
 ### `ring namespace list`
-Lists all namespaces.
 
 ```bash
 ring namespace list
 ```
 
-**Output:**
-```
-+--------------------------------------+------------+---------------------+
-| Id                                   | Name       | Created at          |
-+--------------------------------------+------------+---------------------+
-| a1b2c3d4-...                         | default    | 2024-01-15 10:00:00 |
-| e5f6g7h8-...                         | production | 2024-01-16 09:00:00 |
-+--------------------------------------+------------+---------------------+
-```
-
 ### `ring namespace prune`
-Removes inactive deployments from a namespace. By default, only deployments in a terminal or failed state are deleted — running and pending deployments are preserved.
+
+Remove inactive deployments from a namespace.
 
 ```bash
 ring namespace prune <NAMESPACE> [--all]
 ```
 
 **Options:**
-- `-a`, `--all` : Delete **all** deployments in the namespace, including running ones. Destructive.
 
-**Prunable statuses (default):**
-`completed`, `failed`, `deleted`, `CrashLoopBackOff`, `ImagePullBackOff`, `CreateContainerError`, `NetworkError`, `ConfigError`, `FileSystemError`, `Error`
+- `-a` / `--all` — delete every deployment in the namespace, including running ones. Destructive.
 
-**Preserved statuses (default):**
-`pending`, `creating`, `running`
+**Prunable statuses (default):** `completed`, `failed`, `deleted`, `crashloopbackoff`, `imagepullbackoff`, `createcontainererror`, `networkerror`, `configerror`, `filesystemerror`, `error`.
+
+**Preserved statuses (default):** `pending`, `creating`, `running`.
 
 **Examples:**
-```bash
-# Clean up failed and completed deployments only
-ring namespace prune development
 
-# Wipe the entire namespace, including running deployments
+```bash
+ring namespace prune development
 ring namespace prune development --all
 ```
 
-!!! tip "Auto-creation"
-    Namespaces are automatically created when you deploy to a namespace that doesn't exist yet. You don't need to create them manually before deploying.
-
-## System Information
+## Node
 
 ### `ring node get`
-Displays current node information.
+
+Display node information.
 
 ```bash
 ring node get
 ```
 
-**Information displayed:**
-- CPU and memory usage
-- Available disk space
-- Docker version
-- Number of active containers
-- Ring statistics
+Returns: `hostname`, `os`, `arch`, `uptime`, `cpu_count`, `memory_total`, `memory_available`, `load_average`.
 
-## Context Management
+## Contexts
+
+A context is a named connection profile in `config.toml`.
 
 ### `ring context`
-Manages Ring configuration contexts. Contexts allow you to switch between multiple Ring server environments.
 
 ```bash
-ring context [PARAMETER]
+ring context [SUBCOMMAND]
 ```
 
-**Parameters:**
-- `configs` (default): List all available contexts
-- `current-context`: Show the currently active context
-- `user-token`: Display the authentication token for the current context
+**Subcommands:**
+
+- `configs` (default) — list all contexts
+- `current-context` — print the currently active context name
+- `user-token` — print the authentication token for the current context
 
 **Examples:**
+
 ```bash
-# List all contexts
 ring context
 ring context configs
-
-# Show active context
 ring context current-context
-
-# Print authentication token
 ring context user-token
 ```
 
-### Configuration Files
+### Configuration files
 
-Contexts are stored in `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`):
+Contexts and tokens live in `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`):
 
-- `config.toml` — Context definitions
-- `auth.json` — Authentication tokens per context
+- `config.toml` — context definitions
+- `auth.json` — authentication tokens per context
 
-**config.toml example:**
+**`config.toml` example:**
+
 ```toml
 [contexts.default]
 current = true
@@ -517,7 +446,6 @@ host = "127.0.0.1"
 api.scheme = "http"
 api.port = 3030
 user.salt = "changeme"
-scheduler.interval = 10
 
 [contexts.production]
 current = false
@@ -525,120 +453,97 @@ host = "prod.example.com"
 api.scheme = "https"
 api.port = 443
 user.salt = "changeme"
+
+[scheduler]
+interval = 10
 ```
 
-### Using Contexts
+### Using contexts
 
 ```bash
-# Use a specific context for a command
 ring --context production deployment list
 ring -c staging server start
-
-# The default context (current = true) is used when no --context flag is provided
 ```
 
-## Environment Variables
+The default context (the one with `current = true`) is used when no `--context` flag is provided.
 
-### Configuration variables
+## Environment variables
+
+### Server
+
+- `RING_DATABASE_PATH` — path to the SQLite file (default: `./ring.db`)
+- `RING_DB_POOL_SIZE` — max SQLite connections (default: `5`)
+- `RING_CONFIG_DIR` — config directory (default: `~/.config/kemeter/ring`)
+- `RING_SECRET_KEY` — base64-encoded 32-byte key for secret encryption. **Required** to use secrets.
+- `RING_SCHEDULER_INTERVAL` — scheduler tick in seconds (overrides `scheduler.interval` in `config.toml`)
+- `RING_APPLY_TIMEOUT` — single-deployment apply timeout in seconds (default: `300`)
+- `RUST_LOG` — log level (e.g. `info`, `debug`, `ring=debug`)
+
+### CLI
+
+- `RING_TOKEN` — bearer token used for API requests. When set and non-empty, the CLI ignores `auth.json`. Useful for CI pipelines that should not depend on `ring login`.
 
 ```bash
-# Database location
-export RING_DATABASE_PATH=/custom/path/ring.db
-
-# Database connection pool size (default: 5)
-export RING_DB_POOL_SIZE=10
-
-# Configuration directory (default: ~/.config/kemeter/ring)
-export RING_CONFIG_DIR=/custom/config/path
-
-# Logging level
-export RUST_LOG=debug  # debug, info, warn, error
-
-# Encryption key for secrets management (required for secrets feature)
+# Generate a server-side key
 export RING_SECRET_KEY="$(openssl rand -base64 32)"
-
-# Scheduler check interval in seconds (overrides config.toml, default: 10)
-export RING_SCHEDULER_INTERVAL=30
-
-# Apply operation timeout in seconds (default: 300)
-export RING_APPLY_TIMEOUT=600
+ring server start
 ```
 
-### Authentication variables
+## Exit codes
+
+| Code | Name          | Triggered when                                                   |
+|------|---------------|------------------------------------------------------------------|
+| `0`  | Success       | The command completed successfully (HTTP 2xx)                    |
+| `1`  | General error | Validation, parsing, or any non-categorized failure              |
+| `2`  | Auth          | API responded with `401 Unauthorized` or `403 Forbidden`         |
+| `3`  | Connection    | CLI could not reach the API (network, DNS, timeout, refused)     |
+| `4`  | Not found     | API responded with `404 Not Found`                               |
+| `5`  | Conflict      | API responded with `409 Conflict` (e.g. resource already exists) |
+
+**Conditional create in a shell script:**
 
 ```bash
-# Bearer token used to authenticate CLI requests. When set, it takes
-# precedence over the token stored in auth.json by `ring login`.
-# Intended for CI pipelines and stateless environments.
-export RING_TOKEN="your-token-here"
-```
-
-When `RING_TOKEN` is set and non-empty, the CLI skips reading `auth.json`
-entirely — useful when running `ring apply` in CI without calling `ring login`
-first.
-
-## Exit Codes
-
-Every Ring CLI command exits with a code that describes what happened, so
-scripts and CI pipelines can react accordingly:
-
-| Code | Name            | Triggered when                                                    |
-|------|-----------------|-------------------------------------------------------------------|
-| `0`  | Success         | The command completed successfully (HTTP 2xx)                     |
-| `1`  | General error   | Validation error, parsing error, or any non-categorized failure   |
-| `2`  | Auth            | The API responded with `401 Unauthorized` or `403 Forbidden`      |
-| `3`  | Connection      | The CLI could not reach the API (network, DNS, timeout, refused)  |
-| `4`  | Not found       | The API responded with `404 Not Found`                            |
-| `5`  | Conflict        | The API responded with `409 Conflict` (e.g. resource exists)      |
-
-**Example — conditional create in a shell script:**
-
-```bash
-ring deployment inspect my-app > /dev/null 2>&1
+ring deployment inspect "$DEPLOYMENT_ID" > /dev/null 2>&1
 case $? in
   0) echo "already deployed, skipping" ;;
-  4) ring apply -f deployment.yaml ;;          # not found → create
+  4) ring apply -f deployment.yaml ;;
   2) echo "auth expired"; exit 1 ;;
   3) echo "API unreachable"; exit 1 ;;
   *) echo "unexpected error"; exit 1 ;;
 esac
 ```
 
-**Notes:**
-- `ring apply` processes multiple deployments; if any fail, the command exits
-  with the code of the *first* failure encountered.
-- Follow modes (`ring deployment logs --follow`) keep running on transient
-  errors and only exit if the initial request fails.
+Notes:
 
-## File Formats
+- `ring apply` processes multiple deployments; if any fail, the command exits with the code of the **first** failure.
+- Follow modes (`logs --follow`, `events --follow`) keep running on transient errors and only exit if the initial request fails.
 
-### Deployment Structure
+## File formats
 
-**Required fields:**
-- `name` : Deployment name
-- `runtime` : Execution engine ("docker")
-- `image` : Container image to use
+### Manifest structure
+
+**Required deployment fields:**
+
+- `name`
+- `runtime` — `docker` or `cloud-hypervisor`
+- `image`
+- `namespace`
 
 **Optional fields:**
-- `namespace` : Namespace (default: "default")
-- `kind` : Deployment type ("worker" or "job", default: "worker")
-- `replicas` : Number of replicas (default: 1, always 1 for jobs)
-- `environment` : Environment variables (plain values or secret references)
-- `volumes` : Volume mounts
-- `labels` : Labels for identification
-- `command` : Custom command to execute
-- `resources` : CPU and memory limits/requests (Kubernetes-like format)
-- `health_checks` : Health check configurations (tcp, http, command)
-- `config` : Image pull policy, registry auth, user settings
 
-**Difference between worker vs job:**
-- **worker** : Permanent service with automatic restart and scaling
-- **job** : Single task that runs once and terminates
+- `kind` — `worker` (default) or `job`
+- `replicas` — default `1`; jobs always run a single instance
+- `environment` — map of plain values or `{ secretRef: <name> }` references
+- `volumes` — list of volume objects (see below)
+- `labels` — key/value map (or list of single-key objects)
+- `command` — list of arguments overriding the image entrypoint
+- `resources` — `limits` / `requests` for CPU and memory
+- `health_checks` — list of `tcp`, `http`, or `command` checks
+- `config` — image pull policy, registry auth, optional `user`
 
-### YAML (Recommended)
+### YAML example
 
 ```yaml
-# Namespaces (optional, created before deployments)
 namespaces:
   production:
     name: production
@@ -648,39 +553,46 @@ deployments:
     name: app-name
     namespace: production
     runtime: docker
-    kind: worker  # "worker" (default) or "job"
-    image: "nginx:latest"
-    replicas: 1
+    kind: worker            # "worker" (default) or "job"
+    image: "nginx:1.25"
+    replicas: 3
+
     environment:
       ENV_VAR: "value"
-      # Reference an encrypted secret (must exist in same namespace)
       DB_PASSWORD:
         secretRef: "database-password"
+
     volumes:
-      - "/host:/container"
+      - type: bind
+        source: /var/lib/app
+        destination: /data
+        driver: local
+        permission: rw
+
     labels:
-      - "key=value"
-    # Optional: override the image entrypoint/command
+      app: app-name
+      tier: backend
+
     command:
       - "/bin/sh"
       - "-c"
       - "exec myapp --port $PORT"
-    # Optional: CPU and memory limits/requests (Kubernetes-like)
+
     resources:
       limits:
-        cpu: "500m"        # 500 millicores = 0.5 CPU
+        cpu: "500m"          # 500 millicores = 0.5 CPU
         memory: "512Mi"
       requests:
         cpu: "100m"
         memory: "128Mi"
-    # Optional: health checks (tcp, http, or command)
+
     health_checks:
       - type: http
         url: "http://localhost:8080/health"
         interval: "30s"
         timeout: "5s"
-        threshold: 3          # default: 3
-        on_failure: restart   # restart | stop | alert
+        threshold: 3         # default: 3
+        on_failure: restart  # restart | stop | alert
       - type: tcp
         port: 5432
         interval: "10s"
@@ -693,23 +605,57 @@ deployments:
         on_failure: restart
 ```
 
-**`resources` details:**
-- `limits` : hard cap the container cannot exceed (CPU throttled, OOM-killed on memory overage)
-- `requests` : minimum the scheduler guarantees
-- CPU values accept millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`)
-- Memory values accept raw bytes or suffixes (`Ki`, `Mi`, `Gi`, ...)
+### Volumes
+
+Three `type` values are supported:
+
+- `bind` — host path mount
+- `volume` — named Docker volume
+- `config` — file mounted from a Ring config
+
+Required fields: `type`, `source`, `destination`. Optional: `driver` (`local` or `nfs`, default `local`), `permission` (`ro` or `rw`, default `rw`).
+
+```yaml
+volumes:
+  - type: bind
+    source: /etc/nginx/conf.d/custom.conf
+    destination: /etc/nginx/conf.d/custom.conf
+    driver: local
+    permission: ro
+
+  - type: volume
+    source: app-data
+    destination: /data
+    driver: local
+    permission: rw
+
+  - type: config
+    source: nginx-config       # `name` of a Ring config in the same namespace
+    destination: /etc/nginx/conf.d/site.conf
+    driver: local
+    permission: ro
+```
+
+### Resources
+
+- `limits` — hard cap (CPU throttled, OOM-killed on memory overage)
+- `requests` — minimum the scheduler guarantees
+- CPU values: millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`)
+- Memory values: raw bytes or `Ki` / `Mi` / `Gi` suffixes
 - Both `limits` and `requests` are optional; within each, `cpu` and `memory` are also optional
 
-**`health_checks` details:**
-- `type: tcp` : checks a TCP port is open (requires `port`)
-- `type: http` : issues an HTTP GET and expects a 2xx response (requires `url`)
-- `type: command` : runs a shell command inside the container and expects exit code 0 (requires `command`)
-- `interval` and `timeout` use duration suffixes (`ms`, `s`)
-- `threshold` : consecutive failures before `on_failure` triggers (default: 3)
-- `on_failure` : `restart` (restart the container), `stop` (stop it), or `alert` (log an event only)
+### Health checks
 
-!!! info "Namespaces in YAML"
-    The `namespaces` section is optional. When present, namespaces are created before deployments are processed. If a namespace already exists, it is silently skipped.
+- `type: tcp` — checks a TCP port is open. Requires `port`.
+- `type: http` — issues an HTTP GET and expects a 2xx response. Requires `url`.
+- `type: command` — runs a shell command inside the container and expects exit code 0. Requires `command`.
+- `interval` and `timeout` use duration suffixes `ms` and `s`. `m` and `h` are not supported.
+- `threshold` — consecutive failures before `on_failure` triggers (default: 3).
+- `on_failure` — `restart` (restart the container), `stop` (stop it), or `alert` (log an event only).
+
+### Namespaces in YAML
+
+The top-level `namespaces:` section is optional. When present, namespaces are created before deployments are processed. If a namespace already exists, it is silently skipped. Namespaces are also auto-created on first deployment.
 
 ### JSON
 
@@ -720,30 +666,36 @@ deployments:
   "namespace": "default",
   "kind": "worker",
   "replicas": 1,
-  "image": "nginx:latest",
+  "image": "nginx:1.25",
   "labels": {},
   "environment": {
     "ENV_VAR": "value",
     "DB_PASSWORD": { "secretRef": "database-password" }
   },
-  "volumes": ["/host:/container"]
+  "volumes": [
+    {
+      "type": "bind",
+      "source": "/var/lib/app",
+      "destination": "/data",
+      "driver": "local",
+      "permission": "rw"
+    }
+  ]
 }
 ```
 
-## Patterns and Examples
+## Patterns
 
-### Using variables
+### Variable interpolation
+
+`ring apply` interpolates `$VAR` references in string fields (image, namespace, name, environment values, command arguments) from your shell environment, or from a file passed with `--env-file`.
 
 ```bash
-# Environment variables
 export APP_VERSION=v1.2.3
 export NAMESPACE=production
-
-# YAML files natively support variables
 ring apply -f template.yaml
 ```
 
-**template.yaml:**
 ```yaml
 deployments:
   app:
@@ -753,58 +705,46 @@ deployments:
     replicas: 3
 ```
 
-### Automation scripts
+### CI deployment script
 
 ```bash
 #!/bin/bash
-# deploy.sh
+set -euo pipefail
 
-set -e
+# Use a token-based auth flow rather than `ring login`
+export RING_TOKEN="$RING_API_TOKEN"
 
-# Connection
-ring login --username $RING_USER --password $RING_PASSWORD
-
-# Deployment
 ring apply -f production.yaml
-
-# Verification
 ring deployment list --namespace production
 ```
 
-
 ## Troubleshooting
 
-### Diagnostic commands
+### Diagnostics
 
 ```bash
-# Check connectivity
+ring doctor
 curl http://localhost:3030/healthz
-
-# Detailed logs
 RUST_LOG=debug ring server start
-
-# Docker status
 docker ps --filter "label=ring_deployment"
-
-# Ring networks
-docker network ls | grep ring_
+docker network ls | grep '^.\+ring-'
 ```
 
 ### Reset
 
 ```bash
-# Stop all deployments (list returns all namespaces by default)
-ring deployment list | awk 'NR>1{print $1}' | xargs -I {} ring deployment delete {}
+# List all deployment IDs as JSON, then delete each one
+ring deployment list -o json | jq -r '.[].id' | xargs -I {} ring deployment delete {}
 
-# Clean Ring containers
-docker ps -a --filter "label=ring_deployment" -q | xargs docker rm -f
+# Force-stop everything Ring-labelled at the Docker level
+docker ps -a --filter "label=ring_deployment" -q | xargs -r docker rm -f
 
-# Reset Ring
-rm -f ring.db
-ring init
+# Wipe the database (server must be stopped first)
+rm -f ring.db ring.db-shm ring.db-wal
 ```
 
-For more help on a specific command, use:
+For a single-command help on any subcommand:
+
 ```bash
 ring <command> --help
 ```

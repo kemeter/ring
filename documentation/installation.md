@@ -6,22 +6,23 @@ This guide walks you through installing Ring on your system.
 
 Ring requires:
 
-- **Docker**: [Official installation guide](https://docs.docker.com/get-docker/)
-- **Rust** (for compilation): [Rust installation](https://rustup.rs/)
+- **Docker** — [official installation guide](https://docs.docker.com/get-docker/)
+- **Rust 1.85 or later** (for compilation) — Ring uses edition 2024. Install via [rustup](https://rustup.rs/).
 
-!!! tip "Quick verification"
-    ```bash
-    docker --version
-    rustc --version  # If compiling from source
-    ```
+Quick verification:
+
+```bash
+docker --version
+rustc --version  # if compiling from source
+```
 
 ## Installing Ring
 
-### Option 1: Pre-compiled Binary (Recommended)
+### Option 1: pre-compiled binary
 
-*Note: Pre-compiled binaries will be available soon.*
+Pre-compiled binaries are not yet published. Compile from source for now.
 
-### Option 2: Compile from Source
+### Option 2: compile from source
 
 ```bash
 # Clone the repository
@@ -38,20 +39,18 @@ sudo yum install openssl-devel
 # Install system dependencies (macOS with Homebrew)
 brew install openssl pkg-config
 
-# Compile Ring
+# Compile Ring (needs Rust 1.85+)
 cargo build --release
 
 # Install the binary
 sudo cp target/release/ring /usr/local/bin/
 ```
 
-### Option 3: Docker (Development)
+### Option 3: Docker (development)
 
 ```bash
-# Build Ring Docker image
 docker build -t ring .
 
-# Run Ring in a container
 docker run -d \
   --name ring-server \
   -p 3030:3030 \
@@ -60,77 +59,56 @@ docker run -d \
   ring
 ```
 
-!!! warning "Docker Socket"
-    When running Ring in Docker, mounting the Docker socket allows Ring to manage containers on the host.
+> **Docker socket warning** — mounting `/var/run/docker.sock` gives Ring full control over the host's Docker daemon. Treat the Ring container as privileged.
 
 ## Verification
 
-### Check Ring Installation
-
 ```bash
-# Check Ring version
 ring --version
-
-# Verify Docker access
 docker ps
 ```
 
-### Test Ring Server
+## Initial setup
+
+### 1. Initialize the config directory
 
 ```bash
-# Initialize Ring
 ring init
+```
 
-# Start Ring server
+This creates `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR` if set) and writes an empty `auth.json`. **It does not create the database or seed the admin user** — that happens on the first `ring server start`.
+
+### 2. Start the server
+
+```bash
 ring server start
 ```
 
-The server should start on `http://localhost:3030`.
+On first start, the server:
 
-### Health Check
+- Listens on `127.0.0.1:3030` (configurable via `config.toml`)
+- Runs SQLite migrations to create `ring.db` in the working directory (override with `RING_DATABASE_PATH`)
+- Seeds the default admin user `admin` / `changeme`
+- Logs to stdout (set `RUST_LOG=info` for visibility)
+
+### 3. Check the API is up
 
 ```bash
-# Test the API
 curl http://localhost:3030/healthz
-# Expected: {"state":"UP"}
+# {"state":"UP"}
 ```
 
-## Initial Configuration
-
-### Initialize the Database
-
-```bash
-ring init
-```
-
-This command:
-- Creates the SQLite database (`ring.db`)
-- Creates the default admin user (`admin` / `changeme`)
-
-### Start the Server
-
-```bash
-ring server start
-```
-
-Ring server will:
-- Listen on port `3030` by default
-- Use the SQLite database in the current directory
-- Log activity to the console
-
-### Login
+### 4. Log in
 
 ```bash
 ring login --username admin --password changeme
 ```
 
-!!! tip "Change Default Password"
-    For security, change the default admin password immediately:
-    ```bash
-    ring user update --username admin --password "your-secure-password"
-    ```
+The token is stored in `~/.config/kemeter/ring/auth.json` and reused by subsequent CLI commands.
 
-## Running as a Service
+> **Change the default password immediately.** `ring user update --password "your-secure-password"` updates the currently authenticated user (whose token is in `auth.json`). The `--username` flag also lets you rename the admin account at the same time.
+
+## Running as a service
 
 ### systemd (Linux)
 
@@ -139,7 +117,7 @@ Create a service file:
 ```bash
 sudo tee /etc/systemd/system/ring.service > /dev/null <<EOF
 [Unit]
-Description=Ring Container Orchestrator
+Description=Ring container orchestrator
 After=docker.service
 Requires=docker.service
 
@@ -148,6 +126,7 @@ Type=simple
 User=root
 WorkingDirectory=/opt/ring
 Environment=RING_SECRET_KEY=your-base64-encoded-key
+Environment=RUST_LOG=info
 ExecStart=/usr/local/bin/ring server start
 Restart=always
 RestartSec=10
@@ -160,15 +139,12 @@ EOF
 Enable and start:
 
 ```bash
-# Create working directory
 sudo mkdir -p /opt/ring
 sudo chown $(whoami):$(whoami) /opt/ring
 
-# Initialize Ring in the service directory
 cd /opt/ring
 ring init
 
-# Enable and start service
 sudo systemctl enable ring
 sudo systemctl start ring
 sudo systemctl status ring
@@ -176,9 +152,8 @@ sudo systemctl status ring
 
 ### Docker Compose
 
-```yaml title="docker-compose.yml"
-version: '3.8'
-
+```yaml
+# compose.yaml
 services:
   ring:
     build: .
@@ -193,115 +168,102 @@ services:
       - RING_SECRET_KEY=${RING_SECRET_KEY}
 ```
 
-## Configuration Options
+## Configuration
 
-### Environment Variables
+### config.toml
 
-- `RING_DATABASE_PATH`: Path to SQLite database file (default: `./ring.db`)
-- `RING_DB_POOL_SIZE`: Maximum database connections in the pool (default: `5`)
-- `RING_CONFIG_DIR`: Configuration directory path (default: `~/.config/kemeter/ring`)
-- `RING_SECRET_KEY`: Encryption key for secrets management (32 bytes, base64-encoded). Required to use the secrets feature.
-- `RING_APPLY_TIMEOUT`: Timeout in seconds for apply operations (default: `300`)
-- `RING_SCHEDULER_INTERVAL`: Scheduler check interval in seconds (overrides config.toml value, default: `10`)
+Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) for client and server settings. See the [CLI reference](reference.md) for the full schema. The bind address and port live there.
 
-#### Generating a secret key
+### Environment variables
+
+- `RING_DATABASE_PATH` — path to the SQLite database file (default: `./ring.db`)
+- `RING_DB_POOL_SIZE` — maximum SQLite connections in the pool (default: `5`)
+- `RING_CONFIG_DIR` — config directory path (default: `~/.config/kemeter/ring`)
+- `RING_SECRET_KEY` — 32-byte base64-encoded encryption key for the secrets feature. **Required** to create or read secrets — without it, the server returns `500` on secret endpoints.
+- `RING_APPLY_TIMEOUT` — timeout in seconds for a single scheduler `apply` cycle (default: `300`)
+- `RING_SCHEDULER_INTERVAL` — scheduler tick interval in seconds (overrides `scheduler.interval` in `config.toml`)
+- `RUST_LOG` — log level (e.g. `RUST_LOG=info` or `RUST_LOG=ring=debug`)
+
+#### Generating the secret key
 
 ```bash
-# Generate a random 32-byte key, base64-encoded
 openssl rand -base64 32
 ```
 
-Set it before starting the server:
+Export it before starting the server:
 
 ```bash
 export RING_SECRET_KEY="your-base64-encoded-key"
 ring server start
 ```
 
-!!! warning "Key Management"
-    Store this key securely. If lost, all encrypted secrets become unrecoverable. If compromised, rotate it and recreate all secrets.
-
-### Command Line Options
-
-The Ring server currently uses default settings. Configuration options will be expanded in future versions.
+> **Key management** — store this key securely. If lost, encrypted secrets become unrecoverable. If leaked, rotate it and recreate every secret.
 
 ## Troubleshooting
 
-### Common Issues
+### "Failed to connect to Docker daemon"
 
-#### "Failed to connect to Docker daemon"
+Docker is not running, or the user lacks permissions.
 
-**Cause**: Docker is not running or user lacks permissions.
-
-**Solution**:
 ```bash
-# Start Docker
 sudo systemctl start docker
-
-# Add user to docker group
-sudo usermod -aG docker $USER
-# Then logout and login again
+sudo usermod -aG docker $USER  # then log out and back in
 ```
 
-#### "Permission denied" on `/var/run/docker.sock`
+### "Permission denied" on `/var/run/docker.sock`
 
-**Cause**: User not in docker group.
+User is not in the `docker` group.
 
-**Solution**:
 ```bash
-sudo usermod -aG docker $USER
-# Logout and login again
+sudo usermod -aG docker $USER  # then log out and back in
 ```
 
-#### "Port 3030 already in use"
+### "Port 3030 already in use"
 
-**Cause**: Another service is using port 3030.
+Another service is bound to 3030. Change the port in `config.toml`:
 
-**Solution**:
+```toml
+[contexts.default]
+api.port = 3031
+```
+
+Or find and stop the conflicting process:
+
 ```bash
-# Find the process using port 3030
 sudo ss -tlnp | grep 3030
-
-# Stop the conflicting service or use a different port
-# (Port configuration will be available in future versions)
 ```
 
-### Logs and Debugging
+### Run `ring doctor`
+
+`ring doctor` checks Docker connectivity and Cloud Hypervisor prerequisites (binary, KVM, firmware, virtiofsd). Use it as a first-step diagnostic.
+
+### Logs
 
 ```bash
-# Check Ring server logs (if running as service)
+# Service mode
 sudo journalctl -u ring -f
 
-# Test Docker connectivity
-docker ps
-
-# Verify Ring database
-ls -la ring.db
+# Foreground
+RUST_LOG=info ring server start
 ```
 
-## Next Steps
+## Next steps
 
-Now that Ring is installed:
+1. [Getting started](getting-started/index.md)
+2. [Your first deployment](getting-started/first-deployment.md)
+3. [Examples](examples.md)
 
-1. Follow the [Getting Started guide](getting-started/index.md)
-2. Create your [first deployment](getting-started/first-deployment.md)
-3. Explore [examples](examples.md)
-
-## Uninstallation
-
-### Remove Ring Binary
+## Uninstall
 
 ```bash
+# Remove binary
 sudo rm /usr/local/bin/ring
-```
 
-### Remove Data
+# Remove data
+rm -rf ring.db ring.db-shm ring.db-wal
+rm -rf ~/.config/kemeter/ring
 
-```bash
-# Remove database and data
-rm -rf ring.db
-
-# Remove service (if installed)
+# Remove systemd service
 sudo systemctl stop ring
 sudo systemctl disable ring
 sudo rm /etc/systemd/system/ring.service

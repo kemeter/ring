@@ -1,27 +1,17 @@
-# Managing Deployments
+# Managing deployments
 
-Learn how to efficiently manage your Ring deployments: updating, scaling, monitoring, and troubleshooting.
+Update, scale, monitor, and clean up Ring deployments.
 
-## Deployment Lifecycle
+## Lifecycle
 
-```mermaid
-graph LR
-    A[Configuration] --> B[Deployment]
-    B --> C[Running]
-    C --> D[Update]
-    D --> C
-    C --> E[Scaling]
-    E --> C
-    C --> F[Deletion]
-```
+A deployment goes through these states: `pending` → `creating` → `running` → either `deleted` (operator), `crashloopbackoff` (too many crashes), `failed` (rollout failed), or `completed` (jobs only). The scheduler reconciles the desired state on every tick.
 
-## Image Version Management
+## Updating an image
 
-### Updating an Application
+Suppose you have:
 
-Suppose you have this initial configuration:
-
-```yaml title="app.yaml"
+```yaml
+# app.yaml
 deployments:
   web-app:
     name: web-app
@@ -31,15 +21,15 @@ deployments:
     replicas: 2
 ```
 
-To update to a new version:
+Bump the version:
 
-```yaml title="app.yaml"
+```yaml
 deployments:
   web-app:
     name: web-app
     namespace: production
     runtime: docker
-    image: "nginx:1.21"  # ← New version
+    image: "nginx:1.21"   # was 1.20
     replicas: 2
 ```
 
@@ -47,20 +37,13 @@ deployments:
 ring apply -f app.yaml
 ```
 
-Ring supports two update strategies depending on whether health checks are configured.
+Ring picks one of two strategies depending on whether health checks are configured.
 
-### Rolling Update (Zero-Downtime)
+### Rolling update (zero downtime)
 
-When a deployment has **health checks configured**, `ring apply` performs a rolling update automatically. Containers are replaced one by one with no service interruption:
+When the deployment has at least one health check, `ring apply` performs a rolling update. The new manifest creates a child deployment; containers are swapped one by one as the new ones pass their health checks; the parent deployment is removed once all its instances are gone. Traffic is served by the old containers throughout.
 
-1. A new container with the new image is started
-2. Ring waits for it to pass health checks
-3. One old container is removed
-4. Steps 1-3 repeat until all replicas run the new image
-
-During the rollout, the old deployment stays in `Running` status — traffic continues to be served by the old containers until new ones are confirmed healthy.
-
-```yaml title="app.yaml"
+```yaml
 deployments:
   web-app:
     name: web-app
@@ -80,107 +63,81 @@ deployments:
 
 ```bash
 ring apply -f app.yaml
+ring deployment events <DEPLOYMENT_ID> --follow
 ```
 
-You can follow the rollout progress in real-time:
+If the new container fails health checks, the rollout stops, the old containers stay running, and the new deployment is marked `failed`.
+
+Rolling updates require:
+
+- at least one health check configured
+- exactly one active deployment with the same name and namespace
+- the `--force` flag is **not** set on `ring apply`
+
+If any of these conditions fails, Ring falls back to immediate replacement.
+
+### Immediate replacement
+
+Without health checks, or with `--force`, Ring stops all old containers and creates new ones. Expect a brief downtime.
 
 ```bash
-ring deployment events web-app --follow
-```
-
-#### Automatic Rollback on Failure
-
-If a new container fails its health checks, the rollout **stops immediately**. The old containers remain running and unaffected — no manual intervention is needed to keep the service available. The new deployment is marked as `Failed`.
-
-#### Prerequisites
-
-Rolling updates require **all** of the following:
-
-- At least one health check configured on the deployment
-- Exactly one active deployment with the same name and namespace
-- The `--force` flag is **not** used
-
-If any condition is not met, Ring falls back to immediate replacement.
-
-### Immediate Replacement
-
-Without health checks, or when the `--force` flag is used, Ring performs an immediate replacement:
-
-1. All old containers are stopped
-2. New containers are created with the new image
-3. The number of replicas is maintained
-
-```bash
-# Force immediate replacement even with health checks
 ring apply -f app.yaml --force
 ```
 
-!!! warning "Service Interruption"
-    Immediate replacement causes a brief downtime between old containers stopping and new ones becoming ready. Use health checks to enable rolling updates and avoid this.
-
-### Image Pull Strategies
+### Image pull policy
 
 ```yaml
 deployments:
   app:
-    # ... other parameters
     config:
-      image_pull_policy: "Always"        # Always download the image
+      image_pull_policy: "Always"        # always pull
       # or
-      image_pull_policy: "IfNotPresent"  # Download only if absent
+      image_pull_policy: "IfNotPresent"  # pull only if not present locally
 ```
 
-**Recommendations:**
-- **Production**: `IfNotPresent` with versioned tags
-- **Development**: `Always` with tags like `latest`
+Recommendations:
 
-## Application Scaling
+- **Production** — `IfNotPresent` with pinned tags (`v1.2.3`).
+- **Development** — `Always` if you push to a moving tag like `latest`.
 
-### Horizontal Scaling
+## Scaling
 
-```bash
-# Method 1: Modify YAML file
-# Change replicas: 2 to replicas: 5
-ring apply -f app.yaml
+Edit `replicas` in the manifest and re-apply. There is no "scale" endpoint — `replicas` is just a field on the deployment.
 
-# Method 2: REST API
-curl -X PUT http://localhost:3030/deployments/web-app \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"replicas": 5}'
-```
-
-### Monitoring Scaling
-
-```bash
-# Follow deployment in real-time
-ring deployment events web-app --follow
-
-# Check status
-ring deployment inspect web-app
-```
-
-## Namespace Management
-
-### Organization by Environment
-
-```yaml title="environments.yaml"
+```yaml
 deployments:
-  # Development environment
+  web-app:
+    name: web-app
+    namespace: production
+    image: "nginx:1.21"
+    replicas: 5
+```
+
+```bash
+ring apply -f app.yaml
+ring deployment events <DEPLOYMENT_ID> --follow
+ring deployment inspect <DEPLOYMENT_ID>
+```
+
+## Namespaces
+
+### Multi-environment manifests
+
+```yaml
+# environments.yaml
+deployments:
   dev-app:
     name: my-app
     namespace: development
     image: "myapp:dev"
     replicas: 1
 
-  # Test environment
   staging-app:
     name: my-app
     namespace: staging
     image: "myapp:staging"
     replicas: 2
 
-  # Production environment
   prod-app:
     name: my-app
     namespace: production
@@ -188,69 +145,66 @@ deployments:
     replicas: 5
 ```
 
-### Network Isolation
+### Network isolation
 
-Namespaces automatically create isolated Docker networks:
+Each namespace gets its own Docker bridge network:
 
 ```bash
-# List Ring networks
 docker network ls | grep ring
-
-# Example output:
-# ring_development    bridge    local
-# ring_staging        bridge    local
-# ring_production     bridge    local
+# ring-development    bridge    local
+# ring-staging        bridge    local
+# ring-production     bridge    local
 ```
 
-## Monitoring and Observability
+Containers in the same namespace reach each other by container name. Cross-namespace traffic must go through external routing.
 
-### Application Logs
+## Observability
+
+### Logs
 
 ```bash
-# Real-time logs (SSE streaming)
-ring deployment logs web-app --follow
+# Stream
+ring deployment logs <DEPLOYMENT_ID> --follow
 
 # Last 100 lines
-ring deployment logs web-app --tail 100
+ring deployment logs <DEPLOYMENT_ID> --tail 100
 
-# Logs from last 10 minutes
-ring deployment logs web-app --since 10m
+# Since a relative duration or RFC3339 timestamp
+ring deployment logs <DEPLOYMENT_ID> --since 10m
+ring deployment logs <DEPLOYMENT_ID> --since 2026-04-01T12:00:00Z
 
-# Filter by container name
-ring deployment logs web-app --container web-app-1
+# Filter to one container/instance
+ring deployment logs <DEPLOYMENT_ID> --container web-app-1
 ```
 
-### System Events
+### Events
 
 ```bash
-# View complete history
-ring deployment events web-app
-
-# Filter by event type
-ring deployment events web-app --type error
-
-# Follow in real-time
-ring deployment events web-app --follow
+ring deployment events <DEPLOYMENT_ID>
+ring deployment events <DEPLOYMENT_ID> --level error
+ring deployment events <DEPLOYMENT_ID> --follow
+ring deployment events <DEPLOYMENT_ID> --limit 100
 ```
 
-### Container Metrics
+Levels are `info`, `warning`, `error`.
+
+### Health-check history
 
 ```bash
-# Detailed resource usage for a deployment
-ring deployment metrics web-app
-
-# Node-level information
-ring node get
-
-# Status of all deployments (all namespaces by default)
-ring deployment list
+ring deployment health-checks <DEPLOYMENT_ID>
 ```
 
-## Advanced Configuration
+### Container metrics
 
-### Environment Variables and Secrets
+```bash
+ring deployment metrics <DEPLOYMENT_ID>   # CPU / memory / network / disk per instance
+ring node get                              # node-level info
+ring deployment list                       # all deployments, all namespaces
+```
 
-```yaml title="app-with-secrets.yaml"
+## Environment variables and secrets
+
+```yaml
 deployments:
   secure-app:
     name: secure-app
@@ -263,30 +217,36 @@ deployments:
       DATABASE_HOST: "prod-db.company.com"
       DATABASE_PORT: "5432"
       LOG_LEVEL: "info"
-      REDIS_URL: "redis://redis.production:6379"
 
-      # References to encrypted secrets (managed via ring secret create)
+      # References to encrypted secrets (created via `ring secret create`)
       DATABASE_PASSWORD:
         secretRef: "database-password"
       API_KEY:
         secretRef: "api-key"
 ```
 
-Ring supports two ways to define environment variables:
+- `KEY: "value"` — passed as-is to the container.
+- `KEY: { secretRef: "name" }` — references an encrypted secret in the same namespace; decrypted at deployment time. The deployment fails with an `error` event if the secret is missing.
 
-- **Plain values**: `KEY: "value"` — passed directly to the container
-- **Secret references**: `KEY: { secretRef: "name" }` — references an encrypted secret stored in Ring. The secret must exist in the same namespace as the deployment. It is decrypted and injected at deployment time.
-
-To create the secrets referenced above:
+Create the referenced secrets:
 
 ```bash
 ring secret create database-password -n production -v "s3cret-p@ss"
 ring secret create api-key -n production -v "sk-1234567890"
 ```
 
-### Persistent Volumes
+`ring secret create` requires `RING_SECRET_KEY` to be set on the **server**.
 
-```yaml title="app-with-storage.yaml"
+## Volumes
+
+Volumes are objects, not Docker-style strings. Three `type` values are supported:
+
+- `bind` — host path mount
+- `volume` — named Docker volume (driver `local` or `nfs`)
+- `config` — file from a `ring config` entry, mounted as a file
+
+```yaml
+# app-with-storage.yaml
 deployments:
   data-app:
     name: data-app
@@ -295,24 +255,37 @@ deployments:
     replicas: 1
 
     volumes:
-      # Persistent storage
-      - "/var/lib/ring/postgres:/var/lib/postgresql/data"
+      - type: bind
+        source: /var/lib/ring/postgres
+        destination: /var/lib/postgresql/data
+        driver: local
+        permission: rw
 
-      # Configuration
-      - "/etc/postgres/custom.conf:/etc/postgresql/postgresql.conf"
+      - type: bind
+        source: /etc/postgres/custom.conf
+        destination: /etc/postgresql/postgresql.conf
+        driver: local
+        permission: ro
 
-      # Logs
-      - "/var/log/postgres:/var/log/postgresql"
+      - type: bind
+        source: /var/log/postgres
+        destination: /var/log/postgresql
+        driver: local
+        permission: rw
 
     environment:
       POSTGRES_DB: "myapp"
       POSTGRES_USER: "appuser"
-      POSTGRES_PASSWORD: "$POSTGRES_PASSWORD"
+      POSTGRES_PASSWORD:
+        secretRef: "postgres-password"
 ```
 
-### Private Image Registries
+`permission` accepts `ro` and `rw`.
 
-```yaml title="private-registry.yaml"
+## Private image registries
+
+```yaml
+# private-registry.yaml
 deployments:
   private-app:
     name: private-app
@@ -321,75 +294,63 @@ deployments:
     replicas: 2
 
     config:
+      server: "registry.company.com"
       username: "registry-user"
       password: "$REGISTRY_PASSWORD"
       image_pull_policy: "Always"
 ```
 
+`$REGISTRY_PASSWORD` is interpolated by `ring apply` from your shell environment (or from a file passed via `--env-file`).
+
 ## Troubleshooting
 
-### Diagnosing a Failed Deployment
+### Diagnose a failed deployment
 
 ```bash
-# 1. Check general status
 ring deployment list
+ring deployment inspect <DEPLOYMENT_ID>
+ring deployment logs <DEPLOYMENT_ID> --tail 50
+ring deployment events <DEPLOYMENT_ID>
 
-# 2. Inspect the problematic deployment
-ring deployment inspect problematic-app
-
-# 3. Check logs
-ring deployment logs problematic-app --tail 50
-
-# 4. Check events
-ring deployment events problematic-app
-
-# 5. Check Docker directly
-docker ps --filter "label=ring.deployment=problematic-app"
-docker logs container_id
+# Check Docker directly
+docker ps --filter "label=ring_deployment=<DEPLOYMENT_ID>"
+docker logs <CONTAINER_ID>
 ```
 
-### Common Issues
+`ring doctor` checks Docker connectivity and Cloud Hypervisor prerequisites.
 
-#### Image Not Found
-```bash
+### Image pull failures
+
+```
 Error: Failed to pull image 'myapp:latest'
 ```
 
-**Solutions:**
-- Verify the image exists: `docker pull myapp:latest`
-- Configure authentication for private registries
-- Check network connectivity
+- Test directly: `docker pull myapp:latest`
+- For private registries, set `config.username` / `config.password`
+- Check network connectivity from the Ring host
 
-#### Insufficient Resources
-```bash
-Error: Cannot start container: no space left on device
-```
+### Resource exhaustion
 
-**Solutions:**
 ```bash
-# Clean unused images
 docker image prune
-
-# Clean stopped containers
 docker container prune
-
-# Clean unused volumes
 docker volume prune
 ```
 
-#### Resource Conflicts
+### `CrashLoopBackOff`
+
+The container has exited too many times in a row. Ring stops respawning it once `restart_count` reaches the cap. Inspect with:
+
 ```bash
-Error: Cannot start container
+ring deployment events <DEPLOYMENT_ID> --level error
+ring deployment logs <DEPLOYMENT_ID>
 ```
 
-**Solutions:**
-- Check for container name conflicts
-- Stop conflicting services
-- Use different namespaces
+Fix the underlying issue, then `ring apply` again to reset the deployment.
 
-## Cleanup and Maintenance
+## Cleanup
 
-### Namespace Cleanup
+### Remove deployments in a namespace
 
 ```bash
 # Remove only stopped/failed deployments (safe default)
@@ -397,52 +358,42 @@ ring namespace prune development
 
 # Remove everything, including running deployments
 ring namespace prune development --all
-
-# Confirm deletion
-ring deployment list --namespace development
 ```
 
-### Docker Resource Cleanup
+### Remove an individual deployment
 
 ```bash
-# Clean stopped Ring containers
-docker container prune --filter "label=ring_deployment"
-
-# Remove empty Ring networks
-docker network prune --filter "name=ring_"
+ring deployment delete <DEPLOYMENT_ID>
 ```
 
-## Best Practices
+### Docker housekeeping
 
-### Using Labels
+```bash
+docker container prune --filter "label=ring_deployment"
+docker network prune --filter "name=ring-"
+```
+
+## Best practices
+
+### Labels
+
+Labels are a key/value map. They flow into Docker container labels and are filterable.
 
 ```yaml
 deployments:
   app:
     labels:
-      - "app=frontend"
-      - "version=v1.2.3"
-      - "environment=production"
-      - "team=web"
-      - "monitoring=prometheus"
+      app: frontend
+      version: v1.2.3
+      environment: production
+      team: web
+      monitoring: prometheus
 ```
 
-### Monitoring
+### CI/CD
 
-```bash
-# Simple monitoring script
-#!/bin/bash
-while true; do
-  echo "=== $(date) ==="
-  ring deployment list
-  ring node get
-  sleep 30
-done
-```
-
-### Automation
-
-```yaml title=".github/workflows/deploy.yml"
+```yaml
+# .github/workflows/deploy.yml
 name: Deploy to Ring
 on:
   push:
@@ -452,18 +403,20 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Deploy to Ring
+      - uses: actions/checkout@v4
+      - name: Apply manifest
         env:
           RING_TOKEN: ${{ secrets.RING_TOKEN }}
         run: |
-          ring apply -f deployment.yaml
+          # Push the JSON directly to the API
+          curl -X POST https://ring.example.com/deployments \
+            -H "Authorization: Bearer $RING_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d @deployment.json
 ```
 
-## Next Steps
+## Next steps
 
-Now that you've mastered deployment management, explore:
-
-- [Practical examples](../examples.md)
-- [Command reference](../reference.md)
+- [Examples](../examples.md)
+- [CLI reference](../reference.md)
 - [REST API](../api-reference.md)

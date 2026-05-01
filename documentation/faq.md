@@ -1,153 +1,139 @@
-# Frequently Asked Questions (FAQ)
+# Frequently asked questions
 
-This page answers the most common questions about Ring.
+Common questions about Ring.
 
-## General Questions
+## General
 
-### What exactly is Ring?
+### What is Ring?
 
-Ring is a lightweight container orchestrator that allows you to deploy and manage containerized applications declaratively. It's inspired by Kubernetes but with a much simpler approach and reduced learning curve.
+Ring is a lightweight container orchestrator. It runs as a single binary, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML; Ring keeps it that way.
 
-### How does Ring differ from Kubernetes?
+### How is Ring different from Kubernetes?
 
-| Aspect | Ring | Kubernetes |
-|--------|------|------------|
-| **Complexity** | Simple, minimal configuration | Complex, steep learning curve |
-| **Size** | Single binary, lightweight | Complete distribution with many components |
-| **Scope** | Essential orchestration | Complete platform with service mesh, etc. |
-| **Target** | SMBs, development, simple applications | Large enterprises, complex use cases |
-| **Configuration** | Simple YAML | Complex YAML with many resources |
+| Aspect       | Ring                                    | Kubernetes                               |
+|--------------|-----------------------------------------|------------------------------------------|
+| Complexity   | Simple, single binary                   | Complex, many control-plane components   |
+| Scope        | Essential single-node orchestration     | Full platform (service mesh, CRDs, etc.) |
+| Target       | Small/medium workloads                  | Large clusters, complex requirements     |
+| Manifest     | Compact YAML                            | Verbose YAML across many resources       |
 
-### How does Ring differ from Docker Compose?
+### How is Ring different from Docker Compose?
 
-Ring goes further than Docker Compose by offering:
+Ring goes further than Compose by reconciling state continuously, exposing a REST API, and supporting namespaces, scaling, secrets, and authentication. Compose is a one-shot tool; Ring keeps your deployments in the desired state until you say otherwise.
 
-- **State management**: Ring maintains desired state and automatically restarts containers
-- **REST API**: Integration with external systems
-- **Multi-namespace**: Logical isolation of environments
-- **Scaling**: Replica management
-- **Authentication**: User management system
+### Is Ring production-ready?
 
-### Is Ring ready for production?
+Ring is suitable for small to medium single-node production workloads. It is not designed for:
 
-Ring is suitable for small to medium-sized production environments. It is not recommended for:
-
-- Critical applications requiring complex high availability
 - Multi-node clusters (not yet supported)
-- Use cases requiring advanced service mesh
+- Workloads requiring a full service mesh
+- HA setups across machines
 
-## Installation and Configuration
+## Installation and configuration
 
 ### What are the system requirements?
 
-**Required:**
-- Docker Engine (recent version)
-- Linux, macOS or Windows with WSL2
+- Docker (recent version)
+- Linux (x86_64 or arm64). macOS works for development; Windows requires WSL2.
+- Rust 1.85 or later when compiling from source (Ring uses edition 2024).
 
-**For compilation:**
-- Rust 1.70+
-- OpenSSL (development)
-
-### How to install Ring on Ubuntu?
+### How do I install Ring on Ubuntu?
 
 ```bash
 # Install Docker
 sudo apt update
 sudo apt install docker.io
-sudo usermod -aG docker $USER
+sudo usermod -aG docker $USER  # then log out and back in
 
-# Install Rust (for compilation)
+# Install Rust 1.85+ via rustup
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install dependencies
+# Install build dependencies
 sudo apt install libssl-dev pkg-config
 
-# Compile Ring
+# Compile and install
 git clone https://github.com/kemeter/ring.git
 cd ring
 cargo build --release
 sudo cp target/release/ring /usr/local/bin/
 
-# Initialize Ring
+# Initialize the config directory
 ring init
 ```
 
-### Can I use Ring with Podman instead of Docker?
+### Can I use Podman instead of Docker?
 
-Currently, Ring only supports Docker. Podman support might be added in the future.
+Not currently. Ring uses the [bollard](https://crates.io/crates/bollard) crate to talk to a Docker-compatible socket. Podman support is not on the roadmap.
 
-### How to configure Ring to listen on a different port?
+### How do I run Ring on a different port?
 
-The port is configured via `config.toml` in the context definition:
+Edit `~/.config/kemeter/ring/config.toml`:
 
 ```toml
-# ~/.config/kemeter/ring/config.toml
 [contexts.default]
 current = true
 host = "127.0.0.1"
 api.scheme = "http"
-api.port = 8080        # Change the port here
+api.port = 8080            # change here
 user.salt = "changeme"
 ```
 
-Then start the server normally:
+Then restart `ring server start`.
 
-```bash
-ring server start
-```
+## Usage
 
-## Usage and Deployments
+### Should I pin image tags?
 
-### How to specify a specific image version?
-
-Always specify an explicit version in production:
+Yes. Always pin to a specific tag in production:
 
 ```yaml
 deployments:
   app:
-    image: "nginx:1.21.6"  # ✅ Specific version
-    # image: "nginx:latest"  # ❌ Avoid latest in production
+    image: "nginx:1.25.3"   # good
+    # image: "nginx:latest" # bad — moving target
 ```
 
-### How to manage sensitive secrets?
+### How do I manage sensitive secrets?
 
-Ring supports several approaches:
+Use Ring's encrypted secrets, not plain values in the manifest:
 
 ```yaml
-# ✅ Secret references (recommended)
 environment:
   DATABASE_PASSWORD:
     secretRef: "database-password"
-
-# ✅ External secret files
-volumes:
-  - "/secure/secrets:/app/secrets:ro"
-
-# ❌ Avoid hardcoded secrets
-environment:
-  PASSWORD: "password123"  # Bad practice
 ```
 
-### How to do load balancing?
+Create the secret first:
 
-Ring doesn't do built-in load balancing. Use an external proxy:
+```bash
+ring secret create database-password -n production -v "$(openssl rand -base64 24)"
+```
 
-**With Traefik:**
+The server must be started with `RING_SECRET_KEY` set (a base64-encoded 32-byte key).
+
+### How do I do load balancing?
+
+Ring does not include a built-in load balancer. Two common patterns:
+
+**Traefik via container labels:**
+
 ```yaml
 deployments:
   app:
     replicas: 3
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+      app: web
+      "traefik.enable": "true"
+      "traefik.http.routers.app.rule": "Host(`app.example.com`)"
 ```
 
-**With Nginx:**
+**Nginx upstream block (manual):**
+
 ```nginx
 upstream ring_app {
-    server localhost:32768;  # Container port 1
-    server localhost:32769;  # Container port 2
-    server localhost:32770;  # Container port 3
+    server 127.0.0.1:32768;
+    server 127.0.0.1:32769;
+    server 127.0.0.1:32770;
 }
 
 server {
@@ -159,37 +145,55 @@ server {
 }
 ```
 
-### How to persist data?
+### How do I persist data?
 
-Use bind mounts for persistence:
+Use a `bind` volume:
 
 ```yaml
 deployments:
   database:
     volumes:
-      # Persistent data on host
-      - "/var/lib/ring/postgres:/var/lib/postgresql/data"
-
-      # Backups
-      - "/backup/postgres:/backup"
+      - type: bind
+        source: /var/lib/ring/postgres
+        destination: /var/lib/postgresql/data
+        driver: local
+        permission: rw
+      - type: bind
+        source: /backup/postgres
+        destination: /backup
+        driver: local
+        permission: rw
 ```
 
-### How to handle database migrations?
+Or a named Docker volume:
 
-Several approaches are possible:
+```yaml
+volumes:
+  - type: volume
+    source: postgres-data
+    destination: /var/lib/postgresql/data
+    driver: local
+    permission: rw
+```
 
-**1. Separate migration job:**
+### How do I handle database migrations?
+
+**Separate migration job:**
+
 ```yaml
 deployments:
   migration:
     name: migration
+    namespace: production
+    runtime: docker
+    kind: job
     image: "myapp:latest"
     replicas: 1
     command: ["npm", "run", "migrate"]
-    # Remove after manual migration
 ```
 
-**2. Migration at startup:**
+**Run migrations at app startup:**
+
 ```yaml
 deployments:
   app:
@@ -198,172 +202,111 @@ deployments:
 
 ## Troubleshooting
 
+### `ring doctor`
+
+Always start with `ring doctor`. It checks Docker connectivity and Cloud Hypervisor prerequisites.
+
 ### "Failed to connect to Docker daemon"
 
-**Possible causes:**
-- Docker is not started
-- Insufficient permissions
-- Docker socket inaccessible
-
-**Solutions:**
 ```bash
-# Check Docker
 sudo systemctl status docker
 sudo systemctl start docker
-
-# User permissions
-sudo usermod -aG docker $USER
-# Then restart the session
-
-# Test
+sudo usermod -aG docker $USER  # then log out and back in
 docker ps
 ```
 
 ### "Port already in use"
 
-**Cause:** Port 3030 is already in use.
-
-**Solutions:**
 ```bash
-# Find the process
 sudo ss -tlnp | grep 3030
-
-# Use a different port by editing config.toml
-# Set api.port = 8080 in your context, then restart
-
-# Or stop the other service
-sudo systemctl stop service-using-3030
 ```
+
+Change `api.port` in `config.toml` and restart.
 
 ### "Authentication failed"
 
-**Possible causes:**
-- Wrong credentials
-- Ring server not started
-- Expired token
-
-**Solutions:**
 ```bash
-# Check the server
 curl http://localhost:3030/healthz
-
-# Retry connection
 ring login --username admin --password changeme
-
-# Reset if necessary
-ring init
 ```
+
+If the admin password was changed and you've forgotten it, you currently have to wipe `ring.db` and let the server re-seed `admin/changeme` on next start. There is no `ring init` reset path for the database.
 
 ### Containers won't start
 
-**Diagnostics:**
 ```bash
-# Check deployments
 ring deployment list
-
-# Detailed logs
-ring deployment logs problematic-app
-
-# Events
-ring deployment events problematic-app
+ring deployment logs <DEPLOYMENT_ID>
+ring deployment events <DEPLOYMENT_ID>
 
 # Check Docker directly
-docker ps -a --filter "label=ring.deployment=problematic-app"
+docker ps -a --filter "label=ring_deployment=<DEPLOYMENT_ID>"
+docker logs <CONTAINER_ID>
 ```
 
-**Common causes:**
-- Image not found
-- Error in command
-- Port conflicts
-- Non-existent volumes
+Common causes: image not found, malformed `command`, missing host path for a `bind` volume, missing secret referenced via `secretRef`.
 
 ### "No space left on device"
 
-**Solutions:**
 ```bash
-# Clean up Docker
 docker system prune -f
-
-# Clean up unused images
 docker image prune -a
-
-# Clean up volumes
 docker volume prune
 ```
 
-## Performance and Scaling
+## Performance and scaling
 
-### How many containers can Ring handle?
+### How many containers can Ring handle on one node?
 
-Ring can theoretically handle hundreds of containers on a machine, but it depends on:
+Hundreds, depending on host CPU/RAM/disk and application weight. For larger deployments or multi-node, consider Kubernetes.
 
-- **System resources** (CPU, RAM, storage)
-- **Application type** (lightweight vs heavy)
-- **Disk and network I/O**
+### How do I optimize performance?
 
-For large requirements, consider Kubernetes.
-
-### How to optimize performance?
-
-**System configuration:**
 ```bash
-# Increase Docker limits
-echo '{"default-ulimits":{"nofile":{"Name":"nofile","Hard":65536,"Soft":65536}}}' | sudo tee /etc/docker/daemon.json
+# Raise Docker file-descriptor limits
+echo '{"default-ulimits":{"nofile":{"Name":"nofile","Hard":65536,"Soft":65536}}}' \
+  | sudo tee /etc/docker/daemon.json
 sudo systemctl restart docker
 ```
 
-**Image optimization:**
 ```yaml
 deployments:
   app:
-    # Use Alpine images when possible
-    image: "node:16-alpine"
-
+    image: "node:18-alpine"   # use slim base images
     config:
-      # Avoid downloading images every time
       image_pull_policy: "IfNotPresent"
 ```
 
 ### Does Ring support clustering?
 
-No, Ring is currently designed for a single node. Multi-node support is planned for future versions.
+No. Ring is single-node. Multi-node clustering is not currently planned.
 
 ## Security
 
-### How to secure Ring in production?
+### How do I secure Ring in production?
 
-**Network:**
+Network — front Ring with a reverse proxy doing TLS termination, and restrict the API port to trusted networks:
+
 ```bash
-# Use a reverse proxy with TLS
-# Restrict access to Ring port (3030)
-sudo ufw allow from 192.168.1.0/24 to any port 3030
-sudo ufw deny 3030
+# UFW: allow only the LAN to reach 3030
+sudo ufw allow from 192.168.1.0/24 to any port 3030 proto tcp
 ```
 
-**Authentication:**
-```bash
-# Change admin password
-ring user update --username admin --password "new-strong-password"
+> Don't add a blanket `sudo ufw deny 3030` after that. UFW evaluates rules in order, but a generic deny on the same port can mask the more specific allow depending on your policy. Use a default-deny policy and only allow trusted ranges.
 
-# Create dedicated users
+Authentication — change the default admin password as soon as you log in:
+
+```bash
+ring user update --password "new-strong-password"
 ring user create --username deployer --password "deployer-password"
 ```
 
-**System:**
-```bash
-# Run Ring with a dedicated user
-sudo useradd -r -s /bin/false ring
-sudo systemctl edit ring.service
-# [Service]
-# User=ring
-# Group=ring
-```
+Run as a dedicated user via systemd (`User=ring`, `Group=ring`).
 
-### How to manage TLS certificates?
+### How do I manage TLS?
 
-Ring doesn't have built-in TLS support. Use a reverse proxy:
+Ring doesn't terminate TLS. Use a reverse proxy:
 
-**With Nginx:**
 ```nginx
 server {
     listen 443 ssl http2;
@@ -380,11 +323,12 @@ server {
 }
 ```
 
-## Integration and Automation
+## Integration and automation
 
-### How to integrate Ring with CI/CD?
+### CI/CD with Ring
 
-**GitHub Actions:**
+**GitHub Actions** (using a long-lived token via `RING_TOKEN`):
+
 ```yaml
 name: Deploy to Ring
 on:
@@ -394,54 +338,51 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      RING_TOKEN: ${{ secrets.RING_TOKEN }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Deploy
-        run: |
-          ring login --username ${{ secrets.RING_USER }} --password ${{ secrets.RING_PASSWORD }}
-          ring apply -f deployment.yaml
+        run: ring apply -f deployment.yaml
 ```
 
 **GitLab CI:**
+
 ```yaml
 deploy:
   stage: deploy
   script:
-    - ring login --username $RING_USER --password $RING_PASSWORD
+    - export RING_TOKEN="$RING_API_TOKEN"
     - ring apply -f deployment.yaml
   only:
     - main
 ```
 
-### How to monitor Ring?
+When `RING_TOKEN` is set, the CLI ignores `auth.json` and uses the token directly — no need to run `ring login` from the pipeline.
 
-Ring doesn't expose built-in metrics. To monitor:
+### How do I monitor Ring?
 
-- **Ring itself**: Use the `/healthz` endpoint
-- **Your applications**: Configure monitoring in your containers
+- Health: `GET /healthz` returns `{"state":"UP"}`
+- Per-deployment: `ring deployment metrics <id>` (CPU/memory/network/disk per instance)
+- Per-deployment events: `ring deployment events <id>` or stream via `--follow`
+- Per-deployment health checks: `ring deployment health-checks <id>`
 
+Ring does not yet expose Prometheus-format metrics or outbound webhooks.
 
+## Support and community
 
-## Support and Community
+- Documentation — this site
+- Issues — [github.com/kemeter/ring/issues](https://github.com/kemeter/ring/issues)
+- Discussions — [github.com/kemeter/ring/discussions](https://github.com/kemeter/ring/discussions)
+- Commercial support — [Alpacode](https://alpacode.fr)
 
-### Where to get help?
+### How do I contribute?
 
-- **Documentation**: This documentation
-- **GitHub Issues**: [github.com/kemeter/ring/issues](https://github.com/kemeter/ring/issues)
-- **Discussions**: [github.com/kemeter/ring/discussions](https://github.com/kemeter/ring/discussions)
-
-### How to contribute to Ring?
-
-1. **Fork** the repository
-2. **Create** a branch for your feature
-3. **Test** your changes
-4. **Submit** a pull request
-
-### Does Ring have commercial support?
-
-Yes, Ring has official commercial support provided by [Alpacode.fr](https://alpacode.fr). Community support is also available via GitHub.
+1. Fork the repository
+2. Create a feature branch
+3. Add tests
+4. Open a pull request
 
 ---
 
-**This FAQ didn't answer your question?**
-Feel free to [open an issue](https://github.com/kemeter/ring/issues) or check the [discussions](https://github.com/kemeter/ring/discussions).
+This FAQ didn't answer your question? [Open an issue](https://github.com/kemeter/ring/issues) or check the [discussions](https://github.com/kemeter/ring/discussions).

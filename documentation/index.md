@@ -1,126 +1,114 @@
 # Ring
 
-Ring is a simple and declarative container orchestrator that allows you to deploy and manage your containerized applications with ease.
-
-![Ring Logo](assets/ring-logo.png){ width="200" }
+Ring is a lightweight container orchestrator that lets you deploy and manage containerized applications declaratively, with a REST API and a single binary — no control plane, no etcd, no operators to install.
 
 ## What is Ring?
 
-Ring is a lightweight alternative to Kubernetes and Docker Swarm, designed to provide essential container orchestration features without the complexity. It allows you to describe your deployments declaratively and takes care of maintaining the desired state of your applications.
+Ring is a single-node alternative to Kubernetes and Docker Swarm. It runs as one process, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML, Ring keeps it that way.
 
-!!! tip "Quick Start"
-    New to Ring? Start with the [installation guide](installation.md) then follow the [getting started guide](getting-started/index.md)!
+> **New to Ring?** Start with the [installation guide](installation.md), then follow the [getting started guide](getting-started/index.md).
 
-## Key Features
+## Key features
 
-=== "🚀 Declarative Deployments"
+### Declarative deployments
 
-    Describe your services with simple YAML or JSON files and let Ring handle the rest.
+Describe services in YAML and let Ring handle the rest.
 
-    ```yaml
-    deployments:
-      web-app:
-        name: web-app
-        image: "nginx:latest"
-        replicas: 3
-        namespace: production
-    ```
+```yaml
+deployments:
+  web-app:
+    name: web-app
+    image: "nginx:latest"
+    replicas: 3
+    namespace: production
+```
 
-=== "🔌 API-First Design"
+### REST API first
 
-    Everything is controllable via REST API. Perfect for CI/CD integration and automation.
+Every CLI command is a thin client over the REST API. Plug Ring into CI/CD without scraping output.
 
-    ```bash
-    curl -X POST http://localhost:3030/deployments \
-      -H "Authorization: Bearer $TOKEN" \
-      -d @deployment.json
-    ```
+```bash
+curl -X POST http://localhost:3030/deployments \
+  -H "Authorization: Bearer $TOKEN" \
+  -d @deployment.json
+```
 
-=== "📦 Multi-Runtime Support"
+### Multiple runtimes
 
-    Currently supports Docker with more runtimes planned for the future.
+Docker is the default runtime. Cloud Hypervisor microVMs are supported in alpha — see the [Cloud Hypervisor guide](cloud-hypervisor.md).
 
-    ```yaml
-    deployments:
-      app:
-        runtime: docker
-        image: "myapp:latest"
-    ```
+```yaml
+deployments:
+  app:
+    runtime: docker            # or cloud-hypervisor
+    image: "myapp:latest"
+```
 
-=== "🏷️ Namespace Isolation"
+### Namespace isolation
 
-    Organize your applications by environment or team with automatic network isolation.
+Group deployments by environment or team. Each namespace gets its own Docker network.
 
-    ```yaml
-    deployments:
-      app:
-        namespace: production  # Isolated network
-        replicas: 5
-    ```
+```yaml
+deployments:
+  app:
+    namespace: production
+    replicas: 5
+```
 
-## Perfect for
+### Encrypted secrets
 
-Ring is ideal for:
+Secrets are stored AES-256-GCM-encrypted and referenced by name from a deployment's environment.
 
-- **Development environments**: Simple orchestration for teams
-- **Web applications**: Service deployment with external load balancing
-- **Microservices**: Managing medium-scale microservice architectures
-- **CI/CD**: Automated deployment in your pipelines
-- **Docker Compose migration**: Progressive transition to a more robust solution
+```yaml
+environment:
+  DATABASE_PASSWORD:
+    secretRef: "database-password"
+```
 
-=== "🔒 Secret Management"
+### Health checks and metrics
 
-    Encrypt sensitive values with AES-256-GCM and reference them in deployments.
+Configure TCP, HTTP, or command health checks with failure actions (restart, stop, alert), and inspect live metrics.
 
-    ```yaml
-    environment:
-      DATABASE_PASSWORD:
-        secretRef: "database-password"
-    ```
+```bash
+ring deployment metrics my-app
+ring deployment events my-app
+```
 
-=== "📊 Metrics & Health Checks"
+## Good fit for
 
-    Monitor container resources and configure automated health checks with failure actions.
+- Development and staging environments where Kubernetes is overkill
+- Single-node web apps and small microservice setups
+- CI/CD pipelines that need a real orchestrator without the cluster overhead
+- Teams migrating off Docker Compose toward something with state reconciliation
 
-    ```bash
-    ring deployment metrics my-app
-    ring deployment events my-app
-    ```
+## Quick comparison
 
-## Quick Comparison
+| Feature           | Ring   | Docker Compose | Kubernetes |
+|-------------------|--------|----------------|------------|
+| Complexity        | Low    | Very low       | High       |
+| State reconciliation | Yes | No             | Yes        |
+| REST API          | Yes    | No             | Yes        |
+| Multi-node        | No     | No             | Yes        |
+| Learning curve    | Gentle | Very gentle    | Steep      |
 
-| Feature | Ring | Docker Compose | Kubernetes |
-|---------|------|----------------|------------|
-| Complexity | Low | Very Low | High |
-| State Management | ✅ | ❌ | ✅ |
-| REST API | ✅ | ❌ | ✅ |
-| Multi-node | ❌ | ❌ | ✅ |
-| Learning Curve | Gentle | Very Gentle | Steep |
+## Install from source
 
-## Quick Installation
+```bash
+git clone https://github.com/kemeter/ring.git
+cd ring
+cargo build --release
+sudo cp target/release/ring /usr/local/bin/
+ring init
+```
 
-=== "From source"
+Ring requires a Rust toolchain that supports edition 2024 (Rust 1.85 or later).
 
-    ```bash
-    git clone https://github.com/kemeter/ring.git
-    cd ring
-    cargo build --release
-    sudo cp target/release/ring /usr/local/bin/
-    ring init
-    ```
+## Your first deployment
 
-=== "Package managers"
+Once Ring is installed and the server is running, create a deployment file:
 
-    ```bash
-    # Package managers will be supported in future releases
-    # For now, compile from source
-    ```
-
-## Your First Deployment
-
-Once Ring is installed, create your first deployment:
-
-```yaml title="nginx-demo.yaml"
+```yaml
+# nginx-demo.yaml
 deployments:
   nginx-demo:
     name: nginx-demo
@@ -129,56 +117,36 @@ deployments:
     replicas: 1
 ```
 
-Deploy it:
+Apply it:
 
 ```bash
 ring apply -f nginx-demo.yaml
 ```
 
-Check the status:
+Check status:
 
 ```bash
 ring deployment list
 ```
 
-That's it! Your Nginx server is now running and managed by Ring.
+That's it. Nginx is running and reconciled by Ring.
 
-## Architecture Overview
+## Architecture at a glance
 
-<div class="grid cards" markdown>
+- **Ring server** — central process that exposes the REST API and runs the scheduler.
+- **Scheduler** — reconciliation loop that creates, removes, and health-checks containers; listens to Docker events to detect crashes.
+- **Docker runtime** — default runtime; one Docker network per namespace.
+- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs.
+- **SQLite database** — stores deployments, users, secrets, configs, events; WAL mode by default.
+- **REST API** — the only control surface; the CLI is a client.
 
--   **Ring Server**
+## Support
 
-    Central orchestration engine that manages deployments and exposes the REST API.
-
--   **Docker Runtime**
-
-    Currently uses Docker as the container runtime. Creates isolated networks per namespace.
-
--   **SQLite Database**
-
-    Stores deployment state, user information, and configuration locally with WAL mode for performance.
-
--   **REST API**
-
-    Complete API access to all Ring functionality. Powers both CLI and external integrations.
-
--   **Scheduler**
-
-    Background process that monitors deployments, runs health checks, and maintains desired state.
-
-</div>
-
-## Support and Community
-
-!!! info "Need Help?"
-
-    - **Questions**: [GitHub Discussions](https://github.com/kemeter/ring/discussions)
-    - **Bugs**: [GitHub Issues](https://github.com/kemeter/ring/issues)
-    - **Documentation**: This documentation
-    - **Source code**: [GitHub Repository](https://github.com/kemeter/ring)
-    - **Commercial support**: [Alpacode.fr](https://alpacode.fr)
+- **Questions** — [GitHub Discussions](https://github.com/kemeter/ring/discussions)
+- **Bugs** — [GitHub Issues](https://github.com/kemeter/ring/issues)
+- **Source** — [GitHub repository](https://github.com/kemeter/ring)
+- **Commercial support** — [Alpacode](https://alpacode.fr)
 
 ---
 
-**Ready to get started?** Follow the [installation guide](installation.md)! 🚀
+**Ready to get started?** Follow the [installation guide](installation.md).

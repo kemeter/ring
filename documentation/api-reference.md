@@ -1,15 +1,6 @@
-# REST API Reference
+# REST API reference
 
-Ring is **entirely API-driven**. All CLI features are also accessible via the REST API, enabling native integration with your CI/CD tools, automation scripts, and monitoring systems.
-
-!!! tip "API-First Design"
-    Ring follows an **API-First** approach: the CLI uses the same REST API that you do. No limitations, all operations are possible via HTTP.
-
-## Why use the Ring API?
-
-- 🚀 **CI/CD Integration**: Deploy automatically from your pipelines
-- 🔧 **Automation**: Script your deployments and management
-- 🛠️ **Custom Tools**: Build your own interfaces and dashboards
+Ring is API-driven. Every CLI command is a thin client over this REST API; anything the CLI can do, you can do over HTTP.
 
 ## Base URL
 
@@ -17,15 +8,17 @@ Ring is **entirely API-driven**. All CLI features are also accessible via the RE
 http://localhost:3030
 ```
 
+The bind address and port are configurable per-context in `config.toml`.
+
 ## Authentication
 
-All requests (except `/login` and `/healthz`) require a Bearer token:
+All requests except `POST /login` and `GET /healthz` require a Bearer token.
 
 ```bash
-curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:3030/deployments
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3030/deployments
 ```
 
-### Getting a token
+### Get a token
 
 ```http
 POST /login
@@ -38,87 +31,98 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
-## Endpoints
+Tokens are stable per user; the CLI saves them in `~/.config/kemeter/ring/auth.json` after `ring login`.
 
-### System Health
+## CORS
 
-#### `GET /healthz`
+If `cors_origins` is configured in `config.toml`, the API serves the listed origins with `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS` and the headers `Authorization`, `Content-Type`, `Accept`. Browser clients require this to be set explicitly.
 
-Check the Ring server status.
+## Timeouts
+
+Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoint `GET /deployments/{id}/logs` (used with `?follow=true`) is mounted in a separate router with **no** timeout, so SSE connections can stay open indefinitely.
+
+## System
+
+### `GET /healthz`
+
+Check the server is up. Does not require authentication.
 
 **Response:**
-```json
-{
-  "state": "UP"
-}
-```
 
----
+```json
+{ "state": "UP" }
+```
 
 ## Deployments
 
 ### `GET /deployments`
 
-List all deployments.
+List deployments.
 
 **Query parameters:**
-- `namespace[]`: Filter by namespace(s)
-- `status[]`: Filter by status(es)
+
+- `namespace` or `namespace[]` — filter by one or more namespaces
+- `status` or `status[]` — filter by one or more statuses
+- `kind` or `kind[]` — filter by `worker` or `job` (the CLI flag `--type` maps to this)
 
 **Examples:**
+
 ```bash
-# All deployments
 curl -H "Authorization: Bearer $TOKEN" \
   http://localhost:3030/deployments
 
-# Specific namespace
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments?namespace[]=production
+  "http://localhost:3030/deployments?namespace[]=production&namespace[]=staging"
 
-# Multiple namespaces
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments?namespace[]=production&namespace[]=staging
-
-# By status
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments?status[]=running
+  "http://localhost:3030/deployments?status[]=running&kind=worker"
 ```
 
 **Response:**
+
 ```json
 [
   {
-    "id": "nginx-demo",
+    "id": "f3a8b2c4-...",
+    "created_at": "2026-04-15T10:30:00Z",
+    "updated_at": "2026-04-15T10:30:05Z",
+    "status": "running",
+    "restart_count": 0,
     "name": "nginx-demo",
-    "namespace": "default",
-    "image": "nginx:latest",
     "runtime": "docker",
     "kind": "worker",
+    "namespace": "default",
+    "image": "nginx:1.25",
+    "command": [],
+    "config": {},
     "replicas": 1,
-    "status": "running",
-    "instances": ["container_id_123"],
-    "created_at": "2024-01-15T10:30:00Z",
-    "updated_at": "2024-01-15T10:30:00Z"
+    "ports": [],
+    "labels": { "app": "nginx" },
+    "instances": ["abc123def456..."],
+    "environment": { "ENV": "production" },
+    "volumes": [],
+    "image_digest": "sha256:..."
   }
 ]
 ```
 
 ### `POST /deployments`
 
-Create a new deployment.
+Create a new deployment, or trigger a rolling update if one with the same `name`+`namespace` already exists.
 
-**Parameters:**
-- `kind` (optional): Deployment type
-  - `"worker"` (default): Permanent service with automatic restart and scaling
-  - `"job"`: Single task that runs once and completes
+**Query parameters:**
+
+- `force=true` — bypass the rolling-update path; immediately replace existing instances even when health checks are configured.
 
 **Body:**
+
 ```json
 {
   "name": "my-app",
@@ -126,10 +130,10 @@ Create a new deployment.
   "namespace": "production",
   "kind": "worker",
   "replicas": 3,
-  "image": "nginx:1.21",
+  "image": "nginx:1.25",
   "labels": {
     "app": "nginx",
-    "version": "1.21"
+    "version": "1.25"
   },
   "environment": {
     "ENV": "production",
@@ -137,21 +141,24 @@ Create a new deployment.
     "DATABASE_PASSWORD": { "secretRef": "database-password" }
   },
   "volumes": [
-    "/host/data:/app/data"
+    {
+      "type": "bind",
+      "source": "/host/data",
+      "destination": "/app/data",
+      "driver": "local",
+      "permission": "rw"
+    }
   ]
 }
 ```
 
-Environment variables support two formats:
+Environment values support two forms:
 
-- **Plain value**: `"KEY": "value"` — literal string
-- **Secret reference**: `"KEY": { "secretRef": "secret-name" }` — references an encrypted secret in the same namespace. The secret is decrypted and injected at deployment time.
-
-!!! warning "Secret Resolution"
-    If a referenced secret does not exist in the deployment's namespace, the deployment will fail with an error event.
-```
+- **Plain value** — `"KEY": "value"`, passed as-is to the container.
+- **Secret reference** — `"KEY": { "secretRef": "secret-name" }`, looks up an encrypted secret in the same namespace and injects it at deployment time. If the secret does not exist, the deployment is marked failed and an `error` event is emitted.
 
 **Job example:**
+
 ```json
 {
   "name": "migration",
@@ -164,184 +171,157 @@ Environment variables support two formats:
 }
 ```
 
-**Response:** `201 Created`
-```json
-{
-  "id": "my-app",
-  "name": "my-app",
-  "namespace": "production",
-  "status": "creating"
-}
-```
+**Response:** `201 Created` with the full deployment object (same shape as `GET /deployments/{id}`).
 
 ### `GET /deployments/{id}`
 
-Retrieve deployment details.
+Retrieve a deployment by UUID.
 
 **Response:**
+
 ```json
 {
-  "id": "nginx-demo",
+  "id": "f3a8b2c4-...",
+  "created_at": "2026-04-15T10:30:00Z",
+  "updated_at": "2026-04-15T10:30:05Z",
+  "status": "running",
+  "restart_count": 0,
   "name": "nginx-demo",
-  "namespace": "default",
-  "image": "nginx:latest",
   "runtime": "docker",
   "kind": "worker",
+  "namespace": "default",
+  "image": "nginx:1.25",
+  "command": [],
+  "config": {},
   "replicas": 1,
-  "status": "running",
-  "instances": ["container_id_123"],
-  "volumes": "[{\"source\":\"/data\",\"destination\":\"/app/data\"}]",
-  "environment": {
-    "ENV": "production"
-  },
-  "labels": {
-    "app": "nginx"
-  },
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T10:30:00Z"
+  "ports": [],
+  "labels": { "app": "nginx" },
+  "instances": ["abc123def456..."],
+  "environment": { "ENV": "production" },
+  "volumes": [
+    {
+      "type": "bind",
+      "source": "/host/data",
+      "destination": "/app/data",
+      "driver": "local",
+      "permission": "rw"
+    }
+  ],
+  "image_digest": "sha256:..."
 }
 ```
 
+During a rolling update, the new (child) deployment carries a `parent_id` field referencing the old deployment.
+
 ### `DELETE /deployments/{id}`
 
-Delete a deployment.
+Delete a deployment. The deployment is marked `deleted`; its containers are removed by the scheduler on the next tick.
 
-**Response:** `200 OK`
+**Response:** `204 No Content`
 
 ### `GET /deployments/{id}/logs`
 
-Retrieve deployment logs.
+Tail or stream container logs.
 
 **Query parameters:**
-- `tail`: Number of lines to return (default: 100)
-- `since`: Time filter — relative (`30s`, `10m`, `2h`) or RFC3339 (`2024-01-01T00:00:00Z`)
-- `container`: Filter by container name
-- `follow`: Enable SSE streaming (default: false)
+
+- `tail` — last N lines (default: 100)
+- `since` — relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
+- `container` — filter to one container/instance name
+- `follow=true` — return a Server-Sent Events (SSE) stream instead of a JSON array
 
 **Examples:**
+
 ```bash
-# Last 50 lines
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/logs?tail=50
+  "http://localhost:3030/deployments/$ID/logs?tail=50"
 
-# Logs from last 10 minutes
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/logs?since=10m
+  "http://localhost:3030/deployments/$ID/logs?since=10m"
 
-# Stream logs in real-time (SSE)
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/logs?follow=true
+  "http://localhost:3030/deployments/$ID/logs?follow=true"
 ```
 
-**Response:**
+**Response (default):**
+
 ```json
 [
   {
     "instance": "nginx-demo-1",
     "message": "nginx: starting server",
     "level": "info",
-    "timestamp": "2024-01-15T10:30:00Z"
-  },
-  {
-    "instance": "nginx-demo-1",
-    "message": "nginx: server ready",
-    "level": "info",
-    "timestamp": "2024-01-15T10:30:01Z"
+    "timestamp": "2026-04-15T10:30:00Z"
   }
 ]
 ```
 
-When `follow=true`, the response is a Server-Sent Events (SSE) stream with the same format.
+When `follow=true`, the response is an SSE stream (`Content-Type: text/event-stream`) where each `data:` line carries the same JSON shape as a single log entry.
+
+This route is mounted without the 10-second API timeout so streams can stay open.
 
 ### `GET /deployments/{id}/events`
 
-Retrieve deployment events.
+Retrieve scheduler events for a deployment.
 
 **Query parameters:**
-- `level`: Filter by level (info, warning, error)
-- `limit`: Maximum number of events (default: 50, max: 1000)
 
-**Examples:**
-```bash
-# All events
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/events
-
-# Errors only
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/events?level=error
-
-# Limit to 10 events
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/events?limit=10
-```
+- `level` — filter by `info`, `warning`, or `error`
+- `limit` — maximum number of events (default: 50)
 
 **Response:**
+
 ```json
 [
   {
-    "id": "event_123",
-    "deployment_id": "nginx-demo",
-    "timestamp": "2024-01-15T10:30:00Z",
+    "id": "event-uuid",
+    "deployment_id": "f3a8b2c4-...",
+    "timestamp": "2026-04-15T10:30:00Z",
     "level": "info",
     "component": "scheduler",
     "reason": "ContainerStarted",
-    "message": "Container nginx-demo-container started successfully"
+    "message": "Container nginx-demo-1 started successfully"
   }
 ]
 ```
 
 ### `GET /deployments/{id}/health-checks`
 
-Retrieve health check results for a deployment.
+Retrieve recent health-check results.
 
 **Query parameters:**
-- `limit`: Maximum number of results (default: 100)
-- `latest`: If `true`, returns only the most recent check per check type (default: false)
 
-**Examples:**
-```bash
-# All health check results
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/health-checks
-
-# Latest result per check type
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/health-checks?latest=true
-```
+- `limit` — maximum number of results
+- `latest=true` — only the most recent result per check
 
 **Response:**
+
 ```json
 [
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "deployment_id": "nginx-demo",
+    "deployment_id": "f3a8b2c4-...",
     "check_type": "tcp",
     "status": "success",
     "message": null,
-    "created_at": "2024-01-15T10:30:00Z",
-    "started_at": "2024-01-15T10:30:00Z",
-    "finished_at": "2024-01-15T10:30:01Z"
+    "created_at": "2026-04-15T10:30:00Z",
+    "started_at": "2026-04-15T10:30:00Z",
+    "finished_at": "2026-04-15T10:30:01Z"
   }
 ]
 ```
 
 ### `GET /deployments/{id}/metrics`
 
-Retrieve real-time resource usage metrics for a deployment and its containers.
-
-**Example:**
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/deployments/nginx-demo/metrics
-```
+Live resource usage for a deployment and each of its instances. Only meaningful for the Docker runtime — Cloud Hypervisor returns an empty `instances` list.
 
 **Response:**
+
 ```json
 {
-  "deployment_id": "nginx-demo",
+  "deployment_id": "f3a8b2c4-...",
   "deployment_name": "nginx-demo",
-  "container_count": 3,
+  "instance_count": 3,
   "total_cpu_usage_percent": 2.5,
   "total_memory": {
     "usage_bytes": 52428800,
@@ -359,10 +339,10 @@ curl -H "Authorization: Bearer $TOKEN" \
     "write_bytes": 1024000
   },
   "total_pids": 12,
-  "containers": [
+  "instances": [
     {
-      "container_id": "abc123",
-      "container_name": "nginx-demo-1",
+      "instance_id": "abc123",
+      "instance_name": "nginx-demo-1",
       "cpu_usage_percent": 0.8,
       "memory": {
         "usage_bytes": 17476267,
@@ -389,20 +369,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
----
-
 ## Secrets
 
-Secrets are encrypted values stored with AES-256-GCM encryption. The API never exposes secret values — only metadata is returned.
+Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exposes the decrypted value — only metadata is returned.
 
-!!! info "Prerequisite"
-    The `RING_SECRET_KEY` environment variable must be set on the server. See [Installation](installation.md#generating-a-secret-key).
+The server must be started with `RING_SECRET_KEY` set (a base64-encoded 32-byte key). Without it, every secret endpoint returns `500 Internal Server Error`.
 
 ### `POST /secrets`
 
-Create a new secret.
-
-**Body:**
 ```json
 {
   "namespace": "production",
@@ -412,42 +386,34 @@ Create a new secret.
 ```
 
 **Response:** `201 Created`
+
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2024-01-15T10:30:00Z",
+  "created_at": "2026-04-15T10:30:00Z",
   "namespace": "production",
   "name": "database-password"
 }
 ```
 
 **Errors:**
-- `409 Conflict`: Secret with this name already exists in this namespace
+
+- `409 Conflict` — secret with this name already exists in this namespace
+- `500 Internal Server Error` — `RING_SECRET_KEY` is not set on the server
 
 ### `GET /secrets`
 
-List all secrets (metadata only).
-
 **Query parameters:**
-- `namespace[]`: Filter by namespace(s)
 
-**Examples:**
-```bash
-# All secrets
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/secrets
-
-# Filter by namespace
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/secrets?namespace[]=production
-```
+- `namespace` or `namespace[]`
 
 **Response:**
+
 ```json
 [
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
-    "created_at": "2024-01-15T10:30:00Z",
+    "created_at": "2026-04-15T10:30:00Z",
     "updated_at": null,
     "namespace": "production",
     "name": "database-password"
@@ -457,40 +423,20 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### `GET /secrets/{id}`
 
-Retrieve a specific secret's metadata.
-
-**Response:**
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": null,
-  "namespace": "production",
-  "name": "database-password"
-}
-```
+Returns the same shape as a list entry. Values are never returned.
 
 ### `DELETE /secrets/{id}`
 
-Delete a secret.
-
 **Query parameters:**
-- `force` (boolean): Force deletion even if the secret is referenced by active deployments
 
-**Examples:**
-```bash
-# Delete a secret
-curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/secrets/550e8400-e29b-41d4-a716-446655440000
+- `force=true` — delete even if referenced by active deployments
 
-# Force delete a referenced secret
-curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/secrets/550e8400-e29b-41d4-a716-446655440000?force=true
-```
+**Response:** `204 No Content`
 
 **Errors:**
-- `404 Not Found`: Secret does not exist
-- `409 Conflict`: Secret is referenced by active deployments (includes list of referencing deployments)
+
+- `404 Not Found` — secret does not exist
+- `409 Conflict` — secret is referenced by active deployments. Body lists them:
 
 ```json
 {
@@ -500,33 +446,25 @@ curl -X DELETE -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
----
-
 ## Users
 
 ### `GET /users`
 
-List all users.
-
-**Response:**
 ```json
 [
   {
-    "id": "1",
+    "id": "550e8400-e29b-41d4-a716-446655440000",
     "username": "admin",
-    "created_at": "2024-01-15T10:00:00Z"
+    "created_at": "2026-04-15T10:00:00Z"
   }
 ]
 ```
 
 ### `POST /users`
 
-Create a new user.
-
-**Body:**
 ```json
 {
-  "username": "john",
+  "username": "alice",
   "password": "secretpassword"
 }
 ```
@@ -535,17 +473,16 @@ Create a new user.
 
 ### `GET /users/me`
 
-Retrieve current authenticated user information.
+Returns the user attached to the bearer token.
 
-**Response:**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "username": "admin",
-  "created_at": "2024-01-15T10:00:00Z",
+  "created_at": "2026-04-15T10:00:00Z",
   "updated_at": null,
   "status": "active",
-  "login_at": "2024-01-15T14:30:00Z"
+  "login_at": "2026-04-15T14:30:00Z"
 }
 ```
 
@@ -553,9 +490,9 @@ Retrieve current authenticated user information.
 
 Update a user.
 
-**Body:**
 ```json
 {
+  "username": "alice",
   "password": "newpassword"
 }
 ```
@@ -564,23 +501,18 @@ Update a user.
 
 ### `DELETE /users/{id}`
 
-Delete a user.
+**Response:** `204 No Content`
 
-**Response:** `200 OK`
+## Configs
 
----
-
-## Configurations
+A config is a named blob (typically a config file or JSON document) attached to a namespace. Configs can be mounted into a deployment via a volume of `type: config`.
 
 ### `GET /configs`
 
-List all configurations.
-
-**Response:**
 ```json
 [
   {
-    "id": "app-config",
+    "id": "config-uuid",
     "name": "app-config",
     "namespace": "production",
     "data": "{\"database\":{\"host\":\"localhost\"}}"
@@ -590,9 +522,6 @@ List all configurations.
 
 ### `POST /configs`
 
-Create a new configuration.
-
-**Body:**
 ```json
 {
   "name": "app-config",
@@ -605,12 +534,9 @@ Create a new configuration.
 
 ### `GET /configs/{id}`
 
-Retrieve a specific configuration.
-
-**Response:**
 ```json
 {
-  "id": "app-config",
+  "id": "config-uuid",
   "name": "app-config",
   "namespace": "production",
   "data": "{\"database\":{\"host\":\"localhost\",\"port\":5432}}",
@@ -620,9 +546,8 @@ Retrieve a specific configuration.
 
 ### `PUT /configs/{id}`
 
-Update an existing configuration.
+Full replacement (not partial). All fields must be provided.
 
-**Body:**
 ```json
 {
   "name": "app-config",
@@ -632,54 +557,21 @@ Update an existing configuration.
 ```
 
 **Response:** `200 OK`
-```json
-{
-  "id": "app-config",
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-16T09:00:00Z",
-  "namespace": "production",
-  "name": "app-config",
-  "data": "{\"database\":{\"host\":\"new-host\",\"port\":5432}}",
-  "labels": "env=production"
-}
-```
-
-!!! warning "Full replacement"
-    This is a full replacement (PUT), not a partial update (PATCH). All fields must be provided.
 
 ### `DELETE /configs/{id}`
 
-Delete a configuration.
-
-**Response:** `200 OK`
-
----
+**Response:** `204 No Content`
 
 ## Namespaces
 
 ### `GET /namespaces`
 
-List all namespaces.
-
-**Example:**
-```bash
-curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:3030/namespaces
-```
-
-**Response:**
 ```json
 [
   {
     "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "default",
-    "created_at": "2024-01-15T10:00:00Z",
-    "updated_at": null
-  },
-  {
-    "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-    "name": "production",
-    "created_at": "2024-01-16T09:00:00Z",
+    "created_at": "2026-04-15T10:00:00Z",
     "updated_at": null
   }
 ]
@@ -687,84 +579,73 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### `GET /namespaces/{id}`
 
-Retrieve a specific namespace.
-
-**Response:**
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "production",
-  "created_at": "2024-01-16T09:00:00Z",
+  "created_at": "2026-04-15T09:00:00Z",
   "updated_at": null
 }
 ```
 
-**Error:** `404 Not Found` if the namespace doesn't exist.
+**Errors:** `404 Not Found` if the namespace doesn't exist.
 
 ### `POST /namespaces`
 
-Create a new namespace.
-
-**Body:**
 ```json
-{
-  "name": "staging"
-}
+{ "name": "staging" }
 ```
 
 **Response:** `201 Created`
+
 ```json
 {
-  "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+  "id": "c3d4e5f6-...",
   "name": "staging",
-  "created_at": "2024-01-17T14:00:00Z",
+  "created_at": "2026-04-15T14:00:00Z",
   "updated_at": null
 }
 ```
 
-**Error:** `409 Conflict` if a namespace with the same name already exists.
+**Errors:** `409 Conflict` if a namespace with the same name already exists.
 
-!!! tip "Auto-creation"
-    Namespaces are automatically created when you deploy to a namespace that doesn't exist yet. You don't need to create them explicitly before deploying.
+> Namespaces are also auto-created when a deployment is applied to a non-existent namespace; calling `POST /namespaces` upfront is optional.
 
----
-
-## Nodes
+## Node
 
 ### `GET /node/get`
 
-Retrieve current node information.
+Returns information about the host running the Ring server.
 
-**Response:**
 ```json
 {
   "hostname": "ring-server",
-  "cpu_usage": 15.2,
-  "memory_usage": 45.8,
-  "disk_usage": 23.1,
-  "containers_running": 5,
-  "containers_total": 8,
-  "docker_version": "20.10.21"
+  "os": "linux",
+  "arch": "x86_64",
+  "uptime": "428000s",
+  "cpu_count": 8,
+  "memory_total": 16.0,
+  "memory_available": 11.2,
+  "load_average": [0.42, 0.51, 0.55]
 }
 ```
 
----
+`memory_total` and `memory_available` are in GiB. `load_average` is `[1m, 5m, 15m]`.
 
-## HTTP Status Codes
+## HTTP status codes
 
-Ring uses standard HTTP status codes:
+- `200 OK` — successful request returning a body
+- `201 Created` — resource created
+- `204 No Content` — successful `DELETE`
+- `400 Bad Request` — invalid request body or query parameters
+- `401 Unauthorized` — missing or invalid bearer token
+- `403 Forbidden` — authenticated but not allowed
+- `404 Not Found` — resource does not exist
+- `408 Request Timeout` — handler exceeded the 10-second API timeout
+- `409 Conflict` — duplicate resource or conflicting state
+- `500 Internal Server Error` — server-side failure (e.g. `RING_SECRET_KEY` not set on a secret operation)
 
-- `200 OK`: Successful request
-- `201 Created`: Resource created
-- `400 Bad Request`: Invalid request
-- `401 Unauthorized`: Missing or invalid token
-- `404 Not Found`: Resource not found
-- `409 Conflict`: Conflict (resource already exists)
-- `500 Internal Server Error`: Server error
-
-## Error Format
-
-In case of error, Ring returns a JSON with details:
+## Error format
 
 ```json
 {
@@ -773,31 +654,33 @@ In case of error, Ring returns a JSON with details:
 }
 ```
 
-## API Use Cases
+Some endpoints attach contextual fields — for instance, `DELETE /secrets/{id}` returns the list of referencing deployments under the `deployments` key.
 
-### 🚀 CI/CD Deployment
+## Examples
 
-Integrate Ring into your pipelines for automatic deployments:
+### CI deployment via raw API
 
-```yaml title="GitHub Actions"
-- name: Deploy to Ring
-  run: |
-    # Get token
-    TOKEN=$(curl -s -X POST "$RING_URL/login" \
-      -H "Content-Type: application/json" \
-      -d '{"username":"${{ secrets.RING_USER }}","password":"${{ secrets.RING_PASSWORD }}"}' \
-      | jq -r '.token')
+```bash
+TOKEN=$(curl -s -X POST "$RING_URL/login" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"$RING_USER\",\"password\":\"$RING_PASSWORD\"}" \
+  | jq -r '.token')
 
-    # Deploy
-    curl -X POST "$RING_URL/deployments" \
-      -H "Authorization: Bearer $TOKEN" \
-      -H "Content-Type: application/json" \
-      -d @deployment.json
+curl -X POST "$RING_URL/deployments" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @deployment.json
 ```
 
+### Stream events into stdout
 
+```bash
+curl -N -H "Authorization: Bearer $TOKEN" \
+  "$RING_URL/deployments/$ID/logs?follow=true"
+```
 
+`-N` disables curl's output buffering so SSE lines are flushed immediately.
 
-## Webhooks and Events
+## Webhooks
 
-Ring does not yet support webhooks. To monitor changes, use polling on appropriate endpoints or events with the `--follow` option in CLI.
+Ring does not support outbound webhooks. To observe state changes, poll the relevant endpoint, or open an SSE stream against `GET /deployments/{id}/logs?follow=true` and subscribe to events with `GET /deployments/{id}/events` plus periodic refresh.
