@@ -1,6 +1,7 @@
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
+import { Link } from 'react-router-dom';
 import Head from 'aplos/head';
 import CodeBlock from './CodeBlock';
 import DocSidebar from './DocSidebar';
@@ -36,6 +37,15 @@ export default function MarkdownPage({ content, title }: MarkdownPageProps) {
                     }
 
                     return <code className={className} {...props}>{children}</code>;
+                  },
+                  a({ href, children, ...props }) {
+                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                      return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+                    }
+                    if (href && href.startsWith('/')) {
+                      return <Link to={href}>{children}</Link>;
+                    }
+                    return <a href={href} {...props}>{children}</a>;
                   },
                 }}
               >

@@ -417,6 +417,6 @@ jobs:
 
 ## Next steps
 
-- [Examples](../examples.md)
-- [CLI reference](../reference.md)
-- [REST API](../api-reference.md)
+- [Examples](/documentation/guides/examples)
+- [CLI reference](/documentation/reference/cli)
+- [REST API](/documentation/reference/api)

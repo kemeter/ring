@@ -214,9 +214,9 @@ docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 
 ## Next steps
 
-- [Managing deployments](managing-deployments.md)
-- [Examples](../examples.md)
-- [REST API reference](../api-reference.md)
+- [Managing deployments](/documentation/getting-started/managing-deployments)
+- [Examples](/documentation/guides/examples)
+- [REST API reference](/documentation/reference/api)
 
 ## Best practices
 

@@ -632,7 +632,7 @@ The server must be started with `RING_SECRET_KEY` set; without it, all secret op
 
 ### Health checks for rolling updates
 
-Adding a health check is what unlocks the zero-downtime rolling update path. See [managing deployments](getting-started/managing-deployments.md#rolling-update-zero-downtime) for the full lifecycle.
+Adding a health check is what unlocks the zero-downtime rolling update path. See [managing deployments](/documentation/getting-started/managing-deployments#rolling-update-zero-downtime) for the full lifecycle.
 
 ```yaml
 deployments:

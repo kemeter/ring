@@ -172,7 +172,7 @@ services:
 
 ### config.toml
 
-Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) for client and server settings. See the [CLI reference](reference.md) for the full schema. The bind address and port live there.
+Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) for client and server settings. See the [CLI reference](/documentation/reference/cli) for the full schema. The bind address and port live there.
 
 ### Environment variables
 
@@ -249,9 +249,9 @@ RUST_LOG=info ring server start
 
 ## Next steps
 
-1. [Getting started](getting-started/index.md)
-2. [Your first deployment](getting-started/first-deployment.md)
-3. [Examples](examples.md)
+1. [Getting started](/documentation/getting-started/overview)
+2. [Your first deployment](/documentation/getting-started/first-deployment)
+3. [Examples](/documentation/guides/examples)
 
 ## Uninstall
 

@@ -8,7 +8,7 @@ This guide gets Ring up and running and walks through the fundamentals of orches
 - The `ring` binary installed and in your `PATH`
 - Basic familiarity with containers
 
-If Ring is not installed yet, follow the [installation guide](../installation.md) first.
+If Ring is not installed yet, follow the [installation guide](/documentation/getting-started/installation) first.
 
 ## Initial setup
 
@@ -103,7 +103,7 @@ curl -X POST http://localhost:3030/deployments \
   -d '{"name": "my-app", "image": "nginx:latest", "namespace": "default", "runtime": "docker"}'
 ```
 
-See the [API reference](../api-reference.md) for the full surface.
+See the [API reference](/documentation/reference/api) for the full surface.
 
 ## Architecture overview
 
@@ -185,4 +185,4 @@ ring user create --username <name> --password <pass>
 
 ---
 
-**Ready to deploy?** Continue with the [first deployment guide](first-deployment.md).
+**Ready to deploy?** Continue with the [first deployment guide](/documentation/getting-started/first-deployment).

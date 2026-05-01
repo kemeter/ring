@@ -6,7 +6,7 @@ Ring is a lightweight container orchestrator that lets you deploy and manage con
 
 Ring is a single-node alternative to Kubernetes and Docker Swarm. It runs as one process, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML, Ring keeps it that way.
 
-> **New to Ring?** Start with the [installation guide](installation.md), then follow the [getting started guide](getting-started/index.md).
+> **New to Ring?** Start with the [installation guide](/documentation/getting-started/installation), then follow the [getting started guide](/documentation/getting-started/overview).
 
 ## Key features
 
@@ -35,7 +35,7 @@ curl -X POST http://localhost:3030/deployments \
 
 ### Multiple runtimes
 
-Docker is the default runtime. Cloud Hypervisor microVMs are supported in alpha — see the [Cloud Hypervisor guide](cloud-hypervisor.md).
+Docker is the default runtime. Cloud Hypervisor microVMs are supported in alpha. See the [Docker runtime](/documentation/runtimes/docker) or [Cloud Hypervisor runtime](/documentation/runtimes/cloud-hypervisor) for details.
 
 ```yaml
 deployments:
@@ -149,4 +149,4 @@ That's it. Nginx is running and reconciled by Ring.
 
 ---
 
-**Ready to get started?** Follow the [installation guide](installation.md).
+**Ready to get started?** Follow the [installation guide](/documentation/getting-started/installation).
