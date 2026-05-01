@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -9,43 +8,20 @@ import '@/styles/components/doc-content.css';
 import '@/styles/components/sidebar.css';
 
 interface MarkdownPageProps {
-  path: string;
+  content: string;
   title: string;
 }
 
-export default function MarkdownPage({ path, title }: MarkdownPageProps) {
-  const [content, setContent] = useState('');
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch(`/docs/${path}`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Not found');
-        return res.text();
-      })
-      .then((text) => {
-        setContent(text);
-        setLoading(false);
-      })
-      .catch(() => {
-        setContent('# Page not found\n\nThis documentation page could not be loaded.');
-        setLoading(false);
-      });
-  }, [path]);
-
+export default function MarkdownPage({ content, title }: MarkdownPageProps) {
   return (
     <>
       <Head>
         <title>{title}</title>
       </Head>
-      <div className="doc-layout">
-        <DocSidebar />
-        <div className="doc-content-area">
-          {loading ? (
-            <article className="doc-content">
-              <div style={{ color: 'var(--color-text-muted)' }}>Loading...</div>
-            </article>
-          ) : (
+      <div className="container">
+        <div className="doc-layout">
+          <DocSidebar />
+          <div className="doc-content-area">
             <article className="doc-content">
               <Markdown
                 remarkPlugins={[remarkGfm]}
@@ -66,7 +42,7 @@ export default function MarkdownPage({ path, title }: MarkdownPageProps) {
                 {content}
               </Markdown>
             </article>
-          )}
+          </div>
         </div>
       </div>
     </>

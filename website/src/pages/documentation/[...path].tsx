@@ -1,23 +1,16 @@
-import { useParams } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import MarkdownPage from '@/components/MarkdownPage';
+import { getDoc } from '@/lib/docs';
 
-const PATH_MAP: Record<string, { file: string; title: string }> = {
-  '': { file: 'index.md', title: 'Overview' },
-  'installation': { file: 'installation.md', title: 'Installation' },
-  'getting-started': { file: 'getting-started/index.md', title: 'Getting Started' },
-  'getting-started/first-deployment': { file: 'getting-started/first-deployment.md', title: 'First Deployment' },
-  'getting-started/managing-deployments': { file: 'getting-started/managing-deployments.md', title: 'Managing Deployments' },
-  'examples': { file: 'examples.md', title: 'Examples' },
-  'reference': { file: 'reference.md', title: 'CLI Reference' },
-  'api-reference': { file: 'api-reference.md', title: 'API Reference' },
-  'faq': { file: 'faq.md', title: 'FAQ' },
+const NOT_FOUND = {
+  content: '# Page not found\n\nThis documentation page does not exist.',
+  title: 'Page not found',
 };
 
 export default function DocPage() {
-  const params = useParams();
-  const path = params['*'] || '';
+  const { pathname } = useLocation();
+  const slug = pathname.replace(/^\/documentation\/?/, '').replace(/\/$/, '');
+  const page = getDoc(slug) ?? NOT_FOUND;
 
-  const page = PATH_MAP[path] || { file: path + '.md', title: 'Documentation' };
-
-  return <MarkdownPage path={page.file} title={`${page.title} - Ring Docs`} />;
+  return <MarkdownPage content={page.content} title={`${page.title} — Ring Docs`} />;
 }

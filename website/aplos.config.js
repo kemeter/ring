@@ -1,8 +1,39 @@
+const fs = require('node:fs');
+const path = require('node:path');
+
+function walkMdFiles(dir, prefix = '') {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const abs = path.join(dir, entry.name);
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...walkMdFiles(abs, rel));
+    } else if (entry.isFile() && entry.name.endsWith('.md') && entry.name.toLowerCase() !== 'readme.md') {
+      out.push(rel.replace(/\.md$/, '').replace(/\/?index$/, ''));
+    }
+  }
+  return out;
+}
+
 module.exports = {
   reactStrictMode: true,
   server: {
     port: 3001,
   },
+  routes: [
+    {
+      source: '/documentation/[...path]',
+      paths: () => {
+        const docsDir = path.resolve(__dirname, '../documentation');
+        if (!fs.existsSync(docsDir)) {
+          return [];
+        }
+        return walkMdFiles(docsDir).map((slug) =>
+          slug === '' ? '/documentation' : `/documentation/${slug}`
+        );
+      },
+    },
+  ],
   head: {
     defaultTitle: 'Ring - Lightweight Container Orchestrator',
     titleTemplate: '%s | Ring',

@@ -1,38 +1,46 @@
 import { useState } from 'react';
 import { NavLink } from 'aplos/navigation';
+import { getAllDocs, docToUrl, humanize } from '@/lib/docs';
 import '@/styles/components/sidebar.css';
 
-const sections = [
-  {
-    title: 'Getting Started',
-    links: [
-      { to: '/documentation', label: 'Overview' },
-      { to: '/documentation/installation', label: 'Installation' },
-      { to: '/documentation/getting-started', label: 'Getting Started' },
-      { to: '/documentation/getting-started/first-deployment', label: 'First Deployment' },
-      { to: '/documentation/getting-started/managing-deployments', label: 'Managing Deployments' },
-    ],
-  },
-  {
-    title: 'Guides',
-    links: [
-      { to: '/documentation/examples', label: 'Examples' },
-    ],
-  },
-  {
-    title: 'Reference',
-    links: [
-      { to: '/documentation/reference', label: 'CLI Reference' },
-      { to: '/documentation/api-reference', label: 'API Reference' },
-    ],
-  },
-  {
-    title: 'Help',
-    links: [
-      { to: '/documentation/faq', label: 'FAQ' },
-    ],
-  },
-];
+interface SidebarLink {
+  to: string;
+  label: string;
+}
+
+interface SidebarSection {
+  title: string;
+  links: SidebarLink[];
+}
+
+function buildSections(): SidebarSection[] {
+  const rootLinks: SidebarLink[] = [];
+  const sectionsByFolder = new Map<string, SidebarLink[]>();
+
+  for (const doc of getAllDocs()) {
+    const link: SidebarLink = { to: docToUrl(doc.slug), label: doc.title };
+    if (doc.segments.length <= 1) {
+      rootLinks.push(link);
+    } else {
+      const folder = doc.segments[0];
+      if (!sectionsByFolder.has(folder)) {
+        sectionsByFolder.set(folder, []);
+      }
+      sectionsByFolder.get(folder)!.push(link);
+    }
+  }
+
+  const sections: SidebarSection[] = [];
+  if (rootLinks.length > 0) {
+    sections.push({ title: 'Introduction', links: rootLinks });
+  }
+  for (const [folder, links] of sectionsByFolder) {
+    sections.push({ title: humanize(folder), links });
+  }
+  return sections;
+}
+
+const sections = buildSections();
 
 export default function DocSidebar() {
   const [open, setOpen] = useState(false);
@@ -57,7 +65,7 @@ export default function DocSidebar() {
               <NavLink
                 key={link.to}
                 to={link.to}
-                end
+                end={link.to === '/documentation'}
                 onClick={() => setOpen(false)}
               >
                 {link.label}
