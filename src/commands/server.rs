@@ -13,6 +13,7 @@ use tokio::task;
 use crate::config::config::Config;
 use crate::database::{get_database_pool, migrate_from_refinery_if_needed};
 use crate::scheduler::docker_events::{DockerEvent, start_event_listener};
+use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use crate::scheduler::scheduler::schedule;
 
 pub(crate) fn command_config() -> Command {
@@ -32,8 +33,13 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     let docker = docker::connect().expect("Failed to connect to Docker");
     info!("Connected to Docker");
 
+    let intentional_shutdowns = IntentionalShutdowns::new();
+
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
-    runtimes_map.insert("docker".to_string(), Arc::new(DockerLifecycle::new(docker)));
+    runtimes_map.insert(
+        "docker".to_string(),
+        Arc::new(DockerLifecycle::new(docker, intentional_shutdowns.clone())),
+    );
 
     let ch_runtime_config = crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
         &configuration.runtime.cloud_hypervisor,
@@ -57,7 +63,13 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
     let event_listener_handler = task::spawn(start_event_listener(event_tx, docker_for_events));
 
     let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), runtimes.clone()));
-    let scheduler_handler = task::spawn(schedule(pool, configuration, runtimes, event_rx));
+    let scheduler_handler = task::spawn(schedule(
+        pool,
+        configuration,
+        runtimes,
+        event_rx,
+        intentional_shutdowns,
+    ));
 
     if let Err(e) = api_server_handler.await {
         eprintln!("API server task failed: {}", e);

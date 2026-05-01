@@ -7,6 +7,7 @@ use crate::models::secret as SecretModel;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
+use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
@@ -399,10 +400,14 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
 /// the existing logic in `lifecycle::handle_worker_deployment` flips the
 /// status to `CrashLoopBackOff` and stops respawning — that's what bounds the
 /// loop and prevents disk saturation.
-async fn drain_docker_events(pool: &SqlitePool, event_rx: &mut mpsc::Receiver<DockerEvent>) {
+async fn drain_docker_events(
+    pool: &SqlitePool,
+    event_rx: &mut mpsc::Receiver<DockerEvent>,
+    intentional_shutdowns: &IntentionalShutdowns,
+) {
     loop {
         match event_rx.try_recv() {
-            Ok(event) => apply_docker_event(pool, event).await,
+            Ok(event) => apply_docker_event(pool, event, intentional_shutdowns).await,
             Err(mpsc::error::TryRecvError::Empty) => return,
             Err(mpsc::error::TryRecvError::Disconnected) => {
                 error!("Docker event channel disconnected — listener task likely died");
@@ -412,9 +417,25 @@ async fn drain_docker_events(pool: &SqlitePool, event_rx: &mut mpsc::Receiver<Do
     }
 }
 
-async fn apply_docker_event(pool: &SqlitePool, event: DockerEvent) {
+async fn apply_docker_event(
+    pool: &SqlitePool,
+    event: DockerEvent,
+    intentional_shutdowns: &IntentionalShutdowns,
+) {
     match event {
         DockerEvent::ContainerDied { deployment_id, container_id, exit_code } => {
+            // Operator-initiated shutdowns (scale-down, delete, rolling update,
+            // health-check kill) are pre-marked in `IntentionalShutdowns` by the
+            // runtime before it issues the stop. The matching `die` event must
+            // therefore NOT bump `restart_count` — otherwise we'd flip a healthy
+            // deployment into CrashLoopBackOff just for being scaled down.
+            if intentional_shutdowns.take(&container_id).await {
+                debug!(
+                    "Ignoring die event for {} (intentional shutdown)",
+                    container_id
+                );
+                return;
+            }
             bump_restart_count(
                 pool,
                 &deployment_id,
@@ -519,6 +540,7 @@ pub(crate) async fn schedule(
     config: crate::config::config::Config,
     runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>,
     mut event_rx: mpsc::Receiver<DockerEvent>,
+    intentional_shutdowns: IntentionalShutdowns,
 ) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
@@ -547,7 +569,7 @@ pub(crate) async fn schedule(
         // Doing this before `find_all` ensures that the deployments we load
         // already reflect the latest restart_count, so the worker scaler can
         // hit CrashLoopBackOff in the same cycle as the crash that caused it.
-        drain_docker_events(&pool, &mut event_rx).await;
+        drain_docker_events(&pool, &mut event_rx, &intentional_shutdowns).await;
 
         let mut filters = HashMap::new();
         filters.insert(

@@ -3,6 +3,7 @@ use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
+use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use bollard::Docker;
@@ -25,11 +26,15 @@ fn filter_instances(
 
 pub struct DockerLifecycle {
     docker: Docker,
+    intentional_shutdowns: IntentionalShutdowns,
 }
 
 impl DockerLifecycle {
-    pub fn new(docker: Docker) -> Self {
-        Self { docker }
+    pub fn new(docker: Docker, intentional_shutdowns: IntentionalShutdowns) -> Self {
+        Self {
+            docker,
+            intentional_shutdowns,
+        }
     }
 }
 
@@ -40,7 +45,13 @@ impl RuntimeLifecycle for DockerLifecycle {
         deployment: Deployment,
         resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
-        super::lifecycle::apply(deployment, self.docker.clone(), resolved_mounts).await
+        super::lifecycle::apply(
+            deployment,
+            self.docker.clone(),
+            resolved_mounts,
+            self.intentional_shutdowns.clone(),
+        )
+        .await
     }
 
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
@@ -52,6 +63,7 @@ impl RuntimeLifecycle for DockerLifecycle {
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {
+        self.intentional_shutdowns.mark(instance_id.clone()).await;
         super::container::remove_container_by_id(&self.docker, instance_id).await
     }
 

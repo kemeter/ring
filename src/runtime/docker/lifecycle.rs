@@ -4,6 +4,7 @@ use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::types::InstanceStatus;
+use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
 use std::convert::TryInto;
@@ -12,6 +13,7 @@ pub(crate) async fn apply(
     mut deployment: Deployment,
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
+    intentional_shutdowns: IntentionalShutdowns,
 ) -> Deployment {
     let status_filter = if deployment.status == DeploymentStatus::Deleted {
         "all"
@@ -21,9 +23,9 @@ pub(crate) async fn apply(
     deployment.instances = list_instances(&docker, deployment.id.to_string(), status_filter).await;
 
     if deployment.kind == "job" {
-        handle_job_deployment(deployment, docker, resolved_mounts).await
+        handle_job_deployment(deployment, docker, resolved_mounts, intentional_shutdowns).await
     } else {
-        handle_worker_deployment(deployment, docker, resolved_mounts).await
+        handle_worker_deployment(deployment, docker, resolved_mounts, intentional_shutdowns).await
     }
 }
 
@@ -96,9 +98,15 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     deployment.emit_event("error", message, "docker", Some(reason));
 }
 
-async fn remove_all_instances(deployment: &mut Deployment, docker: &Docker, kind: &str) {
+async fn remove_all_instances(
+    deployment: &mut Deployment,
+    docker: &Docker,
+    kind: &str,
+    intentional_shutdowns: &IntentionalShutdowns,
+) {
     let instance_count = deployment.instances.len();
     for instance in deployment.instances.iter() {
+        intentional_shutdowns.mark(instance.to_string()).await;
         remove_container(docker.clone(), instance.to_string()).await;
         info!("Docker container {} deleted", instance);
     }
@@ -136,10 +144,11 @@ async fn handle_job_deployment(
     mut deployment: Deployment,
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
+    intentional_shutdowns: IntentionalShutdowns,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
-        remove_all_instances(&mut deployment, &docker, "job").await;
+        remove_all_instances(&mut deployment, &docker, "job", &intentional_shutdowns).await;
         return deployment;
     }
 
@@ -178,10 +187,11 @@ async fn handle_worker_deployment(
     mut deployment: Deployment,
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
+    intentional_shutdowns: IntentionalShutdowns,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
-        remove_all_instances(&mut deployment, &docker, "worker").await;
+        remove_all_instances(&mut deployment, &docker, "worker", &intentional_shutdowns).await;
     } else if deployment.restart_count >= MAX_RESTART_COUNT {
         deployment.status = DeploymentStatus::CrashLoopBackOff;
         return deployment;
@@ -252,6 +262,7 @@ async fn handle_worker_deployment(
                 }
 
                 if let Some(container_id) = deployment.instances.first().cloned() {
+                    intentional_shutdowns.mark(container_id.clone()).await;
                     remove_container(docker.clone(), container_id.clone()).await;
                     deployment.instances.remove(0);
                     info!(
