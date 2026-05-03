@@ -26,7 +26,32 @@ Before using the Cloud Hypervisor runtime, you need:
     sudo usermod -aG kvm $USER
     ```
 
-3. **Firmware** (`hypervisor-fw`) placed at the default location.
+3. **Network capabilities on the `cloud-hypervisor` binary.**
+
+    Cloud Hypervisor needs to create a TAP interface for each VM, which requires `CAP_NET_ADMIN`. Without these capabilities the VM creation fails with `Operation not permitted` on `ConfigureTap`. Grant them once on the binary so Ring does not need to run as root:
+
+    ```bash
+    sudo setcap cap_net_admin,cap_net_raw+ep $(which cloud-hypervisor)
+
+    # Verify
+    getcap $(which cloud-hypervisor)
+    # → /usr/local/bin/cloud-hypervisor cap_net_admin,cap_net_raw=ep
+    ```
+
+    Re-run the command after every Cloud Hypervisor upgrade — `setcap` does not survive a new binary.
+
+4. **Seccomp configuration (only if VMs die with `SIGSYS` on boot).**
+
+    On recent kernels Cloud Hypervisor's default seccomp filter sometimes kills the VM process on the first syscall it does not whitelist. Symptom in the Ring log:
+
+    ```
+    cloud-hypervisor process for ch-... exited with signal: 31 (SIGSYS) (core dumped)
+    stderr: ==== Possible seccomp violation ====
+    ```
+
+    If you hit this, set `seccomp = "false"` (or `"log"` to keep the filter enabled but only log violations) in the runtime config (see [Configuration](#configuration)). Production deployments should leave it unset to keep the default kill-on-violation policy.
+
+5. **Firmware** (`hypervisor-fw`) placed at the default location.
 
     Despite the filename `vmlinux` below, this is the EFI firmware binary, not a Linux kernel. The path is what `firmware_path` resolves to by default.
 
@@ -36,7 +61,7 @@ Before using the Cloud Hypervisor runtime, you need:
       -o ~/.config/kemeter/ring/cloud-hypervisor/vmlinux
     ```
 
-4. **A bootable raw disk image** for your VM. See [Preparing a VM Image](#preparing-a-vm-image).
+6. **A bootable raw disk image** for your VM. See [Preparing a VM Image](#preparing-a-vm-image).
 
 ## Configuration
 
@@ -57,6 +82,8 @@ user.salt = "changeme"
 firmware_path = "/path/to/hypervisor-fw"
 binary_path = "/usr/local/bin/cloud-hypervisor"
 socket_dir = "/var/lib/ring/cloud-hypervisor/sockets"
+# Optional escape hatch for the seccomp issue described in Prerequisites.
+# seccomp = "false"
 ```
 
 All fields are optional. When omitted, Ring uses these defaults:
@@ -66,6 +93,7 @@ All fields are optional. When omitted, Ring uses these defaults:
 | `firmware_path` | `$RING_CONFIG_DIR/cloud-hypervisor/vmlinux` |
 | `binary_path` | `cloud-hypervisor` (from `$PATH`) |
 | `socket_dir` | `$RING_CONFIG_DIR/cloud-hypervisor/sockets` |
+| `seccomp` | unset (CH applies its built-in default — kill on violation). Set to `"false"` or `"log"` only when needed (see Prerequisites). |
 
 ## Deploying a VM
 
