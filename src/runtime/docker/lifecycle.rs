@@ -81,6 +81,18 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             "RuntimeError",
             format!("Docker error: {}", msg),
         ),
+        // CH-specific variants — Docker should never produce them, but the
+        // enum is shared so we map them to the closest Docker-side state.
+        RuntimeError::FirmwareNotFound(msg) => (
+            DeploymentStatus::Failed,
+            "FirmwareNotFound",
+            format!("Firmware not found: {}", msg),
+        ),
+        RuntimeError::VmStartFailed(msg) => (
+            DeploymentStatus::Error,
+            "VmStartFailed",
+            format!("VM start failed: {}", msg),
+        ),
         RuntimeError::Io(e) => (
             DeploymentStatus::FileSystemError,
             "FileSystemError",

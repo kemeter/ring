@@ -4,6 +4,7 @@ use super::client::{
 };
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
+use crate::runtime::error::RuntimeError;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
@@ -62,11 +63,49 @@ impl CloudHypervisorRuntimeConfig {
 
 pub struct CloudHypervisorLifecycle {
     config: CloudHypervisorRuntimeConfig,
+    /// In-memory backoff state per deployment id: timestamp of the next
+    /// allowed retry. Cleared once the VM boots successfully or the deployment
+    /// reaches a terminal state. State is intentionally non-persistent — at
+    /// process restart all deployments get a fresh attempt, which is fine
+    /// because the scheduler will requeue them anyway.
+    backoff: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 impl CloudHypervisorLifecycle {
     pub fn new(config: CloudHypervisorRuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            backoff: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Returns true if the deployment is currently in a backoff window and
+    /// should be skipped this cycle.
+    fn in_backoff(&self, deployment_id: &str) -> bool {
+        let guard = self.backoff.lock().expect("backoff mutex poisoned");
+        guard
+            .get(deployment_id)
+            .map(|next| std::time::Instant::now() < *next)
+            .unwrap_or(false)
+    }
+
+    /// Schedule the next retry using exponential backoff capped at 60s.
+    /// `attempt` is `restart_count` (already incremented) — first failure
+    /// waits 1s, then 2, 4, 8, 16, 32, 60, 60...
+    fn arm_backoff(&self, deployment_id: &str, attempt: u32) {
+        let secs = 1u64.checked_shl(attempt.saturating_sub(1)).unwrap_or(60).min(60);
+        let next = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        self.backoff
+            .lock()
+            .expect("backoff mutex poisoned")
+            .insert(deployment_id.to_string(), next);
+    }
+
+    fn clear_backoff(&self, deployment_id: &str) {
+        self.backoff
+            .lock()
+            .expect("backoff mutex poisoned")
+            .remove(deployment_id);
     }
 
     fn socket_path(&self, instance_id: &str) -> PathBuf {
@@ -121,29 +160,42 @@ impl CloudHypervisorLifecycle {
         instances
     }
 
-    fn path_str(path: &Path) -> Result<&str, String> {
-        path.to_str()
-            .ok_or_else(|| format!("Path contains non-UTF-8 characters: {:?}", path))
+    fn path_str(path: &Path) -> Result<&str, RuntimeError> {
+        path.to_str().ok_or_else(|| {
+            RuntimeError::Other(format!("Path contains non-UTF-8 characters: {:?}", path))
+        })
     }
 
     /// Start the cloud-hypervisor process for a VM instance.
+    ///
+    /// Errors are typed so the caller can distinguish permanent failures
+    /// (`FirmwareNotFound`, `ImageNotFound`) — which would loop forever if
+    /// retried — from transient ones (`VmStartFailed`) that warrant a retry.
     async fn start_vm_process(
         &self,
         instance_id: &str,
         deployment: &Deployment,
-    ) -> Result<(), String> {
+    ) -> Result<(), RuntimeError> {
+        // Permanent: missing firmware. The operator must fix `firmware_path`.
+        let firmware = PathBuf::from(&self.config.firmware_path);
+        if !firmware.exists() {
+            return Err(RuntimeError::FirmwareNotFound(
+                self.config.firmware_path.clone(),
+            ));
+        }
+
         let socket = self.socket_path(instance_id);
         let socket_str = Self::path_str(&socket)?;
 
         // Ensure socket directory exists
         tokio::fs::create_dir_all(&self.config.socket_dir)
             .await
-            .map_err(|e| format!("Failed to create socket dir: {}", e))?;
+            .map_err(|e| RuntimeError::Io(e))?;
 
-        // Each instance gets a sparse copy of the base image
+        // Permanent: missing VM image. The operator must fix the deployment.
         let base_image = PathBuf::from(&deployment.image);
         if !base_image.exists() {
-            return Err(format!("VM image not found: {}", deployment.image));
+            return Err(RuntimeError::ImageNotFound(deployment.image.clone()));
         }
 
         let instance_image = self.instance_image_path(instance_id);
@@ -156,11 +208,14 @@ impl CloudHypervisorLifecycle {
                 ])
                 .output()
                 .await
-                .map_err(|e| format!("Failed to copy VM image: {}", e))?;
+                .map_err(|e| RuntimeError::Io(e))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!("Failed to copy VM image: {}", stderr));
+                return Err(RuntimeError::VmStartFailed(format!(
+                    "Failed to copy VM image: {}",
+                    stderr
+                )));
             }
         }
 
@@ -179,7 +234,9 @@ impl CloudHypervisorLifecycle {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to start cloud-hypervisor: {}", e))?;
+            .map_err(|e| {
+                RuntimeError::VmStartFailed(format!("Failed to start cloud-hypervisor: {}", e))
+            })?;
 
         let stderr = child.stderr.take();
 
@@ -233,7 +290,9 @@ impl CloudHypervisorLifecycle {
         }
 
         if !socket.exists() {
-            return Err("cloud-hypervisor socket not available after 5s".to_string());
+            return Err(RuntimeError::VmStartFailed(
+                "cloud-hypervisor socket not available after 5s".to_string(),
+            ));
         }
 
         let client = CloudHypervisorClient::new(socket_str);
@@ -274,12 +333,12 @@ impl CloudHypervisorLifecycle {
         client
             .create_vm(&vm_config)
             .await
-            .map_err(|e| format!("Failed to create VM: {}", e))?;
+            .map_err(|e| RuntimeError::VmStartFailed(format!("Failed to create VM: {}", e)))?;
 
         client
             .boot_vm()
             .await
-            .map_err(|e| format!("Failed to boot VM: {}", e))?;
+            .map_err(|e| RuntimeError::VmStartFailed(format!("Failed to boot VM: {}", e)))?;
 
         info!(
             "Cloud Hypervisor VM {} started for deployment {}",
@@ -363,6 +422,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 }
             }
             deployment.instances.clear();
+            self.clear_backoff(&deployment.id);
             return deployment;
         }
 
@@ -373,6 +433,13 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
 
         let current_count = deployment.instances.len();
         let target_count = deployment.replicas as usize;
+
+        // Skip the cycle while we're in a backoff window after a recent
+        // failure. Without this guard the scheduler would respawn CH at every
+        // tick (1s) and burn CPU/disk until restart_count caps out.
+        if current_count < target_count && self.in_backoff(&deployment.id) {
+            return deployment;
+        }
 
         if current_count < target_count
             && deployment.status != DeploymentStatus::CrashLoopBackOff
@@ -386,6 +453,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             match self.start_vm_process(&instance_id, &deployment).await {
                 Ok(()) => {
                     deployment.instances.push(instance_id);
+                    self.clear_backoff(&deployment.id);
                     if deployment.status == DeploymentStatus::Creating
                         || deployment.status == DeploymentStatus::Pending
                     {
@@ -393,27 +461,49 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                     }
                 }
                 Err(e) => {
-                    // Mirror the Docker runtime behaviour: increment the
-                    // restart counter, surface the failure as an event, and let
-                    // the scheduler retry on the next cycle. Once the counter
-                    // hits MAX_RESTART_COUNT the deployment moves to
-                    // CrashLoopBackOff, which is terminal until the user acts.
                     error!(
                         "Failed to start Cloud Hypervisor VM for deployment {}: {}",
                         deployment.id, e
                     );
-                    deployment.restart_count += 1;
+
+                    // Classify the failure: permanent errors (missing
+                    // firmware/image) move the deployment to a terminal state
+                    // immediately so the scheduler stops looping. Transient
+                    // errors (process spawn, socket, API) increment
+                    // restart_count and let the scheduler retry, capping at
+                    // MAX_RESTART_COUNT to land in CrashLoopBackOff.
+                    let (status, reason) = match &e {
+                        RuntimeError::FirmwareNotFound(_) => (
+                            Some(DeploymentStatus::Failed),
+                            "FirmwareNotFound",
+                        ),
+                        RuntimeError::ImageNotFound(_) => {
+                            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
+                        }
+                        _ => (None, "VmStartFailed"),
+                    };
+
                     deployment.emit_event(
                         "error",
-                        format!("Failed to start VM (attempt {}): {}", deployment.restart_count, e),
+                        format!("{}", e),
                         "cloud-hypervisor",
-                        Some("VmStartFailed"),
+                        Some(reason),
                     );
-                    if deployment.restart_count >= MAX_RESTART_COUNT {
-                        deployment.status = DeploymentStatus::CrashLoopBackOff;
+
+                    if let Some(terminal_status) = status {
+                        deployment.status = terminal_status;
+                        self.clear_backoff(&deployment.id);
+                    } else {
+                        deployment.restart_count += 1;
+                        if deployment.restart_count >= MAX_RESTART_COUNT {
+                            deployment.status = DeploymentStatus::CrashLoopBackOff;
+                            self.clear_backoff(&deployment.id);
+                        } else {
+                            // Schedule the next retry with exponential backoff
+                            // to avoid spinning at the scheduler's tick rate.
+                            self.arm_backoff(&deployment.id, deployment.restart_count);
+                        }
                     }
-                    // Otherwise: keep the current status (Creating/Running) so
-                    // the scheduler picks it up again next cycle.
                 }
             }
         } else if current_count > target_count {
