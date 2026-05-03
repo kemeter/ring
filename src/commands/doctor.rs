@@ -67,6 +67,56 @@ fn check_kvm() -> Check {
     }
 }
 
+/// Verify the cloud-hypervisor binary has the network capabilities it needs
+/// to create TAP interfaces. Without these the VM dies at boot with
+/// `ConfigureTap PermissionDenied` and the only fix is `setcap`.
+fn check_capabilities(binary: &str) -> Check {
+    // Resolve the binary to an absolute path: getcap won't search $PATH.
+    let resolved = match ShellCommand::new("which").arg(binary).output() {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        _ => {
+            return Check::fail(
+                "Capabilities",
+                &format!("cannot resolve '{}' in PATH", binary),
+            );
+        }
+    };
+
+    let output = match ShellCommand::new("getcap").arg(&resolved).output() {
+        Ok(o) => o,
+        Err(_) => {
+            return Check::fail(
+                "Capabilities",
+                "'getcap' not found (install libcap2-bin / libcap)",
+            );
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let has_net_admin = stdout.contains("cap_net_admin");
+    let has_net_raw = stdout.contains("cap_net_raw");
+
+    let fix_hint = format!(
+        "run: sudo setcap cap_net_admin,cap_net_raw+ep {}",
+        resolved
+    );
+
+    if has_net_admin && has_net_raw {
+        Check::ok("Capabilities", &format!("cap_net_admin,cap_net_raw set on {}", resolved))
+    } else if !has_net_admin && !has_net_raw {
+        Check::fail(
+            "Capabilities",
+            &format!("missing cap_net_admin and cap_net_raw on {} ({})", resolved, fix_hint),
+        )
+    } else {
+        let missing = if has_net_admin { "cap_net_raw" } else { "cap_net_admin" };
+        Check::fail(
+            "Capabilities",
+            &format!("missing {} on {} ({})", missing, resolved, fix_hint),
+        )
+    }
+}
+
 fn check_docker() -> Vec<Check> {
     vec![check_binary("docker", "--version")]
 }
@@ -83,6 +133,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     checks.push(check_binary(binary, "--version"));
 
     checks.push(check_kvm());
+    checks.push(check_capabilities(binary));
 
     let default_firmware = format!(
         "{}/cloud-hypervisor/vmlinux",
