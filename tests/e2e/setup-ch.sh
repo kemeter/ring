@@ -12,7 +12,9 @@ set -euo pipefail
 
 RING_E2E_CACHE_DIR="${RING_E2E_CACHE_DIR:-$HOME/.cache/ring-e2e}"
 RING_E2E_CH_IMAGE="${RING_E2E_CH_IMAGE:-$RING_E2E_CACHE_DIR/ch-base.raw}"
-RING_E2E_CH_IMAGE_URL="https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/36/Cloud/x86_64/images/Fedora-Cloud-Base-36-1.5.x86_64.raw.xz"
+# Cirros is the standard tiny cloud image used for boot tests (OpenStack CI).
+# ~12 MB download, ~50 MB raw. Boots in seconds, no cloud-init dance required.
+RING_E2E_CH_IMAGE_URL="https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img"
 RING_E2E_CH_FIRMWARE="${RING_E2E_CH_FIRMWARE:-$HOME/.config/kemeter/ring/cloud-hypervisor/vmlinux}"
 
 # Prerequisites that the user must install themselves. Fail fast if missing.
@@ -35,15 +37,17 @@ check_ch_prereqs() {
     return 1
   fi
 
-  for cmd in xz curl; do
+  for cmd in qemu-img curl; do
     if ! command -v "$cmd" > /dev/null 2>&1; then
       echo "[ch-setup] FAIL: '$cmd' not found in PATH" >&2
+      echo "           qemu-img is shipped with the qemu-utils package" >&2
       return 1
     fi
   done
 }
 
-# Download and decompress the test image if it isn't cached yet.
+# Download and convert the test image to raw if it isn't cached yet.
+# Cirros ships as qcow2; CH only boots raw images, so we convert on first run.
 ensure_ch_image() {
   if [ -f "$RING_E2E_CH_IMAGE" ]; then
     echo "[ch-setup] image already present: $RING_E2E_CH_IMAGE"
@@ -51,18 +55,17 @@ ensure_ch_image() {
   fi
 
   mkdir -p "$RING_E2E_CACHE_DIR"
-  local archive="$RING_E2E_CACHE_DIR/ch-base.raw.xz"
+  local qcow2="$RING_E2E_CACHE_DIR/ch-base.qcow2"
 
-  echo "[ch-setup] downloading Fedora 36 Cloud Base (~280 MB compressed, ~5 GB raw)..."
-  curl -fL --retry 3 -o "$archive" "$RING_E2E_CH_IMAGE_URL"
+  echo "[ch-setup] downloading Cirros 0.6.2 (~12 MB)..."
+  curl -fL --retry 3 -o "$qcow2" "$RING_E2E_CH_IMAGE_URL"
 
-  echo "[ch-setup] decompressing to $RING_E2E_CH_IMAGE..."
-  xz -d --keep "$archive"
-  # `xz -d --keep` produces ch-base.raw alongside ch-base.raw.xz
-  rm -f "$archive"
+  echo "[ch-setup] converting qcow2 to raw at $RING_E2E_CH_IMAGE..."
+  qemu-img convert -f qcow2 -O raw "$qcow2" "$RING_E2E_CH_IMAGE"
+  rm -f "$qcow2"
 
   if [ ! -f "$RING_E2E_CH_IMAGE" ]; then
-    echo "[ch-setup] FAIL: image missing after decompression" >&2
+    echo "[ch-setup] FAIL: image missing after conversion" >&2
     return 1
   fi
 
@@ -89,10 +92,15 @@ setup_ch() {
   # Inject a [runtime.cloud_hypervisor] block into the config.toml that
   # start_ring generates. This is the proper way to point Ring at the host
   # firmware and binary regardless of RING_CONFIG_DIR.
+  #
+  # seccomp = "false" because the CH seccomp whitelist is too strict on recent
+  # kernels (VMs die with SIGSYS otherwise). E2E only — production should leave
+  # this unset to keep CH's default kill-on-violation policy.
   RING_EXTRA_CONFIG=$(cat <<EOF
 [contexts.default.runtime.cloud_hypervisor]
 firmware_path = "$RING_E2E_CH_FIRMWARE"
 socket_dir = "$RING_E2E_CH_SOCKET_DIR"
+seccomp = "false"
 EOF
 )
   export RING_EXTRA_CONFIG

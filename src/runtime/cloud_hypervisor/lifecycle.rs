@@ -2,7 +2,7 @@ use super::client::{
     CloudHypervisorClient, ConsoleConfig, CpuConfig, DiskConfig, MemoryConfig, NetConfig,
     PayloadConfig, VmConfig,
 };
-use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use async_trait::async_trait;
@@ -21,6 +21,9 @@ pub(crate) struct CloudHypervisorRuntimeConfig {
     pub firmware_path: String,
     /// Directory for VM API sockets and instance disk images.
     pub socket_dir: String,
+    /// Forwarded to `cloud-hypervisor --seccomp <value>` when set. None means
+    /// CH applies its own default (kill on violation).
+    pub seccomp: Option<String>,
 }
 
 impl Default for CloudHypervisorRuntimeConfig {
@@ -30,6 +33,7 @@ impl Default for CloudHypervisorRuntimeConfig {
             binary_path: "cloud-hypervisor".to_string(),
             firmware_path: format!("{}/cloud-hypervisor/vmlinux", base_dir),
             socket_dir: format!("{}/cloud-hypervisor/sockets", base_dir),
+            seccomp: None,
         }
     }
 }
@@ -51,6 +55,7 @@ impl CloudHypervisorRuntimeConfig {
                 .clone()
                 .unwrap_or(defaults.firmware_path),
             socket_dir: user.socket_dir.clone().unwrap_or(defaults.socket_dir),
+            seccomp: user.seccomp.clone(),
         }
     }
 }
@@ -162,24 +167,53 @@ impl CloudHypervisorLifecycle {
         // Parse resource limits
         let (vcpus, memory_mb) = parse_resources(deployment);
 
-        // Start cloud-hypervisor process
-        let mut child = Command::new(&self.config.binary_path)
-            .arg("--api-socket")
-            .arg(socket_str)
+        // Start cloud-hypervisor process. We capture stderr so that crashes
+        // (e.g. seccomp violations, missing kvm caps, bad firmware) surface in
+        // the Ring log instead of being silently dropped.
+        let mut command = Command::new(&self.config.binary_path);
+        command.arg("--api-socket").arg(socket_str);
+        if let Some(seccomp) = &self.config.seccomp {
+            command.arg("--seccomp").arg(seccomp);
+        }
+        let mut child = command
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to start cloud-hypervisor: {}", e))?;
+
+        let stderr = child.stderr.take();
 
         // Monitor the child process in the background
         let child_instance_id = instance_id.to_string();
         tokio::spawn(async move {
+            let stderr_task = stderr.map(|mut s| {
+                tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let mut buf = Vec::new();
+                    let _ = s.read_to_end(&mut buf).await;
+                    String::from_utf8_lossy(&buf).into_owned()
+                })
+            });
+
             match child.wait().await {
                 Ok(status) => {
-                    warn!(
-                        "cloud-hypervisor process for {} exited with {}",
-                        child_instance_id, status
-                    );
+                    let stderr_output = match stderr_task {
+                        Some(handle) => handle.await.unwrap_or_default(),
+                        None => String::new(),
+                    };
+                    if status.success() {
+                        debug!(
+                            "cloud-hypervisor process for {} exited cleanly",
+                            child_instance_id
+                        );
+                    } else {
+                        error!(
+                            "cloud-hypervisor process for {} exited with {} — stderr: {}",
+                            child_instance_id,
+                            status,
+                            stderr_output.trim()
+                        );
+                    }
                 }
                 Err(e) => {
                     error!(
@@ -340,7 +374,9 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         let current_count = deployment.instances.len();
         let target_count = deployment.replicas as usize;
 
-        if current_count < target_count {
+        if current_count < target_count
+            && deployment.status != DeploymentStatus::CrashLoopBackOff
+        {
             let instance_id = format!(
                 "ch-{}-{}",
                 &deployment.id[..8.min(deployment.id.len())],
@@ -357,12 +393,27 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                     }
                 }
                 Err(e) => {
+                    // Mirror the Docker runtime behaviour: increment the
+                    // restart counter, surface the failure as an event, and let
+                    // the scheduler retry on the next cycle. Once the counter
+                    // hits MAX_RESTART_COUNT the deployment moves to
+                    // CrashLoopBackOff, which is terminal until the user acts.
                     error!(
                         "Failed to start Cloud Hypervisor VM for deployment {}: {}",
                         deployment.id, e
                     );
                     deployment.restart_count += 1;
-                    deployment.status = DeploymentStatus::Failed;
+                    deployment.emit_event(
+                        "error",
+                        format!("Failed to start VM (attempt {}): {}", deployment.restart_count, e),
+                        "cloud-hypervisor",
+                        Some("VmStartFailed"),
+                    );
+                    if deployment.restart_count >= MAX_RESTART_COUNT {
+                        deployment.status = DeploymentStatus::CrashLoopBackOff;
+                    }
+                    // Otherwise: keep the current status (Creating/Running) so
+                    // the scheduler picks it up again next cycle.
                 }
             }
         } else if current_count > target_count {

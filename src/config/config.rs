@@ -60,6 +60,10 @@ pub(crate) struct CloudHypervisorConfig {
     pub(crate) binary_path: Option<String>,
     pub(crate) firmware_path: Option<String>,
     pub(crate) socket_dir: Option<String>,
+    /// Forwarded to `cloud-hypervisor --seccomp <value>`. Accepts `true`
+    /// (default), `false` or `log`. Set to `false` on hosts where the kernel
+    /// uses syscalls not whitelisted by CH (otherwise VMs die with SIGSYS).
+    pub(crate) seccomp: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
