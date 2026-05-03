@@ -5,6 +5,7 @@ use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
@@ -559,6 +560,11 @@ pub(crate) async fn schedule(
     let cleanup_interval = Duration::from_secs(300);
     let mut last_cleanup = Instant::now();
 
+    // Per-deployment retry backoff. Shared across runtimes so any new runtime
+    // (Docker, Cloud Hypervisor, future Firecracker, ...) automatically gets
+    // exponential backoff on transient failures without duplicating the logic.
+    let mut backoff = RetryBackoff::new();
+
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
         interval_seconds, apply_timeout_secs
@@ -601,6 +607,15 @@ pub(crate) async fn schedule(
                 }
             };
 
+            // Honour the retry backoff. Deletes always go through so the
+            // user can wipe a stuck deployment without waiting.
+            if deployment.status != DeploymentStatus::Deleted
+                && backoff.is_blocked(&deployment.id)
+            {
+                debug!("Deployment {} in retry backoff, skipping cycle", deployment.id);
+                continue;
+            }
+
             let configs = match load_configs(&pool, &deployment).await {
                 Some(c) => c,
                 None => continue,
@@ -623,6 +638,7 @@ pub(crate) async fn schedule(
                     }
                 };
 
+            let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(
                 &pool,
                 &deployment,
@@ -637,6 +653,20 @@ pub(crate) async fn schedule(
                 Some(d) => d,
                 None => continue,
             };
+
+            // Translate the runtime's outcome into a backoff decision.
+            // A bumped restart_count means the runtime hit a transient
+            // failure — arm the next retry. Otherwise (success, terminal
+            // status, or deleted) drop any pending backoff so the next
+            // legitimate failure starts at 1s again.
+            if result.restart_count > restart_count_before
+                && result.status != DeploymentStatus::CrashLoopBackOff
+                && result.status != DeploymentStatus::Failed
+            {
+                backoff.arm(&result.id, result.restart_count);
+            } else {
+                backoff.clear(&result.id);
+            }
 
             persist_pending_events(&pool, &mut result).await;
 

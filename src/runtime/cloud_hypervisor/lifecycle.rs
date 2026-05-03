@@ -63,49 +63,11 @@ impl CloudHypervisorRuntimeConfig {
 
 pub struct CloudHypervisorLifecycle {
     config: CloudHypervisorRuntimeConfig,
-    /// In-memory backoff state per deployment id: timestamp of the next
-    /// allowed retry. Cleared once the VM boots successfully or the deployment
-    /// reaches a terminal state. State is intentionally non-persistent — at
-    /// process restart all deployments get a fresh attempt, which is fine
-    /// because the scheduler will requeue them anyway.
-    backoff: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
 }
 
 impl CloudHypervisorLifecycle {
     pub fn new(config: CloudHypervisorRuntimeConfig) -> Self {
-        Self {
-            config,
-            backoff: std::sync::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
-    /// Returns true if the deployment is currently in a backoff window and
-    /// should be skipped this cycle.
-    fn in_backoff(&self, deployment_id: &str) -> bool {
-        let guard = self.backoff.lock().expect("backoff mutex poisoned");
-        guard
-            .get(deployment_id)
-            .map(|next| std::time::Instant::now() < *next)
-            .unwrap_or(false)
-    }
-
-    /// Schedule the next retry using exponential backoff capped at 60s.
-    /// `attempt` is `restart_count` (already incremented) — first failure
-    /// waits 1s, then 2, 4, 8, 16, 32, 60, 60...
-    fn arm_backoff(&self, deployment_id: &str, attempt: u32) {
-        let secs = 1u64.checked_shl(attempt.saturating_sub(1)).unwrap_or(60).min(60);
-        let next = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-        self.backoff
-            .lock()
-            .expect("backoff mutex poisoned")
-            .insert(deployment_id.to_string(), next);
-    }
-
-    fn clear_backoff(&self, deployment_id: &str) {
-        self.backoff
-            .lock()
-            .expect("backoff mutex poisoned")
-            .remove(deployment_id);
+        Self { config }
     }
 
     fn socket_path(&self, instance_id: &str) -> PathBuf {
@@ -422,7 +384,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 }
             }
             deployment.instances.clear();
-            self.clear_backoff(&deployment.id);
             return deployment;
         }
 
@@ -433,13 +394,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
 
         let current_count = deployment.instances.len();
         let target_count = deployment.replicas as usize;
-
-        // Skip the cycle while we're in a backoff window after a recent
-        // failure. Without this guard the scheduler would respawn CH at every
-        // tick (1s) and burn CPU/disk until restart_count caps out.
-        if current_count < target_count && self.in_backoff(&deployment.id) {
-            return deployment;
-        }
 
         if current_count < target_count
             && deployment.status != DeploymentStatus::CrashLoopBackOff
@@ -453,7 +407,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             match self.start_vm_process(&instance_id, &deployment).await {
                 Ok(()) => {
                     deployment.instances.push(instance_id);
-                    self.clear_backoff(&deployment.id);
                     if deployment.status == DeploymentStatus::Creating
                         || deployment.status == DeploymentStatus::Pending
                     {
@@ -492,17 +445,13 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
 
                     if let Some(terminal_status) = status {
                         deployment.status = terminal_status;
-                        self.clear_backoff(&deployment.id);
                     } else {
                         deployment.restart_count += 1;
                         if deployment.restart_count >= MAX_RESTART_COUNT {
                             deployment.status = DeploymentStatus::CrashLoopBackOff;
-                            self.clear_backoff(&deployment.id);
-                        } else {
-                            // Schedule the next retry with exponential backoff
-                            // to avoid spinning at the scheduler's tick rate.
-                            self.arm_backoff(&deployment.id, deployment.restart_count);
                         }
+                        // The scheduler observes the bumped restart_count and
+                        // arms the backoff window for the next cycle.
                     }
                 }
             }
