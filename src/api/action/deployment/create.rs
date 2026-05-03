@@ -47,6 +47,31 @@ fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
                     .to_string(),
             );
         }
+
+        // Reject silently-dropped fields up front so users get a clear error
+        // instead of a deployment that runs but ignores half its configuration.
+        if !input.environment.is_empty() {
+            return Err(
+                "environment variables are not propagated to cloud-hypervisor VMs (alpha); use a cloud-init image or bake them into the disk".to_string(),
+            );
+        }
+
+        if !input.command.is_empty() {
+            return Err(
+                "custom commands are not supported on cloud-hypervisor runtime (alpha); the VM boots whatever its image is configured to run".to_string(),
+            );
+        }
+
+        // CH expects a raw disk image path on the host, not a Docker image
+        // reference. Anything that doesn't start with '/' is almost certainly
+        // a Docker reference (e.g. `nginx:latest`) — fail early instead of
+        // letting it fail much later with a confusing "VM image not found".
+        if !input.image.starts_with('/') {
+            return Err(format!(
+                "cloud-hypervisor runtime expects an absolute path to a raw disk image, got '{}' (Docker image references are not supported)",
+                input.image
+            ));
+        }
     }
     Ok(())
 }
@@ -510,6 +535,88 @@ mod tests {
         assert!(
             body.message
                 .contains("command health checks are not supported on cloud-hypervisor runtime")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_rejects_environment() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-env",
+                "namespace": "ring",
+                "image": "/tmp/fake.raw",
+                "environment": { "FOO": "bar" }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message
+                .contains("environment variables are not propagated"),
+            "unexpected error: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_rejects_command() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-cmd",
+                "namespace": "ring",
+                "image": "/tmp/fake.raw",
+                "command": ["/bin/sh", "-c", "echo hi"]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message.contains("custom commands are not supported"),
+            "unexpected error: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn create_cloud_hypervisor_rejects_docker_image_reference() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm-with-docker-image",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message
+                .contains("absolute path to a raw disk image"),
+            "unexpected error: {}",
+            body.message
         );
     }
 
