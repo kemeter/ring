@@ -292,15 +292,25 @@ impl CloudHypervisorLifecycle {
             }),
         };
 
-        client
-            .create_vm(&vm_config)
-            .await
-            .map_err(|e| RuntimeError::VmStartFailed(format!("Failed to create VM: {}", e)))?;
+        // From here on, any failure must clean up the half-created VM:
+        // otherwise the socket and possibly a Created-state VM linger and
+        // scan_instances counts them as live, which makes the scheduler
+        // believe the deployment is satisfied and skip every retry.
+        if let Err(e) = client.create_vm(&vm_config).await {
+            self.stop_vm(instance_id).await;
+            return Err(RuntimeError::VmStartFailed(format!(
+                "Failed to create VM: {}",
+                e
+            )));
+        }
 
-        client
-            .boot_vm()
-            .await
-            .map_err(|e| RuntimeError::VmStartFailed(format!("Failed to boot VM: {}", e)))?;
+        if let Err(e) = client.boot_vm().await {
+            self.stop_vm(instance_id).await;
+            return Err(RuntimeError::VmStartFailed(format!(
+                "Failed to boot VM: {}",
+                e
+            )));
+        }
 
         info!(
             "Cloud Hypervisor VM {} started for deployment {}",

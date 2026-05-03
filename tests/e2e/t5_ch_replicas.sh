@@ -100,8 +100,13 @@ fi
 # Each replica must have its own CH API socket and its own per-instance disk
 # copy. Anything less means the scheduler isn't actually fanning out to
 # multiple VMs (e.g. all replicas sharing one socket = silent collision).
-wait_ch_socket_count 3 60
-wait_ch_disk_count 3 60
+#
+# Status flips to 'running' as soon as the first VM boots, so we cannot use
+# wait_deployment_status here — we need to wait for *all* replicas to come up.
+# Each VM boot is sequential at the scheduler tick rate, hence the generous
+# 180s ceiling for 3 VMs (~10-15s per boot in practice with headroom).
+wait_ch_socket_count 3 180
+wait_ch_disk_count 3 180
 
 # All 3 socket filenames must be distinct (ch-<uuid>.sock). Same for disks.
 distinct_sockets=$(find "$RING_E2E_CH_SOCKET_DIR" -maxdepth 1 -type s -name "ch-*.sock" -printf "%f\n" | sort -u | wc -l | tr -d ' ')
