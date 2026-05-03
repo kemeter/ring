@@ -63,6 +63,20 @@ Before using the Cloud Hypervisor runtime, you need:
 
 6. **A bootable raw disk image** for your VM. See [Preparing a VM Image](#preparing-a-vm-image).
 
+7. **`xorriso`** (only if you set `environment` on a deployment).
+
+    Ring uses `xorriso` to build a cloud-init NoCloud cidata ISO that carries your environment variables to the guest. Without it, deployments that ship `environment: { ... }` will fail to start.
+
+    ```bash
+    # Debian / Ubuntu
+    sudo apt install xorriso
+
+    # Fedora
+    sudo dnf install xorriso
+    ```
+
+    `ring doctor` reports whether `xorriso` is available.
+
 ## Configuration
 
 Add a `runtime.cloud_hypervisor` section to your `config.toml` to customize paths:
@@ -162,6 +176,32 @@ health_checks:
 
 `command` health checks are **not supported** and will be rejected by the API.
 
+## Environment variables
+
+Declared `environment:` entries are delivered to the guest VM via the cloud-init NoCloud datasource — Ring builds a small read-only ISO (`<instance>.cidata.iso`) carrying a `user-data` payload and attaches it as a second drive. At boot, cloud-init (preinstalled on every standard cloud image) writes them to:
+
+- `/etc/ring/env` — `KEY=value` lines, mode `0600`
+- `/etc/profile.d/ring-env.sh` — `export` lines for interactive shells
+- `/etc/systemd/system/service.d/ring-env.conf` — global drop-in with `EnvironmentFile=-/etc/ring/env` so every service unit picks them up
+
+```yaml
+deployments:
+  api:
+    runtime: cloud-hypervisor
+    image: /var/lib/ring/images/ubuntu-focal.raw
+    replicas: 1
+    environment:
+      DATABASE_URL: postgres://db.internal:5432/app
+      LOG_LEVEL: debug
+```
+
+**Requirements**:
+
+- `xorriso` installed on the host (see [Prerequisites](#prerequisites) step 7)
+- A guest image that ships cloud-init — true for Ubuntu Cloud, Fedora Cloud, Debian Cloud, Cirros, and most distro-published cloud images. Custom images built from scratch (e.g. minimal Buildroot) won't pick up the variables unless you add cloud-init or read `/etc/ring/env` yourself.
+
+The ISO is regenerated on every VM start and removed when the VM stops, so changes to `environment` are picked up the next time the deployment is reapplied.
+
 ## Preparing a VM Image
 
 The Cloud Hypervisor runtime expects a bootable raw disk image with an EFI partition (required by `hypervisor-fw`). Here are two approaches:
@@ -193,11 +233,11 @@ The following features are **not yet available** on the Cloud Hypervisor runtime
 |---|---|
 | Volumes (bind, named, config) | Not supported — rejected at API |
 | `command` health checks | Not supported — rejected at API |
-| Environment variables | Not propagated to the guest VM |
-| Custom commands (`command: [...]`) | Not propagated to the guest VM |
+| Custom commands (`command: [...]`) | Not supported — rejected at API |
+| Docker image references | Not supported — rejected at API |
+| Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
 | Deployment logs (`ring deployment logs`) | Not available for CH deployments |
 | Deployment metrics (`ring deployment metrics`) | Not available for CH deployments |
-| Docker image references | Not supported — use raw disk images |
 
 These limitations will be addressed in future releases. See the project roadmap for details.
 

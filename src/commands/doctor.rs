@@ -134,6 +134,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
 
     checks.push(check_kvm());
     checks.push(check_capabilities(binary));
+    checks.push(check_xorriso());
 
     let default_firmware = format!(
         "{}/cloud-hypervisor/vmlinux",
@@ -150,6 +151,22 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     checks.push(check_virtiofsd());
 
     checks
+}
+
+/// xorriso is invoked to build the cloud-init NoCloud cidata ISO when a
+/// deployment ships environment variables. Without it `environment: { ... }`
+/// silently degrades into "VM boots without those vars set."
+fn check_xorriso() -> Check {
+    match ShellCommand::new("xorriso").arg("-version").output() {
+        Ok(out) if out.status.success() => Check::ok(
+            "xorriso",
+            "available (used to build cloud-init cidata ISOs)",
+        ),
+        _ => Check::fail(
+            "xorriso",
+            "not found — environment variables won't be injected into VMs (apt install xorriso / dnf install xorriso)",
+        ),
+    }
 }
 
 fn check_virtiofsd() -> Check {

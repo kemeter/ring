@@ -50,12 +50,9 @@ fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
 
         // Reject silently-dropped fields up front so users get a clear error
         // instead of a deployment that runs but ignores half its configuration.
-        if !input.environment.is_empty() {
-            return Err(
-                "environment variables are not propagated to cloud-hypervisor VMs (alpha); use a cloud-init image or bake them into the disk".to_string(),
-            );
-        }
-
+        // (environment is now supported via cloud-init NoCloud — see
+        //  src/runtime/cloud_hypervisor/cloud_init.rs. Requires the guest
+        //  image to ship cloud-init, which every standard cloud image does.)
         if !input.command.is_empty() {
             return Err(
                 "custom commands are not supported on cloud-hypervisor runtime (alpha); the VM boots whatever its image is configured to run".to_string(),
@@ -539,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_cloud_hypervisor_rejects_environment() {
+    async fn create_cloud_hypervisor_accepts_environment() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -556,14 +553,8 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
-        assert!(
-            body.message
-                .contains("environment variables are not propagated"),
-            "unexpected error: {}",
-            body.message
-        );
+        // env vars are now injected via cloud-init NoCloud.
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]

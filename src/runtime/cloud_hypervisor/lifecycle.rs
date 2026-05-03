@@ -78,6 +78,10 @@ impl CloudHypervisorLifecycle {
         PathBuf::from(&self.config.socket_dir).join(format!("{}.raw", instance_id))
     }
 
+    fn cidata_iso_path(&self, instance_id: &str) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir).join(format!("{}.cidata.iso", instance_id))
+    }
+
     fn deployment_prefix(deployment_id: &str) -> String {
         format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())])
     }
@@ -259,6 +263,30 @@ impl CloudHypervisorLifecycle {
 
         let client = CloudHypervisorClient::new(socket_str);
 
+        // Build the disk list. The main rootfs is always there. If the
+        // deployment ships any environment variables, build a NoCloud cidata
+        // ISO and attach it as a second read-only disk so cloud-init in the
+        // guest writes them to /etc/ring/env at boot.
+        let mut disks = vec![DiskConfig {
+            path: Self::path_str(&instance_image)?.to_string(),
+            readonly: Some(false),
+            image_type: None,
+        }];
+        if !deployment.environment.is_empty() {
+            let socket_dir = PathBuf::from(&self.config.socket_dir);
+            let iso_path = super::cloud_init::build_cidata_iso(
+                instance_id,
+                deployment,
+                &socket_dir,
+            )
+            .await?;
+            disks.push(DiskConfig {
+                path: Self::path_str(&iso_path)?.to_string(),
+                readonly: Some(true),
+                image_type: None,
+            });
+        }
+
         let vm_config = VmConfig {
             payload: PayloadConfig {
                 kernel: None,
@@ -273,11 +301,7 @@ impl CloudHypervisorLifecycle {
             memory: Some(MemoryConfig {
                 size: (memory_mb as u64) * 1024 * 1024,
             }),
-            disks: Some(vec![DiskConfig {
-                path: Self::path_str(&instance_image)?.to_string(),
-                readonly: Some(false),
-                image_type: None,
-            }]),
+            disks: Some(disks),
             net: Some(vec![NetConfig {
                 tap: None,
                 ip: None,
@@ -350,6 +374,13 @@ impl CloudHypervisorLifecycle {
         let instance_image = self.instance_image_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&instance_image).await {
             debug!("Failed to remove instance image {:?}: {}", instance_image, e);
+        }
+
+        // The cidata ISO is only present when the deployment shipped env vars,
+        // but unconditional unlink is fine — missing-file is logged at debug.
+        let cidata_iso = self.cidata_iso_path(instance_id);
+        if let Err(e) = tokio::fs::remove_file(&cidata_iso).await {
+            debug!("Failed to remove cidata ISO {:?}: {}", cidata_iso, e);
         }
 
         info!("Cloud Hypervisor VM {} stopped", instance_id);
