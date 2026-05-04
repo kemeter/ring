@@ -165,18 +165,8 @@ pub(crate) fn load_config(context_current: &str) -> Config {
 
         match contexts {
             Ok(contexts) => {
-                for (context_name, mut config) in contexts.contexts {
-                    config.name = context_name.clone();
-
-                    if context_name == context_current {
-                        debug!("Switch to context from {}", context_name);
-                        return config;
-                    }
-
-                    if context_current.is_empty() && config.current {
-                        debug!("Switch to context {}", context_name);
-                        return config;
-                    }
+                if let Some(config) = pick_context(contexts, context_current) {
+                    return config;
                 }
             }
             Err(err) => {
@@ -188,6 +178,39 @@ pub(crate) fn load_config(context_current: &str) -> Config {
     debug!("Switch to default configuration");
 
     Config::default()
+}
+
+/// Pick a context out of the parsed `Contexts`. Tries an exact name match
+/// first, then falls back to whichever context has `current = true`.
+///
+/// Splitting this out of `load_config` keeps the matching logic testable
+/// without touching the filesystem, and it dodges the historical trap
+/// where the caller passed a placeholder name like "default" — without an
+/// explicit match the loader used to silently fall through to
+/// `Config::default()`, dropping any user-set runtime config.
+fn pick_context(contexts: Contexts, context_current: &str) -> Option<Config> {
+    let mut current_fallback: Option<Config> = None;
+    for (context_name, mut config) in contexts.contexts {
+        config.name = context_name.clone();
+
+        if context_name == context_current {
+            debug!("Switch to context from {}", context_name);
+            return Some(config);
+        }
+
+        if config.current && current_fallback.is_none() {
+            current_fallback = Some(config);
+        }
+    }
+
+    if let Some(config) = &current_fallback {
+        debug!(
+            "No context matched name '{}', falling back to current = {}",
+            context_current, config.name
+        );
+    }
+
+    current_fallback
 }
 
 fn auth_token_from_env<F>(get_var: F) -> Option<String>
@@ -272,5 +295,82 @@ mod tests {
             }
         });
         assert!(token.is_none());
+    }
+
+    fn make_contexts(toml_str: &str) -> Contexts {
+        toml::from_str(toml_str).expect("test TOML must parse")
+    }
+
+    const SAMPLE: &str = r#"
+[contexts.dev]
+host = "0.0.0.0"
+current = true
+api.scheme = "http"
+api.port = 3030
+user.salt = "changeme"
+
+[contexts.dev.runtime.cloud_hypervisor]
+seccomp = "false"
+
+[contexts.prod]
+host = "10.0.0.1"
+current = false
+api.scheme = "http"
+api.port = 3030
+user.salt = "changeme"
+"#;
+
+    #[test]
+    fn pick_context_matches_by_name() {
+        let contexts = make_contexts(SAMPLE);
+        let picked = pick_context(contexts, "prod").expect("prod should match");
+        assert_eq!(picked.name, "prod");
+        assert_eq!(picked.host, "10.0.0.1");
+    }
+
+    #[test]
+    fn pick_context_falls_back_to_current_when_name_does_not_match() {
+        // This is the regression: the caller passes "default" but no context
+        // is literally named "default". Before the fix, this returned None
+        // (and load_config fell through to Config::default(), silently
+        // dropping runtime.cloud_hypervisor.seccomp).
+        let contexts = make_contexts(SAMPLE);
+        let picked =
+            pick_context(contexts, "default").expect("should fall back to current = true");
+        assert_eq!(picked.name, "dev");
+        assert_eq!(
+            picked.runtime.cloud_hypervisor.seccomp.as_deref(),
+            Some("false"),
+            "user-set runtime config must survive the fallback"
+        );
+    }
+
+    #[test]
+    fn pick_context_falls_back_to_current_when_name_is_empty() {
+        let contexts = make_contexts(SAMPLE);
+        let picked = pick_context(contexts, "").expect("empty name should fall back");
+        assert_eq!(picked.name, "dev");
+    }
+
+    #[test]
+    fn pick_context_returns_none_when_nothing_matches_and_no_current() {
+        let toml_str = r#"
+[contexts.a]
+host = "1.1.1.1"
+current = false
+api.scheme = "http"
+api.port = 3030
+user.salt = "x"
+"#;
+        let contexts = make_contexts(toml_str);
+        assert!(pick_context(contexts, "missing").is_none());
+    }
+
+    #[test]
+    fn pick_context_prefers_exact_name_over_current() {
+        let contexts = make_contexts(SAMPLE);
+        // dev has current=true, prod is the named target. Named must win.
+        let picked = pick_context(contexts, "prod").expect("prod should match");
+        assert_eq!(picked.name, "prod");
     }
 }
