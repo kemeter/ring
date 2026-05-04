@@ -40,6 +40,8 @@ Before using the Cloud Hypervisor runtime, you need:
 
     Re-run the command after every Cloud Hypervisor upgrade — `setcap` does not survive a new binary.
 
+    `ring doctor` checks this for you and prints the exact `setcap` command if the capabilities are missing.
+
 4. **Seccomp configuration (only if VMs die with `SIGSYS` on boot).**
 
     On recent kernels Cloud Hypervisor's default seccomp filter sometimes kills the VM process on the first syscall it does not whitelist. Symptom in the Ring log:
@@ -49,7 +51,22 @@ Before using the Cloud Hypervisor runtime, you need:
     stderr: ==== Possible seccomp violation ====
     ```
 
-    If you hit this, set `seccomp = "false"` (or `"log"` to keep the filter enabled but only log violations) in the runtime config (see [Configuration](#configuration)). Production deployments should leave it unset to keep the default kill-on-violation policy.
+    If you hit this, set `seccomp = "false"` (or `"log"` to keep the filter enabled but only log violations) in the runtime config. Concrete example that lets a VM boot on a host where the default seccomp filter is too strict:
+
+    ```toml
+    # ~/.config/kemeter/ring/config.toml
+    [contexts.default]
+    host = "0.0.0.0"
+    current = true
+    api.scheme = "http"
+    api.port = 3030
+    user.salt = "changeme"
+
+    [contexts.default.runtime.cloud_hypervisor]
+    seccomp = "false"
+    ```
+
+    Production deployments should leave `seccomp` unset to keep the default kill-on-violation policy.
 
 5. **Firmware** (`hypervisor-fw`) placed at the default location.
 

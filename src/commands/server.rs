@@ -45,10 +45,11 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         &configuration.runtime.cloud_hypervisor,
     );
     info!(
-        "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}",
+        "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
         ch_runtime_config.binary_path,
         ch_runtime_config.firmware_path,
         ch_runtime_config.socket_dir,
+        ch_runtime_config.seccomp,
     );
     runtimes_map.insert(
         "cloud-hypervisor".to_string(),
