@@ -41,9 +41,10 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         Arc::new(DockerLifecycle::new(docker, intentional_shutdowns.clone())),
     );
 
-    let ch_runtime_config = crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
-        &configuration.runtime.cloud_hypervisor,
-    );
+    let ch_runtime_config =
+        crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
+            &configuration.runtime.cloud_hypervisor,
+        );
     info!(
         "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
         ch_runtime_config.binary_path,
@@ -55,15 +56,23 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         "cloud-hypervisor".to_string(),
         Arc::new(CloudHypervisorLifecycle::new(ch_runtime_config)),
     );
-    info!("Registered runtimes: {:?}", runtimes_map.keys().collect::<Vec<_>>());
+    info!(
+        "Registered runtimes: {:?}",
+        runtimes_map.keys().collect::<Vec<_>>()
+    );
 
     let runtimes = std::sync::Arc::new(runtimes_map);
 
     let (event_tx, event_rx) = mpsc::channel::<DockerEvent>(1024);
-    let docker_for_events = docker::connect().expect("Failed to connect to Docker for event listener");
+    let docker_for_events =
+        docker::connect().expect("Failed to connect to Docker for event listener");
     let event_listener_handler = task::spawn(start_event_listener(event_tx, docker_for_events));
 
-    let api_server_handler = task::spawn(ApiServer::start(pool.clone(), configuration.clone(), runtimes.clone()));
+    let api_server_handler = task::spawn(ApiServer::start(
+        pool.clone(),
+        configuration.clone(),
+        runtimes.clone(),
+    ));
     let scheduler_handler = task::spawn(schedule(
         pool,
         configuration,

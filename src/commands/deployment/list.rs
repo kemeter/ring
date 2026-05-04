@@ -130,14 +130,13 @@ pub(crate) async fn execute(
                 return;
             }
 
-            let deployments_list: Vec<DeploymentOutput> =
-                match serde_json::from_str(&body) {
-                    Ok(list) => list,
-                    Err(e) => {
-                        eprintln!("Failed to parse deployment list: {}", e);
-                        exit_code::ExitCode::General.exit();
-                    }
-                };
+            let deployments_list: Vec<DeploymentOutput> = match serde_json::from_str(&body) {
+                Ok(list) => list,
+                Err(e) => {
+                    eprintln!("Failed to parse deployment list: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
+            };
 
             let mut deployments = vec![];
             for deployment in deployments_list {

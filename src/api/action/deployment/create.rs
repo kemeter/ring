@@ -2,7 +2,12 @@ use chrono::{DateTime, Utc};
 use std::borrow::Cow;
 use uuid::Uuid;
 
-use axum::{Json, extract::{Query, State}, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -12,7 +17,9 @@ use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::models::deployment_event;
 use crate::models::deployments;
-use crate::models::deployments::{DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, Resource};
+use crate::models::deployments::{
+    DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, Resource,
+};
 use crate::models::namespace;
 use crate::models::users::User;
 
@@ -294,12 +301,9 @@ pub(crate) async fn create(
                 }
             }
 
-            let active_deployments = deployments::find_active_by_namespace_name(
-                &pool,
-                &input.namespace,
-                &input.name,
-            )
-            .await;
+            let active_deployments =
+                deployments::find_active_by_namespace_name(&pool, &input.namespace, &input.name)
+                    .await;
 
             // Determine whether rolling update is possible:
             // - only when there is exactly one active deployment (the current one)
@@ -604,8 +608,7 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
         let body: Message = response.json();
         assert!(
-            body.message
-                .contains("absolute path to a raw disk image"),
+            body.message.contains("absolute path to a raw disk image"),
             "unexpected error: {}",
             body.message
         );

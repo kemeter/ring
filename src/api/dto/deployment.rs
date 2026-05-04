@@ -1,4 +1,6 @@
-use crate::models::deployments::{Deployment, DeploymentConfig, DeploymentPort, EnvValue, Resource};
+use crate::models::deployments::{
+    Deployment, DeploymentConfig, DeploymentPort, EnvValue, Resource,
+};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;

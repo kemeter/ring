@@ -42,19 +42,11 @@ impl Default for CloudHypervisorRuntimeConfig {
 impl CloudHypervisorRuntimeConfig {
     /// Merge a user-facing config section with the defaults. Any field left
     /// unset in `user` falls back to `CloudHypervisorRuntimeConfig::default`.
-    pub(crate) fn from_user_config(
-        user: &crate::config::config::CloudHypervisorConfig,
-    ) -> Self {
+    pub(crate) fn from_user_config(user: &crate::config::config::CloudHypervisorConfig) -> Self {
         let defaults = Self::default();
         Self {
-            binary_path: user
-                .binary_path
-                .clone()
-                .unwrap_or(defaults.binary_path),
-            firmware_path: user
-                .firmware_path
-                .clone()
-                .unwrap_or(defaults.firmware_path),
+            binary_path: user.binary_path.clone().unwrap_or(defaults.binary_path),
+            firmware_path: user.firmware_path.clone().unwrap_or(defaults.firmware_path),
             socket_dir: user.socket_dir.clone().unwrap_or(defaults.socket_dir),
             seccomp: user.seccomp.clone(),
         }
@@ -274,12 +266,8 @@ impl CloudHypervisorLifecycle {
         }];
         if !deployment.environment.is_empty() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
-            let iso_path = super::cloud_init::build_cidata_iso(
-                instance_id,
-                deployment,
-                &socket_dir,
-            )
-            .await?;
+            let iso_path =
+                super::cloud_init::build_cidata_iso(instance_id, deployment, &socket_dir).await?;
             disks.push(DiskConfig {
                 path: Self::path_str(&iso_path)?.to_string(),
                 readonly: Some(true),
@@ -373,7 +361,10 @@ impl CloudHypervisorLifecycle {
 
         let instance_image = self.instance_image_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&instance_image).await {
-            debug!("Failed to remove instance image {:?}: {}", instance_image, e);
+            debug!(
+                "Failed to remove instance image {:?}: {}",
+                instance_image, e
+            );
         }
 
         // The cidata ISO is only present when the deployment shipped env vars,
@@ -436,9 +427,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         let current_count = deployment.instances.len();
         let target_count = deployment.replicas as usize;
 
-        if current_count < target_count
-            && deployment.status != DeploymentStatus::CrashLoopBackOff
-        {
+        if current_count < target_count && deployment.status != DeploymentStatus::CrashLoopBackOff {
             let instance_id = format!(
                 "ch-{}-{}",
                 &deployment.id[..8.min(deployment.id.len())],
@@ -467,10 +456,9 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                     // restart_count and let the scheduler retry, capping at
                     // MAX_RESTART_COUNT to land in CrashLoopBackOff.
                     let (status, reason) = match &e {
-                        RuntimeError::FirmwareNotFound(_) => (
-                            Some(DeploymentStatus::Failed),
-                            "FirmwareNotFound",
-                        ),
+                        RuntimeError::FirmwareNotFound(_) => {
+                            (Some(DeploymentStatus::Failed), "FirmwareNotFound")
+                        }
                         RuntimeError::ImageNotFound(_) => {
                             (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
                         }

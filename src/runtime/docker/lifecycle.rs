@@ -139,7 +139,10 @@ async fn remove_all_instances(
     let temp_dir = format!("/tmp/ring_configs/{}", deployment.id);
     if std::path::Path::new(&temp_dir).exists() {
         if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
-            warn!("Failed to clean up config temp files at {}: {}", temp_dir, e);
+            warn!(
+                "Failed to clean up config temp files at {}: {}",
+                temp_dir, e
+            );
         } else {
             debug!("Cleaned up config temp files at {}", temp_dir);
         }

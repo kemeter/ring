@@ -40,8 +40,8 @@ impl From<bollard::errors::Error> for RuntimeError {
 }
 
 pub(crate) fn connect() -> Result<Docker, RuntimeError> {
-    let host = std::env::var("DOCKER_HOST")
-        .unwrap_or_else(|_| "unix:///var/run/docker.sock".to_string());
+    let host =
+        std::env::var("DOCKER_HOST").unwrap_or_else(|_| "unix:///var/run/docker.sock".to_string());
 
     connect_with_host(&host)
 }
@@ -49,11 +49,16 @@ pub(crate) fn connect() -> Result<Docker, RuntimeError> {
 pub(crate) fn connect_with_host(host: &str) -> Result<Docker, RuntimeError> {
     if host.starts_with("unix://") {
         let socket_path = host.trim_start_matches("unix://");
-        Docker::connect_with_socket(socket_path, 120, bollard::API_DEFAULT_VERSION)
-            .map_err(|e| RuntimeError::Other(format!("Failed to connect to Docker socket {}: {}", host, e)))
+        Docker::connect_with_socket(socket_path, 120, bollard::API_DEFAULT_VERSION).map_err(|e| {
+            RuntimeError::Other(format!(
+                "Failed to connect to Docker socket {}: {}",
+                host, e
+            ))
+        })
     } else if host.starts_with("tcp://") {
-        Docker::connect_with_http(host, 120, bollard::API_DEFAULT_VERSION)
-            .map_err(|e| RuntimeError::Other(format!("Failed to connect to Docker at {}: {}", host, e)))
+        Docker::connect_with_http(host, 120, bollard::API_DEFAULT_VERSION).map_err(|e| {
+            RuntimeError::Other(format!("Failed to connect to Docker at {}: {}", host, e))
+        })
     } else {
         Docker::connect_with_local_defaults()
             .map_err(|e| RuntimeError::Other(format!("Failed to connect to Docker: {}", e)))

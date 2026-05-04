@@ -272,7 +272,12 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
 /// - If the child is `Running` (healthy): remove one instance from the parent.
 ///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
 /// - If the child is `Failed`: stop the rollout — parent containers keep running.
-async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, deleted: &mut Vec<String>, runtime: &dyn RuntimeLifecycle) {
+async fn handle_rolling_update(
+    pool: &SqlitePool,
+    child: &mut Deployment,
+    deleted: &mut Vec<String>,
+    runtime: &dyn RuntimeLifecycle,
+) {
     let parent_id = match &child.parent_id {
         Some(id) => id.clone(),
         None => return,
@@ -344,7 +349,10 @@ async fn handle_rolling_update(pool: &SqlitePool, child: &mut Deployment, delete
             pool,
             child.id.clone(),
             "info",
-            format!("Rolling update complete: replaced parent deployment {}", parent_id),
+            format!(
+                "Rolling update complete: replaced parent deployment {}",
+                parent_id
+            ),
             "scheduler",
             Some("RollingUpdateComplete"),
         )
@@ -424,7 +432,11 @@ async fn apply_docker_event(
     intentional_shutdowns: &IntentionalShutdowns,
 ) {
     match event {
-        DockerEvent::ContainerDied { deployment_id, container_id, exit_code } => {
+        DockerEvent::ContainerDied {
+            deployment_id,
+            container_id,
+            exit_code,
+        } => {
             // Operator-initiated shutdowns (scale-down, delete, rolling update,
             // health-check kill) are pre-marked in `IntentionalShutdowns` by the
             // runtime before it issues the stop. The matching `die` event must
@@ -443,13 +455,18 @@ async fn apply_docker_event(
                 format!(
                     "Container {} died (exit_code={})",
                     container_id,
-                    exit_code.map(|c| c.to_string()).unwrap_or_else(|| "?".to_string()),
+                    exit_code
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
                 ),
                 "ContainerDied",
             )
             .await;
         }
-        DockerEvent::ContainerOom { deployment_id, container_id } => {
+        DockerEvent::ContainerOom {
+            deployment_id,
+            container_id,
+        } => {
             // Docker emits `oom` then `die`; we count on `die` so we don't double-count.
             // This branch only logs the OOM cause for traceability.
             if let Err(e) = deployment_event::log_event(
@@ -465,7 +482,11 @@ async fn apply_docker_event(
                 warn!("Failed to log OOM event: {}", e);
             }
         }
-        DockerEvent::ContainerKilled { deployment_id, container_id, signal } => {
+        DockerEvent::ContainerKilled {
+            deployment_id,
+            container_id,
+            signal,
+        } => {
             // A `kill` event is fired for any signal sent to the container,
             // including the SIGTERM Ring itself sends on scale-down or delete.
             // We only log it for traceability and let `die` carry the count.
@@ -502,7 +523,10 @@ async fn bump_restart_count(pool: &SqlitePool, deployment_id: &str, message: Str
             return;
         }
         Err(e) => {
-            error!("Failed to load deployment {} on event: {}", deployment_id, e);
+            error!(
+                "Failed to load deployment {} on event: {}",
+                deployment_id, e
+            );
             return;
         }
     };
@@ -602,17 +626,22 @@ pub(crate) async fn schedule(
             let runtime = match runtimes.get(&deployment.runtime) {
                 Some(rt) => rt.clone(),
                 None => {
-                    debug!("No runtime registered for '{}', skipping deployment {}", deployment.runtime, deployment.id);
+                    debug!(
+                        "No runtime registered for '{}', skipping deployment {}",
+                        deployment.runtime, deployment.id
+                    );
                     continue;
                 }
             };
 
             // Honour the retry backoff. Deletes always go through so the
             // user can wipe a stuck deployment without waiting.
-            if deployment.status != DeploymentStatus::Deleted
-                && backoff.is_blocked(&deployment.id)
+            if deployment.status != DeploymentStatus::Deleted && backoff.is_blocked(&deployment.id)
             {
-                debug!("Deployment {} in retry backoff, skipping cycle", deployment.id);
+                debug!(
+                    "Deployment {} in retry backoff, skipping cycle",
+                    deployment.id
+                );
                 continue;
             }
 
@@ -672,7 +701,9 @@ pub(crate) async fn schedule(
 
             // Re-read current status from DB to detect concurrent changes (e.g. API delete)
             if let Ok(Some(current)) = deployments::find(&pool, &result.id).await {
-                if current.status == DeploymentStatus::Deleted && result.status != DeploymentStatus::Deleted {
+                if current.status == DeploymentStatus::Deleted
+                    && result.status != DeploymentStatus::Deleted
+                {
                     info!(
                         "Deployment {} was deleted externally during scheduler cycle, skipping update",
                         result.id

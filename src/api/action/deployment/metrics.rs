@@ -24,19 +24,14 @@ pub(crate) async fn metrics(
 
             let instance_count = instance_stats.len();
             let total_cpu: f64 = instance_stats.iter().map(|c| c.cpu_usage_percent).sum();
-            let total_mem_usage: u64 =
-                instance_stats.iter().map(|c| c.memory.usage_bytes).sum();
-            let total_mem_limit: u64 =
-                instance_stats.iter().map(|c| c.memory.limit_bytes).sum();
+            let total_mem_usage: u64 = instance_stats.iter().map(|c| c.memory.usage_bytes).sum();
+            let total_mem_limit: u64 = instance_stats.iter().map(|c| c.memory.limit_bytes).sum();
             let total_rx: u64 = instance_stats.iter().map(|c| c.network.rx_bytes).sum();
             let total_tx: u64 = instance_stats.iter().map(|c| c.network.tx_bytes).sum();
-            let total_rx_packets: u64 =
-                instance_stats.iter().map(|c| c.network.rx_packets).sum();
-            let total_tx_packets: u64 =
-                instance_stats.iter().map(|c| c.network.tx_packets).sum();
+            let total_rx_packets: u64 = instance_stats.iter().map(|c| c.network.rx_packets).sum();
+            let total_tx_packets: u64 = instance_stats.iter().map(|c| c.network.tx_packets).sum();
             let total_read: u64 = instance_stats.iter().map(|c| c.disk_io.read_bytes).sum();
-            let total_write: u64 =
-                instance_stats.iter().map(|c| c.disk_io.write_bytes).sum();
+            let total_write: u64 = instance_stats.iter().map(|c| c.disk_io.write_bytes).sum();
             let total_pids: u64 = instance_stats.iter().map(|c| c.pids.current).sum();
 
             let output = DeploymentStatsOutput {

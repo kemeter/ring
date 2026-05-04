@@ -190,9 +190,7 @@ impl CloudHypervisorClient {
 
     /// Get VM info and state.
     pub async fn info(&self) -> Result<VmInfo, ClientError> {
-        let body = self
-            .request(Method::GET, "/api/v1/vm.info", None)
-            .await?;
+        let body = self.request(Method::GET, "/api/v1/vm.info", None).await?;
         serde_json::from_str(&body).map_err(|e| ClientError::Json(e.to_string()))
     }
 

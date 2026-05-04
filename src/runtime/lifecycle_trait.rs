@@ -5,11 +5,11 @@ use crate::models::volume::ResolvedMount;
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use futures::stream;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::LazyLock;
-use regex::Regex;
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub(crate) struct Log {
@@ -54,7 +54,11 @@ pub trait RuntimeLifecycle: Send + Sync {
 
     /// Fallback: uses instance ID as display name. Override for runtimes
     /// that assign human-readable names (e.g. Docker container names).
-    async fn list_instances_with_names(&self, deployment_id: String, status: &str) -> Vec<(String, String)> {
+    async fn list_instances_with_names(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Vec<(String, String)> {
         self.list_instances(deployment_id, status)
             .await
             .into_iter()
@@ -92,7 +96,10 @@ pub trait RuntimeLifecycle: Send + Sync {
         _instance_id: &str,
         _health_check: &HealthCheck,
     ) -> (HealthCheckStatus, Option<String>) {
-        (HealthCheckStatus::Failed, Some("health checks not supported on this runtime".to_string()))
+        (
+            HealthCheckStatus::Failed,
+            Some("health checks not supported on this runtime".to_string()),
+        )
     }
 
     async fn get_instance_stats(&self, _deployment_id: &str) -> Vec<InstanceStatsOutput> {

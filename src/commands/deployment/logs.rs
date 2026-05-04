@@ -47,9 +47,9 @@ pub(crate) fn command_config() -> Command {
                 .value_parser(clap::value_parser!(u64)),
         )
         .arg(
-            Arg::new("since")
-                .long("since")
-                .help("Show logs since a relative duration (e.g. 30s, 10m, 2h) or RFC3339 timestamp"),
+            Arg::new("since").long("since").help(
+                "Show logs since a relative duration (e.g. 30s, 10m, 2h) or RFC3339 timestamp",
+            ),
         )
         .arg(
             Arg::new("container")

@@ -36,9 +36,7 @@ pub(crate) async fn execute(
     let password_arg = args.get_one::<String>("password");
 
     if username_arg.is_none() && password_arg.is_none() {
-        eprintln!(
-            "Error: at least one of --username or --password must be provided"
-        );
+        eprintln!("Error: at least one of --username or --password must be provided");
         exit_code::ExitCode::General.exit();
     }
 

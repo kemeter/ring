@@ -106,9 +106,7 @@ pub(crate) async fn execute(
                             }
                         }
                     } else {
-                        eprintln!(
-                            "Secret is referenced by deployments. Use -f to force deletion."
-                        );
+                        eprintln!("Secret is referenced by deployments. Use -f to force deletion.");
                         exit_code::from_http_status(409).exit();
                     }
                 }

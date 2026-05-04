@@ -91,7 +91,12 @@ where
     }
 }
 
-pub(crate) type RuntimeMap = std::sync::Arc<std::collections::HashMap<String, std::sync::Arc<dyn crate::runtime::lifecycle_trait::RuntimeLifecycle>>>;
+pub(crate) type RuntimeMap = std::sync::Arc<
+    std::collections::HashMap<
+        String,
+        std::sync::Arc<dyn crate::runtime::lifecycle_trait::RuntimeLifecycle>,
+    >,
+>;
 
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
@@ -204,7 +209,10 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes:
             return;
         }
         Err(e) => {
-            error!("Cannot start API server: failed to bind to {}: {}", bind_addr, e);
+            error!(
+                "Cannot start API server: failed to bind to {}: {}",
+                bind_addr, e
+            );
             return;
         }
     };

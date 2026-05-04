@@ -58,7 +58,11 @@ impl RuntimeLifecycle for DockerLifecycle {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }
 
-    async fn list_instances_with_names(&self, deployment_id: String, status: &str) -> Vec<(String, String)> {
+    async fn list_instances_with_names(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Vec<(String, String)> {
         super::instances::list_instances_with_names(&self.docker, deployment_id, status).await
     }
 
@@ -156,8 +160,7 @@ impl RuntimeLifecycle for DockerLifecycle {
         for (id, name) in instances {
             match super::stats::fetch_container_stats(&self.docker, &id).await {
                 Ok(raw_stats) => {
-                    let restart_count =
-                        super::stats::fetch_restart_count(&self.docker, &id).await;
+                    let restart_count = super::stats::fetch_restart_count(&self.docker, &id).await;
                     results.push(InstanceStatsOutput {
                         instance_id: id.chars().take(12).collect(),
                         instance_name: name,

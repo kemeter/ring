@@ -335,8 +335,7 @@ user.salt = "changeme"
         // (and load_config fell through to Config::default(), silently
         // dropping runtime.cloud_hypervisor.seccomp).
         let contexts = make_contexts(SAMPLE);
-        let picked =
-            pick_context(contexts, "default").expect("should fall back to current = true");
+        let picked = pick_context(contexts, "default").expect("should fall back to current = true");
         assert_eq!(picked.name, "dev");
         assert_eq!(
             picked.runtime.cloud_hypervisor.seccomp.as_deref(),

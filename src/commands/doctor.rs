@@ -55,14 +55,21 @@ fn check_file(name: &str, path: &str) -> Check {
 
 fn check_kvm() -> Check {
     let path = "/dev/kvm";
-    match std::fs::OpenOptions::new().read(true).write(true).open(path) {
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+    {
         Ok(_) => Check::ok("KVM", "/dev/kvm accessible"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Check::fail("KVM", "/dev/kvm not found")
         }
         Err(e) => Check::fail(
             "KVM",
-            &format!("/dev/kvm not accessible: {} (try: sudo usermod -aG kvm $USER)", e),
+            &format!(
+                "/dev/kvm not accessible: {} (try: sudo usermod -aG kvm $USER)",
+                e
+            ),
         ),
     }
 }
@@ -96,20 +103,27 @@ fn check_capabilities(binary: &str) -> Check {
     let has_net_admin = stdout.contains("cap_net_admin");
     let has_net_raw = stdout.contains("cap_net_raw");
 
-    let fix_hint = format!(
-        "run: sudo setcap cap_net_admin,cap_net_raw+ep {}",
-        resolved
-    );
+    let fix_hint = format!("run: sudo setcap cap_net_admin,cap_net_raw+ep {}", resolved);
 
     if has_net_admin && has_net_raw {
-        Check::ok("Capabilities", &format!("cap_net_admin,cap_net_raw set on {}", resolved))
+        Check::ok(
+            "Capabilities",
+            &format!("cap_net_admin,cap_net_raw set on {}", resolved),
+        )
     } else if !has_net_admin && !has_net_raw {
         Check::fail(
             "Capabilities",
-            &format!("missing cap_net_admin and cap_net_raw on {} ({})", resolved, fix_hint),
+            &format!(
+                "missing cap_net_admin and cap_net_raw on {} ({})",
+                resolved, fix_hint
+            ),
         )
     } else {
-        let missing = if has_net_admin { "cap_net_raw" } else { "cap_net_admin" };
+        let missing = if has_net_admin {
+            "cap_net_raw"
+        } else {
+            "cap_net_admin"
+        };
         Check::fail(
             "Capabilities",
             &format!("missing {} on {} ({})", missing, resolved, fix_hint),

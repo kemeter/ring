@@ -48,7 +48,10 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Error: Failed to retrieve configuration details: {}", status);
+                eprintln!(
+                    "Error: Failed to retrieve configuration details: {}",
+                    status
+                );
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

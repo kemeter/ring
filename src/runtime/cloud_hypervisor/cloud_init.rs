@@ -57,7 +57,9 @@ pub(crate) async fn build_cidata_iso(
     if staging.exists() {
         let _ = tokio::fs::remove_dir_all(&staging).await;
     }
-    tokio::fs::create_dir_all(&staging).await.map_err(RuntimeError::Io)?;
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .map_err(RuntimeError::Io)?;
 
     let user_data = render_user_data(&envs);
     let meta_data = render_meta_data(instance_id);
@@ -74,12 +76,12 @@ pub(crate) async fn build_cidata_iso(
         let _ = tokio::fs::remove_file(&iso_path).await;
     }
 
-    let staging_str = staging.to_str().ok_or_else(|| {
-        RuntimeError::Other(format!("non-UTF-8 staging path: {:?}", staging))
-    })?;
-    let iso_str = iso_path.to_str().ok_or_else(|| {
-        RuntimeError::Other(format!("non-UTF-8 iso path: {:?}", iso_path))
-    })?;
+    let staging_str = staging
+        .to_str()
+        .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 staging path: {:?}", staging)))?;
+    let iso_str = iso_path
+        .to_str()
+        .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 iso path: {:?}", iso_path)))?;
 
     // xorriso flags: -as mkisofs gives us the classic mkisofs CLI surface.
     // -volid CIDATA is mandatory for the NoCloud datasource.
@@ -120,7 +122,10 @@ pub(crate) async fn build_cidata_iso(
 fn render_meta_data(instance_id: &str) -> String {
     // instance-id is the only mandatory NoCloud field. local-hostname is a
     // nice-to-have so that `hostname` inside the VM matches the Ring instance.
-    format!("instance-id: {id}\nlocal-hostname: {id}\n", id = instance_id)
+    format!(
+        "instance-id: {id}\nlocal-hostname: {id}\n",
+        id = instance_id
+    )
 }
 
 fn render_user_data(envs: &[(String, String)]) -> String {
@@ -190,8 +195,7 @@ fn shell_quote(v: &str) -> String {
 /// Tiny standalone base64 encoder so the runtime stays free of an extra
 /// crate just for this. Uses the standard alphabet with padding.
 fn base64_encode(input: &str) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
     let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
     let mut i = 0;

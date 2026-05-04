@@ -50,21 +50,25 @@ pub async fn start_event_listener(tx: mpsc::Sender<DockerEvent>, docker: Docker)
     }
 }
 
-async fn listen_events(tx: mpsc::Sender<DockerEvent>, docker: Docker) -> Result<(), Box<dyn std::error::Error>> {
+async fn listen_events(
+    tx: mpsc::Sender<DockerEvent>,
+    docker: Docker,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Filter for container events with ring_deployment label
     let filters = HashMap::from([
         ("type".to_string(), vec!["container".to_string()]),
-        ("event".to_string(), vec![
-            "die".to_string(),
-            "start".to_string(),
-            "kill".to_string(),
-            "oom".to_string(),
-        ]),
+        (
+            "event".to_string(),
+            vec![
+                "die".to_string(),
+                "start".to_string(),
+                "kill".to_string(),
+                "oom".to_string(),
+            ],
+        ),
     ]);
 
-    let options = EventsOptionsBuilder::new()
-        .filters(&filters)
-        .build();
+    let options = EventsOptionsBuilder::new().filters(&filters).build();
 
     let mut events = docker.events(Some(options));
 
@@ -162,7 +166,11 @@ mod tests {
             Some("container-abc"),
         );
         match parse_docker_event(&event) {
-            Some(DockerEvent::ContainerDied { deployment_id, container_id, exit_code }) => {
+            Some(DockerEvent::ContainerDied {
+                deployment_id,
+                container_id,
+                exit_code,
+            }) => {
                 assert_eq!(deployment_id, "dep-1");
                 assert_eq!(container_id, "container-abc");
                 assert_eq!(exit_code, Some(137));

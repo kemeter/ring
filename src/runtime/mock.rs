@@ -21,17 +21,18 @@ impl MockRuntime {
 
     pub(crate) fn unhealthy(message: &str) -> Self {
         Self {
-            health_check_result: (
-                HealthCheckStatus::Failed,
-                Some(message.to_string()),
-            ),
+            health_check_result: (HealthCheckStatus::Failed, Some(message.to_string())),
         }
     }
 }
 
 #[async_trait]
 impl RuntimeLifecycle for MockRuntime {
-    async fn apply(&self, deployment: Deployment, _resolved_mounts: Vec<ResolvedMount>) -> Deployment {
+    async fn apply(
+        &self,
+        deployment: Deployment,
+        _resolved_mounts: Vec<ResolvedMount>,
+    ) -> Deployment {
         deployment
     }
 

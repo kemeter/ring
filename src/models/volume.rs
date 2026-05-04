@@ -34,9 +34,7 @@ pub fn resolve_volumes(
     for volume in volumes {
         let mount = match volume.r#type.as_str() {
             "bind" => {
-                let source = volume
-                    .source
-                    .ok_or("Bind volume requires a source")?;
+                let source = volume.source.ok_or("Bind volume requires a source")?;
                 ResolvedMount::Bind {
                     source,
                     destination: volume.destination,
@@ -44,9 +42,7 @@ pub fn resolve_volumes(
                 }
             }
             "volume" => {
-                let name = volume
-                    .source
-                    .ok_or("Named volume requires a source")?;
+                let name = volume.source.ok_or("Named volume requires a source")?;
                 ResolvedMount::Named {
                     name,
                     destination: volume.destination,
@@ -74,7 +70,10 @@ pub fn resolve_volumes(
 
                 let content = config_data
                     .get(key)
-                    .ok_or(format!("Key '{}' not found in config '{}'", key, config_name))?
+                    .ok_or(format!(
+                        "Key '{}' not found in config '{}'",
+                        key, config_name
+                    ))?
                     .clone();
 
                 ResolvedMount::Content {
@@ -113,7 +112,11 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         match &result[0] {
-            ResolvedMount::Bind { source, destination, read_only } => {
+            ResolvedMount::Bind {
+                source,
+                destination,
+                read_only,
+            } => {
                 assert_eq!(source, "/host/path");
                 assert_eq!(destination, "/container/path");
                 assert!(read_only);
@@ -140,7 +143,12 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         match &result[0] {
-            ResolvedMount::Named { name, destination, read_only, driver } => {
+            ResolvedMount::Named {
+                name,
+                destination,
+                read_only,
+                driver,
+            } => {
                 assert_eq!(name, "my-data");
                 assert_eq!(destination, "/data");
                 assert!(!read_only);
@@ -156,7 +164,9 @@ mod tests {
         let result = resolve_volumes(json, &HashMap::new()).unwrap();
 
         match &result[0] {
-            ResolvedMount::Named { driver, read_only, .. } => {
+            ResolvedMount::Named {
+                driver, read_only, ..
+            } => {
                 assert_eq!(driver, "nfs");
                 assert!(read_only);
             }
@@ -177,7 +187,10 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         match &result[0] {
-            ResolvedMount::Content { content, destination } => {
+            ResolvedMount::Content {
+                content,
+                destination,
+            } => {
                 assert_eq!(content, "server { listen 80; }");
                 assert_eq!(destination, "/etc/nginx/nginx.conf");
             }

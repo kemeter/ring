@@ -2,7 +2,6 @@ use super::{DockerImage, tiny_id};
 use crate::models::deployments::{Deployment, EnvValue, parse_cpu_string, parse_memory_string};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
-use std::hash::{Hash, Hasher};
 use bollard::{
     Docker,
     auth::DockerCredentials,
@@ -18,6 +17,7 @@ use bollard::{
 };
 use futures::StreamExt;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 fn build_user_config(
     deployment_config: &Option<crate::models::deployments::DeploymentConfig>,
@@ -382,7 +382,6 @@ async fn create_mount_from_resolved(
     }
 }
 
-
 pub(crate) async fn remove_container(docker: Docker, container_id: String) {
     let stop_options = StopContainerOptionsBuilder::new().build();
 
@@ -406,7 +405,9 @@ pub(crate) async fn remove_container(docker: Docker, container_id: String) {
 
 pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String) -> bool {
     let stop_options = StopContainerOptionsBuilder::new().build();
-    let _ = docker.stop_container(&container_id, Some(stop_options)).await;
+    let _ = docker
+        .stop_container(&container_id, Some(stop_options))
+        .await;
 
     let remove_options = RemoveContainerOptionsBuilder::new().build();
     match docker
@@ -526,7 +527,9 @@ mod tests {
             destination: "/container/path".to_string(),
             read_only: false,
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment")
+            .await
+            .unwrap();
         assert_eq!(mount.target, Some("/container/path".to_string()));
         assert_eq!(mount.source, Some("/host/path".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::BIND));
@@ -539,9 +542,16 @@ mod tests {
             content: "server { listen 80; }".to_string(),
             destination: "/app/nginx.conf".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment")
+            .await
+            .unwrap();
         assert_eq!(mount.target, Some("/app/nginx.conf".to_string()));
-        assert!(mount.source.unwrap().contains("/tmp/ring_configs/test-deployment"));
+        assert!(
+            mount
+                .source
+                .unwrap()
+                .contains("/tmp/ring_configs/test-deployment")
+        );
         assert_eq!(mount.read_only, Some(true));
     }
 
@@ -553,7 +563,9 @@ mod tests {
             read_only: false,
             driver: "local".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment")
+            .await
+            .unwrap();
         assert_eq!(mount.target, Some("/app/data".to_string()));
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
         assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
@@ -569,7 +581,9 @@ mod tests {
             read_only: true,
             driver: "nfs".to_string(),
         };
-        let mount = create_mount_from_resolved(&resolved, "test-deployment").await.unwrap();
+        let mount = create_mount_from_resolved(&resolved, "test-deployment")
+            .await
+            .unwrap();
         let driver_name = mount.volume_options.unwrap().driver_config.unwrap().name;
         assert_eq!(driver_name, Some("nfs".to_string()));
     }

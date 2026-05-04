@@ -333,11 +333,7 @@ impl From<DeploymentRow> for Deployment {
                 .filter(|s| !s.is_empty())
                 .map(|s| {
                     serde_json::from_str(&s).unwrap_or_else(|e| {
-                        log::warn!(
-                            "Failed to deserialize ports for deployment {}: {}",
-                            id,
-                            e
-                        );
+                        log::warn!("Failed to deserialize ports for deployment {}: {}", id, e);
                         Vec::new()
                     })
                 })
@@ -423,8 +419,7 @@ pub(crate) async fn create(
         .resources
         .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
-    let ports_json =
-        serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
+    let ports_json = serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
         "INSERT INTO deployment (

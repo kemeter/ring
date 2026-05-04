@@ -94,7 +94,10 @@ mod tests {
         let reg = IntentionalShutdowns::new();
         {
             let mut guard = reg.inner.lock().await;
-            guard.insert("stale".to_string(), Instant::now() - Duration::from_secs(120));
+            guard.insert(
+                "stale".to_string(),
+                Instant::now() - Duration::from_secs(120),
+            );
         }
         assert!(!reg.take("stale").await);
     }

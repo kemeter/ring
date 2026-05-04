@@ -75,7 +75,12 @@ pub(crate) async fn logs(
 
             if params.follow {
                 let stream = runtime
-                    .stream_logs(&deployment.id, tail.as_deref(), since, params.container.as_deref())
+                    .stream_logs(
+                        &deployment.id,
+                        tail.as_deref(),
+                        since,
+                        params.container.as_deref(),
+                    )
                     .await;
 
                 Sse::new(stream)
@@ -83,7 +88,12 @@ pub(crate) async fn logs(
                     .into_response()
             } else {
                 let logs = runtime
-                    .get_logs(&deployment.id, tail.as_deref(), since, params.container.as_deref())
+                    .get_logs(
+                        &deployment.id,
+                        tail.as_deref(),
+                        since,
+                        params.container.as_deref(),
+                    )
                     .await;
                 Json(logs).into_response()
             }
