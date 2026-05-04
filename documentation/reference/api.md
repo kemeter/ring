@@ -148,9 +148,15 @@ Create a new deployment, or trigger a rolling update if one with the same `name`
       "driver": "local",
       "permission": "rw"
     }
+  ],
+  "ports": [
+    { "published": 8080, "target": 80 },
+    { "published": 3000, "target": 3000 }
   ]
 }
 ```
+
+Each port entry maps a host port (`published`) to a container port (`target`). Omit the field or pass `[]` to keep the container unpublished. Bindings are forwarded to Docker's `HostConfig.PortBindings`; a publish conflict is reported by Docker at start time.
 
 Environment values support two forms:
 

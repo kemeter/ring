@@ -139,6 +139,23 @@ health_checks:
 
 Duration suffixes: `ms` and `s`. `m` and `h` are not parsed.
 
+## Port publishing
+
+Publish container ports on the host with the `ports:` field. Each entry maps a host port (`published`) to a container port (`target`).
+
+```yaml
+deployments:
+  web:
+    image: "nginx:1.25"
+    ports:
+      - { published: 8080, target: 80 }
+      - { published: 3000, target: 3000 }
+```
+
+Bindings are forwarded to Docker's `HostConfig.PortBindings`. If `published` is already in use on the host, Docker rejects the container start with `bind: address already in use`; Ring does not detect the conflict before calling Docker.
+
+Omit `ports:` to keep the container unpublished — it remains reachable from other containers in the same Ring namespace via the per-namespace bridge network.
+
 ## Metrics
 
 `ring deployment metrics <id>` returns CPU, memory, network, disk I/O, and PID stats per instance, polled live from the Docker stats endpoint.
@@ -150,7 +167,7 @@ ring deployment metrics $DEPLOYMENT_ID
 ## Limitations
 
 - Single host only — Ring does not orchestrate across multiple Docker daemons.
-- Port publishing is not modeled in the manifest. If your image exposes a port, Docker may auto-publish it depending on daemon settings; otherwise, front the deployment with a reverse proxy.
+- Port conflicts are surfaced by Docker at start time, not validated by Ring at deployment creation.
 
 ## See also
 
