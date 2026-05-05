@@ -37,13 +37,25 @@ pub(crate) struct GuestMount {
     pub read_only: bool,
 }
 
-/// Build a NoCloud cidata ISO from the deployment's environment map and
-/// virtio-fs mounts, returning its path. The caller is responsible for
-/// cleaning the file up when the VM stops.
+/// Static network config Ring asks the guest to apply on its primary NIC.
+/// All values come from `runtime::host_net::InstanceNet`, propagated through
+/// the runtime layer so cloud-init can write a netplan/networkd dropin.
+pub(crate) struct GuestNet {
+    pub guest_ip: String,
+    pub host_ip: String,
+    pub prefix_len: u8,
+    pub mac: String,
+}
+
+/// Build a NoCloud cidata ISO from the deployment's environment map,
+/// virtio-fs mounts and (optionally) a static network configuration,
+/// returning its path. The caller is responsible for cleaning the file up
+/// when the VM stops.
 pub(crate) async fn build_cidata_iso(
     instance_id: &str,
     deployment: &Deployment,
     mounts: &[GuestMount],
+    net: Option<&GuestNet>,
     output_dir: &Path,
 ) -> Result<PathBuf, RuntimeError> {
     // Filter to plain values. Any unresolved SecretRef at this stage is a
@@ -71,7 +83,7 @@ pub(crate) async fn build_cidata_iso(
         .await
         .map_err(RuntimeError::Io)?;
 
-    let user_data = render_user_data(&envs, mounts);
+    let user_data = render_user_data(&envs, mounts, net);
     let meta_data = render_meta_data(instance_id);
 
     tokio::fs::write(staging.join("user-data"), user_data)
@@ -138,7 +150,11 @@ fn render_meta_data(instance_id: &str) -> String {
     )
 }
 
-fn render_user_data(envs: &[(String, String)], mounts: &[GuestMount]) -> String {
+fn render_user_data(
+    envs: &[(String, String)],
+    mounts: &[GuestMount],
+    net: Option<&GuestNet>,
+) -> String {
     // Two-pronged delivery to cover both worlds:
     //   1. /etc/ring/env in KEY=value form, sourced by a systemd drop-in
     //      (`EnvironmentFile=`) so any unit using `[Service]` picks it up.
@@ -172,6 +188,23 @@ fn render_user_data(envs: &[(String, String)], mounts: &[GuestMount]) -> String 
     // contract we want to lean on for "is the dir there yet").
     let mut mounts_block = String::new();
     let mut runcmd_lines = String::from("  - [systemctl, daemon-reload]\n");
+
+    // Static network configuration on the primary NIC. We avoid declarative
+    // formats (netplan, NetworkManager keyfiles, systemd-networkd dropins)
+    // because each Linux distro ships a different one — the only thing
+    // every modern guest reliably ships is `ip` from iproute2. We assume
+    // the kernel exposes the NIC under a predictable name; on Cloud
+    // Hypervisor's virtio-net the name is `enp0s3` on Ubuntu/Debian, `eth0`
+    // on Cirros and older minimal images. Try both.
+    if let Some(n) = net {
+        runcmd_lines.push_str(&format!(
+            "  - [\"sh\", \"-c\", \"for i in enp0s3 ens3 eth0; do ip link show \\\"$i\\\" >/dev/null 2>&1 && IFACE=\\\"$i\\\" && break; done; ip addr add {guest}/{plen} dev \\\"$IFACE\\\"; ip link set \\\"$IFACE\\\" up; ip route add default via {host}\"]\n",
+            guest = n.guest_ip,
+            host = n.host_ip,
+            plen = n.prefix_len,
+        ));
+    }
+
     if !mounts.is_empty() {
         mounts_block.push_str("mounts:\n");
         for m in mounts {
@@ -294,7 +327,7 @@ mod tests {
     #[test]
     fn user_data_contains_b64_env_payload() {
         let envs = vec![("FOO".to_string(), "bar".to_string())];
-        let yaml = render_user_data(&envs, &[]);
+        let yaml = render_user_data(&envs, &[], None);
         assert!(yaml.starts_with("#cloud-config"));
         assert!(yaml.contains("/etc/ring/env"));
         assert!(!yaml.contains("EnvironmentFile=-/etc/ring/env")); // dropin is base64'd
@@ -317,7 +350,7 @@ mod tests {
                 read_only: true,
             },
         ];
-        let yaml = render_user_data(&[], &mounts);
+        let yaml = render_user_data(&[], &mounts, None);
         // fstab entries via cloud-init `mounts:` module
         assert!(yaml.contains("mounts:"));
         assert!(yaml.contains("\"bind-0\", \"/data\", \"virtiofs\", \"defaults\""));
@@ -330,9 +363,32 @@ mod tests {
 
     #[test]
     fn user_data_omits_mounts_block_when_empty() {
-        let yaml = render_user_data(&[], &[]);
+        let yaml = render_user_data(&[], &[], None);
         assert!(!yaml.contains("mounts:"));
         assert!(!yaml.contains("virtiofs"));
+    }
+
+    #[test]
+    fn user_data_emits_network_config_when_provided() {
+        let net = GuestNet {
+            guest_ip: "10.42.5.6".to_string(),
+            host_ip: "10.42.5.5".to_string(),
+            prefix_len: 30,
+            mac: "02:11:22:33:44:55".to_string(),
+        };
+        let yaml = render_user_data(&[], &[], Some(&net));
+        assert!(yaml.contains("ip addr add 10.42.5.6/30"));
+        assert!(yaml.contains("ip route add default via 10.42.5.5"));
+        // The probe loop tries enp0s3 / ens3 / eth0 in turn.
+        assert!(yaml.contains("enp0s3"));
+        assert!(yaml.contains("eth0"));
+    }
+
+    #[test]
+    fn user_data_omits_network_runcmd_when_no_net() {
+        let yaml = render_user_data(&[], &[], None);
+        assert!(!yaml.contains("ip addr add"));
+        assert!(!yaml.contains("ip route add default"));
     }
 
     #[test]
@@ -403,7 +459,7 @@ mod tests {
             read_only: false,
         }];
 
-        let iso = build_cidata_iso("ch-cidata-test", &dep, &mounts, &dir)
+        let iso = build_cidata_iso("ch-cidata-test", &dep, &mounts, None, &dir)
             .await
             .expect("xorriso should produce an ISO");
 
@@ -442,7 +498,7 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let dep = empty_deployment("ch-cidata-empty");
-        let iso = build_cidata_iso("ch-cidata-empty", &dep, &[], &dir)
+        let iso = build_cidata_iso("ch-cidata-empty", &dep, &[], None, &dir)
             .await
             .expect("empty cidata should still build");
         assert!(iso.exists());

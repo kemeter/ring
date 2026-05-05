@@ -36,6 +36,11 @@ start_ring() {
   RING_URL="http://127.0.0.1:${RING_PORT}"
   RING_E2E_LABEL="ring-e2e-$(basename "$RING_TEST_DIR")"
   export RING_CONFIG_DIR="$RING_TEST_DIR"
+  # Without this, every e2e shares the developer's `./ring.db` in CWD.
+  # Tests then see leftover deployments from previous runs and the
+  # scheduler may even boot stale ones, masking failures and producing
+  # false positives. Pin each test to its own database file.
+  export RING_DATABASE_PATH="$RING_TEST_DIR/ring.db"
 
   cat > "$RING_TEST_DIR/config.toml" <<EOF
 [contexts.default]

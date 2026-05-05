@@ -5,7 +5,9 @@ use super::client::{
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
+use crate::runtime::host_net::InstanceNet;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::runtime::port_forwarder::{self, PortForwarder};
 use crate::runtime::virtiofs::{self, VirtiofsMount};
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -63,6 +65,9 @@ pub struct CloudHypervisorLifecycle {
     /// and unlinks its socket. Wrapped in a sync `Mutex` because it is only
     /// touched briefly to insert/remove — never across `.await`.
     virtiofs_mounts: Mutex<HashMap<String, Vec<VirtiofsMount>>>,
+    /// Live socat port-forwarders, keyed by VM instance id. Same lifetime
+    /// rules as `virtiofs_mounts`: dropping the entry kills the socat.
+    port_forwarders: Mutex<HashMap<String, Vec<PortForwarder>>>,
 }
 
 impl CloudHypervisorLifecycle {
@@ -70,6 +75,7 @@ impl CloudHypervisorLifecycle {
         Self {
             config,
             virtiofs_mounts: Mutex::new(HashMap::new()),
+            port_forwarders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -426,20 +432,38 @@ impl CloudHypervisorLifecycle {
             })
             .collect();
 
+        // If the deployment publishes any port, allocate a deterministic /30
+        // for this VM and tell both CH and cloud-init what to do with it.
+        // CH creates the tap and brings up its host-side IP; cloud-init
+        // configures the matching guest-side IP at first boot.
+        let needs_net = !deployment.ports.is_empty();
+        let net_alloc = if needs_net {
+            Some(InstanceNet::for_instance(instance_id))
+        } else {
+            None
+        };
+        let guest_net = net_alloc.as_ref().map(|n| super::cloud_init::GuestNet {
+            guest_ip: n.guest_ip.clone(),
+            host_ip: n.host_ip.clone(),
+            prefix_len: n.prefix_len,
+            mac: n.mac.clone(),
+        });
+
         // Build the disk list. The main rootfs is always there. A cidata ISO
         // is attached whenever there's something for cloud-init to do —
-        // either env vars or virtio-fs mounts.
+        // env vars, virtio-fs mounts, or a static network config.
         let mut disks = vec![DiskConfig {
             path: Self::path_str(&instance_image)?.to_string(),
             readonly: Some(false),
             image_type: None,
         }];
-        if !deployment.environment.is_empty() || !guest_mounts.is_empty() {
+        if !deployment.environment.is_empty() || !guest_mounts.is_empty() || guest_net.is_some() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
             let iso_path = super::cloud_init::build_cidata_iso(
                 instance_id,
                 deployment,
                 &guest_mounts,
+                guest_net.as_ref(),
                 &socket_dir,
             )
             .await?;
@@ -449,6 +473,21 @@ impl CloudHypervisorLifecycle {
                 image_type: None,
             });
         }
+
+        let net_config = match &net_alloc {
+            Some(n) => NetConfig {
+                tap: Some(n.tap_name.clone()),
+                ip: Some(n.host_ip.clone()),
+                mask: Some(n.netmask.clone()),
+                mac: Some(n.mac.clone()),
+            },
+            None => NetConfig {
+                tap: None,
+                ip: None,
+                mask: None,
+                mac: None,
+            },
+        };
 
         let vm_config = VmConfig {
             payload: PayloadConfig {
@@ -473,12 +512,7 @@ impl CloudHypervisorLifecycle {
             } else {
                 Some(fs_configs)
             },
-            net: Some(vec![NetConfig {
-                tap: None,
-                ip: None,
-                mask: None,
-                mac: None,
-            }]),
+            net: Some(vec![net_config]),
             serial: Some(ConsoleConfig {
                 mode: "Tty".to_string(),
             }),
@@ -515,6 +549,31 @@ impl CloudHypervisorLifecycle {
         if !live_mounts.is_empty() {
             if let Ok(mut map) = self.virtiofs_mounts.lock() {
                 map.insert(instance_id.to_string(), live_mounts);
+            }
+        }
+
+        // Spawn one socat per declared port now that the guest IP is reachable
+        // (cloud-init has had time to bring eth0 up). We don't fail the boot
+        // if a port can't be forwarded — the VM is up; the caller can see
+        // the missing port in `ring deployment events` if we emit one. For
+        // now a warn! is enough to keep the scheduler from flapping.
+        if let Some(net) = &net_alloc {
+            let mut forwarders = Vec::with_capacity(deployment.ports.len());
+            for p in &deployment.ports {
+                match port_forwarder::spawn_forwarder(&net.guest_ip, p.published, p.target).await {
+                    Ok(fw) => forwarders.push(fw),
+                    Err(e) => {
+                        warn!(
+                            "Failed to publish port {}->{}:{} for VM {}: {}",
+                            p.published, net.guest_ip, p.target, instance_id, e
+                        );
+                    }
+                }
+            }
+            if !forwarders.is_empty() {
+                if let Ok(mut map) = self.port_forwarders.lock() {
+                    map.insert(instance_id.to_string(), forwarders);
+                }
             }
         }
 
@@ -574,6 +633,12 @@ impl CloudHypervisorLifecycle {
         // shut down avoids the kernel logging spurious EIO when the guest
         // tries to flush a now-disconnected share.
         if let Ok(mut map) = self.virtiofs_mounts.lock() {
+            let _ = map.remove(instance_id);
+        }
+
+        // Drop port-forwarders for this instance. Their `Drop` sends SIGKILL
+        // to the matching socat processes and frees the listening ports.
+        if let Ok(mut map) = self.port_forwarders.lock() {
             let _ = map.remove(instance_id);
         }
 
