@@ -15,7 +15,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITES=("docker" "cloud-hypervisor")
+SUITES=("server" "docker" "cloud-hypervisor")
 
 # Restrict to the suite the user named, if any.
 if [ "$#" -gt 0 ]; then

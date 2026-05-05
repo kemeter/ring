@@ -15,13 +15,13 @@ If the connection fails, the server logs an error and exits. Run `ring doctor` f
 
 ## Per-namespace networks
 
-Each Ring namespace maps to one Docker bridge network named `ring-<namespace>`. Containers in the same namespace can reach each other by name; containers in different namespaces are isolated unless you wire something up externally.
+Each Ring namespace maps to one Docker bridge network named `ring_<namespace>`. Containers in the same namespace can reach each other by name; containers in different namespaces are isolated unless you wire something up externally.
 
 ```bash
-docker network ls | grep '^.\+ring-'
-# ring-development    bridge    local
-# ring-staging        bridge    local
-# ring-production     bridge    local
+docker network ls | grep '^.\+ring_'
+# ring_development    bridge    local
+# ring_staging        bridge    local
+# ring_production     bridge    local
 ```
 
 ## Container labels

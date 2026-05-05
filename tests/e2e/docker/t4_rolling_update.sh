@@ -7,8 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
 
 log "== T4: rolling update =="
 
@@ -16,7 +16,7 @@ start_ring
 ring_login
 
 # Apply v1
-"$RING_BIN" apply --file "$SCRIPT_DIR/fixtures/nginx-rolling-v1.yaml"
+"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-rolling-v1.yaml"
 wait_deployment_by_image "ring-e2e" "nginx-rolling" "nginx:1.25-alpine" "running" 90
 
 V1_ID=$(get_deployment_id_by_image "ring-e2e" "nginx-rolling" "nginx:1.25-alpine")
@@ -30,7 +30,7 @@ V1_CONTAINER=$(docker ps -q --filter "label=ring_deployment=$V1_ID" | head -n1)
 log "v1 container: $V1_CONTAINER"
 
 # Apply v2 (same name, different image)
-"$RING_BIN" apply --file "$SCRIPT_DIR/fixtures/nginx-rolling-v2.yaml"
+"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-rolling-v2.yaml"
 wait_deployment_by_image "ring-e2e" "nginx-rolling" "nginx:1.26-alpine" "running" 90
 
 V2_ID=$(get_deployment_id_by_image "ring-e2e" "nginx-rolling" "nginx:1.26-alpine")

@@ -10,10 +10,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
-# shellcheck source=./setup-ch.sh
-source "$SCRIPT_DIR/setup-ch.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
+# shellcheck source=./setup.sh
+source "$SCRIPT_DIR/setup.sh"
 
 # Wait for exactly <expected> CH sockets to be present in $RING_E2E_CH_SOCKET_DIR.
 # Usage: wait_ch_socket_count <expected> [timeout_seconds]

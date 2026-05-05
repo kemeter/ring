@@ -41,6 +41,10 @@ start_ring() {
   # scheduler may even boot stale ones, masking failures and producing
   # false positives. Pin each test to its own database file.
   export RING_DATABASE_PATH="$RING_TEST_DIR/ring.db"
+  # Required as soon as a deployment carries a `secretRef` (or any code path
+  # touches `secret::encrypt_value`); the server panics otherwise. The
+  # CI workflow sets the same constant — kept in sync.
+  export RING_SECRET_KEY="${RING_SECRET_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
 
   cat > "$RING_TEST_DIR/config.toml" <<EOF
 [contexts.default]

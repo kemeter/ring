@@ -281,7 +281,7 @@ ring user delete <ID>
 
 ## Secrets
 
-Secrets are AES-256-GCM-encrypted values stored per-namespace. The server must be started with `RING_SECRET_KEY` (a base64-encoded 32-byte key) for any secret operation to succeed; without it, the API returns `500 Internal Server Error`.
+Secrets are AES-256-GCM-encrypted values stored per-namespace. `RING_SECRET_KEY` (a base64-encoded 32-byte key) must be exported before `ring server start` — the server refuses to start otherwise. Run `ring doctor` to confirm the variable is set and decodes correctly.
 
 ### `ring secret create`
 
@@ -474,7 +474,7 @@ The default context (the one with `current = true`) is used when no `--context` 
 - `RING_DATABASE_PATH` — path to the SQLite file (default: `./ring.db`)
 - `RING_DB_POOL_SIZE` — max SQLite connections (default: `5`)
 - `RING_CONFIG_DIR` — config directory (default: `~/.config/kemeter/ring`)
-- `RING_SECRET_KEY` — base64-encoded 32-byte key for secret encryption. **Required** to use secrets.
+- `RING_SECRET_KEY` — base64-encoded 32-byte key for secret encryption. **Required**: the server refuses to start without it (validated up front; see `ring doctor`).
 - `RING_SCHEDULER_INTERVAL` — scheduler tick in seconds (overrides `scheduler.interval` in `config.toml`)
 - `RING_APPLY_TIMEOUT` — single-deployment apply timeout in seconds (default: `300`)
 - `RUST_LOG` — log level (e.g. `info`, `debug`, `ring=debug`)
