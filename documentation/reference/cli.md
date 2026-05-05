@@ -362,7 +362,7 @@ ring config delete <CONFIG_ID>
 ring namespace create <NAME>
 ```
 
-Each namespace gets a dedicated Docker network (`ring-<name>`). Namespaces are also auto-created when a deployment is applied to a non-existent namespace.
+For Docker-runtime deployments, each namespace gets a dedicated Docker bridge network (`ring_<name>`). Namespaces are also auto-created when a deployment is applied to a non-existent namespace. The Cloud Hypervisor runtime does not create per-namespace networks; see [its runtime page](/documentation/runtimes/cloud-hypervisor) for the VM networking model.
 
 ### `ring namespace list`
 
@@ -727,7 +727,7 @@ ring doctor
 curl http://localhost:3030/healthz
 RUST_LOG=debug ring server start
 docker ps --filter "label=ring_deployment"
-docker network ls | grep '^.\+ring-'
+docker network ls | grep '^.\+ring_'
 ```
 
 ### Reset

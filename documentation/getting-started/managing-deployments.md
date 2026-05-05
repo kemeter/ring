@@ -151,9 +151,9 @@ Each namespace gets its own Docker bridge network:
 
 ```bash
 docker network ls | grep ring
-# ring-development    bridge    local
-# ring-staging        bridge    local
-# ring-production     bridge    local
+# ring_development    bridge    local
+# ring_staging        bridge    local
+# ring_production     bridge    local
 ```
 
 Containers in the same namespace reach each other by container name. Cross-namespace traffic must go through external routing.

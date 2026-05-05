@@ -285,8 +285,8 @@ Retrieve scheduler events for a deployment.
     "deployment_id": "f3a8b2c4-...",
     "timestamp": "2026-04-15T10:30:00Z",
     "level": "info",
-    "component": "scheduler",
-    "reason": "ContainerStarted",
+    "component": "docker",
+    "reason": "ScaleUp",
     "message": "Container nginx-demo-1 started successfully"
   }
 ]

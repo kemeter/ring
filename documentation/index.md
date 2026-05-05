@@ -35,18 +35,23 @@ curl -X POST http://localhost:3030/deployments \
 
 ### Multiple runtimes
 
-Docker is the default runtime. Cloud Hypervisor microVMs are supported in alpha. See the [Docker runtime](/documentation/runtimes/docker) or [Cloud Hypervisor runtime](/documentation/runtimes/cloud-hypervisor) for details.
+Two runtimes share the same manifest shape, with different trade-offs:
+
+- **Docker** — default. The most complete: health checks, labels, image pulls, container metrics, inter-container DNS within a namespace.
+- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary, but several Docker-runtime features are silently ignored or not yet wired (labels, registry credentials, health-check probes, container metrics, inter-instance networking).
+
+See the [Docker runtime](/documentation/runtimes/docker), the [Cloud Hypervisor runtime](/documentation/runtimes/cloud-hypervisor), or jump straight to the [CH parity table](/documentation/runtimes/cloud-hypervisor#current-limitations).
 
 ```yaml
 deployments:
   app:
     runtime: docker            # or cloud-hypervisor
-    image: "myapp:latest"
+    image: "myapp:latest"      # or "/var/lib/ring/images/app.raw" on CH
 ```
 
 ### Namespace isolation
 
-Group deployments by environment or team. Each namespace gets its own Docker network.
+Group deployments by environment or team. On the Docker runtime, each namespace gets its own bridge network so containers in the same namespace can reach each other by name. On Cloud Hypervisor, namespaces are organizational only — VMs are independently networked.
 
 ```yaml
 deployments:
@@ -134,9 +139,9 @@ That's it. Nginx is running and reconciled by Ring.
 ## Architecture at a glance
 
 - **Ring server** — central process that exposes the REST API and runs the scheduler.
-- **Scheduler** — reconciliation loop that creates, removes, and health-checks containers; listens to Docker events to detect crashes.
-- **Docker runtime** — default runtime; one Docker network per namespace.
-- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs.
+- **Scheduler** — reconciliation loop that creates, removes, and health-checks instances. On the Docker runtime it also listens to live Docker events (`die`, `oom`, `kill`) to detect crashes; on the Cloud Hypervisor runtime it reconciles by scanning sockets.
+- **Docker runtime** — default runtime. Containers, one bridge network per namespace.
+- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/runtimes/cloud-hypervisor#current-limitations).
 - **SQLite database** — stores deployments, users, secrets, configs, events; WAL mode by default.
 - **REST API** — the only control surface; the CLI is a client.
 

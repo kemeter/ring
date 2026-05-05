@@ -180,18 +180,25 @@ resources:
 
 ## Health Checks
 
-Only `tcp` and `http` health checks are supported on the Cloud Hypervisor runtime:
+The CH runtime accepts `tcp` and `http` declarations at the API and rejects `command` (`400 Bad Request`).
+
+**Current status:** the probe execution path is not yet wired in `cloud_hypervisor/lifecycle.rs` — the default trait implementation is used, which always returns `failed`. Health checks declared on a CH deployment will therefore accumulate failures and eventually trigger their `on_failure` action regardless of the application's actual state.
+
+Until the implementation lands:
+
+- Either omit `health_checks:` entirely on CH deployments.
+- Or set `on_failure: alert` so the failures only show up in `ring deployment events` without restarting the VM.
 
 ```yaml
 health_checks:
   - type: tcp
     port: 80
-    interval: 10s
-    timeout: 5s
-    on_failure: restart
+    interval: "10s"
+    timeout: "5s"
+    on_failure: alert         # not `restart` — see note above
 ```
 
-`command` health checks are **not supported** and will be rejected by the API.
+`command` is rejected at the API; the VM model has no direct `docker exec` equivalent, so implementing it would require an in-guest agent (vsock or SSH).
 
 ## Environment variables
 
@@ -355,14 +362,21 @@ The following features are **not yet available** on the Cloud Hypervisor runtime
 
 | Feature | Status |
 |---|---|
-| `command` health checks | Not supported — rejected at API |
-| Custom commands (`command: [...]`) | Not supported — rejected at API |
-| Docker image references | Not supported — rejected at API |
+| `tcp` / `http` health checks | Accepted at the API but probe path not yet wired — every probe returns `failed`. See [Health Checks](#health-checks) |
+| `command` health checks | Rejected at the API. No `docker exec` equivalent in the VM model |
+| Custom commands (`command: [...]`) | Rejected at the API — the VM boots whatever its image is configured to run |
+| Docker image references | Rejected at the API — `image:` must be an absolute path to a raw disk image |
+| `labels:` | Silently ignored — no equivalent of Docker container labels in the VM model |
+| `resources.requests` | Silently ignored — only `resources.limits.cpu` (→ vCPU count) and `resources.limits.memory` (→ VM RAM allocation) are honored |
+| `config.image_pull_policy` / `config.server` / `config.username` / `config.password` | Silently ignored — there is no image to pull, the disk image is local |
+| `kind: job` | Untested — the job lifecycle (`completed` / `failed` on exit) lives in the Docker runtime; CH only reconciles `replicas` |
+| Inter-instance networking (same namespace) | Each VM is isolated — no shared bridge network. Cross-VM traffic must go through host-published ports |
 | Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
 | Volumes | Supported via virtio-fs — see [Volumes](#volumes) |
 | Port mapping | Supported via socat userspace forwarders — see [Port mapping](#port-mapping) |
 | Deployment logs (`ring deployment logs`) | Supported via the serial console — see [Logs](#logs) |
-| Deployment metrics (`ring deployment metrics`) | Not available for CH deployments |
+| Deployment metrics (`ring deployment metrics`) | Not available for CH deployments — `instances:` array is empty |
+| Runtime event subscription (OOM, kill, die) | No equivalent — CH has no live event stream; the scheduler reconciles by scanning sockets |
 
 These limitations will be addressed in future releases. See the project roadmap for details.
 
