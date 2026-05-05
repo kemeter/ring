@@ -7,15 +7,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
 
 log "== T6: crash loop must converge to CrashLoopBackOff =="
 
 start_ring
 ring_login
 
-"$RING_BIN" apply --file "$SCRIPT_DIR/fixtures/crashloop.yaml"
+"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/crashloop.yaml"
 
 # Give the scheduler time to react. With a 1s scheduler interval, 90s leaves
 # comfortable headroom for restart_count to climb past MAX_RESTART_COUNT (5).

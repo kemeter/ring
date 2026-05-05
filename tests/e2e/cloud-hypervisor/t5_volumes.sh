@@ -10,10 +10,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
-# shellcheck source=./setup-ch.sh
-source "$SCRIPT_DIR/setup-ch.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
+# shellcheck source=./setup.sh
+source "$SCRIPT_DIR/setup.sh"
 
 log "== T10-CH: virtio-fs volumes (bind, named, config) =="
 

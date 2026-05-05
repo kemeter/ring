@@ -3,7 +3,7 @@
 #
 # Verifies that the host has everything needed to boot a VM through Ring's
 # cloud-hypervisor runtime, and downloads a small bootable raw image on first
-# run. Sourced by t*-ch.sh scripts via `source setup-ch.sh`.
+# run. Sourced by tests/e2e/cloud-hypervisor/t*.sh via `source setup.sh`.
 #
 # Artifacts live outside the repo under $HOME/.cache/ring-e2e/ to avoid
 # committing ~5 GB of VM image to git.

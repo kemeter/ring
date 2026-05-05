@@ -7,8 +7,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
 
 log "== T7: scale-down must not bump restart_count =="
 
@@ -16,7 +16,7 @@ start_ring
 ring_login
 
 # Use the existing replicas fixture (nginx, replicas=3).
-"$RING_BIN" apply --file "$SCRIPT_DIR/fixtures/nginx-replicas.yaml"
+"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-replicas.yaml"
 
 wait_deployment_status "ring-e2e" "nginx-scaled" "running" 60
 

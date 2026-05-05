@@ -5,8 +5,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./lib.sh
-source "$SCRIPT_DIR/lib.sh"
+# shellcheck source=../lib.sh
+source "$SCRIPT_DIR/../lib.sh"
 
 log "== T2: bind volume (read-only) =="
 
@@ -17,7 +17,7 @@ mkdir -p "$BIND_SOURCE"
 start_ring
 ring_login
 
-"$RING_BIN" apply --file "$SCRIPT_DIR/fixtures/nginx-bind.yaml"
+"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-bind.yaml"
 
 wait_deployment_status "ring-e2e" "nginx-bind" "running" 60
 
