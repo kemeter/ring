@@ -77,6 +77,15 @@ struct Deployment {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     health_checks: Vec<HealthCheck>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ports: Vec<Port>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Port {
+    published: u16,
+    target: u16,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -603,6 +612,7 @@ mod tests {
             command: Vec::new(),
             resources: None,
             health_checks: Vec::new(),
+            ports: Vec::new(),
         };
 
         assert!(deployment.validate().is_ok());
@@ -822,6 +832,7 @@ deployments:
             ],
             resources: None,
             health_checks: Vec::new(),
+            ports: Vec::new(),
         };
 
         let mut env_vars = HashMap::new();

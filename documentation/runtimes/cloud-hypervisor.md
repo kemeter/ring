@@ -286,6 +286,42 @@ Mapping:
 
 The virtiofsd process lives as long as its VM. When the VM is stopped (scale-down, delete, rolling update), Ring kills the daemon and removes the socket. Named volumes' on-disk content **survives** deployment deletion; bind sources belong to the operator. Config and `Content`-style payloads are wiped with the share directory on stop.
 
+## Port mapping
+
+Publish guest ports on the host with the same `ports:` field as the Docker runtime:
+
+```yaml
+deployments:
+  api:
+    runtime: cloud-hypervisor
+    image: /var/lib/ring/images/ubuntu-focal.raw
+    ports:
+      - { published: 8080, target: 80 }
+      - { published: 5432, target: 5432 }
+```
+
+### How it works
+
+For each VM with at least one declared port, Ring derives a deterministic /30 subnet under `10.42.0.0/16` from the instance id. Cloud Hypervisor creates a tap interface (`ring-<14-bit-hex>`) and brings up its host-side IP; cloud-init configures the matching guest-side IP on the primary NIC at first boot. Ring then spawns one `socat` process per port mapping that forwards `0.0.0.0:<published>` on the host to `<guest_ip>:<target>`.
+
+Why a userspace proxy and not iptables? `socat` runs without extra capabilities, surfaces port conflicts as a clean `bind: address already in use` and cleans up via plain SIGKILL — there's no leftover NAT rule to garbage-collect on a Ring crash. The throughput trade-off is negligible for the workloads the CH runtime targets (HTTP, dev databases). A future iteration may switch to `nftables` DNAT rules; tracked in the project roadmap.
+
+### Requirements
+
+- **`socat`** must be on the host. Install via `apt install socat` on Debian/Ubuntu.
+- The guest kernel needs the `virtio_net` driver (every standard cloud image ships it).
+- The guest's primary NIC must respond to `enp0s3`, `ens3` or `eth0` — Ring's cloud-init dropin probes those names in order.
+
+### Lifecycle
+
+Each `socat` lives as long as its VM. On `deployment delete` (or scaledown / rolling update / crashloop eviction), Ring sends SIGKILL to the matching socat processes and frees the listening ports. CH itself owns the tap device and removes it on VM shutdown.
+
+### Limitations
+
+- **No automatic conflict detection** — if `published` is already bound on the host, `socat` fails to start and the port silently does not become available; the VM still boots. Inspect `ring deployment events` if a port doesn't respond.
+- **TCP only** — `socat`'s configuration is `TCP4-LISTEN`/`TCP4`. UDP forwarding requires a separate config and is not wired up yet.
+- **No bandwidth shaping or connection limits** — the forwarder is permissive by design.
+
 ## Current Limitations
 
 The following features are **not yet available** on the Cloud Hypervisor runtime:
@@ -297,6 +333,7 @@ The following features are **not yet available** on the Cloud Hypervisor runtime
 | Docker image references | Not supported — rejected at API |
 | Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
 | Volumes | Supported via virtio-fs — see [Volumes](#volumes) |
+| Port mapping | Supported via socat userspace forwarders — see [Port mapping](#port-mapping) |
 | Deployment logs (`ring deployment logs`) | Not available for CH deployments |
 | Deployment metrics (`ring deployment metrics`) | Not available for CH deployments |
 
