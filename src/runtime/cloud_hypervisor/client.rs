@@ -102,6 +102,11 @@ pub(crate) struct NetConfig {
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct ConsoleConfig {
     pub mode: String,
+    /// Path to the file CH appends serial output to when `mode == "File"`.
+    /// Cloud Hypervisor opens it in append mode and never rotates it; the
+    /// caller is responsible for cleanup when the VM is torn down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

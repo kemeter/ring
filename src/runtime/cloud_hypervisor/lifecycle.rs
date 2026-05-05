@@ -107,6 +107,17 @@ impl CloudHypervisorLifecycle {
         PathBuf::from(&self.config.socket_dir).join(format!("{}.cidata.iso", instance_id))
     }
 
+    fn console_log_path(&self, instance_id: &str) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir).join(format!("{}.console.log", instance_id))
+    }
+
+    /// Public for the e2e test only — production callers go through
+    /// `get_logs` / `stream_logs`.
+    #[cfg(test)]
+    pub(crate) fn console_log_path_for_test(&self, instance_id: &str) -> PathBuf {
+        self.console_log_path(instance_id)
+    }
+
     fn deployment_prefix(deployment_id: &str) -> String {
         format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())])
     }
@@ -513,11 +524,18 @@ impl CloudHypervisorLifecycle {
                 Some(fs_configs)
             },
             net: Some(vec![net_config]),
+            // Append serial output to a per-instance file so `ring deployment
+            // logs` can read it back. CH never rotates this file; cleanup is
+            // tied to the VM lifetime via stop_vm. Anything the guest writes
+            // to /dev/console (cloud-init banner, kernel messages, app stdout
+            // when redirected) lands here.
             serial: Some(ConsoleConfig {
-                mode: "Tty".to_string(),
+                mode: "File".to_string(),
+                file: Some(Self::path_str(&self.console_log_path(instance_id))?.to_string()),
             }),
             console: Some(ConsoleConfig {
                 mode: "Off".to_string(),
+                file: None,
             }),
         };
 
@@ -626,6 +644,11 @@ impl CloudHypervisorLifecycle {
         let cidata_iso = self.cidata_iso_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&cidata_iso).await {
             debug!("Failed to remove cidata ISO {:?}: {}", cidata_iso, e);
+        }
+
+        let console_log = self.console_log_path(instance_id);
+        if let Err(e) = tokio::fs::remove_file(&console_log).await {
+            debug!("Failed to remove console log {:?}: {}", console_log, e);
         }
 
         // Drop any live virtiofsd processes for this instance. Their `Drop`
@@ -780,6 +803,98 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
 
     async fn remove_instance(&self, instance_id: String) -> bool {
         self.stop_vm(&instance_id).await
+    }
+
+    async fn get_logs(
+        &self,
+        deployment_id: &str,
+        tail: Option<&str>,
+        since: Option<i32>,
+        instance_filter: Option<&str>,
+    ) -> Vec<crate::runtime::lifecycle_trait::Log> {
+        // Read every state CH knows about: a crashed VM still has a console
+        // log file the operator wants to see, even after the VM is gone.
+        let instances = self.scan_instances(deployment_id, &[]).await;
+
+        let mut logs = Vec::new();
+        for instance_id in instances {
+            if let Some(want) = instance_filter
+                && instance_id != want
+            {
+                continue;
+            }
+            let path = self.console_log_path(&instance_id);
+            let lines = super::console_logs::read_lines(&path, tail, since).await;
+            for message in lines {
+                logs.push(crate::runtime::lifecycle_trait::Log {
+                    instance: instance_id.clone(),
+                    level: crate::runtime::lifecycle_trait::classify_log(&message),
+                    timestamp: crate::runtime::lifecycle_trait::extract_date(&message),
+                    message,
+                });
+            }
+        }
+        logs
+    }
+
+    async fn stream_logs(
+        &self,
+        deployment_id: &str,
+        tail: Option<&str>,
+        since: Option<i32>,
+        instance_filter: Option<&str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>
+                + Send,
+        >,
+    > {
+        use futures::stream::{self, StreamExt};
+
+        let instances = self.scan_instances(deployment_id, &[]).await;
+        let filtered: Vec<String> = instances
+            .into_iter()
+            .filter(|id| match instance_filter {
+                Some(want) => id == want,
+                None => true,
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            return Box::pin(stream::empty());
+        }
+
+        let mut streams: Vec<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+                        > + Send,
+                >,
+            >,
+        > = Vec::new();
+
+        for instance_id in filtered {
+            let path = self.console_log_path(&instance_id);
+            let owned_id = instance_id.clone();
+            let raw =
+                super::console_logs::stream_lines(path, tail.map(|s| s.to_string()), since).await;
+
+            let mapped = raw.map(move |line| {
+                let log = crate::runtime::lifecycle_trait::Log {
+                    instance: owned_id.clone(),
+                    level: crate::runtime::lifecycle_trait::classify_log(&line),
+                    timestamp: crate::runtime::lifecycle_trait::extract_date(&line),
+                    message: line,
+                };
+                let json = serde_json::to_string(&log).unwrap_or_default();
+                Ok(axum::response::sse::Event::default().data(json))
+            });
+
+            streams.push(Box::pin(mapped));
+        }
+
+        Box::pin(stream::select_all(streams))
     }
 }
 
