@@ -896,6 +896,14 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
 
         Box::pin(stream::select_all(streams))
     }
+
+    /// Resolve the guest IP for `instance_id` from the deterministic /30
+    /// allocation. The mapping is a pure function of the instance id (see
+    /// `InstanceNet::for_instance`), so we don't need any persistent state
+    /// — every probe recomputes the same address the VM was booted with.
+    async fn instance_address(&self, instance_id: &str) -> Option<std::net::IpAddr> {
+        InstanceNet::for_instance(instance_id).guest_ip.parse().ok()
+    }
 }
 
 #[cfg(test)]

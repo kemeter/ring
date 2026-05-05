@@ -8,6 +8,7 @@ use futures::stream;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::LazyLock;
 
@@ -91,15 +92,89 @@ pub trait RuntimeLifecycle: Send + Sync {
         Box::pin(stream::empty())
     }
 
-    async fn execute_health_check(
+    /// Resolve the instance's reachable address for an external probe.
+    ///
+    /// Runtimes that expose their workloads on the host network or on a
+    /// runtime-private network should override this so TCP/HTTP probes can
+    /// reach the workload. The default returns `None`, which causes the
+    /// default `execute_health_check` to fail any TCP/HTTP probe with a
+    /// clear "could not resolve" message.
+    async fn instance_address(&self, _instance_id: &str) -> Option<IpAddr> {
+        None
+    }
+
+    /// Run a `command` health-check probe inside the instance.
+    ///
+    /// Container runtimes implement this via `docker exec` or equivalent.
+    /// VM runtimes have no direct equivalent — supporting `command` requires
+    /// an in-guest agent (vsock or SSH), so the default impl reports the
+    /// limitation up front rather than silently appearing to work.
+    async fn execute_command_probe(
         &self,
         _instance_id: &str,
-        _health_check: &HealthCheck,
+        _command: &str,
     ) -> (HealthCheckStatus, Option<String>) {
         (
             HealthCheckStatus::Failed,
-            Some("health checks not supported on this runtime".to_string()),
+            Some("command health checks are not supported on this runtime".to_string()),
         )
+    }
+
+    /// Execute one health-check definition for one instance.
+    ///
+    /// The default impl orchestrates the three probe types via shared
+    /// helpers: `tcp` and `http` probes go through `health_probes` once an
+    /// IP has been resolved via [`Self::instance_address`]; `command`
+    /// probes are delegated to [`Self::execute_command_probe`].
+    ///
+    /// A runtime overrides this only if it needs to deviate from the
+    /// shared pipeline — for example, the Docker runtime keeps its own
+    /// override because its IP-resolution path is interleaved with
+    /// `bollard::inspect_container` calls that already exist there.
+    async fn execute_health_check(
+        &self,
+        instance_id: &str,
+        health_check: &HealthCheck,
+    ) -> (HealthCheckStatus, Option<String>) {
+        let timeout = match HealthCheck::parse_duration(health_check.timeout()) {
+            Ok(d) => d,
+            Err(e) => {
+                return (
+                    HealthCheckStatus::Failed,
+                    Some(format!("Invalid timeout duration: {}", e)),
+                );
+            }
+        };
+
+        match health_check {
+            HealthCheck::Tcp { port, .. } => {
+                let Some(ip) = self.instance_address(instance_id).await else {
+                    return (
+                        HealthCheckStatus::Failed,
+                        Some(format!(
+                            "Could not resolve instance address for {}",
+                            instance_id
+                        )),
+                    );
+                };
+                crate::runtime::health_probes::tcp_probe(ip, *port, timeout).await
+            }
+            HealthCheck::Http { url, .. } => {
+                let Some(ip) = self.instance_address(instance_id).await else {
+                    return (
+                        HealthCheckStatus::Failed,
+                        Some(format!(
+                            "Could not resolve instance address for {}",
+                            instance_id
+                        )),
+                    );
+                };
+                crate::runtime::health_probes::http_probe(ip, url, timeout).await
+            }
+            HealthCheck::Command { command, .. } => {
+                self.execute_command_probe(instance_id, command).await
+            }
+        }
     }
 
     async fn get_instance_stats(&self, _deployment_id: &str) -> Vec<InstanceStatsOutput> {

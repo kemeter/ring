@@ -1,6 +1,7 @@
 pub mod cloud_hypervisor;
 pub mod docker;
 pub mod error;
+pub mod health_probes;
 pub mod lifecycle_trait;
 #[cfg(test)]
 pub mod mock;
