@@ -28,12 +28,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
+/// One virtio-fs mount the guest needs to perform at boot. The host side
+/// (virtiofsd, socket) is set up before calling [`build_cidata_iso`]; this
+/// struct only carries what cloud-init needs to mount it inside the VM.
+pub(crate) struct GuestMount {
+    pub tag: String,
+    pub destination: String,
+    pub read_only: bool,
+}
+
 /// Build a NoCloud cidata ISO from the deployment's environment map and
-/// return its path. The caller is responsible for cleaning the file up when
-/// the VM stops.
+/// virtio-fs mounts, returning its path. The caller is responsible for
+/// cleaning the file up when the VM stops.
 pub(crate) async fn build_cidata_iso(
     instance_id: &str,
     deployment: &Deployment,
+    mounts: &[GuestMount],
     output_dir: &Path,
 ) -> Result<PathBuf, RuntimeError> {
     // Filter to plain values. Any unresolved SecretRef at this stage is a
@@ -61,7 +71,7 @@ pub(crate) async fn build_cidata_iso(
         .await
         .map_err(RuntimeError::Io)?;
 
-    let user_data = render_user_data(&envs);
+    let user_data = render_user_data(&envs, mounts);
     let meta_data = render_meta_data(instance_id);
 
     tokio::fs::write(staging.join("user-data"), user_data)
@@ -128,7 +138,7 @@ fn render_meta_data(instance_id: &str) -> String {
     )
 }
 
-fn render_user_data(envs: &[(String, String)]) -> String {
+fn render_user_data(envs: &[(String, String)], mounts: &[GuestMount]) -> String {
     // Two-pronged delivery to cover both worlds:
     //   1. /etc/ring/env in KEY=value form, sourced by a systemd drop-in
     //      (`EnvironmentFile=`) so any unit using `[Service]` picks it up.
@@ -155,6 +165,33 @@ fn render_user_data(envs: &[(String, String)]) -> String {
     let profile_b64 = base64_encode(&profile_script);
     let dropin_b64 = base64_encode(dropin);
 
+    // cloud-init's `mounts:` module owns fstab; entries become persistent
+    // mounts honoured at every boot. We also emit explicit `mount` commands
+    // in `runcmd` so the share is available *immediately* after first boot
+    // (cloud-init runs `mounts` before `runcmd`, but the order isn't a
+    // contract we want to lean on for "is the dir there yet").
+    let mut mounts_block = String::new();
+    let mut runcmd_lines = String::from("  - [systemctl, daemon-reload]\n");
+    if !mounts.is_empty() {
+        mounts_block.push_str("mounts:\n");
+        for m in mounts {
+            let opts = if m.read_only { "ro" } else { "defaults" };
+            // [device, mountpoint, fstype, opts, dump, fsck_pass]
+            mounts_block.push_str(&format!(
+                "  - [\"{tag}\", \"{dest}\", \"virtiofs\", \"{opts}\", \"0\", \"0\"]\n",
+                tag = m.tag,
+                dest = m.destination,
+                opts = opts,
+            ));
+            runcmd_lines.push_str(&format!(
+                "  - [mkdir, -p, \"{dest}\"]\n  - [mount, -t, virtiofs, -o, \"{opts}\", \"{tag}\", \"{dest}\"]\n",
+                tag = m.tag,
+                dest = m.destination,
+                opts = opts,
+            ));
+        }
+    }
+
     format!(
         "#cloud-config
 write_files:
@@ -170,9 +207,8 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: {dropin_b64}
-runcmd:
-  - [systemctl, daemon-reload]
-"
+{mounts_block}runcmd:
+{runcmd_lines}"
     )
 }
 
@@ -258,13 +294,45 @@ mod tests {
     #[test]
     fn user_data_contains_b64_env_payload() {
         let envs = vec![("FOO".to_string(), "bar".to_string())];
-        let yaml = render_user_data(&envs);
+        let yaml = render_user_data(&envs, &[]);
         assert!(yaml.starts_with("#cloud-config"));
         assert!(yaml.contains("/etc/ring/env"));
-        assert!(yaml.contains("EnvironmentFile=-/etc/ring/env") == false); // dropin is base64'd
+        assert!(!yaml.contains("EnvironmentFile=-/etc/ring/env")); // dropin is base64'd
         // The plain "FOO='bar'" string must be base64-encoded inside the YAML.
         let expected = base64_encode("FOO='bar'\n");
         assert!(yaml.contains(&expected), "payload not in yaml: {}", yaml);
+    }
+
+    #[test]
+    fn user_data_emits_mounts_and_runcmd_for_virtiofs() {
+        let mounts = vec![
+            GuestMount {
+                tag: "bind-0".to_string(),
+                destination: "/data".to_string(),
+                read_only: false,
+            },
+            GuestMount {
+                tag: "cfg-1".to_string(),
+                destination: "/etc/app".to_string(),
+                read_only: true,
+            },
+        ];
+        let yaml = render_user_data(&[], &mounts);
+        // fstab entries via cloud-init `mounts:` module
+        assert!(yaml.contains("mounts:"));
+        assert!(yaml.contains("\"bind-0\", \"/data\", \"virtiofs\", \"defaults\""));
+        assert!(yaml.contains("\"cfg-1\", \"/etc/app\", \"virtiofs\", \"ro\""));
+        // Immediate mount via runcmd
+        assert!(yaml.contains("[mkdir, -p, \"/data\"]"));
+        assert!(yaml.contains("[mount, -t, virtiofs, -o, \"defaults\", \"bind-0\", \"/data\"]"));
+        assert!(yaml.contains("[mount, -t, virtiofs, -o, \"ro\", \"cfg-1\", \"/etc/app\"]"));
+    }
+
+    #[test]
+    fn user_data_omits_mounts_block_when_empty() {
+        let yaml = render_user_data(&[], &[]);
+        assert!(!yaml.contains("mounts:"));
+        assert!(!yaml.contains("virtiofs"));
     }
 
     #[test]
@@ -272,5 +340,113 @@ mod tests {
         let md = render_meta_data("ch-deadbeef");
         assert!(md.contains("instance-id: ch-deadbeef"));
         assert!(md.contains("local-hostname: ch-deadbeef"));
+    }
+
+    fn xorriso_or_skip(test: &str) -> bool {
+        if std::process::Command::new("xorriso")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping {}: xorriso not installed", test);
+            return true;
+        }
+        false
+    }
+
+    fn empty_deployment(id: &str) -> crate::models::deployments::Deployment {
+        crate::models::deployments::Deployment {
+            id: id.to_string(),
+            created_at: String::new(),
+            updated_at: None,
+            status: crate::models::deployments::DeploymentStatus::Creating,
+            restart_count: 0,
+            namespace: "default".to_string(),
+            name: "test".to_string(),
+            image: "ubuntu.raw".to_string(),
+            config: None,
+            runtime: "cloud-hypervisor".to_string(),
+            kind: "worker".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: std::collections::HashMap::new(),
+            environment: std::collections::HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn build_cidata_iso_with_mounts_writes_real_iso() {
+        if xorriso_or_skip("build_cidata_iso_with_mounts_writes_real_iso") {
+            return;
+        }
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ring-cidata-{}-{}", std::process::id(), nanos));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let dep = empty_deployment("ch-cidata-test");
+        let mounts = vec![GuestMount {
+            tag: "bind-0".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let iso = build_cidata_iso("ch-cidata-test", &dep, &mounts, &dir)
+            .await
+            .expect("xorriso should produce an ISO");
+
+        let meta = tokio::fs::metadata(&iso).await.unwrap();
+        assert!(meta.is_file(), "iso should be a file");
+        assert!(meta.len() > 0, "iso should not be empty");
+        // ISO9660 magic "CD001" lives at offset 0x8001 in the volume descriptor.
+        let bytes = tokio::fs::read(&iso).await.unwrap();
+        assert!(bytes.len() > 0x8006);
+        assert_eq!(&bytes[0x8001..0x8006], b"CD001", "missing ISO9660 magic");
+        // The volume label is at offset 0x8028, padded to 32 bytes — we want
+        // CIDATA so cloud-init's NoCloud datasource picks it up.
+        let label = std::str::from_utf8(&bytes[0x8028..0x8028 + 6]).unwrap();
+        assert_eq!(label, "CIDATA");
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn build_cidata_iso_skips_when_nothing_to_emit() {
+        if xorriso_or_skip("build_cidata_iso_skips_when_nothing_to_emit") {
+            return;
+        }
+        // No env, no mounts: build_cidata_iso still produces an ISO (callers
+        // decide whether to invoke it). What matters is that the function
+        // doesn't crash on an empty input.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ring-cidata-empty-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let dep = empty_deployment("ch-cidata-empty");
+        let iso = build_cidata_iso("ch-cidata-empty", &dep, &[], &dir)
+            .await
+            .expect("empty cidata should still build");
+        assert!(iso.exists());
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }

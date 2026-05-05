@@ -22,6 +22,7 @@ log() {
 
 fail() {
   echo "[e2e] FAIL: $*" >&2
+  export RING_E2E_EXIT_CODE=1
   exit 1
 }
 
@@ -77,7 +78,7 @@ EOF
 }
 
 cleanup_ring() {
-  local exit_code=$?
+  local exit_code=${RING_E2E_EXIT_CODE:-$?}
 
   if [ -n "$RING_PID" ] && kill -0 "$RING_PID" 2>/dev/null; then
     kill "$RING_PID" 2>/dev/null || true
@@ -95,8 +96,8 @@ cleanup_ring() {
   if [ -n "$RING_TEST_DIR" ] && [ -d "$RING_TEST_DIR" ]; then
     if [ "$exit_code" -ne 0 ]; then
       echo "[e2e] ring log (test failed, keeping $RING_TEST_DIR):" >&2
-      tail -n 50 "$RING_TEST_DIR/ring.log" >&2 || true
-    else
+      tail -n 80 "$RING_TEST_DIR/ring.log" >&2 || true
+    elif [ -z "${RING_E2E_KEEP:-}" ]; then
       rm -rf "$RING_TEST_DIR"
     fi
   fi
