@@ -38,12 +38,6 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
 
 fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
     if input.runtime == "cloud-hypervisor" {
-        if !input.volumes.is_empty() {
-            return Err(
-                "volumes are not supported on cloud-hypervisor runtime (alpha)".to_string(),
-            );
-        }
-
         if let Some(hcs) = &input.health_checks
             && hcs
                 .iter()
@@ -472,7 +466,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_cloud_hypervisor_rejects_volumes() {
+    async fn create_cloud_hypervisor_accepts_volumes() {
+        // virtio-fs covers all three volume types on the CH runtime, so the
+        // API no longer rejects them. The runtime layer is responsible for
+        // spawning virtiofsd and enriching cloud-init at boot.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -497,12 +494,7 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
-        assert!(
-            body.message
-                .contains("volumes are not supported on cloud-hypervisor runtime")
-        );
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]

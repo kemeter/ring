@@ -24,6 +24,8 @@ pub(crate) struct VmConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disks: Option<Vec<DiskConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub fs: Option<Vec<FsConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub net: Option<Vec<NetConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serial: Option<ConsoleConfig>,
@@ -52,6 +54,11 @@ pub(crate) struct CpuConfig {
 #[derive(Debug, Serialize, Clone)]
 pub(crate) struct MemoryConfig {
     pub size: u64,
+    /// Required when virtio-fs is attached to the VM. CH refuses to boot
+    /// with vhost-user devices unless guest memory is `MAP_SHARED` (or
+    /// hugepages). Default `false` matches CH's own default.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -61,6 +68,23 @@ pub(crate) struct DiskConfig {
     pub readonly: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_type: Option<String>,
+}
+
+/// One virtio-fs share attached to the VM. Cloud Hypervisor talks to a running
+/// `virtiofsd` over `socket`; the guest sees the share as device `tag` and
+/// mounts it with `mount -t virtiofs <tag> <dest>`.
+///
+/// `num_queues` and `queue_size` are listed as `required` in the CH OpenAPI
+/// spec (vmm/src/api/openapi/cloud-hypervisor.yaml in v46.0). Sending the
+/// payload without them makes `create_vm` fail and the VM crashloops, which
+/// in turn kills the virtiofsd daemons that were spawned for it. CH's CLI
+/// defaults are 1 queue / size 1024 — match those.
+#[derive(Debug, Serialize, Clone)]
+pub(crate) struct FsConfig {
+    pub tag: String,
+    pub socket: String,
+    pub num_queues: u32,
+    pub queue_size: u32,
 }
 
 #[derive(Debug, Serialize, Clone)]

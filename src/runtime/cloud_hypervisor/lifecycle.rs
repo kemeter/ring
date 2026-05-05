@@ -1,14 +1,17 @@
 use super::client::{
-    CloudHypervisorClient, ConsoleConfig, CpuConfig, DiskConfig, MemoryConfig, NetConfig,
+    CloudHypervisorClient, ConsoleConfig, CpuConfig, DiskConfig, FsConfig, MemoryConfig, NetConfig,
     PayloadConfig, VmConfig,
 };
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::runtime::virtiofs::{self, VirtiofsMount};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use tokio::process::Command;
 
 /// Resolved runtime configuration for Cloud Hypervisor.
@@ -55,11 +58,35 @@ impl CloudHypervisorRuntimeConfig {
 
 pub struct CloudHypervisorLifecycle {
     config: CloudHypervisorRuntimeConfig,
+    /// Live virtiofsd processes, keyed by VM instance id. The daemon stays
+    /// up as long as the VM is running; dropping the entry kills the daemon
+    /// and unlinks its socket. Wrapped in a sync `Mutex` because it is only
+    /// touched briefly to insert/remove — never across `.await`.
+    virtiofs_mounts: Mutex<HashMap<String, Vec<VirtiofsMount>>>,
 }
 
 impl CloudHypervisorLifecycle {
     pub fn new(config: CloudHypervisorRuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            virtiofs_mounts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn instance_share_dir(&self, instance_id: &str) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir).join(format!("{}.shares", instance_id))
+    }
+
+    fn virtiofs_socket_path(&self, instance_id: &str, idx: usize) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir)
+            .join(format!("{}.virtiofs-{}.sock", instance_id, idx))
+    }
+
+    fn named_volume_dir(&self, namespace: &str, name: &str) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir)
+            .join("volumes")
+            .join(namespace)
+            .join(name)
     }
 
     fn socket_path(&self, instance_id: &str) -> PathBuf {
@@ -124,6 +151,128 @@ impl CloudHypervisorLifecycle {
         })
     }
 
+    /// Prepare the host side of every requested volume and spawn the
+    /// matching virtiofsd processes. Returns the live mounts plus their
+    /// `FsConfig` ready to attach to a `VmConfig`.
+    ///
+    /// Mapping:
+    /// - `Bind`    → virtiofsd directly on the user-supplied host path.
+    /// - `Named`   → virtiofsd on `<socket_dir>/volumes/<namespace>/<name>`,
+    ///   created on first use, persisted across deployment lifetimes.
+    /// - `Content` → write the rendered file under
+    ///   `<socket_dir>/<instance>.shares/cfg-<idx>/<basename>` and virtiofsd
+    ///   on that directory; the guest mounts the directory at the parent of
+    ///   the requested destination so the file lands at the right path.
+    async fn prepare_virtiofs_mounts(
+        &self,
+        instance_id: &str,
+        namespace: &str,
+        resolved: &[ResolvedMount],
+    ) -> Result<(Vec<VirtiofsMount>, Vec<FsConfig>), RuntimeError> {
+        if resolved.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let virtiofsd_path = virtiofs::locate_virtiofsd().ok_or_else(|| {
+            RuntimeError::Other(
+                "virtiofsd binary not found (install virtiofsd or set RING_VIRTIOFSD)".to_string(),
+            )
+        })?;
+
+        let share_root = self.instance_share_dir(instance_id);
+        if share_root.exists() {
+            let _ = tokio::fs::remove_dir_all(&share_root).await;
+        }
+        tokio::fs::create_dir_all(&share_root)
+            .await
+            .map_err(RuntimeError::Io)?;
+
+        let mut mounts: Vec<VirtiofsMount> = Vec::with_capacity(resolved.len());
+        let mut fs_configs: Vec<FsConfig> = Vec::with_capacity(resolved.len());
+
+        for (idx, m) in resolved.iter().enumerate() {
+            let socket_path = self.virtiofs_socket_path(instance_id, idx);
+
+            let (tag, source, destination, read_only) = match m {
+                ResolvedMount::Bind {
+                    source,
+                    destination,
+                    read_only,
+                } => (
+                    format!("bind-{}", idx),
+                    PathBuf::from(source),
+                    destination.clone(),
+                    *read_only,
+                ),
+                ResolvedMount::Named {
+                    name,
+                    destination,
+                    read_only,
+                    driver: _,
+                } => {
+                    let dir = self.named_volume_dir(namespace, name);
+                    tokio::fs::create_dir_all(&dir)
+                        .await
+                        .map_err(RuntimeError::Io)?;
+                    (format!("vol-{}", idx), dir, destination.clone(), *read_only)
+                }
+                ResolvedMount::Content {
+                    content,
+                    destination,
+                } => {
+                    let dest_path = Path::new(destination);
+                    let parent = dest_path
+                        .parent()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "/".to_string());
+                    let basename = dest_path
+                        .file_name()
+                        .ok_or_else(|| {
+                            RuntimeError::Other(format!(
+                                "config volume destination has no filename: {}",
+                                destination
+                            ))
+                        })?
+                        .to_string_lossy()
+                        .into_owned();
+
+                    let cfg_dir = share_root.join(format!("cfg-{}", idx));
+                    tokio::fs::create_dir_all(&cfg_dir)
+                        .await
+                        .map_err(RuntimeError::Io)?;
+                    tokio::fs::write(cfg_dir.join(&basename), content)
+                        .await
+                        .map_err(RuntimeError::Io)?;
+                    // Mount the *parent* directory inside the guest. The file
+                    // we wrote shows up at `<parent>/<basename>` == the
+                    // user-supplied destination.
+                    (format!("cfg-{}", idx), cfg_dir, parent, true)
+                }
+            };
+
+            let mount = virtiofs::spawn_virtiofsd(
+                &virtiofsd_path,
+                &source,
+                &socket_path,
+                &tag,
+                &destination,
+                read_only,
+            )
+            .await?;
+
+            fs_configs.push(FsConfig {
+                tag: mount.tag.clone(),
+                socket: mount.socket_path_str()?.to_string(),
+                // CH defaults from cloud-hypervisor --help.
+                num_queues: 1,
+                queue_size: 1024,
+            });
+            mounts.push(mount);
+        }
+
+        Ok((mounts, fs_configs))
+    }
+
     /// Start the cloud-hypervisor process for a VM instance.
     ///
     /// Errors are typed so the caller can distinguish permanent failures
@@ -133,6 +282,7 @@ impl CloudHypervisorLifecycle {
         &self,
         instance_id: &str,
         deployment: &Deployment,
+        resolved_mounts: &[ResolvedMount],
     ) -> Result<(), RuntimeError> {
         // Permanent: missing firmware. The operator must fix `firmware_path`.
         let firmware = PathBuf::from(&self.config.firmware_path);
@@ -255,19 +405,44 @@ impl CloudHypervisorLifecycle {
 
         let client = CloudHypervisorClient::new(socket_str);
 
-        // Build the disk list. The main rootfs is always there. If the
-        // deployment ships any environment variables, build a NoCloud cidata
-        // ISO and attach it as a second read-only disk so cloud-init in the
-        // guest writes them to /etc/ring/env at boot.
+        // Spawn virtiofsd for every requested volume *before* the cidata ISO
+        // gets built, so cloud-init learns about the mounts in the same pass.
+        // The mounts are stashed in `self.virtiofs_mounts` only after the VM
+        // has booted successfully — until then, an early return drops them
+        // and Drop kills the daemons.
+        let (live_mounts, fs_configs) = self
+            .prepare_virtiofs_mounts(instance_id, &deployment.namespace, resolved_mounts)
+            .await
+            .map_err(|e| {
+                RuntimeError::VmStartFailed(format!("Failed to set up virtio-fs: {}", e))
+            })?;
+
+        let guest_mounts: Vec<super::cloud_init::GuestMount> = live_mounts
+            .iter()
+            .map(|m| super::cloud_init::GuestMount {
+                tag: m.tag.clone(),
+                destination: m.destination.clone(),
+                read_only: m.read_only,
+            })
+            .collect();
+
+        // Build the disk list. The main rootfs is always there. A cidata ISO
+        // is attached whenever there's something for cloud-init to do —
+        // either env vars or virtio-fs mounts.
         let mut disks = vec![DiskConfig {
             path: Self::path_str(&instance_image)?.to_string(),
             readonly: Some(false),
             image_type: None,
         }];
-        if !deployment.environment.is_empty() {
+        if !deployment.environment.is_empty() || !guest_mounts.is_empty() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
-            let iso_path =
-                super::cloud_init::build_cidata_iso(instance_id, deployment, &socket_dir).await?;
+            let iso_path = super::cloud_init::build_cidata_iso(
+                instance_id,
+                deployment,
+                &guest_mounts,
+                &socket_dir,
+            )
+            .await?;
             disks.push(DiskConfig {
                 path: Self::path_str(&iso_path)?.to_string(),
                 readonly: Some(true),
@@ -288,8 +463,16 @@ impl CloudHypervisorLifecycle {
             }),
             memory: Some(MemoryConfig {
                 size: (memory_mb as u64) * 1024 * 1024,
+                // vhost-user (virtio-fs) requires shared guest memory.
+                // Off by default to avoid the small perf hit on VMs without volumes.
+                shared: !fs_configs.is_empty(),
             }),
             disks: Some(disks),
+            fs: if fs_configs.is_empty() {
+                None
+            } else {
+                Some(fs_configs)
+            },
             net: Some(vec![NetConfig {
                 tap: None,
                 ip: None,
@@ -307,7 +490,9 @@ impl CloudHypervisorLifecycle {
         // From here on, any failure must clean up the half-created VM:
         // otherwise the socket and possibly a Created-state VM linger and
         // scan_instances counts them as live, which makes the scheduler
-        // believe the deployment is satisfied and skip every retry.
+        // believe the deployment is satisfied and skip every retry. The
+        // `live_mounts` are still owned locally; if we early-return below,
+        // they drop here and the virtiofsd processes get killed.
         if let Err(e) = client.create_vm(&vm_config).await {
             self.stop_vm(instance_id).await;
             return Err(RuntimeError::VmStartFailed(format!(
@@ -322,6 +507,15 @@ impl CloudHypervisorLifecycle {
                 "Failed to boot VM: {}",
                 e
             )));
+        }
+
+        // VM is up — hand the mounts over to the lifecycle so they outlive
+        // this function. The lock window is tiny and held only across an
+        // insert.
+        if !live_mounts.is_empty() {
+            if let Ok(mut map) = self.virtiofs_mounts.lock() {
+                map.insert(instance_id.to_string(), live_mounts);
+            }
         }
 
         info!(
@@ -367,11 +561,27 @@ impl CloudHypervisorLifecycle {
             );
         }
 
-        // The cidata ISO is only present when the deployment shipped env vars,
-        // but unconditional unlink is fine — missing-file is logged at debug.
+        // The cidata ISO is only present when the deployment shipped env vars
+        // or virtio-fs mounts, but unconditional unlink is fine — missing-file
+        // is logged at debug.
         let cidata_iso = self.cidata_iso_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&cidata_iso).await {
             debug!("Failed to remove cidata ISO {:?}: {}", cidata_iso, e);
+        }
+
+        // Drop any live virtiofsd processes for this instance. Their `Drop`
+        // sends SIGKILL and unlinks the socket. Doing this *after* the VM is
+        // shut down avoids the kernel logging spurious EIO when the guest
+        // tries to flush a now-disconnected share.
+        if let Ok(mut map) = self.virtiofs_mounts.lock() {
+            let _ = map.remove(instance_id);
+        }
+
+        // The per-instance share staging dir holds rendered config volumes;
+        // remove it whether or not we had any virtio-fs mounts since last run.
+        let share_dir = self.instance_share_dir(instance_id);
+        if let Err(e) = tokio::fs::remove_dir_all(&share_dir).await {
+            debug!("Failed to remove share dir {:?}: {}", share_dir, e);
         }
 
         info!("Cloud Hypervisor VM {} stopped", instance_id);
@@ -434,7 +644,10 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 crate::runtime::docker::tiny_id()
             );
 
-            match self.start_vm_process(&instance_id, &deployment).await {
+            match self
+                .start_vm_process(&instance_id, &deployment, &resolved_mounts)
+                .await
+            {
                 Ok(()) => {
                     deployment.instances.push(instance_id);
                     if deployment.status == DeploymentStatus::Creating
@@ -493,7 +706,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             }
         }
 
-        let _ = &resolved_mounts; // TODO: mount volumes via virtio-fs
         deployment
     }
 
@@ -588,5 +800,192 @@ mod tests {
             CloudHypervisorLifecycle::deployment_prefix("abcdef12-3456-7890"),
             "ch-abcdef12-"
         );
+    }
+
+    fn lifecycle_with_socket_dir() -> (CloudHypervisorLifecycle, PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let socket_dir =
+            std::env::temp_dir().join(format!("ring-ch-virtiofs-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&socket_dir).unwrap();
+        let cfg = CloudHypervisorRuntimeConfig {
+            binary_path: "cloud-hypervisor".to_string(),
+            firmware_path: "/tmp/fake-fw".to_string(),
+            socket_dir: socket_dir.to_string_lossy().into_owned(),
+            seccomp: None,
+        };
+        (CloudHypervisorLifecycle::new(cfg), socket_dir)
+    }
+
+    fn skip_if_no_virtiofsd(test: &str) -> bool {
+        if crate::runtime::virtiofs::locate_virtiofsd().is_none() {
+            eprintln!(
+                "skipping {}: virtiofsd not installed (apt install virtiofsd)",
+                test
+            );
+            return true;
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn prepare_mounts_empty_returns_nothing() {
+        // Pure logic — no virtiofsd needed.
+        let (lc, dir) = lifecycle_with_socket_dir();
+        let (live, fs) = lc
+            .prepare_virtiofs_mounts("ch-instance-empty", "default", &[])
+            .await
+            .unwrap();
+        assert!(live.is_empty());
+        assert!(fs.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn prepare_mounts_bind() {
+        if skip_if_no_virtiofsd("prepare_mounts_bind") {
+            return;
+        }
+        let (lc, dir) = lifecycle_with_socket_dir();
+        let bind_src = dir.join("bind-src");
+        std::fs::create_dir_all(&bind_src).unwrap();
+        std::fs::write(bind_src.join("payload"), b"x").unwrap();
+
+        let mounts = vec![ResolvedMount::Bind {
+            source: bind_src.to_string_lossy().into_owned(),
+            destination: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let (live, fs) = lc
+            .prepare_virtiofs_mounts("ch-instance-bind", "default", &mounts)
+            .await
+            .expect("bind prepare should succeed");
+
+        assert_eq!(live.len(), 1);
+        assert_eq!(fs.len(), 1);
+        assert_eq!(fs[0].tag, "bind-0");
+        assert_eq!(live[0].tag, "bind-0");
+        assert_eq!(live[0].destination, "/data");
+        assert!(!live[0].read_only);
+        // Drop the live mount so the daemon dies before scratch cleanup.
+        drop(live);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn prepare_mounts_named_creates_persistent_dir() {
+        if skip_if_no_virtiofsd("prepare_mounts_named_creates_persistent_dir") {
+            return;
+        }
+        let (lc, dir) = lifecycle_with_socket_dir();
+
+        let mounts = vec![ResolvedMount::Named {
+            name: "pgdata".to_string(),
+            destination: "/var/lib/postgresql/data".to_string(),
+            read_only: false,
+            driver: "local".to_string(),
+        }];
+
+        let (live, fs) = lc
+            .prepare_virtiofs_mounts("ch-instance-vol", "team-a", &mounts)
+            .await
+            .expect("named prepare should succeed");
+
+        assert_eq!(fs[0].tag, "vol-0");
+        // The named volume directory should sit under socket_dir/volumes/<ns>/<name>.
+        let expected = dir.join("volumes").join("team-a").join("pgdata");
+        assert!(
+            expected.is_dir(),
+            "named volume dir should exist at {:?}",
+            expected
+        );
+
+        drop(live);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn prepare_mounts_content_writes_file_in_share_dir() {
+        if skip_if_no_virtiofsd("prepare_mounts_content_writes_file_in_share_dir") {
+            return;
+        }
+        let (lc, dir) = lifecycle_with_socket_dir();
+
+        let mounts = vec![ResolvedMount::Content {
+            content: "server { listen 80; }".to_string(),
+            destination: "/etc/nginx/nginx.conf".to_string(),
+        }];
+
+        let instance_id = "ch-instance-content";
+        let (live, fs) = lc
+            .prepare_virtiofs_mounts(instance_id, "default", &mounts)
+            .await
+            .expect("content prepare should succeed");
+
+        assert_eq!(fs[0].tag, "cfg-0");
+        // The destination's parent is the *guest* mountpoint; on the host,
+        // the file lives inside the per-instance share staging dir.
+        let staged = lc
+            .instance_share_dir(instance_id)
+            .join("cfg-0")
+            .join("nginx.conf");
+        assert!(
+            staged.is_file(),
+            "config file should be staged at {:?}",
+            staged
+        );
+        let body = std::fs::read_to_string(&staged).unwrap();
+        assert_eq!(body, "server { listen 80; }");
+        // Guest sees the *parent* directory as the mount point so that the
+        // file lands at the user-supplied destination.
+        assert_eq!(live[0].destination, "/etc/nginx");
+        assert!(live[0].read_only);
+
+        drop(live);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn prepare_mounts_three_kinds_emit_distinct_tags() {
+        if skip_if_no_virtiofsd("prepare_mounts_three_kinds_emit_distinct_tags") {
+            return;
+        }
+        let (lc, dir) = lifecycle_with_socket_dir();
+
+        let bind_src = dir.join("bind-src");
+        std::fs::create_dir_all(&bind_src).unwrap();
+
+        let mounts = vec![
+            ResolvedMount::Bind {
+                source: bind_src.to_string_lossy().into_owned(),
+                destination: "/host-data".to_string(),
+                read_only: false,
+            },
+            ResolvedMount::Named {
+                name: "cache".to_string(),
+                destination: "/cache".to_string(),
+                read_only: false,
+                driver: "local".to_string(),
+            },
+            ResolvedMount::Content {
+                content: "hello=world".to_string(),
+                destination: "/etc/conf/app.env".to_string(),
+            },
+        ];
+
+        let (live, fs) = lc
+            .prepare_virtiofs_mounts("ch-instance-mix", "default", &mounts)
+            .await
+            .expect("mixed prepare should succeed");
+
+        assert_eq!(fs.len(), 3);
+        let tags: Vec<&str> = fs.iter().map(|c| c.tag.as_str()).collect();
+        assert_eq!(tags, vec!["bind-0", "vol-1", "cfg-2"]);
+
+        drop(live);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

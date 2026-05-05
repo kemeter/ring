@@ -39,6 +39,7 @@ mod runtime {
     #[cfg(test)]
     pub(crate) mod mock;
     pub(crate) mod types;
+    pub(crate) mod virtiofs;
 }
 
 mod models {

@@ -242,17 +242,61 @@ qemu-img convert -p -f qcow2 -O raw focal-server-cloudimg-amd64.img /var/lib/rin
 
 > Ubuntu Jammy (22.04) and Noble (24.04) have known boot issues with `hypervisor-fw`. Use Focal (20.04) for best compatibility.
 
+## Volumes
+
+All three volume types are supported via [virtio-fs](https://virtio-fs.gitlab.io/), which exports a host directory to the guest over a Unix socket. Ring spawns one `virtiofsd` process per volume per VM and tells cloud-init to mount each share at boot.
+
+```yaml
+deployments:
+  app:
+    runtime: cloud-hypervisor
+    image: /var/lib/ring/images/ubuntu-focal.raw
+    volumes:
+      - type: bind
+        source: /var/lib/ring/postgres
+        destination: /var/lib/postgresql/data
+        driver: local
+        permission: rw
+      - type: volume
+        source: app-data
+        destination: /data
+        driver: local
+        permission: rw
+      - type: config
+        source: nginx-config
+        key: nginx.conf
+        destination: /etc/nginx/nginx.conf
+        driver: local
+        permission: ro
+```
+
+Mapping:
+
+- **`bind`** — `virtiofsd --shared-dir <source>`. Tagged `bind-<idx>`. The guest sees `<destination>` as the share root.
+- **`volume`** — Ring creates `<socket_dir>/volumes/<namespace>/<name>` on first use, persists it across restarts and deletions, and shares it via virtiofsd. Tagged `vol-<idx>`.
+- **`config`** — Ring renders the config payload to `<socket_dir>/<instance>.shares/cfg-<idx>/<basename>` and shares the directory read-only. The guest mounts the parent directory so the file lands at the requested destination. Tagged `cfg-<idx>`.
+
+### Requirements
+
+- **`virtiofsd`** must be on the host. Ring looks for `/usr/libexec/virtiofsd` then `/usr/lib/qemu/virtiofsd`. Override with `RING_VIRTIOFSD=/path/to/virtiofsd`. Install via `apt install virtiofsd` on Debian/Ubuntu.
+- **Guest kernel** must have `CONFIG_VIRTIO_FS=y` (or `m`). All standard cloud images (Ubuntu Focal/Jammy, Fedora 35+, Debian 12+) ship it.
+- **Guest cloud-init** is required to apply the mounts at boot — same prerequisite as for environment variable injection.
+
+### Lifecycle
+
+The virtiofsd process lives as long as its VM. When the VM is stopped (scale-down, delete, rolling update), Ring kills the daemon and removes the socket. Named volumes' on-disk content **survives** deployment deletion; bind sources belong to the operator. Config and `Content`-style payloads are wiped with the share directory on stop.
+
 ## Current Limitations
 
 The following features are **not yet available** on the Cloud Hypervisor runtime:
 
 | Feature | Status |
 |---|---|
-| Volumes (bind, named, config) | Not supported — rejected at API |
 | `command` health checks | Not supported — rejected at API |
 | Custom commands (`command: [...]`) | Not supported — rejected at API |
 | Docker image references | Not supported — rejected at API |
 | Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
+| Volumes | Supported via virtio-fs — see [Volumes](#volumes) |
 | Deployment logs (`ring deployment logs`) | Not available for CH deployments |
 | Deployment metrics (`ring deployment metrics`) | Not available for CH deployments |
 
