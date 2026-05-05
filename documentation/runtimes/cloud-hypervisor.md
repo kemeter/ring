@@ -322,6 +322,33 @@ Each `socat` lives as long as its VM. On `deployment delete` (or scaledown / rol
 - **TCP only** — `socat`'s configuration is `TCP4-LISTEN`/`TCP4`. UDP forwarding requires a separate config and is not wired up yet.
 - **No bandwidth shaping or connection limits** — the forwarder is permissive by design.
 
+## Logs
+
+`ring deployment logs <id>` works on Cloud Hypervisor deployments. Cloud Hypervisor is started with `serial.mode = "File"` and writes everything the guest emits on `/dev/console` — kernel messages, cloud-init progress, and any application output redirected to the console — to a per-instance file at `<socket_dir>/<instance>.console.log`.
+
+```bash
+# Last 100 lines (default)
+ring deployment logs <deployment-id>
+
+# Tail a specific number of lines
+ring deployment logs <deployment-id> --tail 500
+
+# Stream as new lines arrive
+ring deployment logs <deployment-id> --follow
+
+# Filter to a single instance (when you have replicas)
+ring deployment logs <deployment-id> --container <instance-id>
+```
+
+### Limitations
+
+- **Append-only, no rotation** — Cloud Hypervisor never truncates the file. For long-running VMs the file grows unbounded; rotate it externally (logrotate) or recreate the deployment to start fresh. Tracked in the project roadmap.
+- **No native timestamps** — the serial console is a raw byte stream. Ring's `--since <duration>` is best-effort: if the file's last-modified time is older than the cutoff, the output is empty; otherwise the whole window is returned.
+- **`level` classification is heuristic** — same regex as the Docker runtime: `[error]`, `[warning]`, `[info]`/`[notice]` substring matches. The kernel and cloud-init don't follow this convention, so most lines come back as `unknown`.
+- **Binary bytes** — early kernel output may include non-UTF-8 bytes; Ring lossy-decodes and serves them as-is. Some shells warn on null bytes when piping the output.
+
+To get application logs into this stream, redirect them to `/dev/console` from inside the guest (e.g. systemd `StandardOutput=tty TTYPath=/dev/console`).
+
 ## Current Limitations
 
 The following features are **not yet available** on the Cloud Hypervisor runtime:
@@ -334,7 +361,7 @@ The following features are **not yet available** on the Cloud Hypervisor runtime
 | Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
 | Volumes | Supported via virtio-fs — see [Volumes](#volumes) |
 | Port mapping | Supported via socat userspace forwarders — see [Port mapping](#port-mapping) |
-| Deployment logs (`ring deployment logs`) | Not available for CH deployments |
+| Deployment logs (`ring deployment logs`) | Supported via the serial console — see [Logs](#logs) |
 | Deployment metrics (`ring deployment metrics`) | Not available for CH deployments |
 
 These limitations will be addressed in future releases. See the project roadmap for details.

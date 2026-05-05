@@ -4,6 +4,7 @@ mod client;
 // to `src/runtime/cloud_init.rs` and adjust the `use` paths — the contents are
 // runtime-agnostic on purpose. See comment at the top of cloud_init.rs.
 mod cloud_init;
+mod console_logs;
 mod lifecycle;
 
 pub(crate) use lifecycle::{CloudHypervisorLifecycle, CloudHypervisorRuntimeConfig};
