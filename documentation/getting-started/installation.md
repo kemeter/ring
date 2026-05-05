@@ -179,7 +179,7 @@ Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.tom
 - `RING_DATABASE_PATH` — path to the SQLite database file (default: `./ring.db`)
 - `RING_DB_POOL_SIZE` — maximum SQLite connections in the pool (default: `5`)
 - `RING_CONFIG_DIR` — config directory path (default: `~/.config/kemeter/ring`)
-- `RING_SECRET_KEY` — 32-byte base64-encoded encryption key for the secrets feature. **Required** to create or read secrets — without it, the server returns `500` on secret endpoints.
+- `RING_SECRET_KEY` — 32-byte base64-encoded encryption key used to encrypt secrets at rest. **Required**: `ring server start` refuses to start without it (a clear error is logged and the process exits with code 1). Verify your environment with `ring doctor` before starting the server.
 - `RING_APPLY_TIMEOUT` — timeout in seconds for a single scheduler `apply` cycle (default: `300`)
 - `RING_SCHEDULER_INTERVAL` — scheduler tick interval in seconds (overrides `scheduler.interval` in `config.toml`)
 - `RUST_LOG` — log level (e.g. `RUST_LOG=info` or `RUST_LOG=ring=debug`)

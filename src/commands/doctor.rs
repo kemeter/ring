@@ -205,9 +205,22 @@ fn check_virtiofsd() -> Check {
     Check::fail("virtiofsd", "not found (apt install virtiofsd)")
 }
 
+/// Server-level checks that apply regardless of which runtime is in use.
+/// Today: `RING_SECRET_KEY` validation. Anything that touches a secret
+/// (deployment env vars with `secretRef`, `POST /secrets`, ...) panics
+/// when the key is missing or malformed; surface it here so operators
+/// catch it before the first `ring apply`.
+fn check_server() -> Vec<Check> {
+    vec![match crate::models::secret::try_load_encryption_key() {
+        Ok(_) => Check::ok("RING_SECRET_KEY", "set, decodes to a 32-byte AES-256 key"),
+        Err(e) => Check::fail("RING_SECRET_KEY", &e),
+    }]
+}
+
 pub(crate) fn execute(_args: &ArgMatches, config: Config) {
     let mut all_checks: Vec<(&str, Vec<Check>)> = Vec::new();
 
+    all_checks.push(("Server", check_server()));
     all_checks.push(("Docker", check_docker()));
     all_checks.push(("Cloud Hypervisor", check_cloud_hypervisor(&config)));
 

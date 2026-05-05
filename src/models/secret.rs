@@ -11,21 +11,41 @@ use std::env;
 
 const NONCE_SIZE: usize = 12;
 
-fn get_encryption_key() -> [u8; 32] {
-    let key_str = env::var("RING_SECRET_KEY")
-        .expect("RING_SECRET_KEY environment variable must be set (32 bytes, base64 encoded)");
+/// Read and validate `RING_SECRET_KEY` from the environment. Returns the
+/// decoded 32-byte key on success, an explanatory message otherwise.
+///
+/// Used both at server startup (so missing/invalid keys produce a clear
+/// fatal error before any request is served) and from `ring doctor` to
+/// surface configuration drift before users hit it via a panic.
+pub(crate) fn try_load_encryption_key() -> Result<[u8; 32], String> {
+    let key_str = env::var("RING_SECRET_KEY").map_err(|_| {
+        "RING_SECRET_KEY environment variable is not set. \
+         Generate one with: openssl rand -base64 32"
+            .to_string()
+    })?;
 
     let key_bytes = BASE64
         .decode(&key_str)
-        .expect("RING_SECRET_KEY must be valid base64");
+        .map_err(|e| format!("RING_SECRET_KEY is not valid base64: {}", e))?;
 
     if key_bytes.len() != 32 {
-        panic!("RING_SECRET_KEY must be exactly 32 bytes (256 bits)");
+        return Err(format!(
+            "RING_SECRET_KEY must decode to exactly 32 bytes (256 bits), got {}",
+            key_bytes.len()
+        ));
     }
 
     let mut key = [0u8; 32];
     key.copy_from_slice(&key_bytes);
-    key
+    Ok(key)
+}
+
+fn get_encryption_key() -> [u8; 32] {
+    // The server validates the key once at startup (see `commands::server`)
+    // and aborts before listening if it's missing or malformed. Anything
+    // that reaches this function therefore has a working key — the
+    // remaining unwrap is on a path the operator cannot break at runtime.
+    try_load_encryption_key().expect("RING_SECRET_KEY validation passed at startup")
 }
 
 pub(crate) fn encrypt_value(plaintext: &str) -> Vec<u8> {

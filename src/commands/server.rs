@@ -21,6 +21,16 @@ pub(crate) fn command_config() -> Command {
 }
 
 pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
+    // Validate the encryption key up front. Anything that touches a
+    // secret (deployment env vars with `secretRef`, `POST /secrets`, ...)
+    // would panic later on a missing or malformed key; failing here gives
+    // operators a single, clear log line and a non-zero exit, instead of
+    // a 500 the first time someone applies a manifest.
+    if let Err(e) = crate::models::secret::try_load_encryption_key() {
+        error!("Refusing to start: {}", e);
+        std::process::exit(1);
+    }
+
     let pool = get_database_pool().await;
 
     migrate_from_refinery_if_needed(&pool).await;

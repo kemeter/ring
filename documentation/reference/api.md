@@ -380,7 +380,7 @@ Live resource usage for a deployment and each of its instances. Only meaningful 
 
 Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exposes the decrypted value — only metadata is returned.
 
-The server must be started with `RING_SECRET_KEY` set (a base64-encoded 32-byte key). Without it, every secret endpoint returns `500 Internal Server Error`.
+`RING_SECRET_KEY` (a base64-encoded 32-byte key) must be set before `ring server start` — the server refuses to start without it. `ring doctor` validates the variable.
 
 ### `POST /secrets`
 
@@ -406,7 +406,6 @@ The server must be started with `RING_SECRET_KEY` set (a base64-encoded 32-byte 
 **Errors:**
 
 - `409 Conflict` — secret with this name already exists in this namespace
-- `500 Internal Server Error` — `RING_SECRET_KEY` is not set on the server
 
 ### `GET /secrets`
 
@@ -650,7 +649,7 @@ Returns information about the host running the Ring server.
 - `404 Not Found` — resource does not exist
 - `408 Request Timeout` — handler exceeded the 10-second API timeout
 - `409 Conflict` — duplicate resource or conflicting state
-- `500 Internal Server Error` — server-side failure (e.g. `RING_SECRET_KEY` not set on a secret operation)
+- `500 Internal Server Error` — server-side failure (database, runtime communication)
 
 ## Error format
 
