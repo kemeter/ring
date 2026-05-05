@@ -48,6 +48,11 @@ pub(crate) struct DeploymentOutput {
     pub(crate) resources: Option<Resource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) image_digest: Option<String>,
+    /// Set during a rolling update: points to the deployment row this
+    /// one supersedes. The previous deployment stays `running` until the
+    /// new one is healthy, then the scheduler tears it down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) parent_id: Option<String>,
 }
 
 impl DeploymentOutput {
@@ -87,6 +92,7 @@ impl DeploymentOutput {
             health_checks: deployment.health_checks,
             resources: deployment.resources,
             image_digest: deployment.image_digest,
+            parent_id: deployment.parent_id,
         }
     }
 }

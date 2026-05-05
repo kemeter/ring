@@ -213,11 +213,12 @@ Retrieve a deployment by UUID.
       "permission": "rw"
     }
   ],
-  "image_digest": "sha256:..."
+  "image_digest": "sha256:...",
+  "parent_id": null
 }
 ```
 
-During a rolling update, the new (child) deployment carries a `parent_id` field referencing the old deployment.
+During a rolling update, the new (child) deployment carries a `parent_id` field referencing the old deployment id (a UUID string). On a fresh deployment with no rolling update in progress the field is omitted (or `null` depending on the client).
 
 ### `DELETE /deployments/{id}`
 
