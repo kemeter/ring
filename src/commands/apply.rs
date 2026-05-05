@@ -155,6 +155,8 @@ struct Volume {
     driver: String,
     #[serde(default = "default_permission")]
     permission: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
 }
 
 fn default_driver() -> String {
