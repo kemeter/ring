@@ -1,132 +1,61 @@
-use crate::models::health_check::{HealthCheck, HealthCheckStatus};
+//! Docker-specific bits of the health-check pipeline.
+//!
+//! TCP and HTTP probes themselves live in `runtime::health_probes` and are
+//! shared with the Cloud Hypervisor runtime (and any future VM runtime). The
+//! Docker runtime only contributes:
+//!
+//! - `container_address` — resolve a container's reachable IP from
+//!   `bollard::inspect_container`. Used by the trait-default
+//!   `execute_health_check` once it knows it has a TCP/HTTP probe to run.
+//! - `execute_command_check` — run a shell command inside the container via
+//!   `docker exec`. The VM runtimes have no equivalent, so this stays in
+//!   the Docker module.
+
+use crate::models::health_check::HealthCheckStatus;
 use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecOptions};
 use bollard::query_parameters::InspectContainerOptions;
+use std::net::IpAddr;
 
-pub(crate) async fn execute_health_check_for_instance(
-    docker: &Docker,
-    container_id: String,
-    health_check: HealthCheck,
-) -> (HealthCheckStatus, Option<String>) {
-    let container_ip = match health_check {
-        HealthCheck::Command { .. } => None,
-        _ => get_container_ip(docker, &container_id).await,
-    };
-
-    match health_check {
-        HealthCheck::Tcp { port, .. } => match container_ip {
-            Some(ip) => execute_tcp_check(&ip, port).await,
-            None => (
-                HealthCheckStatus::Failed,
-                Some(format!("Could not get IP for container {}", container_id)),
-            ),
-        },
-        HealthCheck::Http { url, .. } => match container_ip {
-            Some(ip) => execute_http_check(&ip, &url).await,
-            None => (
-                HealthCheckStatus::Failed,
-                Some(format!("Could not get IP for container {}", container_id)),
-            ),
-        },
-        HealthCheck::Command { command, .. } => {
-            execute_command_check(docker, &container_id, &command).await
-        }
-    }
-}
-
-async fn get_container_ip(docker: &Docker, container_id: &str) -> Option<String> {
+/// Resolve a Docker container's IP from its network settings.
+///
+/// Prefers the default `bridge` network (matches Docker's own conventions
+/// when no user-defined network is attached). Falls back to the first
+/// network with a non-empty IP if `bridge` is missing — Ring containers
+/// live on `ring_<namespace>` networks, so this is the common path.
+pub(crate) async fn container_address(docker: &Docker, container_id: &str) -> Option<IpAddr> {
     let inspect_result = docker
         .inspect_container(container_id, None::<InspectContainerOptions>)
         .await
         .ok()?;
 
-    if let Some(networks) = inspect_result.network_settings?.networks {
-        if let Some(bridge) = networks.get("bridge")
-            && let Some(ip) = &bridge.ip_address
-            && !ip.is_empty()
-        {
-            return Some(ip.clone());
-        }
+    let networks = inspect_result.network_settings?.networks?;
 
-        for (_, network) in networks {
-            if let Some(ip) = network.ip_address
-                && !ip.is_empty()
-            {
-                return Some(ip);
-            }
+    if let Some(bridge) = networks.get("bridge")
+        && let Some(ip) = &bridge.ip_address
+        && !ip.is_empty()
+        && let Ok(parsed) = ip.parse::<IpAddr>()
+    {
+        return Some(parsed);
+    }
+
+    for (_, network) in networks {
+        if let Some(ip) = network.ip_address
+            && !ip.is_empty()
+            && let Ok(parsed) = ip.parse::<IpAddr>()
+        {
+            return Some(parsed);
         }
     }
 
     None
 }
 
-async fn execute_tcp_check(container_ip: &str, port: u16) -> (HealthCheckStatus, Option<String>) {
-    use std::time::Duration;
-    use tokio::net::TcpStream;
-
-    let addr = format!("{}:{}", container_ip, port);
-
-    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
-        Ok(Ok(_)) => (
-            HealthCheckStatus::Success,
-            Some(format!("TCP connection to {} successful", addr)),
-        ),
-        Ok(Err(e)) => (
-            HealthCheckStatus::Failed,
-            Some(format!("TCP connection failed: {}", e)),
-        ),
-        Err(_) => (
-            HealthCheckStatus::Failed,
-            Some(format!("TCP connection timed out for {}", addr)),
-        ),
-    }
-}
-
-async fn execute_http_check(container_ip: &str, url: &str) -> (HealthCheckStatus, Option<String>) {
-    let target_url = url.replace("localhost", container_ip);
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                HealthCheckStatus::Failed,
-                Some(format!("Failed to create HTTP client: {}", e)),
-            );
-        }
-    };
-
-    match client.get(&target_url).send().await {
-        Ok(response) => {
-            let code = response.status().as_u16();
-            if (200..300).contains(&code) {
-                (
-                    HealthCheckStatus::Success,
-                    Some(format!(
-                        "HTTP check successful ({}) for {}",
-                        code, target_url
-                    )),
-                )
-            } else {
-                (
-                    HealthCheckStatus::Failed,
-                    Some(format!(
-                        "HTTP check failed with status {} for {}",
-                        code, target_url
-                    )),
-                )
-            }
-        }
-        Err(e) => (
-            HealthCheckStatus::Failed,
-            Some(format!("HTTP request failed for {}: {}", target_url, e)),
-        ),
-    }
-}
-
-async fn execute_command_check(
+/// Run a `command` health-check probe via `docker exec`. Success means the
+/// command was successfully started — Docker's exec API doesn't surface the
+/// exit code synchronously, so a successful start is treated as a healthy
+/// probe (matches the historical behavior of this runtime).
+pub(crate) async fn execute_command_check(
     docker: &Docker,
     container_id: &str,
     command: &str,

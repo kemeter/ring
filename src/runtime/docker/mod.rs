@@ -10,7 +10,6 @@ use crate::runtime::error::RuntimeError;
 use bollard::Docker;
 
 pub(crate) use container::remove_container_by_id;
-pub(crate) use health_check::execute_health_check_for_instance;
 pub(crate) use instances::{list_instances, list_instances_with_names};
 pub(crate) use lifecycle::apply;
 pub(crate) use logs::{logs, logs_stream};

@@ -1,6 +1,6 @@
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::models::deployments::Deployment;
-use crate::models::health_check::{HealthCheck, HealthCheckStatus};
+use crate::models::health_check::HealthCheckStatus;
 use crate::models::volume::ResolvedMount;
 use crate::runtime::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
@@ -138,17 +138,16 @@ impl RuntimeLifecycle for DockerLifecycle {
         Box::pin(stream::select_all(streams))
     }
 
-    async fn execute_health_check(
+    async fn instance_address(&self, instance_id: &str) -> Option<std::net::IpAddr> {
+        super::health_check::container_address(&self.docker, instance_id).await
+    }
+
+    async fn execute_command_probe(
         &self,
         instance_id: &str,
-        health_check: &HealthCheck,
+        command: &str,
     ) -> (HealthCheckStatus, Option<String>) {
-        super::health_check::execute_health_check_for_instance(
-            &self.docker,
-            instance_id.to_string(),
-            health_check.clone(),
-        )
-        .await
+        super::health_check::execute_command_check(&self.docker, instance_id, command).await
     }
 
     async fn get_instance_stats(&self, deployment_id: &str) -> Vec<InstanceStatsOutput> {
