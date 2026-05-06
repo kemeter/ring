@@ -4,7 +4,19 @@ Update, scale, monitor, and clean up Ring deployments.
 
 ## Lifecycle
 
-A deployment goes through these states: `pending` → `creating` → `running` → either `deleted` (operator), `crashloopbackoff` (too many crashes), `failed` (rollout failed), or `completed` (jobs only). The scheduler reconciles the desired state on every tick.
+A deployment moves through these states (case-sensitive — the strings shown match what the API and database serialize):
+
+- `pending` — accepted, not yet picked up.
+- `creating` — scheduler is creating the runtime instance.
+- `running` — at least one healthy instance.
+- `completed` — only for `kind: job`; the job ran and exited 0.
+- `failed` — startup failed (rollout failed, or a `kind: job` exited non-zero).
+- `deleted` — operator marked it for removal; the scheduler tears down the instance(s) on the next tick.
+- `CrashLoopBackOff` — too many consecutive restarts (cap is `MAX_RESTART_COUNT = 5`). Ring stops respawning.
+- `ImagePullBackOff` — the image couldn't be pulled (Docker) or doesn't exist on disk (Cloud Hypervisor).
+- `CreateContainerError`, `NetworkError`, `ConfigError`, `FileSystemError`, `Error` — runtime-level errors emitted by the Docker runtime when the create / network / config / FS step fails.
+
+The scheduler reconciles the desired state once per tick (default: 10 seconds; override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval` in `config.toml`).
 
 ## Updating an image
 
@@ -173,8 +185,11 @@ ring deployment logs <DEPLOYMENT_ID> --tail 100
 ring deployment logs <DEPLOYMENT_ID> --since 10m
 ring deployment logs <DEPLOYMENT_ID> --since 2026-04-01T12:00:00Z
 
-# Filter to one container/instance
-ring deployment logs <DEPLOYMENT_ID> --container web-app-1
+# Filter to one container/instance. The match is `id.starts_with(filter)
+# || name.contains(filter)`, so you can use any prefix of the container ID
+# or any substring of the auto-generated name. Container names follow
+# `<namespace>_<name>_<8-hex>` (Docker), e.g. `production_web-app_a1b2c3d4`.
+ring deployment logs <DEPLOYMENT_ID> --container production_web-app
 ```
 
 ### Events
@@ -241,9 +256,11 @@ ring secret create api-key -n production -v "sk-1234567890"
 
 Volumes are objects, not Docker-style strings. Three `type` values are supported:
 
-- `bind` — host path mount
-- `volume` — named Docker volume (driver `local` or `nfs`)
-- `config` — file from a `ring config` entry, mounted as a file
+- `bind` — host path mount. `source` is the host path.
+- `volume` — named Docker volume (driver `local` or `nfs`). `source` is the volume name.
+- `config` — file rendered from a `ring config` entry, mounted at `destination`. `source` is the config name; `key` is **required** and selects which entry inside the config (a config can carry multiple keyed payloads). `permission` is forced to `ro`.
+
+See the full schema in [manifest reference → volumes](/documentation/reference/manifest#volumes).
 
 ```yaml
 # app-with-storage.yaml
@@ -370,7 +387,8 @@ ring deployment delete <DEPLOYMENT_ID>
 
 ```bash
 docker container prune --filter "label=ring_deployment"
-docker network prune --filter "name=ring-"
+# Note: networks are named `ring_<namespace>` (underscore, not hyphen).
+docker network prune --filter "name=ring_"
 ```
 
 ## Best practices

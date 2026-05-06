@@ -41,7 +41,7 @@ docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID"
 
 ## Lifecycle
 
-The scheduler reconciles the desired state once per tick (default: 1 second, override with `RING_SCHEDULER_INTERVAL`):
+The scheduler reconciles the desired state once per tick (default: 10 seconds, override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval` in `config.toml`):
 
 1. Read the deployment from SQLite.
 2. List running containers labelled with the deployment's UUID.
@@ -111,11 +111,14 @@ volumes:
     permission: rw
 
   - type: config
-    source: nginx-config       # `name` of a Ring config
+    source: nginx-config       # name of a Ring config (in the same namespace)
+    key: site.conf             # which entry inside the config to mount
     destination: /etc/nginx/conf.d/site.conf
     driver: local
     permission: ro
 ```
+
+`type: config` requires the `key` field. See [manifest reference → volumes](/documentation/reference/manifest#volumes) for the full schema.
 
 Named Docker volumes are intentionally **not** removed when the deployment is deleted. Their lifecycle is independent of any single deployment.
 
@@ -125,7 +128,7 @@ All three types are supported by the Docker runtime:
 
 - `type: tcp` — checks a TCP port on the container
 - `type: http` — issues an HTTP GET, expects a 2xx response
-- `type: command` — runs a shell command inside the container, expects exit code 0
+- `type: command` — runs a shell command inside the container via `docker exec`. **Currently the probe only checks that the exec call succeeded, not the command's exit code** (a command that runs but exits non-zero will still report success). Use `tcp` / `http` for real readiness probes until this is fixed.
 
 ```yaml
 health_checks:

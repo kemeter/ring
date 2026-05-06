@@ -86,10 +86,10 @@ ring server start
 
 On first start, the server:
 
-- Listens on `127.0.0.1:3030` (configurable via `config.toml`)
-- Runs SQLite migrations to create `ring.db` in the working directory (override with `RING_DATABASE_PATH`)
-- Seeds the default admin user `admin` / `changeme`
-- Logs to stdout (set `RUST_LOG=info` for visibility)
+- Binds to `<local-IP>:3030` by default. The "local IP" is detected via `local_ip_address::local_ip()`; on a typical machine it's the LAN IP (e.g. `192.168.1.x`), with a fallback to `127.0.0.1` only if detection fails. Override with `host = "..."` in `~/.config/kemeter/ring/config.toml`. Set `host = "127.0.0.1"` if you want loopback only.
+- Runs SQLite migrations to create `ring.db` in the working directory (override with `RING_DATABASE_PATH`).
+- Seeds the default admin user `admin` / `changeme`.
+- Logs to stdout (set `RUST_LOG=info` for visibility).
 
 ### 3. Check the API is up
 
@@ -180,8 +180,8 @@ Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.tom
 - `RING_DB_POOL_SIZE` — maximum SQLite connections in the pool (default: `5`)
 - `RING_CONFIG_DIR` — config directory path (default: `~/.config/kemeter/ring`)
 - `RING_SECRET_KEY` — 32-byte base64-encoded encryption key used to encrypt secrets at rest. **Required**: `ring server start` refuses to start without it (a clear error is logged and the process exits with code 1). Verify your environment with `ring doctor` before starting the server.
-- `RING_APPLY_TIMEOUT` — timeout in seconds for a single scheduler `apply` cycle (default: `300`)
-- `RING_SCHEDULER_INTERVAL` — scheduler tick interval in seconds (overrides `scheduler.interval` in `config.toml`)
+- `RING_APPLY_TIMEOUT` — timeout in seconds for a single deployment's `runtime.apply()` call inside one scheduler tick (default: `300`). It does **not** bound the whole scheduler cycle nor the client-side `ring apply` command.
+- `RING_SCHEDULER_INTERVAL` — scheduler tick interval in seconds. Default: `10`. Overrides `[scheduler] interval` in `config.toml`.
 - `RUST_LOG` — log level (e.g. `RUST_LOG=info` or `RUST_LOG=ring=debug`)
 
 #### Generating the secret key

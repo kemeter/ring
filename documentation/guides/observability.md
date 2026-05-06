@@ -25,7 +25,7 @@ ring deployment logs <DEPLOYMENT_ID> --tail 500       # last 500 lines
 ring deployment logs <DEPLOYMENT_ID> --follow         # stream new lines (polls every 2 s)
 ring deployment logs <DEPLOYMENT_ID> --since 10m      # last 10 minutes
 ring deployment logs <DEPLOYMENT_ID> --since 2026-04-15T12:00:00Z   # since RFC3339 timestamp
-ring deployment logs <DEPLOYMENT_ID> --container web-app-1          # filter to one instance
+ring deployment logs <DEPLOYMENT_ID> --container production_web-app   # filter by name prefix or container-id prefix
 ```
 
 `--since` accepts relative durations (`30s`, `10m`, `2h`) and absolute RFC3339 timestamps. Note that `m` and `h` work here — they are parsed by the logs subcommand specifically. The health-check duration parser is stricter (only `ms` and `s`).
@@ -65,7 +65,7 @@ ring deployment events <DEPLOYMENT_ID> --limit 100
 ### Levels
 
 - **`info`** — routine progress (deployment created, replica scaled up, rolling update step).
-- **`warning`** / **`warn`** — Ring took a corrective action or noticed something noteworthy. Both spellings appear in the database — health-check actions emit `warning`, while Docker-event-driven entries (OOM, kill) emit `warn`. The `--level warning` filter only matches the long form.
+- **`warning`** — Ring took a corrective action or noticed something noteworthy (health-check restart, OOM kill, container died unexpectedly).
 - **`error`** — Ring could not do what was asked (config load failure, secret resolution failure, container start failure, `HealthCheckAlert`).
 
 ### Common reasons
@@ -79,8 +79,8 @@ The exhaustive list (extracted from the source):
 | `ScaleUp` | `info` | `docker` | A new instance was created to reach `replicas` |
 | `ScaleDown` | `info` | `docker` | An instance was removed to reach `replicas` |
 | `ContainerDeletion` | `info` | `docker` | A container was removed during deployment delete |
-| `ContainerDied` | `warn` | `docker-events` | A container exited unexpectedly (counts toward `crashloopbackoff`) |
-| `ContainerOom` | `warn` | `docker-events` | A container was killed by the OOM killer |
+| `ContainerDied` | `warning` | `docker-events` | A container exited unexpectedly (counts toward `crashloopbackoff`) |
+| `ContainerOom` | `warning` | `docker-events` | A container was killed by the OOM killer |
 | `ContainerKilled` | `info` | `docker-events` | A container received a signal (including SIGTERM from Ring's own scale-down) |
 | `HealthCheckInstanceRestart` | `warning` | `health_checker` | A health check failed `threshold` times — instance removed for recreation |
 | `HealthCheckStop` | `warning` | `health_checker` | A health check with `on_failure: stop` triggered — deployment marked `deleted` |
@@ -92,6 +92,13 @@ The exhaustive list (extracted from the source):
 | `RollingUpdateComplete` | `info` | `scheduler` | The rolling update finished, parent fully drained |
 | `RollingUpdateFailed` | `error` | `scheduler` | The new manifest never reached healthy — parent left untouched |
 | `CleanupScheduled` | `info` | `scheduler` | A deleted deployment is queued for cleanup |
+| `ImagePullBackOff` | `error` | `docker` | Docker couldn't pull the image (wrong tag, missing credentials, network) |
+| `InstanceCreationFailed` | `error` | `docker` | Docker rejected the container creation (port conflict, invalid mount, unsupported runtime option) |
+| `NetworkCreationFailed` | `error` | `docker` | Ring couldn't create or attach to the per-namespace bridge network |
+| `ConfigError` | `error` | `docker` | A `type: config` volume's referenced config was missing or unreadable |
+| `FileSystemError` | `error` | `docker` | A `type: bind` source path is missing or has wrong permissions |
+| `StatsFetchFailed` | `warning` | `docker` | The Docker stats endpoint failed for an instance during a metrics call |
+| `RuntimeError` | `error` | `docker` | Catch-all for runtime errors not classified above |
 | `FirmwareNotFound` | `error` | `cloud-hypervisor` | The CH firmware (`hypervisor-fw`) was not at the configured path |
 | `ImageNotFound` | `error` | `cloud-hypervisor` | The raw disk image referenced by `image:` does not exist |
 | `VmStartFailed` | `error` | `cloud-hypervisor` | A transient failure during `cloud-hypervisor` process spawn / API call |
@@ -116,7 +123,11 @@ Each row records `check_type` (`tcp`/`http`/`command`), `status` (`success`/`fai
 The two streams are correlated: a `HealthCheckInstanceRestart` event always corresponds to a run of `failed` / `timeout` rows in the health-check table that crossed `threshold`. When debugging a flapping deployment, line them up by timestamp:
 
 ```bash
-ring deployment events <DEPLOYMENT_ID> --level warning -o json \
+# `ring deployment events` only renders a table; for JSON, hit the API.
+TOKEN=$(jq -r '.default.token' ~/.config/kemeter/ring/auth.json)
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:3030/deployments/$ID/events?level=warning" \
   | jq '.[] | {ts: .timestamp, reason: .reason}'
 
 ring deployment health-checks <DEPLOYMENT_ID> -o json \
@@ -237,15 +248,28 @@ sudo journalctl -u ring --since "10 minutes ago"
 
 ### Streaming events into a monitoring pipeline
 
-There is no outbound webhook. Tail and forward yourself:
+There is no outbound webhook, and the events endpoint is not yet a stream. Poll the API and forward yourself:
 
 ```bash
-ring deployment events <ID> --follow -o json | jq -c | \
-  while read line; do
-    curl -X POST -H 'Content-Type: application/json' \
-      "$MONITORING_URL/events" -d "$line"
-  done
+TOKEN=$(jq -r '.default.token' ~/.config/kemeter/ring/auth.json)
+SEEN=""
+
+while sleep 5; do
+  curl -s -H "Authorization: Bearer $TOKEN" \
+       "http://localhost:3030/deployments/$ID/events" \
+    | jq -c '.[]' \
+    | while read -r line; do
+        id=$(echo "$line" | jq -r '.id')
+        if ! grep -q "$id" <<< "$SEEN"; then
+          curl -X POST -H 'Content-Type: application/json' \
+               "$MONITORING_URL/events" -d "$line"
+          SEEN="$SEEN $id"
+        fi
+      done
+done
 ```
+
+A real SSE endpoint for events (similar to the existing `/logs?follow=true`) is on the roadmap.
 
 ### Polling metrics into Prometheus
 

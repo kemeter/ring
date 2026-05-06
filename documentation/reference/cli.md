@@ -41,11 +41,9 @@ Creates `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`) and writes an empty `a
 
 Run diagnostic checks against the host:
 
-- Docker daemon connectivity
-- Cloud Hypervisor binary (for the alpha runtime)
-- KVM availability (`/dev/kvm`)
-- EFI firmware presence
-- `virtiofsd` binary presence
+- **Server-side env** — `RING_SECRET_KEY` is set, decodes to base64, and is exactly 32 bytes.
+- **Docker** — `docker --version` succeeds (the binary is present and the daemon is reachable).
+- **Cloud Hypervisor** — the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `xorriso` is on `$PATH` (needed for the cloud-init NoCloud ISO when a CH deployment ships `environment`), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
 
 ```bash
 ring doctor
@@ -187,7 +185,7 @@ ring deployment logs web-app
 ring deployment logs web-app --follow
 ring deployment logs web-app --tail 50
 ring deployment logs web-app --since 10m
-ring deployment logs web-app --container web-app-1
+ring deployment logs web-app --container production_web-app   # name prefix, or full container ID prefix
 ```
 
 ### `ring deployment events`
@@ -382,9 +380,11 @@ ring namespace prune <NAMESPACE> [--all]
 
 - `-a` / `--all` — delete every deployment in the namespace, including running ones. Destructive.
 
-**Prunable statuses (default):** `completed`, `failed`, `deleted`, `crashloopbackoff`, `imagepullbackoff`, `createcontainererror`, `networkerror`, `configerror`, `filesystemerror`, `error`.
+**Prunable statuses (default):** `completed`, `failed`, `deleted`, `CrashLoopBackOff`, `ImagePullBackOff`, `CreateContainerError`, `NetworkError`, `ConfigError`, `FileSystemError`, `Error`.
 
 **Preserved statuses (default):** `pending`, `creating`, `running`.
+
+> **Casing matters.** The first three (`completed`, `failed`, `deleted`) are stored lowercase; the rest are stored CamelCase (e.g. `CrashLoopBackOff`, not `crashloopbackoff`). The match is case-sensitive against the literal string in the database. Use `ring deployment list -o json | jq '.[].status'` to see the exact form before scripting.
 
 **Examples:**
 
@@ -611,9 +611,9 @@ Three `type` values are supported:
 
 - `bind` — host path mount
 - `volume` — named Docker volume
-- `config` — file mounted from a Ring config
+- `config` — file rendered from a Ring config and mounted at `destination`. Requires a `key` field that selects which entry in the config to mount; `permission` is forced to `ro`.
 
-Required fields: `type`, `source`, `destination`. Optional: `driver` (`local` or `nfs`, default `local`), `permission` (`ro` or `rw`, default `rw`).
+Required fields: `type`, `source`, `destination`. `key` is required for `type: config`. `driver` and `permission` have defaults via `ring apply` (`local` and `rw` respectively, except `config` which is `ro`); they are required at the API level — see [manifest reference → volumes](/documentation/reference/manifest#volumes).
 
 ```yaml
 volumes:
@@ -630,7 +630,8 @@ volumes:
     permission: rw
 
   - type: config
-    source: nginx-config       # `name` of a Ring config in the same namespace
+    source: nginx-config       # name of a Ring config in the same namespace
+    key: site.conf             # which entry inside the config
     destination: /etc/nginx/conf.d/site.conf
     driver: local
     permission: ro
@@ -638,20 +639,22 @@ volumes:
 
 ### Resources
 
-- `limits` — hard cap (CPU throttled, OOM-killed on memory overage)
-- `requests` — minimum the scheduler guarantees
-- CPU values: millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`)
-- Memory values: raw bytes or `Ki` / `Mi` / `Gi` suffixes
-- Both `limits` and `requests` are optional; within each, `cpu` and `memory` are also optional
+- `limits` — hard cap on Docker (CPU throttled via `nano_cpus`, OOM-killed on memory overage). Allocation, not a cap, on Cloud Hypervisor (vCPU count + RAM size).
+- `requests` — only `requests.memory` is honored on Docker (mapped to `memory_reservation`, a soft minimum). `requests.cpu` is currently ignored on both runtimes.
+- CPU values: millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`). On Cloud Hypervisor, fractional values are rounded down to whole vCPU (floor of 1).
+- Memory values: raw bytes or `Ki` / `Mi` / `Gi` suffixes.
+- Both `limits` and `requests` are optional; within each, `cpu` and `memory` are also optional.
 
 ### Health checks
 
-- `type: tcp` — checks a TCP port is open. Requires `port`.
-- `type: http` — issues an HTTP GET and expects a 2xx response. Requires `url`.
-- `type: command` — runs a shell command inside the container and expects exit code 0. Requires `command`.
-- `interval` and `timeout` use duration suffixes `ms` and `s`. `m` and `h` are not supported.
+- `type: tcp` — checks a TCP port is open. Requires `port`. Probe runs from the host against the runtime-private IP (Docker bridge IP / CH guest IP).
+- `type: http` — issues an HTTP GET, expects a 2xx response. Requires `url`. `localhost` in the URL is rewritten to the runtime-private IP.
+- `type: command` — runs a shell command inside the container via `docker exec`. Requires `command`. **Currently the probe only checks that exec started without error — the command's exit code is not inspected** (so a script that exits non-zero will still report success). Docker only.
+- `interval` and `timeout` use duration suffixes `ms` and `s`. `m` and `h` are **not** supported in this context (write `60s`, not `1m`). The `--since` flag on logs is a separate parser that does accept `m`/`h`.
+- `interval` is currently advisory — the actual cadence is one probe per scheduler tick (default 10s).
 - `threshold` — consecutive failures before `on_failure` triggers (default: 3).
-- `on_failure` — `restart` (restart the container), `stop` (stop it), or `alert` (log an event only).
+- `on_failure` — `restart` (recreate the instance), `stop` (mark the deployment `deleted`), or `alert` (emit an `error` event only).
+- **Cloud Hypervisor:** `tcp` and `http` are supported; `command` is rejected at the API.
 
 ### Namespaces in YAML
 

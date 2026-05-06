@@ -37,10 +37,10 @@ curl -X POST http://localhost:3030/deployments \
 
 Two runtimes share the same manifest shape, with different trade-offs:
 
-- **Docker** — default. The most complete: health checks, labels, image pulls, container metrics, inter-container DNS within a namespace.
-- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary, but several Docker-runtime features are silently ignored or not yet wired (labels, registry credentials, health-check probes, container metrics, inter-instance networking).
+- **Docker** — default. Containers, per-namespace bridge networks, container metrics, all three health-check types (TCP / HTTP / command).
+- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary; TCP and HTTP health checks work, but several Docker features have no VM equivalent (labels, registry credentials, container metrics, inter-VM networking, `command` health checks, `kind: job`).
 
-See the [Docker runtime](/documentation/runtimes/docker), the [Cloud Hypervisor runtime](/documentation/runtimes/cloud-hypervisor), or jump straight to the [CH parity table](/documentation/runtimes/cloud-hypervisor#current-limitations).
+The full per-feature parity matrix is in [Cloud Hypervisor → Current Limitations](/documentation/runtimes/cloud-hypervisor#current-limitations).
 
 ```yaml
 deployments:
@@ -138,9 +138,9 @@ That's it. Nginx is running and reconciled by Ring.
 
 ## Architecture at a glance
 
-- **Ring server** — central process that exposes the REST API and runs the scheduler.
-- **Scheduler** — reconciliation loop that creates, removes, and health-checks instances. On the Docker runtime it also listens to live Docker events (`die`, `oom`, `kill`) to detect crashes; on the Cloud Hypervisor runtime it reconciles by scanning sockets.
-- **Docker runtime** — default runtime. Containers, one bridge network per namespace.
+- **Ring server** — central process that exposes the REST API and runs the scheduler. Default tick: every 10 seconds (override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval`).
+- **Scheduler** — reconciliation loop that creates, removes, and health-checks instances. On the Docker runtime it also listens to live Docker events (`die`, `start`, `oom`, `kill`) to detect crashes; on the Cloud Hypervisor runtime it reconciles by scanning sockets.
+- **Docker runtime** — default runtime. Containers, one bridge network per namespace (`ring_<namespace>`).
 - **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/runtimes/cloud-hypervisor#current-limitations).
 - **SQLite database** — stores deployments, users, secrets, configs, events; WAL mode by default.
 - **REST API** — the only control surface; the CLI is a client.

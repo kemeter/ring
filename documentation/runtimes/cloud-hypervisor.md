@@ -180,25 +180,21 @@ resources:
 
 ## Health Checks
 
-The CH runtime accepts `tcp` and `http` declarations at the API and rejects `command` (`400 Bad Request`).
-
-**Current status:** the probe execution path is not yet wired in `cloud_hypervisor/lifecycle.rs` — the default trait implementation is used, which always returns `failed`. Health checks declared on a CH deployment will therefore accumulate failures and eventually trigger their `on_failure` action regardless of the application's actual state.
-
-Until the implementation lands:
-
-- Either omit `health_checks:` entirely on CH deployments.
-- Or set `on_failure: alert` so the failures only show up in `ring deployment events` without restarting the VM.
+`tcp` and `http` health checks are supported. `command` is rejected at the API (`400 Bad Request`) — the VM model has no direct `docker exec` equivalent; implementing it would require an in-guest agent (vsock or SSH).
 
 ```yaml
 health_checks:
-  - type: tcp
-    port: 80
+  - type: http
+    url: "http://localhost:8080/health"
     interval: "10s"
     timeout: "5s"
-    on_failure: alert         # not `restart` — see note above
+    threshold: 3
+    on_failure: restart
 ```
 
-`command` is rejected at the API; the VM model has no direct `docker exec` equivalent, so implementing it would require an in-guest agent (vsock or SSH).
+The probe runs from the host against the VM's guest IP, derived deterministically from the instance ID by `runtime::host_net::InstanceNet::for_instance` (the same `/30` allocation used for port forwarding). No state is persisted — every probe recomputes the same address the VM was booted with.
+
+For probe semantics (TCP success criteria, HTTP redirect handling, threshold counting, failure actions) the CH runtime behaves exactly like the Docker runtime — see the [health checks guide](/documentation/guides/health-checks) for the full spec.
 
 ## Environment variables
 
@@ -360,23 +356,29 @@ To get application logs into this stream, redirect them to `/dev/console` from i
 
 The following features are **not yet available** on the Cloud Hypervisor runtime:
 
+This is the **canonical parity table** between the Docker runtime (the reference) and the Cloud Hypervisor runtime. Other pages link here rather than restating it.
+
 | Feature | Status |
 |---|---|
-| `tcp` / `http` health checks | Accepted at the API but probe path not yet wired — every probe returns `failed`. See [Health Checks](#health-checks) |
-| `command` health checks | Rejected at the API. No `docker exec` equivalent in the VM model |
-| Custom commands (`command: [...]`) | Rejected at the API — the VM boots whatever its image is configured to run |
-| Docker image references | Rejected at the API — `image:` must be an absolute path to a raw disk image |
-| `labels:` | Silently ignored — no equivalent of Docker container labels in the VM model |
-| `resources.requests` | Silently ignored — only `resources.limits.cpu` (→ vCPU count) and `resources.limits.memory` (→ VM RAM allocation) are honored |
-| `config.image_pull_policy` / `config.server` / `config.username` / `config.password` | Silently ignored — there is no image to pull, the disk image is local |
-| `kind: job` | Untested — the job lifecycle (`completed` / `failed` on exit) lives in the Docker runtime; CH only reconciles `replicas` |
-| Inter-instance networking (same namespace) | Each VM is isolated — no shared bridge network. Cross-VM traffic must go through host-published ports |
-| Environment variables | Supported via cloud-init (NoCloud) — see [Environment variables](#environment-variables) |
-| Volumes | Supported via virtio-fs — see [Volumes](#volumes) |
-| Port mapping | Supported via socat userspace forwarders — see [Port mapping](#port-mapping) |
-| Deployment logs (`ring deployment logs`) | Supported via the serial console — see [Logs](#logs) |
-| Deployment metrics (`ring deployment metrics`) | Not available for CH deployments — `instances:` array is empty |
-| Runtime event subscription (OOM, kill, die) | No equivalent — CH has no live event stream; the scheduler reconciles by scanning sockets |
+| `tcp` / `http` health checks | **Supported.** Probes run from the host against the VM's deterministic guest IP (no agent required). See [Health Checks](#health-checks). |
+| `command` health checks | Rejected at the API. No `docker exec` equivalent in the VM model — would need an in-guest agent (vsock or SSH). |
+| Custom commands (`command: [...]`) | Rejected at the API — the VM boots whatever its image is configured to run. |
+| Docker image references | Rejected at the API — `image:` must be an absolute path to a raw disk image (e.g. `/var/lib/ring/images/ubuntu-focal.raw`). |
+| `labels:` | Silently ignored — no equivalent of Docker container labels in the VM model. |
+| `resources.limits.cpu` | Honored, but **as an allocation, not a cap**: rounded down to whole vCPU with a floor of 1 (`"500m"` → 1 vCPU). |
+| `resources.limits.memory` | Honored, but **as an allocation, not a cap**: VM RAM size, minimum 128 MiB. |
+| `resources.requests.*` | Silently ignored. |
+| `config.image_pull_policy` / `config.server` / `config.username` / `config.password` | Silently ignored — there is no image to pull, the disk image is local. |
+| `config.user` (privileged / id / group) | Silently ignored. |
+| `kind: job` | Untested — the job lifecycle (`completed` / `failed` on exit) lives in the Docker runtime path only; CH treats every deployment as a worker (just keeps `replicas` instances alive). |
+| Inter-VM networking | Each VM is isolated — no shared bridge network across replicas or sibling deployments. Cross-VM traffic must go through host-published ports. |
+| Environment variables | **Supported** via cloud-init (NoCloud) — see [Environment variables](#environment-variables). Requires `xorriso` on the host and a guest image with cloud-init. |
+| Volumes (`bind`, `volume`, `config`) | **Supported** via virtio-fs — see [Volumes](#volumes). Requires `virtiofsd` on the host and `CONFIG_VIRTIO_FS=y` in the guest kernel (every standard cloud image has it). |
+| Port mapping | **Supported** via `socat` userspace forwarders — see [Port mapping](#port-mapping). |
+| Deployment logs (`ring deployment logs`) | **Supported** via the serial console (per-instance file at `<socket_dir>/<instance>.console.log`). See [Logs](#logs). Append-only — no rotation by Ring. |
+| Deployment metrics (`ring deployment metrics`) | Not available — `instances:` array is empty. The trait default returns no stats; Cloud Hypervisor exposes `vm.info` / `vm.counters` but Ring doesn't read them yet. |
+| Runtime event subscription (OOM, kill, die) | No equivalent — CH has no live event stream; the scheduler reconciles by scanning sockets at each tick. Crash detection is therefore latency-bound by `[scheduler] interval`. |
+| Container DNS aliases between replicas | Not applicable — no shared bridge, no DNS. |
 
 These limitations will be addressed in future releases. See the project roadmap for details.
 

@@ -59,12 +59,17 @@ deployments:
 
 ### Multiple replicas
 
-When `replicas > 1`, Docker assigns each instance a unique container name (`api-1`, `api-2`, …). The deployment name (`api`) does **not** resolve to a round-robin of replicas — there is no Ring-managed virtual IP. To distribute traffic across replicas:
+When `replicas > 1`, every container has a unique Docker name of the form `<namespace>_<name>_<8-hex>` (e.g. `production_api_a1b2c3d4`). All replicas of one deployment also share the same Docker network alias — the **deployment name** (and the namespace name) — so resolving `api` from inside another container in `ring_production` round-robins across the replicas via Docker's embedded DNS.
 
-- Front the deployment with a reverse proxy that knows about the replicas (Traefik via labels, Nginx with a manual upstream block, HAProxy).
-- Or have your client library do the resolution and pooling itself (e.g. a Postgres client with a connection pool against a single primary).
+In other words: `http://api:8080` from a sibling container reaches one of the replicas (round-robin DNS), no reverse proxy required for L4 traffic. The trade-offs are the same as any DNS-based load balancing — sticky behaviour depends on TTLs and per-language resolver caches; expect occasional uneven distribution.
 
-There is no equivalent of Kubernetes' headless or virtual `Service`.
+If you need explicit control (sticky sessions, weighted distribution, health-aware routing, observability), put a reverse proxy in front:
+
+- Traefik via container labels (`traefik.http.services.api.loadbalancer.server.port`).
+- Nginx with a manual `upstream` block.
+- HAProxy similar story.
+
+There is still no equivalent of Kubernetes' `Service` resource — Ring doesn't provide a virtual IP, just the DNS alias.
 
 ## Cross-namespace traffic
 
