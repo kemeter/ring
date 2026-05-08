@@ -108,6 +108,19 @@ Before using the Cloud Hypervisor runtime, you need:
 
     `ring doctor` reports whether `socat` is available.
 
+9. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`).
+
+    Container runtimes implement `command` health checks via `docker exec`. VMs have no equivalent — Ring talks to a small in-guest daemon over AF_VSOCK. Build the agent once and bake it into your guest image:
+
+    ```bash
+    # Build a static binary on the host
+    cargo build -p ring-agent --release --target x86_64-unknown-linux-musl
+    # Copy into the guest image at /usr/local/bin/ring-agent and enable a
+    # systemd unit (or equivalent) that runs it at boot.
+    ```
+
+    The agent listens on AF_VSOCK port 2375. Ring opens one connection per probe and reads the command's exit code; non-zero counts as a failed probe. See [Health Checks](#health-checks) for details on what gets shipped to the guest.
+
 ## Configuration
 
 Add a `runtime.cloud_hypervisor` section to your `config.toml` to customize paths:
@@ -194,7 +207,7 @@ resources:
 
 ## Health Checks
 
-`tcp` and `http` health checks are supported. `command` is rejected at the API (`400 Bad Request`) — the VM model has no direct `docker exec` equivalent; implementing it would require an in-guest agent (vsock or SSH).
+`tcp`, `http` and `command` health checks are all supported. `tcp` and `http` probes run from the host against the VM's deterministic guest IP (no agent required). `command` probes go through the in-guest `ring-agent` daemon over AF_VSOCK — the agent must be installed inside the guest image (see [Prerequisites](#prerequisites)). The probe receives the command verbatim and runs it through `/bin/sh -c`; exit code zero means success.
 
 ```yaml
 health_checks:
@@ -386,7 +399,7 @@ This is the **canonical parity table** between the Docker runtime (the reference
 | Feature | Status |
 |---|---|
 | `tcp` / `http` health checks | **Supported.** Probes run from the host against the VM's deterministic guest IP (no agent required). See [Health Checks](#health-checks). |
-| `command` health checks | Rejected at the API. No `docker exec` equivalent in the VM model — would need an in-guest agent (vsock or SSH). |
+| `command` health checks | **Supported** via the in-guest `ring-agent` daemon (AF_VSOCK port 2375). The guest image must ship the agent — see [Prerequisites](#prerequisites). |
 | Custom commands (`command: [...]`) | Rejected at the API — the VM boots whatever its image is configured to run. |
 | Docker image references | Rejected at the API — `image:` must be an absolute path to a raw disk image (e.g. `/var/lib/ring/images/ubuntu-focal.raw`). |
 | `labels:` | Silently ignored — no equivalent of Docker container labels in the VM model. |

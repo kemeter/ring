@@ -31,6 +31,8 @@ pub(crate) struct VmConfig {
     pub serial: Option<ConsoleConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub console: Option<ConsoleConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vsock: Option<VsockConfig>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -97,6 +99,15 @@ pub(crate) struct NetConfig {
     pub mask: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mac: Option<String>,
+}
+
+/// Attaches a vhost-vsock device to the VM. The guest sees AF_VSOCK and
+/// `ring-agent` (running inside) listens on a well-known port. Ring opens
+/// connections from the host to (cid, port) for command health checks.
+#[derive(Debug, Serialize, Clone)]
+pub(crate) struct VsockConfig {
+    pub cid: u32,
+    pub socket: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
