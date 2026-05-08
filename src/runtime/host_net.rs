@@ -89,6 +89,22 @@ impl InstanceNet {
     }
 }
 
+/// Deterministic AF_VSOCK CID for a given instance id. CIDs 0/1/2 are
+/// reserved by the kernel/hypervisor (HOST=2, ANY=u32::MAX, etc.); we map
+/// the instance hash into [3, u32::MAX-1) so collisions across distinct
+/// instances on the same host are vanishingly rare. Two VMs with the same
+/// CID can't both run on the same host (CH rejects duplicates), so the
+/// scheduler will surface this as a boot failure rather than silently mix
+/// traffic.
+pub fn cid_for_instance(instance_id: &str) -> u32 {
+    let h = stable_hash(instance_id);
+    // Reserved range [0..=2]. ANY = u32::MAX. Take a 32-bit slice and
+    // shift into [3, u32::MAX-1].
+    let raw = (h as u32) ^ ((h >> 32) as u32);
+    let span = u32::MAX - 4;
+    3 + (raw % span)
+}
+
 /// Tiny FNV-1a 64-bit. Vendor-free, deterministic across builds. We don't
 /// need cryptographic strength — just a good distribution across the /30
 /// space.

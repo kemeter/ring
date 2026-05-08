@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/ring-agent"]
+
 [package]
 name = "ring-server"
 version = "0.7.0"
@@ -52,5 +55,6 @@ sysinfo = "0.35.1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tokio-vsock = "0.7"
 [dev-dependencies]
 axum-test = "17.3.0"

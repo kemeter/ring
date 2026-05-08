@@ -43,6 +43,7 @@ mod runtime {
     pub(crate) mod port_forwarder;
     pub(crate) mod types;
     pub(crate) mod virtiofs;
+    pub(crate) mod vsock_client;
 }
 
 mod models {

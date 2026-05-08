@@ -38,16 +38,9 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
 
 fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
     if input.runtime == "cloud-hypervisor" {
-        if let Some(hcs) = &input.health_checks
-            && hcs
-                .iter()
-                .any(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }))
-        {
-            return Err(
-                "command health checks are not supported on cloud-hypervisor runtime (alpha); use tcp or http"
-                    .to_string(),
-            );
-        }
+        // `command` health checks are now supported via the in-guest
+        // `ring-agent` daemon (vsock). The guest image must ship the agent
+        // listening on AF_VSOCK port 2375 — see the runtime documentation.
 
         // Reject silently-dropped fields up front so users get a clear error
         // instead of a deployment that runs but ignores half its configuration.
@@ -498,7 +491,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_cloud_hypervisor_rejects_command_health_check() {
+    async fn create_cloud_hypervisor_accepts_command_health_check() {
+        // command health checks now route through `ring-agent` over vsock.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -523,12 +517,7 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
-        assert!(
-            body.message
-                .contains("command health checks are not supported on cloud-hypervisor runtime")
-        );
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]

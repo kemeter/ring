@@ -453,6 +453,30 @@ impl CloudHypervisorLifecycle {
         } else {
             None
         };
+
+        // Attach a vhost-vsock device whenever the deployment declares a
+        // `command` health check — that's the only consumer today. Adding a
+        // vsock for every CH VM would mean an extra device per VM for no
+        // benefit; gate it on demand instead.
+        //
+        // Known limitation: `needs_vsock` is evaluated only at boot. If an
+        // operator adds a `command` health check to an already-running
+        // deployment, the existing VM has no vsock device; the next probe
+        // will fail at connect, the scheduler will increment failures and
+        // eventually restart the VM, at which point this path runs again
+        // and the vsock is provisioned. The transient failures are
+        // unavoidable without a hot-attach path through the CH API.
+        let needs_vsock = deployment
+            .health_checks
+            .iter()
+            .any(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }));
+        let vsock_cid = if needs_vsock {
+            Some(crate::runtime::host_net::cid_for_instance(instance_id))
+        } else {
+            None
+        };
+        let vsock_socket_path = vsock_cid
+            .map(|_| PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id)));
         let guest_net = net_alloc.as_ref().map(|n| super::cloud_init::GuestNet {
             guest_ip: n.guest_ip.clone(),
             host_ip: n.host_ip.clone(),
@@ -537,6 +561,13 @@ impl CloudHypervisorLifecycle {
                 mode: "Off".to_string(),
                 file: None,
             }),
+            vsock: match (vsock_cid, vsock_socket_path.as_ref()) {
+                (Some(cid), Some(path)) => Some(super::client::VsockConfig {
+                    cid,
+                    socket: Self::path_str(path)?.to_string(),
+                }),
+                _ => None,
+            },
         };
 
         // From here on, any failure must clean up the half-created VM:
@@ -649,6 +680,14 @@ impl CloudHypervisorLifecycle {
         let console_log = self.console_log_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&console_log).await {
             debug!("Failed to remove console log {:?}: {}", console_log, e);
+        }
+
+        // CH creates the vsock backing socket on `create_vm` and leaves it
+        // behind on `delete`. Best-effort cleanup; absence is fine.
+        let vsock_path =
+            PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id));
+        if let Err(e) = tokio::fs::remove_file(&vsock_path).await {
+            debug!("Failed to remove vsock socket {:?}: {}", vsock_path, e);
         }
 
         // Drop any live virtiofsd processes for this instance. Their `Drop`
@@ -903,6 +942,46 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
     /// — every probe recomputes the same address the VM was booted with.
     async fn instance_address(&self, instance_id: &str) -> Option<std::net::IpAddr> {
         InstanceNet::for_instance(instance_id).guest_ip.parse().ok()
+    }
+
+    /// Execute the probe via vsock against `ring-agent` running in the guest.
+    /// The CID was assigned deterministically at boot from the instance id;
+    /// recompute it here so we don't need to thread state through the probe
+    /// path. The agent is responsible for shell-parsing the command — it
+    /// receives the string verbatim and lets the guest's shell deal with it.
+    async fn execute_command_probe(
+        &self,
+        instance_id: &str,
+        command: &str,
+    ) -> (
+        crate::models::health_check::HealthCheckStatus,
+        Option<String>,
+    ) {
+        use crate::models::health_check::HealthCheckStatus;
+
+        let cid = crate::runtime::host_net::cid_for_instance(instance_id);
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.to_string()];
+        let timeout = std::time::Duration::from_secs(30);
+
+        match crate::runtime::vsock_client::exec(cid, &argv, &[], timeout).await {
+            Ok(resp) if resp.timed_out => (
+                HealthCheckStatus::Timeout,
+                Some(format!("command timed out: {}", command)),
+            ),
+            Ok(resp) if resp.exit_code == 0 => (HealthCheckStatus::Success, None),
+            Ok(resp) => (
+                HealthCheckStatus::Failed,
+                Some(format!(
+                    "exit code {}: {}",
+                    resp.exit_code,
+                    resp.stderr.trim()
+                )),
+            ),
+            Err(e) => (
+                HealthCheckStatus::Failed,
+                Some(format!("vsock probe failed: {}", e)),
+            ),
+        }
     }
 }
 
