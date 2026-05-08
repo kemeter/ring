@@ -149,6 +149,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     checks.push(check_kvm());
     checks.push(check_capabilities(binary));
     checks.push(check_xorriso());
+    checks.push(check_socat());
 
     let default_firmware = format!(
         "{}/cloud-hypervisor/vmlinux",
@@ -179,6 +180,35 @@ fn check_xorriso() -> Check {
         _ => Check::fail(
             "xorriso",
             "not found — environment variables won't be injected into VMs (apt install xorriso / dnf install xorriso)",
+        ),
+    }
+}
+
+/// socat is spawned (one process per port mapping) to forward `0.0.0.0:<published>`
+/// on the host to `<guest_ip>:<target>` inside the VM. Without it, deployments
+/// with `ports:` boot but stay unreachable from the host.
+fn check_socat() -> Check {
+    match ShellCommand::new("socat").arg("-V").output() {
+        Ok(out) if out.status.success() => {
+            let version = String::from_utf8_lossy(&out.stderr)
+                .lines()
+                .chain(String::from_utf8_lossy(&out.stdout).lines())
+                .find(|l| l.contains("socat version"))
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            Check::ok(
+                "socat",
+                if version.is_empty() {
+                    "available (used to forward host ports to VM guest IPs)"
+                } else {
+                    &version
+                },
+            )
+        }
+        _ => Check::fail(
+            "socat",
+            "not found — `ports:` on cloud-hypervisor deployments won't be reachable from the host (apt install socat / dnf install socat)",
         ),
     }
 }

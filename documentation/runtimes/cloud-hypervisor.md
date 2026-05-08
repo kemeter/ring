@@ -94,6 +94,20 @@ Before using the Cloud Hypervisor runtime, you need:
 
     `ring doctor` reports whether `xorriso` is available.
 
+8. **`socat`** (only if you publish ports on a deployment).
+
+    Ring spawns one `socat` process per `ports:` entry to forward host ports to the VM's guest IP. Without it, deployments that ship `ports: [...]` boot but stay unreachable from the host. See [Port mapping](#port-mapping) for the full picture.
+
+    ```bash
+    # Debian / Ubuntu
+    sudo apt install socat
+
+    # Fedora
+    sudo dnf install socat
+    ```
+
+    `ring doctor` reports whether `socat` is available.
+
 ## Configuration
 
 Add a `runtime.cloud_hypervisor` section to your `config.toml` to customize paths:
@@ -311,7 +325,18 @@ Why a userspace proxy and not iptables? `socat` runs without extra capabilities,
 
 ### Requirements
 
-- **`socat`** must be on the host. Install via `apt install socat` on Debian/Ubuntu.
+- **`socat`** must be on the host. Without it, deployments that ship `ports: [...]` boot but stay unreachable from the host.
+
+    ```bash
+    # Debian / Ubuntu
+    sudo apt install socat
+
+    # Fedora
+    sudo dnf install socat
+    ```
+
+    `ring doctor` reports whether `socat` is available.
+
 - The guest kernel needs the `virtio_net` driver (every standard cloud image ships it).
 - The guest's primary NIC must respond to `enp0s3`, `ens3` or `eth0` — Ring's cloud-init dropin probes those names in order.
 
