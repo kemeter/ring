@@ -2,7 +2,7 @@
 
 Zero-downtime deployments. When you update an image tag, change resources, or modify the manifest of a deployment that has at least one health check declared, Ring rolls the change out instance-by-instance — the old version keeps serving traffic until each new instance has passed its check.
 
-> **Runtime parity.** Rolling updates rely on health checks reporting `success` to advance. The Docker runtime implements all three check types; the Cloud Hypervisor runtime does not yet implement the probe path (see [health checks → CH limits](/documentation/guides/health-checks#limits-and-caveats)), so a rolling update on a CH deployment never advances and eventually marks the child `failed`. Until CH probes are wired, apply CH manifests with `--force` for immediate replacement.
+> **Runtime parity.** Rolling updates rely on health checks reporting `success` to advance. The Docker runtime implements all three check types (`tcp`, `http`, `command`); the Cloud Hypervisor runtime supports `tcp` and `http` only (`command` is rejected at the API). Both runtimes drive the same rolling-update path once a probe passes.
 
 ## How Ring picks the strategy
 
@@ -121,7 +121,7 @@ There is no built-in tree view across rollouts; the chain is `parent_id → pare
 - **Health-check definition changes.** If the new manifest **removes** all health checks, Ring takes the immediate-replacement path on the next apply. If it **adds** the first health check, that apply is the **first** one that gets a rolling update — you only get the benefit going forward.
 - **Multiple active deployments with the same name+namespace.** Ring sees this and falls back to immediate replacement. Clean up duplicates before relying on rolling updates: `ring deployment list -n <ns>` then `ring deployment delete <ID>`.
 - **No automatic rollback.** A failed rollout leaves the parent untouched, but Ring does not automatically re-roll back to a known-good version if the child later degrades. Re-apply the previous manifest yourself.
-- **Apply timeout.** A single `ring apply` cycle is bounded by `RING_APPLY_TIMEOUT` (default 300 s). For very slow-booting workloads with many replicas, raise it explicitly.
+- **Apply timeout.** `RING_APPLY_TIMEOUT` (default 300 s) bounds a single deployment's `runtime.apply()` call **inside one scheduler tick** — it is **not** the timeout of the client-side `ring apply` command, nor of the whole rolling update. For very slow-booting workloads, raise it explicitly so a single instance creation isn't aborted mid-flight.
 
 ## Recipe: deploying a new image safely
 

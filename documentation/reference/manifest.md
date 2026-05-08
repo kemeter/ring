@@ -112,13 +112,14 @@ A list of volume objects. **Three** types are supported:
 
 ### Schema
 
-| Field | Required | Description |
-|---|---|---|
-| `type` | yes | `bind`, `volume`, or `config`. |
-| `source` | yes | Host path (bind), volume name (volume), or config name (config). |
-| `destination` | yes | Path inside the container. |
-| `driver` | no (default `local`) | `local` or `nfs`. Only meaningful for `volume`. |
-| `permission` | no (default `rw`) | `ro` or `rw`. |
+| Field | Required | Used by | Description |
+|---|---|---|---|
+| `type` | yes | all | `bind`, `volume`, or `config`. |
+| `source` | yes | all | Host path (bind), volume name (volume), or config name (config). |
+| `key` | yes for `config`, ignored otherwise | `config` only | Selects which key inside the named config to mount. A config can carry multiple key/value entries; `key` picks one. The API rejects a `config` volume without `key` (or with empty `key`). |
+| `destination` | yes | all | Path inside the container. For `config` volumes, this is the file path the selected `key`'s payload will be written to. |
+| `driver` | no (default `local`) | `volume` (otherwise informational) | `local` or `nfs`. Only meaningful for `volume`. |
+| `permission` | no | `bind` and `volume` | `ro` or `rw`. Defaults to `rw` for `bind` and `volume`. **For `config`, the API forces `ro`** regardless of what you write. |
 
 ```yaml
 volumes:
@@ -136,12 +137,15 @@ volumes:
 
   - type: config
     source: nginx-config            # name of an existing `ring config`
+    key: site.conf                  # which entry inside the config to mount
     destination: /etc/nginx/conf.d/site.conf
     driver: local
     permission: ro
 ```
 
 For `config` volumes, the `source` is the config's `name` (not its UUID), and the config must live in the **same namespace** as the deployment. See [Cloud Hypervisor → volumes](/documentation/runtimes/cloud-hypervisor#volumes) for runtime-specific lifecycle details.
+
+> **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 
 ## `ports`
 
@@ -195,15 +199,16 @@ resources:
     memory: "128Mi"
 ```
 
-| Section | Docker | Cloud Hypervisor |
+| Field | Docker behavior | Cloud Hypervisor behavior |
 |---|---|---|
-| `limits.cpu` | Hard cap — CPU is throttled when exceeded | **Allocation, not a cap** — translates to the VM's vCPU count (rounded down, minimum 1) |
-| `limits.memory` | Hard cap — overage triggers an OOM kill | **Allocation, not a cap** — translates to the VM's RAM size (minimum 128 MiB) |
-| `requests.cpu` / `requests.memory` | Minimum the scheduler guarantees (Docker CPU shares + memory reservation) | **Silently ignored** |
+| `limits.cpu` | Sets `HostConfig.NanoCpus` — hard cap, CPU is throttled when exceeded. Fractional values OK (`"500m"` = 0.5 core). | Number of vCPU at boot (`max(1, floor(cpu))`). Fractional values are rounded **down** to whole vCPU, with a floor of 1. `"500m"` becomes 1 vCPU. |
+| `limits.memory` | Sets `HostConfig.Memory` — hard cap, overage triggers an OOM kill. | Sets the VM's RAM size (`max(128, bytes / 1MiB)` MiB). Allocation, not a cap — the guest OS sees exactly this much RAM. |
+| `requests.cpu` | **Silently ignored.** The doc previously claimed it set Docker CPU shares; the code never sets `cpu_shares`. | **Silently ignored.** |
+| `requests.memory` | Sets `HostConfig.MemoryReservation` — soft minimum (kernel tries to keep this much available, but doesn't enforce it strictly). | **Silently ignored.** |
 
 Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are also optional.
 
-> **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot; live resize is not supported.
+> **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot only; Ring does not use Cloud Hypervisor's `vm.resize` API to live-resize a running VM, so changing `resources` requires a redeploy.
 
 ### CPU values
 
@@ -257,11 +262,11 @@ health_checks:
 
 | Type | Field | Description |
 |---|---|---|
-| `tcp` | `port` | TCP port inside the container/VM. |
-| `http` | `url` | Full URL. `localhost` is rewritten to the instance's runtime-private IP. Expects 2xx. |
-| `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. Pass = exit code 0. |
+| `tcp` | `port` | TCP port inside the container/VM. Probe succeeds if the kernel accepts the SYN within `timeout`. |
+| `http` | `url` | Full URL. `localhost` is rewritten to the instance's runtime-private IP. Probe succeeds on a 2xx response within `timeout`. Redirects (3xx) are not followed and count as failures. |
+| `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. **Current behavior:** the probe succeeds as soon as `docker exec` *starts the command without an API error*; the command's actual **exit code is not checked**. So a command that runs but exits non-zero will report `success`. This is a known limitation — track the [code source](https://github.com/kemeter/ring/blob/main/src/runtime/docker/health_check.rs) for the fix. |
 
-**Cloud Hypervisor caveat:** `command` is rejected at the API. `tcp` and `http` are accepted at the API but the probe path is not yet implemented in the CH lifecycle — every probe currently returns `failed`. See the [CH runtime page → Health Checks](/documentation/runtimes/cloud-hypervisor#health-checks).
+**Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is rejected at the API — there's no `docker exec` equivalent in the VM model. See the [CH runtime page → Health Checks](/documentation/runtimes/cloud-hypervisor#health-checks).
 
 See the dedicated [health-checks guide](/documentation/guides/health-checks) for tuning, recipes, and the rolling-update interaction.
 
@@ -281,9 +286,12 @@ config:
 
 | Field | Description |
 |---|---|
-| `image_pull_policy` | `Always` (default) or `IfNotPresent` |
-| `server` | Private-registry hostname (only for non-Docker-Hub registries) |
+| `image_pull_policy` | `Always` (default) or `IfNotPresent`. The third historical value `Never` skips the pull entirely. |
+| `server` | Private-registry hostname (only for non-Docker-Hub registries). |
 | `username`, `password` | Registry credentials. Sent to Docker on `pull`. |
+| `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
+| `user.group` | Numeric GID. Optional. |
+| `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
 
 The `password` field is **not** an encrypted secret — it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`.
 

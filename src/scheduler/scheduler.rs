@@ -472,7 +472,7 @@ async fn apply_docker_event(
             if let Err(e) = deployment_event::log_event(
                 pool,
                 deployment_id,
-                "warn",
+                "warning",
                 format!("Container {} killed by OOM", container_id),
                 "docker-events",
                 Some("ContainerOom"),
@@ -549,7 +549,7 @@ async fn bump_restart_count(pool: &SqlitePool, deployment_id: &str, message: Str
     if let Err(e) = deployment_event::log_event(
         pool,
         deployment_id.to_string(),
-        "warn",
+        "warning",
         format!("{} — restart_count={}", message, deployment.restart_count),
         "docker-events",
         Some(reason),

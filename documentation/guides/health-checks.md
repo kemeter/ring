@@ -45,7 +45,7 @@ ring deployment events <DEPLOYMENT_ID> --follow
 
 ## How they run
 
-The scheduler executes every declared check **once per scheduler tick** (default tick: 1 second, override with `RING_SCHEDULER_INTERVAL`) for every running instance of the deployment. Note that `interval` in a health-check definition is currently advisory — the cadence is driven by the scheduler tick. The whole pipeline is wrapped in `tokio::time::timeout(timeout)`; if the runtime call doesn't return within that duration, the result is recorded as `timeout`.
+The scheduler executes every declared check **once per scheduler tick** (default: every 10 seconds; override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval` in `config.toml`) for every running instance of the deployment. Note that `interval` in a health-check definition is currently advisory — the cadence is driven by the scheduler tick, not by the per-check `interval`. The whole pipeline is wrapped in `tokio::time::timeout(timeout)`; if the runtime call doesn't return within that duration, the result is recorded as `timeout`.
 
 Each result becomes a row in the `health_check` table (id, deployment_id, check_type, status, message, started_at, finished_at) and is exposed by `GET /deployments/{id}/health-checks`.
 
@@ -113,7 +113,9 @@ Redirects (`3xx`) are **not** followed and count as failures. If your endpoint r
 
 ### `command` — exec inside the container
 
-Runs an arbitrary command **inside** the container via `docker exec`. The check passes if the command exits with code `0`.
+Runs an arbitrary command **inside** the container via `docker exec`.
+
+> **Known limitation.** The current implementation marks the probe as `success` as soon as `docker exec` *starts the command without an API error* — the command's actual **exit code is not checked**. So a script that runs but exits non-zero will still report `success`. Until that's fixed, treat `type: command` as "is the binary executable inside the container?", not "is the command happy?". For real readiness checks, prefer `tcp` or `http` against an internal endpoint your app exposes.
 
 ```yaml
 health_checks:
@@ -260,18 +262,18 @@ Failures of one check do not reset another's counter — they are tracked per `(
 A few rules of thumb that hold in practice:
 
 - **Start lenient.** `threshold: 3` and a forgiving `timeout` avoid flapping during cold-starts and JIT warmup. Tighten later if your service genuinely catches issues earlier.
-- **`timeout < interval`.** If a probe can run longer than the gap between probes, Ring will queue them up and your dashboard fills with `timeout` rows that aren't helping anyone.
+- **`timeout < scheduler tick`.** Since `interval` is currently advisory and probes actually run once per scheduler tick (default 10s), keep `timeout` shorter than the tick. Otherwise the scheduler cycle drags and other deployments wait. Lower the tick (`RING_SCHEDULER_INTERVAL=2`) if you need faster probes, and keep `timeout` proportional.
 - **Probe a real endpoint.** A `/health` that returns `200 OK` from a static handler doesn't tell you anything. Hit your DB pool, your downstream cache, your auth service.
 - **Don't probe what you can't fix.** A `command` check that calls an external API will trigger restarts when the external API blips. Use `alert` for those.
 - **Avoid `stop` on stateless services.** If `restart` would have done the job, `stop` is just an outage with extra steps.
 
 ## Limits and caveats
 
-- **`interval` is advisory.** The actual cadence is driven by the scheduler tick. If you set `interval: 30s` but the scheduler tick is `1s`, the check runs every second.
+- **`interval` is advisory.** The actual cadence is driven by the scheduler tick (default 10s). If you set `interval: 30s` but the tick is `2s`, the check runs every 2 seconds. To slow probes down, increase the tick.
 - **Counters are in memory.** Restarting `ring server` resets every counter to zero.
 - **No per-instance disable.** You can't pause health checks on a single instance for debugging — either remove the check from the manifest or `--force` an immediate replacement.
 - **No startup delay / grace period field.** A slow-booting service must absorb the cold-start failures within the `threshold` window. If your app needs 30 seconds to warm up, either bump `threshold` accordingly, or use `timeout` generously, or both. A dedicated `start_period` field may land in a future release.
-- **Cloud Hypervisor:** the runtime has its own implementation in flight. `command` is rejected at the API; `tcp` and `http` are accepted at the API but the probe path is not yet wired in `cloud_hypervisor/lifecycle.rs`, so the default trait impl is used and **every probe currently returns `failed`**. Until the implementation lands, declaring health checks on a CH deployment will eventually trigger your `on_failure` action — set `on_failure: alert` (or omit the block) for now.
+- **Cloud Hypervisor:** `tcp` and `http` are supported — probes run from the host against the VM's guest IP (deterministic /30 allocation). `command` is rejected at the API (no `docker exec` equivalent in the VM model — would require an in-guest agent over vsock or SSH).
 - **Duration suffixes:** only `ms` and `s` are accepted. `1m` does not parse — write `60s`.
 
 ## Recipes

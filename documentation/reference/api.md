@@ -255,12 +255,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```json
 [
   {
-    "instance": "nginx-demo-1",
+    "instance": "default_nginx-demo_a1b2c3d4",
     "message": "nginx: starting server",
     "level": "info",
     "timestamp": "2026-04-15T10:30:00Z"
   }
 ]
+
+The `instance` field is the Docker container name (`<namespace>_<name>_<8-hex>`) for Docker deployments, or the CH instance ID (`ch-<8-hex>-<8-hex>`) for Cloud Hypervisor deployments. The `level` is a heuristic — Ring infers it from substring matches on the line (`[error]`, `[warning]`, `[info]`, `[notice]`, `info:`); structured-log levels are not preserved.
 ```
 
 When `follow=true`, the response is an SSE stream (`Content-Type: text/event-stream`) where each `data:` line carries the same JSON shape as a single log entry.
@@ -269,7 +271,7 @@ This route is mounted without the 10-second API timeout so streams can stay open
 
 ### `GET /deployments/{id}/events`
 
-Retrieve scheduler events for a deployment.
+Retrieve scheduler events for a deployment. **Not a stream** — only `/logs?follow=true` supports SSE today; this endpoint is plain JSON. Poll periodically if you need to forward events into another system.
 
 **Query parameters:**
 
@@ -287,7 +289,7 @@ Retrieve scheduler events for a deployment.
     "level": "info",
     "component": "docker",
     "reason": "ScaleUp",
-    "message": "Container nginx-demo-1 started successfully"
+    "message": "Container default_nginx-demo_a1b2c3d4 started successfully"
   }
 ]
 ```
@@ -349,7 +351,7 @@ Live resource usage for a deployment and each of its instances. Only meaningful 
   "instances": [
     {
       "instance_id": "abc123",
-      "instance_name": "nginx-demo-1",
+      "instance_name": "default_nginx-demo_a1b2c3d4",
       "cpu_usage_percent": 0.8,
       "memory": {
         "usage_bytes": 17476267,
@@ -405,7 +407,9 @@ Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exp
 
 **Errors:**
 
-- `409 Conflict` — secret with this name already exists in this namespace
+- `404 Not Found` — the namespace doesn't exist yet (POST /secrets does not auto-create it).
+- `409 Conflict` — a secret with this name already exists in this namespace.
+- `500 Internal Server Error` — encryption failed (typically a misconfigured `RING_SECRET_KEY` somehow surviving startup validation).
 
 ### `GET /secrets`
 
@@ -653,14 +657,20 @@ Returns information about the host running the Ring server.
 
 ## Error format
 
+Ring's error responses are not yet uniform across endpoints. Three shapes appear in the wild:
+
 ```json
-{
-  "error": "Deployment not found",
-  "code": "DEPLOYMENT_NOT_FOUND"
-}
+// Most handlers (deployments, namespaces, secrets, configs)
+{ "error": "Secret not found" }
+
+// Some handlers (e.g. POST /deployments validation errors)
+{ "message": "Invalid runtime, supported: [docker, cloud-hypervisor]" }
+
+// POST /login on bad credentials
+{ "errors": ["Invalid credentials"] }
 ```
 
-Some endpoints attach contextual fields — for instance, `DELETE /secrets/{id}` returns the list of referencing deployments under the `deployments` key.
+There is currently no `code` field. Some endpoints attach contextual fields — for instance, `DELETE /secrets/{id}` returns the list of referencing deployments under `deployments` and a `hint` field. Plan to handle all three shapes when consuming the API; standardisation is on the roadmap.
 
 ## Examples
 

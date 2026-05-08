@@ -40,7 +40,7 @@ Summary:
   Successful: 1
 ```
 
-The scheduler then picks the deployment up on its next tick (default: every second), pulls the image if needed, and starts the container. Watch progress with `ring deployment events`.
+The scheduler then picks the deployment up on its next tick (default: every 10 seconds — set `RING_SCHEDULER_INTERVAL` or `[scheduler] interval` to a smaller value during local development), pulls the image if needed, and starts the container. Watch progress with `ring deployment events`.
 
 ## With the REST API
 
@@ -92,7 +92,7 @@ ring deployment inspect "$DEPLOYMENT_ID"
 
 ### Find Ring containers in Docker
 
-Every Ring container is labelled `ring_deployment=<deployment-id>`:
+Every Ring container is labelled `ring_deployment=<deployment-id>`. Container names follow `<namespace>_<name>_<8-hex>` (e.g. `default_nginx-demo_a1b2c3d4`). All replicas of one deployment share the same Docker DNS alias (`<deployment-name>` and `<namespace>`), so other containers in the same Ring namespace can reach them by name.
 
 ```bash
 docker ps --filter "label=ring_deployment"

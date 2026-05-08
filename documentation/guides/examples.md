@@ -168,13 +168,21 @@ deployments:
 
 ### Config-mounted file
 
-First create the config:
+Configs are created via the API (there is **no `ring config create` CLI command** — only `list`, `inspect`, `delete`):
 
 ```bash
-ring config create nginx-config -n web -f ./custom.conf
+TOKEN=$(jq -r '.default.token' ~/.config/kemeter/ring/auth.json)
+curl -X POST http://localhost:3030/configs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "nginx-config",
+    "namespace": "web",
+    "data": "{\"site.conf\": \"server { listen 80; ... }\"}"
+  }'
 ```
 
-Then mount it:
+Then mount one of the config's keys:
 
 ```yaml
 deployments:
@@ -188,6 +196,7 @@ deployments:
     volumes:
       - type: config
         source: nginx-config       # config name in the same namespace
+        key: site.conf             # entry inside the config
         destination: /etc/nginx/conf.d/custom.conf
         driver: local
         permission: ro
@@ -631,7 +640,7 @@ ring secret create jwt-secret -n production -v "$JWT_SECRET"
 ring secret create external-api-key -n production -v "$EXTERNAL_API_KEY"
 ```
 
-The server must be started with `RING_SECRET_KEY` set; without it, all secret operations return `500 Internal Server Error`.
+The server must be started with `RING_SECRET_KEY` set; without it, `ring server start` refuses to start at all (validated up front; exit code 1).
 
 ### Health checks for rolling updates
 

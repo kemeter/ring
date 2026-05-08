@@ -49,6 +49,9 @@ The token is saved to `~/.config/kemeter/ring/auth.json` and reused by subsequen
 ### 4. Verify everything works
 
 ```bash
+# Replace `localhost` with the bind address logged by the server on startup.
+# Default: the host's local IP (e.g. 192.168.1.x), or 127.0.0.1 if local IP
+# detection fails. Set `host = "127.0.0.1"` in config.toml for loopback only.
 curl http://localhost:3030/healthz
 # {"state":"UP"}
 

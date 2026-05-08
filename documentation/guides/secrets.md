@@ -119,9 +119,9 @@ At apply time, Ring decrypts each `secretRef` and injects the plaintext into the
 
 If a referenced secret does not exist in the namespace:
 
-- The deployment is marked `failed`.
-- An `error` event is emitted with the missing secret's name.
-- No container is created.
+- An `error` event is emitted with `reason: SecretResolutionError` and the missing secret's name in the message.
+- The scheduler skips the deployment for the current tick (no container is created).
+- The deployment **stays in its current status** (typically `creating`) — Ring does not auto-fail it. The status only moves on if the secret keeps failing to resolve and another error path (e.g. crashloop) is triggered.
 
 You can troubleshoot with:
 
