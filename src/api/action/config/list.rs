@@ -17,6 +17,8 @@ use url::form_urlencoded::parse;
 pub(crate) struct QueryParameters {
     #[serde(default)]
     namespaces: Vec<String>,
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
@@ -32,16 +34,19 @@ where
         let parsed: Vec<(String, String)> = parse(query.as_bytes()).into_owned().collect();
 
         let mut namespaces = Vec::new();
+        let mut names = Vec::new();
 
         for (key, value) in parsed {
             match key.as_str() {
                 "namespace[]" => namespaces.push(value),
                 "namespace" => namespaces.push(value),
+                "name[]" => names.push(value),
+                "name" => names.push(value),
                 _ => {}
             }
         }
 
-        Ok(QueryParameters { namespaces })
+        Ok(QueryParameters { namespaces, names })
     }
 }
 
@@ -56,6 +61,10 @@ pub(crate) async fn list(
 
     if !query_parameters.namespaces.is_empty() {
         filters.insert(String::from("namespace"), query_parameters.namespaces);
+    }
+
+    if !query_parameters.names.is_empty() {
+        filters.insert(String::from("name"), query_parameters.names);
     }
 
     let list_configs = match ConfigModel::find_all(&pool, filters).await {
@@ -172,5 +181,58 @@ mod tests {
 
         let configs = response.json::<Vec<ConfigOutput>>();
         assert_eq!(0, configs.len()); // Should have no configs
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_name() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?name=app.properties")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(2, configs.len()); // production + staging both have app.properties
+        for config in configs {
+            assert_eq!(config.name, "app.properties");
+        }
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_namespace_and_name() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?namespace=staging&name=app.properties")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(1, configs.len());
+        assert_eq!(configs[0].namespace, "staging");
+        assert_eq!(configs[0].name, "app.properties");
+    }
+
+    #[tokio::test]
+    async fn list_configs_filter_by_nonexistent_name() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .get("/configs?name=nonexistent")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let configs = response.json::<Vec<ConfigOutput>>();
+        assert_eq!(0, configs.len());
     }
 }

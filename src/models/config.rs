@@ -22,7 +22,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Config>, 
     .await
 }
 
-const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace"];
+const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "name"];
 
 pub(crate) async fn find_all(
     pool: &SqlitePool,
