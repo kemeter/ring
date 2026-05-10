@@ -297,6 +297,12 @@ pub(crate) async fn create(
             // - it has health checks configured
             // - --force flag is not set
             let mut rolling_parent_id: Option<String> = None;
+            // Captured to log a `ForceReplace` event on the new deployment once
+            // it exists. We collect the reason here so the caller of the API
+            // gets a clear explanation for why rolling didn't happen, instead
+            // of having to compare timestamps across two deployments.
+            let mut replaced_deployment_ids: Vec<String> = Vec::new();
+            let mut replace_reason: Option<&'static str> = None;
 
             match active_deployments {
                 Ok(deployments_list) => {
@@ -328,9 +334,19 @@ pub(crate) async fn create(
                             );
                             rolling_parent_id = Some(existing.id.clone());
                         } else {
-                            // Immediate replace (force, no health checks, or multiple active)
+                            // Immediate replace. Pick the most specific reason so
+                            // operators can fix the root cause: `force=true` is a
+                            // deliberate caller choice, the others are config gaps.
+                            replace_reason = Some(if params.force {
+                                "force"
+                            } else if !has_health_checks {
+                                "no_health_checks"
+                            } else {
+                                "multiple_active_deployments"
+                            });
                             for mut deployment in deployments_list {
                                 info!("Marking deployment {} as deleted", deployment.id);
+                                replaced_deployment_ids.push(deployment.id.clone());
                                 deployment.status = DeploymentStatus::Deleted;
                                 deployment.updated_at = Some(Utc::now().to_string());
                                 if let Err(e) = deployments::update(&pool, &deployment).await {
@@ -406,6 +422,48 @@ pub(crate) async fn create(
                         Some("DeploymentCreated"),
                     )
                     .await;
+
+                    // When a previous active deployment was wiped instead of
+                    // being kept as a rolling parent, surface the reason as a
+                    // dedicated event. Operators inspecting "why didn't my
+                    // rolling update happen?" find the answer in one place
+                    // (event level: warning so it shows up under
+                    // `--level warning` filters).
+                    if let Some(reason) = replace_reason {
+                        let replaced = if replaced_deployment_ids.len() == 1 {
+                            format!("deployment {}", replaced_deployment_ids[0])
+                        } else {
+                            format!(
+                                "{} deployments ({})",
+                                replaced_deployment_ids.len(),
+                                replaced_deployment_ids.join(", ")
+                            )
+                        };
+                        let message = match reason {
+                            "force" => format!(
+                                "Replaced {} immediately because force=true was set on the request — rolling update skipped",
+                                replaced
+                            ),
+                            "no_health_checks" => format!(
+                                "Replaced {} immediately because no health checks are declared — rolling update requires at least one health check",
+                                replaced
+                            ),
+                            "multiple_active_deployments" => format!(
+                                "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
+                                replaced, deployment.namespace, deployment.name
+                            ),
+                            other => format!("Replaced {} immediately ({})", replaced, other),
+                        };
+                        let _ = deployment_event::log_event(
+                            &pool,
+                            deployment.id.clone(),
+                            "warning",
+                            message,
+                            "api",
+                            Some("ForceReplace"),
+                        )
+                        .await;
+                    }
 
                     let deployment_output = DeploymentOutput::from_to_model(deployment);
                     (StatusCode::CREATED, Json(deployment_output)).into_response()
@@ -1743,6 +1801,28 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
         let parent: serde_json::Value = response.json();
         assert_eq!(parent["status"], "deleted");
+
+        // The new deployment must carry a ForceReplace event explaining why
+        // the parent was wiped instead of kept as a rolling parent.
+        let list_response = server
+            .get("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        let deployments: Vec<serde_json::Value> = list_response.json();
+        let new_deployment = deployments
+            .iter()
+            .find(|d| d["name"] == "force-app" && d["id"].as_str() != Some(&first_id))
+            .expect("new deployment must exist");
+        let new_id = new_deployment["id"].as_str().unwrap();
+        let event: (String, String) = sqlx::query_as(
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'ForceReplace'",
+        )
+        .bind(new_id)
+        .fetch_one(&pool)
+        .await
+        .expect("ForceReplace event must be logged");
+        assert_eq!(event.0, "warning");
+        assert!(event.1.contains("force=true"), "got message: {}", event.1);
     }
 
     #[tokio::test]
@@ -1794,6 +1874,32 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
         let parent: serde_json::Value = response.json();
         assert_eq!(parent["status"], "deleted");
+
+        // The new deployment must carry a ForceReplace event with reason
+        // "no_health_checks" so the operator can fix the config.
+        let list_response = server
+            .get("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        let deployments: Vec<serde_json::Value> = list_response.json();
+        let new_deployment = deployments
+            .iter()
+            .find(|d| d["name"] == "nohc-app" && d["id"].as_str() != Some(&first_id))
+            .expect("new deployment must exist");
+        let new_id = new_deployment["id"].as_str().unwrap();
+        let event: (String, String) = sqlx::query_as(
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'ForceReplace'",
+        )
+        .bind(new_id)
+        .fetch_one(&pool)
+        .await
+        .expect("ForceReplace event must be logged");
+        assert_eq!(event.0, "warning");
+        assert!(
+            event.1.contains("no health checks"),
+            "got message: {}",
+            event.1
+        );
     }
 
     #[tokio::test]

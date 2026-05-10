@@ -91,6 +91,7 @@ The exhaustive list (extracted from the source):
 | `RollingUpdateStep` | `info` | `scheduler` | One instance was swapped during a rolling update |
 | `RollingUpdateComplete` | `info` | `scheduler` | The rolling update finished, parent fully drained |
 | `RollingUpdateFailed` | `error` | `scheduler` | The new manifest never reached healthy — parent left untouched |
+| `ForceReplace` | `warning` | `api` | A `POST /deployments` wiped the previous active deployment(s) instead of running a rolling update — message states the reason (`force=true`, no health checks declared, or multiple active deployments) |
 | `CleanupScheduled` | `info` | `scheduler` | A deleted deployment is queued for cleanup |
 | `ImagePullBackOff` | `error` | `docker` | Docker couldn't pull the image (wrong tag, missing credentials, network) |
 | `InstanceCreationFailed` | `error` | `docker` | Docker rejected the container creation (port conflict, invalid mount, unsupported runtime option) |
