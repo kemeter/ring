@@ -414,7 +414,7 @@ This is the **canonical parity table** between the Docker runtime (the reference
 | Volumes (`bind`, `volume`, `config`) | **Supported** via virtio-fs — see [Volumes](#volumes). Requires `virtiofsd` on the host and `CONFIG_VIRTIO_FS=y` in the guest kernel (every standard cloud image has it). |
 | Port mapping | **Supported** via `socat` userspace forwarders — see [Port mapping](#port-mapping). |
 | Deployment logs (`ring deployment logs`) | **Supported** via the serial console (per-instance file at `<socket_dir>/<instance>.console.log`). See [Logs](#logs). Append-only — no rotation by Ring. |
-| Deployment metrics (`ring deployment metrics`) | Not available — `instances:` array is empty. The trait default returns no stats; Cloud Hypervisor exposes `vm.info` / `vm.counters` but Ring doesn't read them yet. |
+| Deployment metrics (`ring deployment metrics`) | **Partial.** CPU% and memory (`usage_bytes` / `limit_bytes`) are populated by sampling `/proc/<pid>/*` of the cloud-hypervisor process. `network`, `disk_io` and `pids` are reported as zero — full parity with Docker is tracked separately. |
 | Runtime event subscription (OOM, kill, die) | No equivalent — CH has no live event stream; the scheduler reconciles by scanning sockets at each tick. Crash detection is therefore latency-bound by `[scheduler] interval`. |
 | Container DNS aliases between replicas | Not applicable — no shared bridge, no DNS. |
 

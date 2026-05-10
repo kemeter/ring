@@ -322,7 +322,12 @@ Retrieve recent health-check results.
 
 ### `GET /deployments/{id}/metrics`
 
-Live resource usage for a deployment and each of its instances. Only meaningful for the Docker runtime — Cloud Hypervisor returns an empty `instances` list.
+Live resource usage for a deployment and each of its instances.
+
+Coverage by runtime:
+
+- **Docker** — every field populated from the Docker stats endpoint (CPU, memory, network, disk I/O, PIDs).
+- **Cloud Hypervisor** — `cpu_usage_percent` and `memory.usage_bytes` / `memory.limit_bytes` are populated by sampling `/proc/<pid>/stat` and `/proc/<pid>/status` of the cloud-hypervisor process. `network`, `disk_io` and `pids` are reported as zero in this first pass; full parity with Docker is tracked separately.
 
 **Response:**
 
