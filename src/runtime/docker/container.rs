@@ -6,7 +6,7 @@ use bollard::{
     Docker,
     auth::DockerCredentials,
     models::{
-        ContainerCreateBody, EndpointSettings, HostConfig, Mount, MountTypeEnum,
+        ContainerCreateBody, EndpointSettings, HealthConfig, HostConfig, Mount, MountTypeEnum,
         MountVolumeOptions, MountVolumeOptionsDriverConfig, NetworkConnectRequest,
         NetworkCreateRequest, PortBinding,
     },
@@ -44,6 +44,50 @@ fn extract_digest(repo_digests: &Option<Vec<String>>) -> Option<String> {
         .as_ref()?
         .first()
         .and_then(|d| d.split_once('@').map(|(_, digest)| digest.to_string()))
+}
+
+/// Translate the first readiness HC of `type: command` into a Docker
+/// `HEALTHCHECK`, so the proxy (Traefik / Sozune) can gate traffic via the
+/// container's `Status: healthy` flag — without that translation, the proxy
+/// would route to the new container as soon as it is `Running`, which is
+/// before the application is actually ready.
+///
+/// Only `command` is translated: Docker's healthcheck takes a shell command,
+/// it has no native TCP/HTTP probe. A `tcp` or `http` readiness HC is still
+/// honoured by Ring's own scheduler-side gating, but the proxy won't see it.
+/// This is documented as a limitation; users who need proxy-aware TCP/HTTP
+/// readiness can wrap the probe in a shell command (`curl -fsS …`).
+fn build_health_config(
+    health_checks: &[crate::models::health_check::HealthCheck],
+) -> Option<HealthConfig> {
+    let hc = health_checks
+        .iter()
+        .filter(|hc| hc.is_readiness())
+        .find(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }))?;
+
+    let command = match hc {
+        crate::models::health_check::HealthCheck::Command { command, .. } => command.clone(),
+        _ => return None,
+    };
+
+    // Docker expects nanoseconds. Fall back to safe defaults if the user's
+    // duration string is malformed — the Ring scheduler-side gate will still
+    // run with the same values, so a misconfiguration doesn't go unnoticed.
+    let to_nanos = |s: &str| -> i64 {
+        crate::models::health_check::HealthCheck::parse_duration(s)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_nanos()).ok())
+            .unwrap_or(0)
+    };
+
+    Some(HealthConfig {
+        test: Some(vec!["CMD-SHELL".to_string(), command]),
+        interval: Some(to_nanos(hc.interval())),
+        timeout: Some(to_nanos(hc.timeout())),
+        retries: Some(hc.threshold() as i64),
+        start_period: None,
+        start_interval: None,
+    })
 }
 
 async fn pull_image(
@@ -246,6 +290,7 @@ pub(crate) async fn create_container(
         labels: Some(labels),
         host_config: Some(host_config),
         user: user_config,
+        healthcheck: build_health_config(&deployment.health_checks),
         ..Default::default()
     };
 
@@ -607,5 +652,95 @@ mod tests {
     fn test_extract_digest_none_when_no_at_sign() {
         let repo_digests = Some(vec!["nginx:latest".to_string()]);
         assert_eq!(extract_digest(&repo_digests), None);
+    }
+
+    use crate::models::health_check::{FailureAction, HealthCheck};
+
+    #[test]
+    fn build_health_config_returns_none_when_no_readiness_hc() {
+        let hcs = vec![HealthCheck::Command {
+            command: "echo ok".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: false,
+        }];
+        assert!(build_health_config(&hcs).is_none());
+    }
+
+    #[test]
+    fn build_health_config_returns_none_for_tcp_readiness() {
+        // TCP readiness gates Ring scheduling but does not become a Docker
+        // HEALTHCHECK — Docker's healthcheck takes a shell command only.
+        let hcs = vec![HealthCheck::Tcp {
+            port: 80,
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+        }];
+        assert!(build_health_config(&hcs).is_none());
+    }
+
+    #[test]
+    fn build_health_config_returns_none_for_http_readiness() {
+        let hcs = vec![HealthCheck::Http {
+            url: "http://localhost/health".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+        }];
+        assert!(build_health_config(&hcs).is_none());
+    }
+
+    #[test]
+    fn build_health_config_translates_command_readiness() {
+        let hcs = vec![HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+        }];
+        let cfg = build_health_config(&hcs).expect("should translate");
+        assert_eq!(
+            cfg.test,
+            Some(vec![
+                "CMD-SHELL".to_string(),
+                "test -f /var/run/kemeter/ready".to_string(),
+            ])
+        );
+        assert_eq!(cfg.interval, Some(10_000_000_000));
+        assert_eq!(cfg.timeout, Some(5_000_000_000));
+        assert_eq!(cfg.retries, Some(3));
+    }
+
+    #[test]
+    fn build_health_config_picks_first_command_readiness_when_mixed() {
+        let hcs = vec![
+            HealthCheck::Tcp {
+                port: 80,
+                interval: "10s".to_string(),
+                timeout: "5s".to_string(),
+                threshold: 3,
+                on_failure: FailureAction::Alert,
+                readiness: true,
+            },
+            HealthCheck::Command {
+                command: "/usr/local/bin/ready.sh".to_string(),
+                interval: "15s".to_string(),
+                timeout: "3s".to_string(),
+                threshold: 5,
+                on_failure: FailureAction::Alert,
+                readiness: true,
+            },
+        ];
+        let cfg = build_health_config(&hcs).expect("should translate the command HC");
+        assert_eq!(cfg.test.as_ref().unwrap()[1], "/usr/local/bin/ready.sh");
     }
 }

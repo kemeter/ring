@@ -160,7 +160,7 @@ A deployment that has **at least one** health check enables zero-downtime rollin
 1. `ring apply` finds an active deployment with the same `name` + `namespace`.
 2. Ring creates a **child deployment** (carrying `parent_id`) with the new manifest.
 3. The scheduler boots the child's instances. Old containers keep serving traffic.
-4. As soon as a new instance returns `success` on its check, Ring removes one old instance and decrements the parent's instance list.
+4. Once the child's readiness gate opens (see below), Ring removes one old instance and decrements the parent's instance list.
 5. Once the parent has zero instances, it's marked `deleted`.
 
 If the new instances **never** pass their health checks, the parent stays running, the child is marked `failed`, and the rollout halts. Inspect with:
@@ -176,6 +176,50 @@ Rolling updates are skipped (immediate replacement, brief downtime) when:
 - The deployment has **no** health checks declared.
 - `ring apply --force` is set.
 - More than one active deployment shares the `name`+`namespace` (an unusual state — fix the duplicates first).
+
+In each case Ring logs a `ForceReplace` event on the new deployment with the precise reason — `ring deployment events <ID> --level warning` to see it.
+
+### Readiness gate (`readiness: true`)
+
+By default Ring drains the parent as soon as the child container reaches `Running`. That's fast, but it ignores application-level boot time (warmup, migrations, cache priming, etc.). Mark a check as **readiness** to gate the drain on real application readiness:
+
+```yaml
+health_checks:
+  - type: command
+    command: test -f /var/run/kemeter/ready
+    interval: 5s
+    timeout: 2s
+    threshold: 3
+    on_failure: alert
+    readiness: true        # ← drain the parent only after this passes
+```
+
+Behaviour with at least one `readiness: true` check:
+
+- The child must produce **at least one `success` result** for **every** readiness check before the parent is touched.
+- Each readiness check must remain green for at least **10 seconds** (`min_healthy_time`, hardcoded — anti-flap window borrowed from Nomad).
+- Any `failed` or `timeout` on a readiness check resets the gate. The parent stays alive.
+- Non-readiness checks keep their existing role (liveness / restart / alert) and don't influence the gate.
+
+If no check is marked `readiness: true`, the legacy "drain on `Running`" behaviour is preserved — existing manifests are unaffected.
+
+### Proxy integration (Traefik / Sozune)
+
+A `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK` on the container. Proxies that read Docker labels (Traefik, Sozune, …) gate traffic on `Status: healthy` automatically — they won't route to the new container while the readiness command is failing.
+
+```bash
+docker inspect <container> | jq '.[0].Config.Healthcheck'
+docker inspect <container> | jq '.[0].State.Health.Status'   # → starting | healthy | unhealthy
+```
+
+| Check type | Ring scheduler gate (drain) | Docker HEALTHCHECK (proxy gate) |
+|---|---|---|
+| `command` + `readiness: true` | ✅ | ✅ |
+| `tcp` + `readiness: true`     | ✅ | ❌ — Docker has no native TCP probe |
+| `http` + `readiness: true`    | ✅ | ❌ — Docker has no native HTTP probe |
+| any without `readiness: true` | ❌ (legacy drain on Running) | ❌ |
+
+If you need proxy-aware readiness for HTTP, wrap the probe in a shell command that calls `curl -fsS http://localhost:<port>/health` from inside the container, and use `type: command` with `readiness: true`. The image must ship `curl` (or `wget`/`busybox`) for that to work.
 
 See [managing deployments → rolling update](/documentation/getting-started/managing-deployments#rolling-update-zero-downtime) for the operator's perspective.
 
@@ -322,6 +366,40 @@ health_checks:
     threshold: 3
     on_failure: alert
 ```
+
+### Zero-downtime rolling update for a slow-booting service
+
+The app writes `/var/run/kemeter/ready` once it has run its migrations,
+warmed its cache, and is ready to serve traffic. The readiness check both
+gates Ring's drain of the old version *and* tells Traefik (via the Docker
+HEALTHCHECK Ring writes for it) not to route traffic to the new container
+until that file exists.
+
+```yaml
+health_checks:
+  # Liveness — restart on hard listener failure (no readiness flag)
+  - type: tcp
+    port: 8080
+    interval: "5s"
+    timeout: "2s"
+    threshold: 3
+    on_failure: restart
+
+  # Readiness — gates rolling drain AND proxy traffic
+  - type: command
+    command: test -f /var/run/kemeter/ready
+    interval: "5s"
+    timeout: "2s"
+    threshold: 3
+    on_failure: alert
+    readiness: true
+```
+
+Operationally, your application creates the file at the very end of its
+boot sequence (after migrations, after cache warmup, after a self-test).
+Ring's scheduler waits for ≥1 success kept green for 10s before draining
+the old deployment, and Docker's `Status: healthy` flag tells the proxy
+when to start routing traffic to the new container.
 
 ### Stateful service that should be hands-off
 

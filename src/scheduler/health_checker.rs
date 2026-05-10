@@ -343,6 +343,7 @@ mod tests {
                 timeout: "10s".to_string(),
                 threshold: 3,
                 on_failure: FailureAction::Restart,
+                readiness: false,
             }],
         );
 
@@ -372,6 +373,7 @@ mod tests {
                 timeout: "5s".to_string(),
                 threshold: 1,
                 on_failure: FailureAction::Restart,
+                readiness: false,
             }],
         );
 
@@ -406,6 +408,7 @@ mod tests {
                 timeout: "10s".to_string(),
                 threshold: 3,
                 on_failure: FailureAction::Restart,
+                readiness: false,
             }],
         );
 
@@ -434,6 +437,7 @@ mod tests {
                 timeout: "10s".to_string(),
                 threshold: 3,
                 on_failure: FailureAction::Restart,
+                readiness: false,
             }],
         );
 
@@ -462,6 +466,7 @@ mod tests {
                 timeout: "5s".to_string(),
                 threshold: 3,
                 on_failure: FailureAction::Restart,
+                readiness: false,
             }],
         );
 
@@ -501,6 +506,7 @@ mod tests {
                 timeout: "5s".to_string(),
                 threshold: 1,
                 on_failure: FailureAction::Stop,
+                readiness: false,
             }],
         );
 
@@ -531,6 +537,7 @@ mod tests {
                 timeout: "5s".to_string(),
                 threshold: 1,
                 on_failure: FailureAction::Alert,
+                readiness: false,
             }],
         );
 

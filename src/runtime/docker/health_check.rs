@@ -13,8 +13,9 @@
 
 use crate::models::health_check::HealthCheckStatus;
 use bollard::Docker;
-use bollard::exec::{CreateExecOptions, StartExecOptions};
+use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::query_parameters::InspectContainerOptions;
+use futures::StreamExt;
 use std::net::IpAddr;
 
 /// Resolve a Docker container's IP from its network settings.
@@ -51,10 +52,12 @@ pub(crate) async fn container_address(docker: &Docker, container_id: &str) -> Op
     None
 }
 
-/// Run a `command` health-check probe via `docker exec`. Success means the
-/// command was successfully started — Docker's exec API doesn't surface the
-/// exit code synchronously, so a successful start is treated as a healthy
-/// probe (matches the historical behavior of this runtime).
+/// Run a `command` health-check probe via `docker exec` and report the
+/// outcome based on the **exit code**: 0 = `Success`, anything else =
+/// `Failed`. The stream returned by `start_exec` must be drained before
+/// `inspect_exec` will report the final exit code — otherwise the docker
+/// daemon may still show `running: true` and the inspect comes back without
+/// `exit_code`.
 pub(crate) async fn execute_command_check(
     docker: &Docker,
     container_id: &str,
@@ -99,13 +102,38 @@ pub(crate) async fn execute_command_check(
         .start_exec(&exec_result.id, Some(start_exec_options))
         .await
     {
-        Ok(_) => (
-            HealthCheckStatus::Success,
-            Some("Command executed successfully".to_string()),
-        ),
+        Ok(StartExecResults::Attached { mut output, .. }) => {
+            // Drain stdout/stderr — without this the daemon doesn't finalize
+            // the exec and inspect_exec returns exit_code=None.
+            while let Some(_chunk) = output.next().await {}
+        }
+        Ok(StartExecResults::Detached) => {}
+        Err(e) => {
+            return (
+                HealthCheckStatus::Failed,
+                Some(format!("Failed to execute command: {}", e)),
+            );
+        }
+    }
+
+    match docker.inspect_exec(&exec_result.id).await {
+        Ok(inspect) => match inspect.exit_code {
+            Some(0) => (
+                HealthCheckStatus::Success,
+                Some("Command exited 0".to_string()),
+            ),
+            Some(code) => (
+                HealthCheckStatus::Failed,
+                Some(format!("Command exited {}", code)),
+            ),
+            None => (
+                HealthCheckStatus::Failed,
+                Some("Command did not finish in time".to_string()),
+            ),
+        },
         Err(e) => (
             HealthCheckStatus::Failed,
-            Some(format!("Failed to execute command: {}", e)),
+            Some(format!("Failed to inspect exec result: {}", e)),
         ),
     }
 }
