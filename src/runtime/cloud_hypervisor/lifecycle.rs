@@ -931,7 +931,10 @@ impl CloudHypervisorLifecycle {
                         );
                     }
                     other => {
-                        debug!("Job VM {} in unhandled state {}, waiting", instance_id, other);
+                        debug!(
+                            "Job VM {} in unhandled state {}, waiting",
+                            instance_id, other
+                        );
                         deployment.instances = vec![instance_id];
                     }
                 },
