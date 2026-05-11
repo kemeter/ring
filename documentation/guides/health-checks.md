@@ -221,6 +221,12 @@ docker inspect <container> | jq '.[0].State.Health.Status'   # → starting | he
 
 If you need proxy-aware readiness for HTTP, wrap the probe in a shell command that calls `curl -fsS http://localhost:<port>/health` from inside the container, and use `type: command` with `readiness: true`. The image must ship `curl` (or `wget`/`busybox`) for that to work.
 
+#### Cloud Hypervisor
+
+The Ring scheduler-side readiness gate is **runtime-agnostic** — it runs for CH deployments exactly the same way it runs for Docker ones, based on the `health_check` rows the probes write to the database. `tcp`, `http` and `command` (via the in-guest `ring-agent`) readiness checks are all honoured to gate the drain.
+
+There is no CH-side equivalent to the Docker `HEALTHCHECK` translation: VMs don't expose container-style labels, so a proxy can't read readiness from the runtime. Proxy integration for CH-backed deployments is tracked separately — for now, the readiness gate only blocks the rolling update, it doesn't gate proxy traffic on VM workloads.
+
 See [managing deployments → rolling update](/documentation/getting-started/managing-deployments#rolling-update-zero-downtime) for the operator's perspective.
 
 ## Inspecting results
