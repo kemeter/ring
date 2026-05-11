@@ -341,6 +341,19 @@ impl CloudHypervisorLifecycle {
             return Err(RuntimeError::ImageNotFound(deployment.image.clone()));
         }
 
+        // Pre-check every published port before doing any expensive work
+        // (image copy, virtiofsd spawn, VM boot). Mirrors docker compose's
+        // "port is already allocated" rejection: if the host can't bind the
+        // port now, the VM is doomed to be unreachable on it. Failing here
+        // means the scheduler increments restart_count and eventually
+        // surfaces a CrashLoopBackOff with a clear PortAllocationFailed
+        // event in the deployment history.
+        for p in &deployment.ports {
+            if !port_forwarder::host_port_available(p.published) {
+                return Err(RuntimeError::PortAlreadyInUse(p.published));
+            }
+        }
+
         let instance_image = self.instance_image_path(instance_id);
         if !instance_image.exists() {
             let output = Command::new("cp")
@@ -632,20 +645,20 @@ impl CloudHypervisorLifecycle {
         }
 
         // Spawn one socat per declared port now that the guest IP is reachable
-        // (cloud-init has had time to bring eth0 up). We don't fail the boot
-        // if a port can't be forwarded — the VM is up; the caller can see
-        // the missing port in `ring deployment events` if we emit one. For
-        // now a warn! is enough to keep the scheduler from flapping.
+        // (cloud-init has had time to bring eth0 up). The host-port
+        // availability was pre-checked before VM boot, but a race with an
+        // unrelated process binding the port in the meantime is still
+        // possible — in that case we tear the VM down rather than leave it
+        // running with a black-hole port. `forwarders` is a local owned
+        // Vec; on early return its Drop kills any socat we already spawned.
         if let Some(net) = &net_alloc {
             let mut forwarders = Vec::with_capacity(deployment.ports.len());
             for p in &deployment.ports {
                 match port_forwarder::spawn_forwarder(&net.guest_ip, p.published, p.target).await {
                     Ok(fw) => forwarders.push(fw),
                     Err(e) => {
-                        warn!(
-                            "Failed to publish port {}->{}:{} for VM {}: {}",
-                            p.published, net.guest_ip, p.target, instance_id, e
-                        );
+                        self.stop_vm(instance_id).await;
+                        return Err(e);
                     }
                 }
             }
@@ -836,6 +849,10 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                         RuntimeError::ImageNotFound(_) => {
                             (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
                         }
+                        // Port conflict is transient (the port might free up)
+                        // but worth surfacing distinctly so the user can tell
+                        // it apart from a generic VM start failure.
+                        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
                         _ => (None, "VmStartFailed"),
                     };
 

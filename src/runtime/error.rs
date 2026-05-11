@@ -24,6 +24,12 @@ pub enum RuntimeError {
     /// access, transient API socket error). Worth retrying.
     #[error("VM start failed: {0}")]
     VmStartFailed(String),
+    /// A published host port is already bound by another process. Matches
+    /// the Docker daemon's "port is already allocated" rejection: surface the
+    /// conflict to the user immediately instead of booting a VM whose ports
+    /// would silently never be reachable.
+    #[error("port {0} is already allocated")]
+    PortAlreadyInUse(u16),
     #[error("runtime error: {0}")]
     Other(String),
     #[error(transparent)]
