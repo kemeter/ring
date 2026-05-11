@@ -38,7 +38,7 @@ curl -X POST http://localhost:3030/deployments \
 Two runtimes share the same manifest shape, with different trade-offs:
 
 - **Docker** — default. Containers, per-namespace bridge networks, container metrics, all three health-check types (TCP / HTTP / command).
-- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary; TCP and HTTP health checks work, but several Docker features have no VM equivalent (labels, registry credentials, container metrics, inter-VM networking, `command` health checks, `kind: job`).
+- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary; TCP, HTTP and command (via `ring-agent`) health checks all work; `kind: job` is supported but signals success on clean guest shutdown rather than on the workload's exit code (no per-process visibility from the host). Several Docker features still have no VM equivalent (labels, registry credentials, full container metrics, inter-VM networking).
 
 The full per-feature parity matrix is in [Cloud Hypervisor → Current Limitations](/documentation/runtimes/cloud-hypervisor#current-limitations).
 

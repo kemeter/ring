@@ -7,7 +7,7 @@ Ring deployments come in two flavors, set by the `kind` field in the manifest:
 
 Both share the same manifest shape (image, namespace, environment, volumes, resources). The difference is how the scheduler interprets the lifecycle.
 
-> **Runtime parity.** Job lifecycle handling (transitioning to `completed` on exit code 0, `failed` otherwise) is implemented in the Docker runtime. The Cloud Hypervisor runtime does not have a job-mode reconciliation path — a `kind: job` deployment on CH will be treated like a worker (the VM is kept up to `replicas` instances). Run jobs on Docker.
+> **Runtime parity.** On **Docker**, the job transitions to `completed` when the container exits 0 and `failed` when it exits non-zero. On **Cloud Hypervisor**, a clean guest shutdown (e.g. the workload calls `poweroff` or the init system halts the VM) moves the deployment to `completed`; a VM that crashes repeatedly before completing lands in `failed`. CH does not expose the guest's main-process exit code — Ring sees only the VM state — so any clean shutdown counts as success regardless of what the workload returned. If the workload needs the exit code to gate downstream steps, prefer Docker.
 
 ## When to use which
 

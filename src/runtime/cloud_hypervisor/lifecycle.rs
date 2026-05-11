@@ -685,25 +685,78 @@ impl CloudHypervisorLifecycle {
             None => return false,
         };
 
-        if !socket.exists() {
-            debug!("Socket {} does not exist, VM already stopped", socket_str);
-            return true;
+        if socket.exists() {
+            let client = CloudHypervisorClient::new(socket_str);
+
+            if let Err(e) = client.shutdown_vm().await {
+                warn!("Failed to shutdown VM {}: {}", instance_id, e);
+            }
+
+            if let Err(e) = client.delete_vm().await {
+                warn!("Failed to delete VM {}: {}", instance_id, e);
+            }
+
+            if let Err(e) = tokio::fs::remove_file(&socket).await {
+                debug!("Failed to remove socket {}: {}", socket_str, e);
+            }
+        } else {
+            debug!(
+                "Socket {} absent (VM already gone); cleaning artifacts only",
+                socket_str
+            );
         }
 
-        let client = CloudHypervisorClient::new(socket_str);
+        self.cleanup_instance_artifacts(instance_id).await;
 
-        if let Err(e) = client.shutdown_vm().await {
-            warn!("Failed to shutdown VM {}: {}", instance_id, e);
+        info!("Cloud Hypervisor VM {} stopped", instance_id);
+        true
+    }
+
+    /// Remove every on-disk artifact left behind for a deployment that has
+    /// no live VM (per-instance disks, console logs, share dirs, etc.).
+    /// Used when CH exited on its own and we have no specific instance_id
+    /// to target — typical for `kind: job` after the guest powered off.
+    /// The deployment-id prefix narrows the scan so sibling deployments are
+    /// not touched.
+    async fn cleanup_orphaned_artifacts(&self, deployment_id: &str) {
+        let prefix = Self::deployment_prefix(deployment_id);
+        let mut entries = match tokio::fs::read_dir(&self.config.socket_dir).await {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(&prefix) {
+                continue;
+            }
+            // Derive the instance_id by stripping the first suffix
+            // (`.raw`, `.console.log`, `.shares`, `.vsock`, `.sock`, etc.).
+            for suffix in [
+                ".sock",
+                ".raw",
+                ".console.log",
+                ".cidata.iso",
+                ".vsock",
+                ".shares",
+            ] {
+                if let Some(id) = name.strip_suffix(suffix) {
+                    seen_ids.insert(id.to_string());
+                    break;
+                }
+            }
         }
-
-        if let Err(e) = client.delete_vm().await {
-            warn!("Failed to delete VM {}: {}", instance_id, e);
+        for instance_id in seen_ids {
+            self.cleanup_instance_artifacts(&instance_id).await;
         }
+    }
 
-        if let Err(e) = tokio::fs::remove_file(&socket).await {
-            debug!("Failed to remove socket {}: {}", socket_str, e);
-        }
-
+    /// Remove the on-disk and in-memory artifacts associated with a VM
+    /// instance. Idempotent and missing-file-tolerant — runs as part of
+    /// `stop_vm` (after the CH API shutdown) and on its own when CH has
+    /// already exited (e.g. `kind: job` guest powered off and took the
+    /// process down with it).
+    async fn cleanup_instance_artifacts(&self, instance_id: &str) {
         let instance_image = self.instance_image_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&instance_image).await {
             debug!(
@@ -712,9 +765,6 @@ impl CloudHypervisorLifecycle {
             );
         }
 
-        // The cidata ISO is only present when the deployment shipped env vars
-        // or virtio-fs mounts, but unconditional unlink is fine — missing-file
-        // is logged at debug.
         let cidata_iso = self.cidata_iso_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&cidata_iso).await {
             debug!("Failed to remove cidata ISO {:?}: {}", cidata_iso, e);
@@ -725,41 +775,270 @@ impl CloudHypervisorLifecycle {
             debug!("Failed to remove console log {:?}: {}", console_log, e);
         }
 
-        // CH creates the vsock backing socket on `create_vm` and leaves it
-        // behind on `delete`. Best-effort cleanup; absence is fine.
         let vsock_path =
             PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id));
         if let Err(e) = tokio::fs::remove_file(&vsock_path).await {
             debug!("Failed to remove vsock socket {:?}: {}", vsock_path, e);
         }
 
-        // Drop any live virtiofsd processes for this instance. Their `Drop`
-        // sends SIGKILL and unlinks the socket. Doing this *after* the VM is
-        // shut down avoids the kernel logging spurious EIO when the guest
-        // tries to flush a now-disconnected share.
         if let Ok(mut map) = self.virtiofs_mounts.lock() {
             let _ = map.remove(instance_id);
         }
-
-        // Drop port-forwarders for this instance. Their `Drop` sends SIGKILL
-        // to the matching socat processes and frees the listening ports.
         if let Ok(mut map) = self.port_forwarders.lock() {
             let _ = map.remove(instance_id);
         }
-
         if let Ok(mut map) = self.pids.lock() {
             let _ = map.remove(instance_id);
         }
 
-        // The per-instance share staging dir holds rendered config volumes;
-        // remove it whether or not we had any virtio-fs mounts since last run.
         let share_dir = self.instance_share_dir(instance_id);
         if let Err(e) = tokio::fs::remove_dir_all(&share_dir).await {
             debug!("Failed to remove share dir {:?}: {}", share_dir, e);
         }
+    }
 
-        info!("Cloud Hypervisor VM {} stopped", instance_id);
-        true
+    /// Long-running deployment: keep `replicas` instances alive, scale up or
+    /// down to match. Identical to the pre-`kind: job` behaviour.
+    async fn handle_worker_deployment(
+        &self,
+        mut deployment: Deployment,
+        resolved_mounts: Vec<ResolvedMount>,
+    ) -> Deployment {
+        deployment.instances = self
+            .scan_instances(&deployment.id, &["Running", "Created", "Booting"])
+            .await;
+
+        let current_count = deployment.instances.len();
+        let target_count = deployment.replicas as usize;
+
+        if current_count < target_count && deployment.status != DeploymentStatus::CrashLoopBackOff {
+            let instance_id = format!(
+                "ch-{}-{}",
+                &deployment.id[..8.min(deployment.id.len())],
+                crate::runtime::docker::tiny_id()
+            );
+
+            match self
+                .start_vm_process(&instance_id, &deployment, &resolved_mounts)
+                .await
+            {
+                Ok(()) => {
+                    deployment.instances.push(instance_id);
+                    if deployment.status == DeploymentStatus::Creating
+                        || deployment.status == DeploymentStatus::Pending
+                    {
+                        deployment.status = DeploymentStatus::Running;
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to start Cloud Hypervisor VM for deployment {}: {}",
+                        deployment.id, e
+                    );
+
+                    let (status, reason) = classify_vm_start_error(&e);
+
+                    deployment.emit_event(
+                        "error",
+                        format!("{}", e),
+                        "cloud-hypervisor",
+                        Some(reason),
+                    );
+
+                    if let Some(terminal_status) = status {
+                        deployment.status = terminal_status;
+                    } else {
+                        deployment.restart_count += 1;
+                        if deployment.restart_count >= MAX_RESTART_COUNT {
+                            deployment.status = DeploymentStatus::CrashLoopBackOff;
+                        }
+                    }
+                }
+            }
+        } else if current_count > target_count {
+            if let Some(instance_id) = deployment.instances.first().cloned() {
+                if !self.stop_vm(&instance_id).await {
+                    warn!("Failed to stop VM {} during scale down", instance_id);
+                }
+                deployment.instances.remove(0);
+            }
+        }
+
+        deployment
+    }
+
+    /// One-shot deployment: boot exactly one VM, watch its state, and finalize
+    /// as `Completed` once the guest powers off cleanly. `replicas` is
+    /// ignored. Because CH does not surface the guest's main-process exit
+    /// code (the VM runs whatever its image decides), a clean guest shutdown
+    /// is interpreted as success. VM start failures classify the deployment
+    /// as `Failed`/`ImagePullBackOff` directly, identical to worker.
+    async fn handle_job_deployment(
+        &self,
+        mut deployment: Deployment,
+        resolved_mounts: Vec<ResolvedMount>,
+    ) -> Deployment {
+        // Terminal states are sticky: once a job is Completed/Failed we never
+        // reboot it. The scheduler keeps the row around for inspection.
+        if matches!(
+            deployment.status,
+            DeploymentStatus::Completed
+                | DeploymentStatus::Failed
+                | DeploymentStatus::CrashLoopBackOff
+        ) {
+            return deployment;
+        }
+
+        // Scan every instance the deployment ever had, regardless of CH state,
+        // so a `Shutdown` VM (guest powered off but socket still around) does
+        // not look like "no instance, boot a new one".
+        let all_instances = self.scan_instances(&deployment.id, &[]).await;
+
+        if let Some(instance_id) = all_instances.first().cloned() {
+            let socket = self.socket_path(&instance_id);
+            let socket_str = match socket.to_str() {
+                Some(s) => s,
+                None => return deployment,
+            };
+            let client = CloudHypervisorClient::new(socket_str);
+
+            match client.info().await {
+                Ok(info) => match info.state.as_str() {
+                    "Running" | "Created" | "Booting" => {
+                        deployment.instances = vec![instance_id];
+                        if deployment.status == DeploymentStatus::Creating
+                            || deployment.status == DeploymentStatus::Pending
+                        {
+                            deployment.status = DeploymentStatus::Running;
+                        }
+                    }
+                    "Shutdown" => {
+                        // Guest powered off on its own. Approach A: any clean
+                        // shutdown is success — CH does not expose the
+                        // guest's main-process exit code.
+                        info!(
+                            "Job VM {} reached Shutdown state, finalizing as Completed",
+                            instance_id
+                        );
+                        self.stop_vm(&instance_id).await;
+                        deployment.instances.clear();
+                        deployment.status = DeploymentStatus::Completed;
+                        deployment.emit_event(
+                            "info",
+                            format!("Job VM {} completed", instance_id),
+                            "cloud-hypervisor",
+                            Some("JobCompleted"),
+                        );
+                    }
+                    other => {
+                        debug!("Job VM {} in unhandled state {}, waiting", instance_id, other);
+                        deployment.instances = vec![instance_id];
+                    }
+                },
+                Err(_) => {
+                    // Socket present but unresponsive: CH process likely
+                    // crashed mid-flight. Treat the same as worker crash —
+                    // bump restart_count, eventually CrashLoopBackOff.
+                    warn!(
+                        "Job VM {} socket present but info() failed; treating as crashed",
+                        instance_id
+                    );
+                    self.stop_vm(&instance_id).await;
+                    deployment.instances.clear();
+                    deployment.restart_count += 1;
+                    if deployment.restart_count >= MAX_RESTART_COUNT {
+                        deployment.status = DeploymentStatus::Failed;
+                        deployment.emit_event(
+                            "error",
+                            "Job VM repeatedly crashed before completing".to_string(),
+                            "cloud-hypervisor",
+                            Some("JobFailed"),
+                        );
+                    }
+                }
+            }
+        } else if deployment.status == DeploymentStatus::Running {
+            // VM was Running on a previous tick but no instance left on disk:
+            // the guest powered off and CH exited cleanly, taking the socket
+            // and per-instance image down with it. Approach A: a clean exit
+            // is success. Walk the socket_dir for any leftover artifacts
+            // (instance disk, console log, share dir) and unlink them —
+            // `deployment.instances` is rebuilt by the runtime each tick
+            // and is not persisted in the DB, so we cannot rely on it
+            // here.
+            info!(
+                "Job deployment {} has no live VM after Running; finalizing as Completed",
+                deployment.id
+            );
+            self.cleanup_orphaned_artifacts(&deployment.id).await;
+            deployment.instances.clear();
+            deployment.status = DeploymentStatus::Completed;
+            deployment.emit_event(
+                "info",
+                "Job VM exited and CH process terminated; finalized as completed".to_string(),
+                "cloud-hypervisor",
+                Some("JobCompleted"),
+            );
+        } else if matches!(
+            deployment.status,
+            DeploymentStatus::Creating | DeploymentStatus::Pending
+        ) {
+            let instance_id = format!(
+                "ch-{}-{}",
+                &deployment.id[..8.min(deployment.id.len())],
+                crate::runtime::docker::tiny_id()
+            );
+
+            match self
+                .start_vm_process(&instance_id, &deployment, &resolved_mounts)
+                .await
+            {
+                Ok(()) => {
+                    deployment.instances.push(instance_id);
+                    deployment.status = DeploymentStatus::Running;
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to start Cloud Hypervisor job VM for deployment {}: {}",
+                        deployment.id, e
+                    );
+
+                    let (status, reason) = classify_vm_start_error(&e);
+
+                    deployment.emit_event(
+                        "error",
+                        format!("{}", e),
+                        "cloud-hypervisor",
+                        Some(reason),
+                    );
+
+                    if let Some(terminal_status) = status {
+                        deployment.status = terminal_status;
+                    } else {
+                        deployment.restart_count += 1;
+                        if deployment.restart_count >= MAX_RESTART_COUNT {
+                            deployment.status = DeploymentStatus::Failed;
+                        }
+                    }
+                }
+            }
+        }
+
+        deployment
+    }
+}
+
+/// Classify a VM start failure into either a terminal deployment status
+/// (permanent: missing firmware/image) or `None` for transient errors that
+/// should bump `restart_count` and let the scheduler retry.
+fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'static str) {
+    match e {
+        RuntimeError::FirmwareNotFound(_) => (Some(DeploymentStatus::Failed), "FirmwareNotFound"),
+        RuntimeError::ImageNotFound(_) => {
+            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
+        }
+        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
+        _ => (None, "VmStartFailed"),
     }
 }
 
@@ -803,88 +1082,13 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             return deployment;
         }
 
-        // Refresh instances from disk
-        deployment.instances = self
-            .scan_instances(&deployment.id, &["Running", "Created", "Booting"])
-            .await;
-
-        let current_count = deployment.instances.len();
-        let target_count = deployment.replicas as usize;
-
-        if current_count < target_count && deployment.status != DeploymentStatus::CrashLoopBackOff {
-            let instance_id = format!(
-                "ch-{}-{}",
-                &deployment.id[..8.min(deployment.id.len())],
-                crate::runtime::docker::tiny_id()
-            );
-
-            match self
-                .start_vm_process(&instance_id, &deployment, &resolved_mounts)
+        if deployment.kind == "job" {
+            self.handle_job_deployment(deployment, resolved_mounts)
                 .await
-            {
-                Ok(()) => {
-                    deployment.instances.push(instance_id);
-                    if deployment.status == DeploymentStatus::Creating
-                        || deployment.status == DeploymentStatus::Pending
-                    {
-                        deployment.status = DeploymentStatus::Running;
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to start Cloud Hypervisor VM for deployment {}: {}",
-                        deployment.id, e
-                    );
-
-                    // Classify the failure: permanent errors (missing
-                    // firmware/image) move the deployment to a terminal state
-                    // immediately so the scheduler stops looping. Transient
-                    // errors (process spawn, socket, API) increment
-                    // restart_count and let the scheduler retry, capping at
-                    // MAX_RESTART_COUNT to land in CrashLoopBackOff.
-                    let (status, reason) = match &e {
-                        RuntimeError::FirmwareNotFound(_) => {
-                            (Some(DeploymentStatus::Failed), "FirmwareNotFound")
-                        }
-                        RuntimeError::ImageNotFound(_) => {
-                            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
-                        }
-                        // Port conflict is transient (the port might free up)
-                        // but worth surfacing distinctly so the user can tell
-                        // it apart from a generic VM start failure.
-                        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
-                        _ => (None, "VmStartFailed"),
-                    };
-
-                    deployment.emit_event(
-                        "error",
-                        format!("{}", e),
-                        "cloud-hypervisor",
-                        Some(reason),
-                    );
-
-                    if let Some(terminal_status) = status {
-                        deployment.status = terminal_status;
-                    } else {
-                        deployment.restart_count += 1;
-                        if deployment.restart_count >= MAX_RESTART_COUNT {
-                            deployment.status = DeploymentStatus::CrashLoopBackOff;
-                        }
-                        // The scheduler observes the bumped restart_count and
-                        // arms the backoff window for the next cycle.
-                    }
-                }
-            }
-        } else if current_count > target_count {
-            if let Some(instance_id) = deployment.instances.first().cloned() {
-                if !self.stop_vm(&instance_id).await {
-                    warn!("Failed to stop VM {} during scale down", instance_id);
-                }
-                deployment.instances.remove(0);
-            }
+        } else {
+            self.handle_worker_deployment(deployment, resolved_mounts)
+                .await
         }
-
-        deployment
     }
 
     async fn list_instances(&self, deployment_id: String, _status: &str) -> Vec<String> {
@@ -1325,6 +1529,83 @@ mod tests {
 
         drop(live);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn job_deployment(status: DeploymentStatus) -> Deployment {
+        Deployment {
+            id: "job1234-5678".to_string(),
+            created_at: String::new(),
+            updated_at: None,
+            status,
+            restart_count: 0,
+            namespace: "default".to_string(),
+            name: "job".to_string(),
+            image: "/tmp/does-not-exist.img".to_string(),
+            config: None,
+            runtime: "cloud-hypervisor".to_string(),
+            kind: "job".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: std::collections::HashMap::new(),
+            environment: std::collections::HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn job_terminal_status_is_sticky_completed() {
+        let (lc, dir) = lifecycle_with_socket_dir();
+        let dep = job_deployment(DeploymentStatus::Completed);
+        let out = lc.handle_job_deployment(dep, vec![]).await;
+        assert_eq!(out.status, DeploymentStatus::Completed);
+        assert!(out.instances.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn job_terminal_status_is_sticky_failed() {
+        let (lc, dir) = lifecycle_with_socket_dir();
+        let dep = job_deployment(DeploymentStatus::Failed);
+        let out = lc.handle_job_deployment(dep, vec![]).await;
+        assert_eq!(out.status, DeploymentStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn job_missing_firmware_classifies_as_failed() {
+        // No firmware on disk → FirmwareNotFound is terminal, the job should
+        // land in Failed without burning restart_count cycles.
+        let (lc, dir) = lifecycle_with_socket_dir();
+        let dep = job_deployment(DeploymentStatus::Creating);
+        let out = lc.handle_job_deployment(dep, vec![]).await;
+        assert_eq!(out.status, DeploymentStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn classify_vm_start_error_terminal_vs_transient() {
+        let (s, r) = classify_vm_start_error(&RuntimeError::FirmwareNotFound("/x".into()));
+        assert_eq!(s, Some(DeploymentStatus::Failed));
+        assert_eq!(r, "FirmwareNotFound");
+
+        let (s, r) = classify_vm_start_error(&RuntimeError::ImageNotFound("img".into()));
+        assert_eq!(s, Some(DeploymentStatus::ImagePullBackOff));
+        assert_eq!(r, "ImageNotFound");
+
+        let (s, r) = classify_vm_start_error(&RuntimeError::PortAlreadyInUse(8080));
+        assert_eq!(s, None);
+        assert_eq!(r, "PortAllocationFailed");
+
+        let (s, r) = classify_vm_start_error(&RuntimeError::Other("boom".into()));
+        assert_eq!(s, None);
+        assert_eq!(r, "VmStartFailed");
     }
 
     #[tokio::test]

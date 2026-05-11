@@ -53,7 +53,7 @@ A map of deployment declarations. The map key is internal — Ring keys the depl
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). Job lifecycle is Docker-only — CH treats every deployment as a worker. See [jobs and workers](/documentation/guides/jobs-and-workers). |
+| `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [jobs and workers](/documentation/guides/jobs-and-workers). |
 | `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only** — rejected at the API on the CH runtime. |
 | `environment` | map | `{}` | Environment variables — plain values or `secretRef` references. See [environment](#environment). |

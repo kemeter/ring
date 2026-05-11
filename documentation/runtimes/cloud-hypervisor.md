@@ -428,7 +428,7 @@ This is the **canonical parity table** between the Docker runtime (the reference
 | `resources.requests.*` | Silently ignored. |
 | `config.image_pull_policy` / `config.server` / `config.username` / `config.password` | Silently ignored — there is no image to pull, the disk image is local. |
 | `config.user` (privileged / id / group) | Silently ignored. |
-| `kind: job` | Untested — the job lifecycle (`completed` / `failed` on exit) lives in the Docker runtime path only; CH treats every deployment as a worker (just keeps `replicas` instances alive). |
+| `kind: job` | **Supported, with a coarser success signal.** A job VM is booted once (replicas is ignored). When the guest powers off cleanly, the deployment moves to `completed`. CH does not expose the guest's main-process exit code — Ring only sees the VM state — so any clean guest shutdown is treated as success. A VM start failure (missing firmware/image, repeated crashes) lands the job in `failed`. Use a worker for long-running services. |
 | Inter-VM networking | Each VM is isolated — no shared bridge network across replicas or sibling deployments. Cross-VM traffic must go through host-published ports. |
 | Environment variables | **Supported** via cloud-init (NoCloud) — see [Environment variables](#environment-variables). Requires `xorriso` on the host and a guest image with cloud-init. |
 | Volumes (`bind`, `volume`, `config`) | **Supported** via virtio-fs — see [Volumes](#volumes). Requires `virtiofsd` on the host and `CONFIG_VIRTIO_FS=y` in the guest kernel (every standard cloud image has it). |
