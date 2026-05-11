@@ -223,6 +223,17 @@ The probe runs from the host against the VM's guest IP, derived deterministicall
 
 For probe semantics (TCP success criteria, HTTP redirect handling, threshold counting, failure actions) the CH runtime behaves exactly like the Docker runtime — see the [health checks guide](/documentation/guides/health-checks) for the full spec.
 
+### Readiness gate
+
+Marking a check `readiness: true` works on CH just like on Docker — the scheduler-side gate (`is_ready_to_drain`) reads `health_check` rows regardless of runtime, so it holds the rolling update until every readiness check has been green for the anti-flap window (10 s). All three probe types are eligible:
+
+- `tcp` and `http`: probed from the host against the guest IP, no agent required.
+- `command`: probed through the in-guest `ring-agent` over AF_VSOCK — the agent must be installed in the guest image (see [Prerequisites](#prerequisites)), and the probe reads the real exit code (0 = success).
+
+Unlike the Docker runtime, **there is no CH equivalent of the native `HEALTHCHECK` translation**. A `command` readiness probe gates the rolling update but is not exposed to external proxies — VMs have no Docker-style label channel for that. Proxy integration for CH-backed deployments is an open design question (track via Sozune's `ring-provider-readiness-strategy` issue).
+
+See the [readiness gate section](/documentation/guides/health-checks#readiness-gate-readiness-true) of the health checks guide for the full semantic spec.
+
 ## Environment variables
 
 Declared `environment:` entries are delivered to the guest VM via the cloud-init NoCloud datasource — Ring builds a small read-only ISO (`<instance>.cidata.iso`) carrying a `user-data` payload and attaches it as a second drive. At boot, cloud-init (preinstalled on every standard cloud image) writes them to:
