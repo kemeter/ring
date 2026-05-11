@@ -68,6 +68,19 @@ pub struct CloudHypervisorLifecycle {
     /// Live socat port-forwarders, keyed by VM instance id. Same lifetime
     /// rules as `virtiofs_mounts`: dropping the entry kills the socat.
     port_forwarders: Mutex<HashMap<String, Vec<PortForwarder>>>,
+    /// PID + memory limit (bytes) per instance. PID is captured at spawn so
+    /// stats lookups can read /proc/<pid>/* without shelling out to pgrep;
+    /// the memory limit is what we passed to CH at boot so stats can report
+    /// `usage_percent` without a second round-trip to the CH API socket.
+    /// Removed on stop. Absence means the VM is gone (or was never tracked
+    /// by this process — e.g. inherited across a ring-server restart).
+    pids: Mutex<HashMap<String, InstanceProcessInfo>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InstanceProcessInfo {
+    pub pid: u32,
+    pub memory_limit_bytes: u64,
 }
 
 impl CloudHypervisorLifecycle {
@@ -76,6 +89,7 @@ impl CloudHypervisorLifecycle {
             config,
             virtiofs_mounts: Mutex::new(HashMap::new()),
             port_forwarders: Mutex::new(HashMap::new()),
+            pids: Mutex::new(HashMap::new()),
         }
     }
 
@@ -120,6 +134,10 @@ impl CloudHypervisorLifecycle {
 
     fn deployment_prefix(deployment_id: &str) -> String {
         format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())])
+    }
+
+    fn process_info(&self, instance_id: &str) -> Option<InstanceProcessInfo> {
+        self.pids.lock().ok()?.get(instance_id).copied()
     }
 
     /// Scan sockets directory for instances belonging to a deployment.
@@ -362,6 +380,18 @@ impl CloudHypervisorLifecycle {
             .map_err(|e| {
                 RuntimeError::VmStartFailed(format!("Failed to start cloud-hypervisor: {}", e))
             })?;
+
+        if let Some(pid) = child.id()
+            && let Ok(mut map) = self.pids.lock()
+        {
+            map.insert(
+                instance_id.to_string(),
+                InstanceProcessInfo {
+                    pid,
+                    memory_limit_bytes: (memory_mb as u64).saturating_mul(1024 * 1024),
+                },
+            );
+        }
 
         let stderr = child.stderr.take();
 
@@ -704,6 +734,10 @@ impl CloudHypervisorLifecycle {
             let _ = map.remove(instance_id);
         }
 
+        if let Ok(mut map) = self.pids.lock() {
+            let _ = map.remove(instance_id);
+        }
+
         // The per-instance share staging dir holds rendered config volumes;
         // remove it whether or not we had any virtio-fs mounts since last run.
         let share_dir = self.instance_share_dir(instance_id);
@@ -982,6 +1016,67 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 Some(format!("vsock probe failed: {}", e)),
             ),
         }
+    }
+
+    /// Fan out `read_instance_stats` over each running VM of the deployment.
+    /// CPU% requires two samples spaced apart; we sleep a short interval
+    /// between reads, so this call blocks for ~`SAMPLE_INTERVAL_MS`. Docker's
+    /// `stats` API has the same shape (one-shot still costs a sampling
+    /// round-trip), so this is consistent with what the operator already
+    /// experiences on the Docker runtime.
+    async fn get_instance_stats(
+        &self,
+        deployment_id: &str,
+    ) -> Vec<crate::api::dto::stats::InstanceStatsOutput> {
+        let instances = self.scan_instances(deployment_id, &["Running"]).await;
+        let mut out = Vec::with_capacity(instances.len());
+        for instance_id in instances {
+            if let Some(stats) = self.read_instance_stats(&instance_id).await {
+                out.push(stats);
+            }
+        }
+        out
+    }
+}
+
+/// Sampling window for CPU%: long enough for ticks to accumulate on an idle
+/// VM, short enough that an HTTP `metrics` call doesn't feel laggy. Docker's
+/// stream emits a frame about every second, so we mirror that.
+const CPU_SAMPLE_INTERVAL_MS: u64 = 500;
+
+impl CloudHypervisorLifecycle {
+    /// Sample CPU twice with a short delay, read RSS once, and assemble the
+    /// `InstanceStatsOutput`. Returns `None` if the process tracking entry
+    /// is gone (VM stopped, or this server didn't spawn the VM and so has no
+    /// PID for it — typical after a ring-server restart).
+    async fn read_instance_stats(
+        &self,
+        instance_id: &str,
+    ) -> Option<crate::api::dto::stats::InstanceStatsOutput> {
+        let info = self.process_info(instance_id)?;
+
+        let prev = super::stats::read_cpu_sample(info.pid).await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(CPU_SAMPLE_INTERVAL_MS)).await;
+        let curr = super::stats::read_cpu_sample(info.pid).await?;
+
+        let interval_secs = CPU_SAMPLE_INTERVAL_MS as f64 / 1000.0;
+        // SC_CLK_TCK is fixed at compile time on Linux (typically 100). Reading
+        // it via libc would force a sysconf dependency; the constant is stable.
+        let cpu_usage_percent = super::stats::compute_cpu_percent(prev, curr, interval_secs, 100.0);
+
+        let rss = super::stats::read_rss_bytes(info.pid).await;
+        let memory = super::stats::memory_stats(rss, info.memory_limit_bytes);
+
+        Some(crate::api::dto::stats::InstanceStatsOutput {
+            instance_id: instance_id.to_string(),
+            instance_name: instance_id.to_string(),
+            cpu_usage_percent,
+            memory,
+            network: super::stats::empty_network(),
+            disk_io: super::stats::empty_disk_io(),
+            pids: super::stats::empty_pids(),
+            restart_count: 0,
+        })
     }
 }
 

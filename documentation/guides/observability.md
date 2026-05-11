@@ -9,7 +9,7 @@ Ring exposes four distinct streams of operational data:
 | **Logs** | Container stdout/stderr (Docker) or serial console (Cloud Hypervisor) | Application-level debugging |
 | **Events** | Ring scheduler decisions and health-check actions | Why did Ring (re)start / fail / kill an instance? |
 | **Health checks** | TCP / HTTP / command probes | Is the service inside a container actually working? |
-| **Metrics** | Docker stats endpoint, polled live | CPU / memory / network / disk per instance |
+| **Metrics** | Docker stats endpoint or `/proc/<pid>/*` for Cloud Hypervisor, polled live | CPU / memory per instance (Docker also: network / disk / PIDs) |
 
 Every CLI command listed below is a thin wrapper over the REST API — see the [API reference](/documentation/reference/api) for the raw endpoints.
 
@@ -137,7 +137,7 @@ ring deployment health-checks <DEPLOYMENT_ID> -o json \
 
 ## Metrics
 
-Live resource usage per deployment, polled from the Docker stats endpoint at request time.
+Live resource usage per deployment, polled at request time. Docker reads from the daemon's stats endpoint; Cloud Hypervisor samples `/proc/<pid>/stat` and `/proc/<pid>/status` of the VMM process.
 
 ```bash
 ring deployment metrics <DEPLOYMENT_ID>
@@ -173,7 +173,7 @@ Output (JSON via `-o json`):
 
 ### Limits
 
-- **Docker only.** The Cloud Hypervisor runtime returns an empty `instances` list — there is no `cgroup`-equivalent stats endpoint plumbed for VMs yet.
+- **Cloud Hypervisor partial.** CPU% and memory (`usage_bytes`, `limit_bytes`) are populated from the VMM process; `network`, `disk_io` and `pids` are reported as zero pending host-side counter wiring. Docker reports all five.
 - **Snapshot, not history.** Each call returns the current sample. Ring does not store a metrics time-series. For trends, scrape `/deployments/{id}/metrics` periodically into Prometheus, InfluxDB, or a flat file.
 - **No Prometheus exporter.** There is no `/metrics` endpoint exposing the host's deployments in OpenMetrics format. Scrape per-deployment with a small adapter.
 
