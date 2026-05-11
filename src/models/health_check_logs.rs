@@ -75,6 +75,58 @@ pub(crate) async fn find_latest_by_deployment(
     .await
 }
 
+/// Per-check_type entry returned by `find_ready_since_by_deployment`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub(crate) struct ReadySinceRecord {
+    pub(crate) check_type: String,
+    pub(crate) ready_since: String,
+}
+
+/// For each `check_type`, return the timestamp of the **first** success since
+/// the last non-success result (or the first success ever if there was no
+/// failure). Used by the readiness gate to compute the anti-flap window
+/// against a stable point in time rather than the most recent success
+/// (which would slide forward at every probe and never let the window
+/// elapse). Check types whose most recent result is not Success are
+/// excluded — caller must treat a missing row as "failing or no result".
+pub(crate) async fn find_ready_since_by_deployment(
+    pool: &SqlitePool,
+    deployment_id: String,
+) -> Result<Vec<ReadySinceRecord>, sqlx::Error> {
+    sqlx::query_as::<_, ReadySinceRecord>(
+        "WITH last_failure AS (
+            SELECT check_type, MAX(finished_at) AS finished_at
+            FROM health_check
+            WHERE deployment_id = ? AND status != 'success'
+            GROUP BY check_type
+        ),
+        latest AS (
+            SELECT hc.check_type, hc.status
+            FROM health_check hc
+            INNER JOIN (
+                SELECT check_type, MAX(finished_at) AS max_f
+                FROM health_check WHERE deployment_id = ?
+                GROUP BY check_type
+            ) m ON hc.check_type = m.check_type AND hc.finished_at = m.max_f
+            WHERE hc.deployment_id = ?
+        )
+        SELECT hc.check_type, MIN(hc.finished_at) AS ready_since
+        FROM health_check hc
+        INNER JOIN latest ON latest.check_type = hc.check_type AND latest.status = 'success'
+        LEFT JOIN last_failure lf ON lf.check_type = hc.check_type
+        WHERE hc.deployment_id = ?
+          AND hc.status = 'success'
+          AND (lf.finished_at IS NULL OR hc.finished_at > lf.finished_at)
+        GROUP BY hc.check_type",
+    )
+    .bind(&deployment_id)
+    .bind(&deployment_id)
+    .bind(&deployment_id)
+    .bind(&deployment_id)
+    .fetch_all(pool)
+    .await
+}
+
 pub(crate) async fn delete_by_deployment_id(
     pool: &SqlitePool,
     deployment_id: &str,

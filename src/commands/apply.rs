@@ -114,6 +114,8 @@ enum HealthCheck {
         #[serde(default = "default_hc_threshold")]
         threshold: u32,
         on_failure: FailureAction,
+        #[serde(default)]
+        readiness: bool,
     },
     Http {
         url: String,
@@ -122,6 +124,8 @@ enum HealthCheck {
         #[serde(default = "default_hc_threshold")]
         threshold: u32,
         on_failure: FailureAction,
+        #[serde(default)]
+        readiness: bool,
     },
     Command {
         command: String,
@@ -130,6 +134,8 @@ enum HealthCheck {
         #[serde(default = "default_hc_threshold")]
         threshold: u32,
         on_failure: FailureAction,
+        #[serde(default)]
+        readiness: bool,
     },
 }
 

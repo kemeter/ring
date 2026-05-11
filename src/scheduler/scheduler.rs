@@ -266,6 +266,140 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
     }
 }
 
+/// Anti-flap window: how long all readiness HCs must have been green
+/// before the rolling update is allowed to drain a parent instance.
+/// Mirrors Nomad's `min_healthy_time` default (10s). Hardcoded for now —
+/// expose as a per-deployment field if operators ever need to tune it.
+const MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
+
+/// True when the child either has no readiness HC at all (legacy behaviour)
+/// or all of its readiness HCs have been green for `MIN_HEALTHY_TIME`.
+async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
+    use crate::models::health_check::{ReadinessDecision, evaluate_readiness};
+
+    let expected = child
+        .health_checks
+        .iter()
+        .filter(|hc| hc.is_readiness())
+        .count();
+
+    if expected == 0 {
+        // No readiness HC declared — legacy "drain on Running" semantics.
+        return true;
+    }
+
+    // We need two things per check_type: (1) the latest status, to detect
+    // Failing / PendingNoResult; (2) the **ready-since** timestamp, i.e. the
+    // first success after the last non-success — anchoring the anti-flap
+    // window to a stable point so the gate actually elapses instead of
+    // being re-armed by every new success.
+    let latest = match health_check_logs::find_latest_by_deployment(pool, child.id.clone()).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            warn!(
+                "Failed to load readiness check results for deployment {}: {} — holding rollout",
+                child.id, e
+            );
+            return false;
+        }
+    };
+    let ready_since =
+        match health_check_logs::find_ready_since_by_deployment(pool, child.id.clone()).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!(
+                    "Failed to load ready-since timestamps for deployment {}: {} — holding rollout",
+                    child.id, e
+                );
+                return false;
+            }
+        };
+
+    // Restrict to the check_types that are marked readiness in the manifest.
+    let readiness_types: std::collections::HashSet<&str> = child
+        .health_checks
+        .iter()
+        .filter(|hc| hc.is_readiness())
+        .map(|hc| hc.check_type())
+        .collect();
+
+    let ready_since_by_type: std::collections::HashMap<&str, chrono::DateTime<chrono::Utc>> =
+        ready_since
+            .iter()
+            .filter_map(|r| {
+                chrono::DateTime::parse_from_rfc3339(&r.ready_since)
+                    .ok()
+                    .map(|t| (r.check_type.as_str(), t.with_timezone(&chrono::Utc)))
+            })
+            .collect();
+
+    // We currently identify a HC by its `check_type`. That works as long as
+    // a deployment doesn't declare two HCs of the same type (e.g. two
+    // separate http probes) — the storage layer aggregates results by
+    // check_type, so distinguishing two http checks would need a richer
+    // identifier. Document the limitation; revisit if a real use case lands.
+    let mut filtered: Vec<(
+        crate::models::health_check::HealthCheckStatus,
+        chrono::DateTime<chrono::Utc>,
+    )> = Vec::new();
+    for record in &latest {
+        if !readiness_types.contains(record.check_type.as_str()) {
+            continue;
+        }
+        let status = match record.status.as_str() {
+            "success" => crate::models::health_check::HealthCheckStatus::Success,
+            "timeout" => crate::models::health_check::HealthCheckStatus::Timeout,
+            _ => crate::models::health_check::HealthCheckStatus::Failed,
+        };
+        // For success, anchor the timestamp to ready_since (stable). For
+        // non-success, the timestamp is irrelevant — evaluate_readiness will
+        // short-circuit to Failing.
+        let anchor = if matches!(
+            status,
+            crate::models::health_check::HealthCheckStatus::Success
+        ) {
+            match ready_since_by_type.get(record.check_type.as_str()) {
+                Some(t) => *t,
+                None => continue,
+            }
+        } else {
+            match chrono::DateTime::parse_from_rfc3339(&record.finished_at) {
+                Ok(t) => t.with_timezone(&chrono::Utc),
+                Err(_) => continue,
+            }
+        };
+        filtered.push((status, anchor));
+    }
+
+    let decision = evaluate_readiness(expected, &filtered, chrono::Utc::now(), MIN_HEALTHY_TIME);
+
+    match decision {
+        ReadinessDecision::Ready => true,
+        ReadinessDecision::NotConfigured => true, // expected == 0 case, defensive.
+        ReadinessDecision::PendingNoResult => {
+            debug!(
+                "Rolling update on hold for {}: still waiting for first readiness check result",
+                child.id
+            );
+            false
+        }
+        ReadinessDecision::PendingMinHealthyTime { remaining } => {
+            debug!(
+                "Rolling update on hold for {}: readiness green but need {:?} more in the anti-flap window",
+                child.id, remaining
+            );
+            false
+        }
+        ReadinessDecision::Failing => {
+            debug!(
+                "Rolling update on hold for {}: at least one readiness check is failing",
+                child.id
+            );
+            false
+        }
+    }
+}
+
 /// Handle rolling update coordination for deployments that have a `parent_id`.
 ///
 /// Called after `apply_runtime` + `run_health_checks` for each child deployment.
@@ -309,6 +443,15 @@ async fn handle_rolling_update(
         return;
     }
 
+    // Readiness gate. If the child declares any HC with `readiness: true`,
+    // we hold off on draining the parent until those checks have been
+    // green for at least `min_healthy_time`. Deployments without any
+    // readiness HC keep the legacy behaviour (drain on `Running`) so this
+    // change is fully opt-in for existing manifests.
+    if !is_ready_to_drain(pool, child).await {
+        return;
+    }
+
     // Load the parent deployment.
     let mut parent = match deployments::find(pool, &parent_id).await {
         Ok(Some(d)) => d,
@@ -330,38 +473,9 @@ async fn handle_rolling_update(
     // Refresh parent's live instance list.
     parent.instances = runtime.list_instances(parent.id.clone(), "active").await;
 
-    if parent.instances.is_empty() {
-        // All parent instances are gone — finalize the rollout.
-        info!(
-            "Rolling update complete: parent {} has 0 instances, marking as deleted",
-            parent.id
-        );
-        parent.status = DeploymentStatus::Deleted;
-        if let Err(e) = deployments::update(pool, &parent).await {
-            error!("Failed to mark parent {} as deleted: {}", parent.id, e);
-        }
-        // Parent will be cleaned up in the next cleanup_deleted pass — add it to the list.
-        deleted.push(parent.id.clone());
-
-        child.parent_id = None;
-
-        if let Err(e) = deployment_event::log_event(
-            pool,
-            child.id.clone(),
-            "info",
-            format!(
-                "Rolling update complete: replaced parent deployment {}",
-                parent_id
-            ),
-            "scheduler",
-            Some("RollingUpdateComplete"),
-        )
-        .await
-        {
-            warn!("Failed to log rolling update complete event: {}", e);
-        }
-    } else {
-        // Remove one instance from the parent — one step per scheduler cycle.
+    // Drain one instance per cycle if the parent still has some. If the
+    // remove fails, bail — the next cycle will retry.
+    if !parent.instances.is_empty() {
         let instance_id = parent.instances[0].clone();
         if runtime.remove_instance(instance_id.clone()).await {
             parent.instances.remove(0);
@@ -395,6 +509,40 @@ async fn handle_rolling_update(
         .await
         {
             warn!("Failed to log rolling update step event: {}", e);
+        }
+    }
+
+    // Finalize in the same cycle the last instance was drained: otherwise
+    // the parent's `apply_runtime` on the next cycle would see replicas=1
+    // vs instances=0 and respawn a fresh container, sending us into a
+    // spawn/kill loop that never lets the rollout converge.
+    if parent.instances.is_empty() {
+        info!(
+            "Rolling update complete: parent {} has 0 instances, marking as deleted",
+            parent.id
+        );
+        parent.status = DeploymentStatus::Deleted;
+        if let Err(e) = deployments::update(pool, &parent).await {
+            error!("Failed to mark parent {} as deleted: {}", parent.id, e);
+        }
+        deleted.push(parent.id.clone());
+
+        child.parent_id = None;
+
+        if let Err(e) = deployment_event::log_event(
+            pool,
+            child.id.clone(),
+            "info",
+            format!(
+                "Rolling update complete: replaced parent deployment {}",
+                parent_id
+            ),
+            "scheduler",
+            Some("RollingUpdateComplete"),
+        )
+        .await
+        {
+            warn!("Failed to log rolling update complete event: {}", e);
         }
     }
 }
@@ -735,5 +883,197 @@ pub(crate) async fn schedule(
             duration.as_secs()
         );
         sleep(duration).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::health_check::{FailureAction, HealthCheck};
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn new_test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("Could not create test database pool");
+
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("Could not execute database migrations");
+
+        pool
+    }
+
+    fn child_with_health_checks(id: &str, hcs: Vec<HealthCheck>) -> Deployment {
+        Deployment {
+            id: id.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: None,
+            status: DeploymentStatus::Running,
+            restart_count: 0,
+            namespace: "test".to_string(),
+            name: "child".to_string(),
+            image: "nginx:alpine".to_string(),
+            config: None,
+            runtime: "docker".to_string(),
+            kind: "worker".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec!["instance-1".to_string()],
+            labels: HashMap::new(),
+            environment: HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: hcs,
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: Some("parent-id".to_string()),
+        }
+    }
+
+    /// Insert a health_check row directly so the gate has something to read.
+    /// `seconds_ago` is the offset from now() applied to all timestamps —
+    /// makes the anti-flap window deterministic without sleeping.
+    async fn insert_hc_result(
+        pool: &SqlitePool,
+        deployment_id: &str,
+        check_type: &str,
+        status: &str,
+        seconds_ago: i64,
+    ) {
+        let ts = (chrono::Utc::now() - chrono::Duration::seconds(seconds_ago)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO health_check (id, deployment_id, check_type, status, message, created_at, started_at, finished_at)
+             VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(deployment_id)
+        .bind(check_type)
+        .bind(status)
+        .bind(&ts)
+        .bind(&ts)
+        .bind(&ts)
+        .execute(pool)
+        .await
+        .expect("insert HC result");
+    }
+
+    fn readiness_command(name: &str) -> HealthCheck {
+        let _ = name;
+        HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+        }
+    }
+
+    fn readiness_tcp() -> HealthCheck {
+        HealthCheck::Tcp {
+            port: 80,
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+        }
+    }
+
+    fn liveness_command() -> HealthCheck {
+        HealthCheck::Command {
+            command: "true".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_allowed_when_no_readiness_hc() {
+        // Backward compat: deployments without any readiness HC keep the
+        // legacy "drain on Running" behaviour.
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks("child-1", vec![liveness_command()]);
+        assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_blocked_when_readiness_has_no_result_yet() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks("child-2", vec![readiness_command("ready")]);
+        // No insert into health_check — no result has been recorded yet.
+        assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_blocked_when_readiness_too_recent() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks("child-3", vec![readiness_command("ready")]);
+        // Success 5s ago, MIN_HEALTHY_TIME is 10s → not enough.
+        insert_hc_result(&pool, "child-3", "command", "success", 5).await;
+        assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_allowed_when_readiness_old_enough() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks("child-4", vec![readiness_command("ready")]);
+        // Success 30s ago — well past MIN_HEALTHY_TIME.
+        insert_hc_result(&pool, "child-4", "command", "success", 30).await;
+        assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_blocked_when_latest_readiness_failed() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks("child-5", vec![readiness_command("ready")]);
+        // An old success and a recent failure — gate must read the latest only.
+        insert_hc_result(&pool, "child-5", "command", "success", 60).await;
+        insert_hc_result(&pool, "child-5", "command", "failed", 5).await;
+        assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_requires_all_readiness_hcs_to_have_a_result() {
+        let pool = new_test_pool().await;
+        // Two readiness HCs declared (tcp + command) but only one has produced
+        // a result. We must wait until both have at least one entry.
+        let child =
+            child_with_health_checks("child-6", vec![readiness_tcp(), readiness_command("ready")]);
+        insert_hc_result(&pool, "child-6", "command", "success", 30).await;
+        // tcp has no result yet — gate must hold.
+        assert!(!is_ready_to_drain(&pool, &child).await);
+
+        // After both are green and old enough, gate opens.
+        insert_hc_result(&pool, "child-6", "tcp", "success", 30).await;
+        assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_ignores_non_readiness_hc_results() {
+        // A non-readiness HC must not influence the decision: even if it has
+        // never produced a result, the readiness HC alone gates the drain.
+        let pool = new_test_pool().await;
+        let mut hcs = vec![readiness_command("ready")];
+        hcs.push(HealthCheck::Tcp {
+            port: 80,
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: false, // not a readiness HC
+        });
+        let child = child_with_health_checks("child-7", hcs);
+        insert_hc_result(&pool, "child-7", "command", "success", 30).await;
+        // tcp has no result, but it's not a readiness HC, so gate opens.
+        assert!(is_ready_to_drain(&pool, &child).await);
     }
 }
