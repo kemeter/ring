@@ -20,11 +20,23 @@
 //! rules; documented in ROADMAP.
 
 use crate::runtime::error::RuntimeError;
+use std::net::TcpListener;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
+/// True when the host can currently bind `0.0.0.0:<port>`. We bind then drop
+/// immediately — `socat` re-binds milliseconds later thanks to `SO_REUSEADDR`.
+/// The window between drop and re-bind is the same race docker's daemon
+/// itself has when checking port availability, and it's harmless: if someone
+/// snatches the port in between, the socat process exits and the caller
+/// already has a clear "port allocated" path to fall back to.
+pub(crate) fn host_port_available(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
 /// One running `socat` instance forwarding `published_port` on the host to
 /// `<guest_ip>:target_port` inside the VM. Dropping it kills the daemon.
+#[derive(Debug)]
 pub(crate) struct PortForwarder {
     pub published_port: u16,
     pub target_port: u16,
@@ -47,6 +59,14 @@ pub(crate) async fn spawn_forwarder(
     published_port: u16,
     target_port: u16,
 ) -> Result<PortForwarder, RuntimeError> {
+    // Match docker compose's contract: refuse to start the workload when a
+    // requested host port is already bound. Without this pre-check, socat
+    // would silently exit after `Bind: Address already in use`, the VM
+    // would still boot, and the port would be a black hole.
+    if !host_port_available(published_port) {
+        return Err(RuntimeError::PortAlreadyInUse(published_port));
+    }
+
     // -d -d gives info-level diagnostics to stderr (handy when this fails
     // because the host port is already bound). `reuseaddr` lets us restart
     // a forwarder fast across deployment recreations without TIME_WAIT.
@@ -155,5 +175,24 @@ mod tests {
         assert_eq!(fw.published_port, host_port);
         assert_eq!(fw.target_port, 5432);
         drop(fw);
+    }
+
+    #[tokio::test]
+    async fn spawn_forwarder_rejects_a_port_already_in_use() {
+        // We do not need socat for this — the pre-check rejects before any
+        // process is spawned. Skipping when socat is absent would hide a
+        // regression that only surfaces in environments where socat exists.
+        let host_port = pick_free_port();
+        let _holder = TcpListener::bind(format!("0.0.0.0:{}", host_port))
+            .expect("test setup: holder must bind the port");
+
+        let err = spawn_forwarder("10.0.0.1", host_port, 5432)
+            .await
+            .expect_err("spawn_forwarder should refuse a bound port");
+
+        match err {
+            RuntimeError::PortAlreadyInUse(p) => assert_eq!(p, host_port),
+            other => panic!("expected PortAlreadyInUse, got {:?}", other),
+        }
     }
 }

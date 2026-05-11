@@ -368,9 +368,18 @@ Why a userspace proxy and not iptables? `socat` runs without extra capabilities,
 
 Each `socat` lives as long as its VM. On `deployment delete` (or scaledown / rolling update / crashloop eviction), Ring sends SIGKILL to the matching socat processes and frees the listening ports. CH itself owns the tap device and removes it on VM shutdown.
 
+### Port conflict handling
+
+Before booting a VM, Ring tries to bind every `published` port on `0.0.0.0`. If a port is already held by another process, the VM **is not started**: the deployment receives a `PortAllocationFailed` event and is retried by the scheduler (the conflicting process might release the port). After `MAX_RESTART_COUNT` failed attempts the deployment lands in `CrashLoopBackOff`. This mirrors docker compose's "port is already allocated" rejection and replaces the previous silent failure where `socat` exited and the VM stayed up with an unreachable port.
+
+```bash
+# Inspect what happened:
+ring deployment events <id> --level error
+# → PortAllocationFailed: port 8080 is already allocated
+```
+
 ### Limitations
 
-- **No automatic conflict detection** — if `published` is already bound on the host, `socat` fails to start and the port silently does not become available; the VM still boots. Inspect `ring deployment events` if a port doesn't respond.
 - **TCP only** — `socat`'s configuration is `TCP4-LISTEN`/`TCP4`. UDP forwarding requires a separate config and is not wired up yet.
 - **No bandwidth shaping or connection limits** — the forwarder is permissive by design.
 

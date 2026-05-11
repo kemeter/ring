@@ -93,6 +93,14 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             "VmStartFailed",
             format!("VM start failed: {}", msg),
         ),
+        // The CH runtime emits this; the Docker runtime doesn't (the daemon
+        // rejects port conflicts itself through InstanceCreationFailed). The
+        // arm exists to keep the match exhaustive over the shared enum.
+        RuntimeError::PortAlreadyInUse(port) => (
+            DeploymentStatus::Error,
+            "PortAllocationFailed",
+            format!("Port {} is already allocated", port),
+        ),
         RuntimeError::Io(e) => (
             DeploymentStatus::FileSystemError,
             "FileSystemError",
