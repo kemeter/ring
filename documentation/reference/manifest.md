@@ -257,6 +257,8 @@ health_checks:
 | `timeout` | yes | Probe timeout. Only `ms` and `s` suffixes parse. |
 | `threshold` | no (default `3`) | Consecutive failures before `on_failure` triggers. |
 | `on_failure` | yes | `restart` (recreate the instance), `stop` (delete the deployment), or `alert` (log only). |
+| `readiness` | no (default `false`) | When `true`, this check gates rolling updates and (for `command` on Docker) is translated into a native `HEALTHCHECK`. See [health checks → readiness gate](/documentation/guides/health-checks#readiness-gate-readiness-true). |
+| `min_healthy_time` | no (default `10s`) | Anti-flap window for the readiness gate: the check must be green for this long before the parent is drained. Per-check; the scheduler takes the maximum across readiness checks. Ignored when `readiness: false`. Same syntax as `interval` / `timeout`. |
 
 ### Type-specific fields
 

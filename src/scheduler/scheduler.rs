@@ -266,14 +266,48 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
     }
 }
 
-/// Anti-flap window: how long all readiness HCs must have been green
-/// before the rolling update is allowed to drain a parent instance.
-/// Mirrors Nomad's `min_healthy_time` default (10s). Hardcoded for now —
-/// expose as a per-deployment field if operators ever need to tune it.
-const MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
+/// Built-in anti-flap window when the manifest doesn't override it. Mirrors
+/// Nomad's `min_healthy_time` default. Override per readiness HC via the
+/// `min_healthy_time` field on the check; the scheduler takes the maximum
+/// across readiness checks so the most-cautious wins.
+const DEFAULT_MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
+
+/// Resolve the anti-flap window for a deployment: take the max of the
+/// per-HC `min_healthy_time` (parsed via `HealthCheck::parse_duration`)
+/// across readiness checks. Falls back to `DEFAULT_MIN_HEALTHY_TIME` when
+/// nothing is set. Malformed values are logged at warn and ignored — the
+/// rollout shouldn't stall just because someone typo'd a duration.
+fn min_healthy_time_for(child: &Deployment) -> Duration {
+    use crate::models::health_check::HealthCheck;
+
+    let mut window = DEFAULT_MIN_HEALTHY_TIME;
+    let mut overridden = false;
+
+    for hc in child.health_checks.iter().filter(|hc| hc.is_readiness()) {
+        if let Some(raw) = hc.min_healthy_time() {
+            match HealthCheck::parse_duration(raw) {
+                Ok(d) => {
+                    if !overridden || d > window {
+                        window = d;
+                    }
+                    overridden = true;
+                }
+                Err(e) => {
+                    warn!(
+                        "Invalid min_healthy_time '{}' on readiness HC for deployment {}: {} — using default",
+                        raw, child.id, e
+                    );
+                }
+            }
+        }
+    }
+
+    window
+}
 
 /// True when the child either has no readiness HC at all (legacy behaviour)
-/// or all of its readiness HCs have been green for `MIN_HEALTHY_TIME`.
+/// or all of its readiness HCs have been green for the configured anti-flap
+/// window.
 async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
     use crate::models::health_check::{ReadinessDecision, evaluate_readiness};
 
@@ -371,7 +405,8 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
         filtered.push((status, anchor));
     }
 
-    let decision = evaluate_readiness(expected, &filtered, chrono::Utc::now(), MIN_HEALTHY_TIME);
+    let min_healthy_time = min_healthy_time_for(child);
+    let decision = evaluate_readiness(expected, &filtered, chrono::Utc::now(), min_healthy_time);
 
     match decision {
         ReadinessDecision::Ready => true,
@@ -971,6 +1006,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: true,
+            min_healthy_time: None,
         }
     }
 
@@ -982,6 +1018,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: true,
+            min_healthy_time: None,
         }
     }
 
@@ -993,7 +1030,56 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: false,
+            min_healthy_time: None,
         }
+    }
+
+    fn child_with_min_healthy(id: &str, hc_min: Vec<(bool, Option<&str>)>) -> Deployment {
+        let hcs: Vec<HealthCheck> = hc_min
+            .into_iter()
+            .map(|(readiness, raw)| HealthCheck::Tcp {
+                port: 80,
+                interval: "10s".to_string(),
+                timeout: "5s".to_string(),
+                threshold: 3,
+                on_failure: FailureAction::Alert,
+                readiness,
+                min_healthy_time: raw.map(|s| s.to_string()),
+            })
+            .collect();
+        child_with_health_checks(id, hcs)
+    }
+
+    #[test]
+    fn min_healthy_time_default_when_no_override() {
+        let child = child_with_min_healthy("c", vec![(true, None)]);
+        assert_eq!(min_healthy_time_for(&child), DEFAULT_MIN_HEALTHY_TIME);
+    }
+
+    #[test]
+    fn min_healthy_time_uses_per_hc_value() {
+        let child = child_with_min_healthy("c", vec![(true, Some("30s"))]);
+        assert_eq!(min_healthy_time_for(&child), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn min_healthy_time_takes_max_across_readiness_checks() {
+        // Two readiness HCs: 15s and 45s — the most-cautious value wins.
+        let child = child_with_min_healthy("c", vec![(true, Some("15s")), (true, Some("45s"))]);
+        assert_eq!(min_healthy_time_for(&child), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn min_healthy_time_ignores_non_readiness_hcs() {
+        // A non-readiness HC's window must not influence the gate.
+        let child = child_with_min_healthy("c", vec![(false, Some("999s")), (true, Some("20s"))]);
+        assert_eq!(min_healthy_time_for(&child), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn min_healthy_time_falls_back_on_malformed_value() {
+        let child = child_with_min_healthy("c", vec![(true, Some("not-a-duration"))]);
+        assert_eq!(min_healthy_time_for(&child), DEFAULT_MIN_HEALTHY_TIME);
     }
 
     #[tokio::test]
@@ -1028,6 +1114,31 @@ mod tests {
         let child = child_with_health_checks("child-4", vec![readiness_command("ready")]);
         // Success 30s ago — well past MIN_HEALTHY_TIME.
         insert_hc_result(&pool, "child-4", "command", "success", 30).await;
+        assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    #[tokio::test]
+    async fn drain_respects_custom_min_healthy_time() {
+        // A 60s anti-flap window on the readiness HC: a 30s-old success is
+        // not enough anymore. The same data would have unblocked drain with
+        // the default 10s window.
+        let pool = new_test_pool().await;
+        let mut hcs = vec![readiness_command("ready")];
+        if let HealthCheck::Command {
+            min_healthy_time, ..
+        } = &mut hcs[0]
+        {
+            *min_healthy_time = Some("60s".to_string());
+        }
+        let child = child_with_health_checks("child-mht", hcs);
+        insert_hc_result(&pool, "child-mht", "command", "success", 30).await;
+        assert!(
+            !is_ready_to_drain(&pool, &child).await,
+            "30s should be too recent for a 60s anti-flap window"
+        );
+
+        // Bump the recorded success to 90s ago — now past the custom window.
+        insert_hc_result(&pool, "child-mht", "command", "success", 90).await;
         assert!(is_ready_to_drain(&pool, &child).await);
     }
 
@@ -1070,6 +1181,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: false, // not a readiness HC
+            min_healthy_time: None,
         });
         let child = child_with_health_checks("child-7", hcs);
         insert_hc_result(&pool, "child-7", "command", "success", 30).await;

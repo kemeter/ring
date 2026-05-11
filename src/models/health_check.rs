@@ -29,6 +29,13 @@ pub(crate) enum HealthCheck {
         /// Docker equivalent and are documented as Ring-only readiness.
         #[serde(default = "default_readiness")]
         readiness: bool,
+        /// Anti-flap window: the readiness gate requires this check to have
+        /// been green for at least this long before allowing a rolling
+        /// update to drain the parent. Parsed by `parse_duration` (e.g.
+        /// `"10s"`, `"500ms"`). Ignored when `readiness = false`. Defaults
+        /// to the scheduler's built-in window when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
     #[serde(rename = "http")]
     Http {
@@ -40,6 +47,8 @@ pub(crate) enum HealthCheck {
         on_failure: FailureAction,
         #[serde(default = "default_readiness")]
         readiness: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
     #[serde(rename = "command")]
     Command {
@@ -51,6 +60,8 @@ pub(crate) enum HealthCheck {
         on_failure: FailureAction,
         #[serde(default = "default_readiness")]
         readiness: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
 }
 
@@ -146,6 +157,23 @@ impl HealthCheck {
             HealthCheck::Command { interval, .. } => interval,
         }
     }
+
+    /// Returns the configured anti-flap window for this check, if any.
+    /// Only meaningful when `is_readiness() == true`; the scheduler
+    /// aggregates across all readiness checks by taking the maximum.
+    pub(crate) fn min_healthy_time(&self) -> Option<&str> {
+        match self {
+            HealthCheck::Tcp {
+                min_healthy_time, ..
+            }
+            | HealthCheck::Http {
+                min_healthy_time, ..
+            }
+            | HealthCheck::Command {
+                min_healthy_time, ..
+            } => min_healthy_time.as_deref(),
+        }
+    }
 }
 
 impl Default for HealthCheck {
@@ -157,6 +185,7 @@ impl Default for HealthCheck {
             threshold: 3,
             on_failure: FailureAction::Restart,
             readiness: false,
+            min_healthy_time: None,
         }
     }
 }
