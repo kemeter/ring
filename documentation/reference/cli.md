@@ -360,7 +360,7 @@ ring config delete <CONFIG_ID>
 ring namespace create <NAME>
 ```
 
-For Docker-runtime deployments, each namespace gets a dedicated Docker bridge network (`ring_<name>`). Namespaces are also auto-created when a deployment is applied to a non-existent namespace. The Cloud Hypervisor runtime does not create per-namespace networks; see [its runtime page](/documentation/runtimes/cloud-hypervisor) for the VM networking model.
+For Docker-runtime deployments, each namespace gets a dedicated Docker bridge network (`ring_<name>`). Namespaces are also auto-created when a deployment is applied to a non-existent namespace. The Cloud Hypervisor runtime does not create per-namespace networks; see [how-to: deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor) for the VM networking model.
 
 ### `ring namespace list`
 

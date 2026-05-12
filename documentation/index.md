@@ -6,7 +6,7 @@ Ring is a lightweight container orchestrator that lets you deploy and manage con
 
 Ring is a single-node alternative to Kubernetes and Docker Swarm. It runs as one process, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML, Ring keeps it that way.
 
-> **New to Ring?** Start with the [installation guide](/documentation/getting-started/installation), then follow the [getting started guide](/documentation/getting-started/overview).
+> **New to Ring?** Start with [Install and run Ring](/documentation/tutorials/install-and-run), then deploy your [first workload](/documentation/tutorials/first-deployment).
 
 ## Key features
 
@@ -40,7 +40,7 @@ Two runtimes share the same manifest shape, with different trade-offs:
 - **Docker** — default. Containers, per-namespace bridge networks, container metrics, all three health-check types (TCP / HTTP / command).
 - **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary; TCP, HTTP and command (via `ring-agent`) health checks all work; `kind: job` is supported but signals success on clean guest shutdown rather than on the workload's exit code (no per-process visibility from the host). Several Docker features still have no VM equivalent (labels, registry credentials, full container metrics, inter-VM networking).
 
-The full per-feature parity matrix is in [Cloud Hypervisor → Current Limitations](/documentation/runtimes/cloud-hypervisor#current-limitations).
+The full per-feature parity matrix is in [How-to: deploy on Cloud Hypervisor → Limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
 
 ```yaml
 deployments:
@@ -96,52 +96,53 @@ ring deployment events my-app
 | Multi-node        | No     | No             | Yes        |
 | Learning curve    | Gentle | Very gentle    | Steep      |
 
-## Install from source
+## Documentation
 
-```bash
-git clone https://github.com/kemeter/ring.git
-cd ring
-cargo build --release
-sudo cp target/release/ring /usr/local/bin/
-ring init
-```
+The docs are organized by what you're trying to do. Pick the section that matches:
 
-Ring requires a Rust toolchain that supports edition 2024 (Rust 1.85 or later).
+**Tutorials** — learn Ring step by step
+- [Install and run Ring](/documentation/tutorials/install-and-run) — 15 minutes, install through first API call
+- [Your first deployment](/documentation/tutorials/first-deployment) — 10 minutes, deploy and scale nginx
 
-## Your first deployment
+Once you're past the basics, pick a [how-to guide](#how-to-guides) for the specific feature you need (secrets, rolling updates, health checks, jobs, …).
 
-Once Ring is installed and the server is running, create a deployment file:
+**How-to guides** — solve a specific problem
+- [Deploy with secrets](/documentation/how-to/deploy-with-secrets)
+- [Configure health checks](/documentation/how-to/configure-health-checks)
+- [Run a job](/documentation/how-to/run-a-job)
+- [Perform a rolling update](/documentation/how-to/perform-rolling-update)
+- [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
+- [Observe and debug](/documentation/how-to/observe-and-debug)
+- [Manage users](/documentation/how-to/manage-users)
+- [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
+- [Run Ring as a service](/documentation/how-to/run-as-service)
 
-```yaml
-# nginx-demo.yaml
-deployments:
-  nginx-demo:
-    name: nginx-demo
-    runtime: docker
-    image: "nginx:latest"
-    replicas: 1
-```
+**Reference** — exhaustive specs
+- [Manifest](/documentation/reference/manifest) — complete YAML/JSON schema
+- [CLI](/documentation/reference/cli) — every `ring` subcommand
+- [API](/documentation/reference/api) — REST endpoints
+- [config.toml](/documentation/reference/config-toml) — file-based configuration
+- [Environment variables](/documentation/reference/environment-variables) — `RING_*` vars
 
-Apply it:
+**Concepts** — how Ring works internally
+- [Architecture](/documentation/concepts/architecture)
+- [Reconciliation](/documentation/concepts/reconciliation)
+- [Runtimes](/documentation/concepts/runtimes)
+- [Namespaces and networking](/documentation/concepts/namespaces-and-networking)
+- [Secrets and encryption](/documentation/concepts/secrets-encryption)
+- [Health checks (design)](/documentation/concepts/health-checks-design)
+- [Why not Kubernetes](/documentation/concepts/why-not-kubernetes)
 
-```bash
-ring apply -f nginx-demo.yaml
-```
-
-Check status:
-
-```bash
-ring deployment list
-```
-
-That's it. Nginx is running and reconciled by Ring.
+**Help**
+- [Troubleshooting](/documentation/help/troubleshooting)
+- [FAQ](/documentation/help/faq)
 
 ## Architecture at a glance
 
 - **Ring server** — central process that exposes the REST API and runs the scheduler. Default tick: every 10 seconds (override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval`).
 - **Scheduler** — reconciliation loop that creates, removes, and health-checks instances. On the Docker runtime it also listens to live Docker events (`die`, `start`, `oom`, `kill`) to detect crashes; on the Cloud Hypervisor runtime it reconciles by scanning sockets.
 - **Docker runtime** — default runtime. Containers, one bridge network per namespace (`ring_<namespace>`).
-- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/runtimes/cloud-hypervisor#current-limitations).
+- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
 - **SQLite database** — stores deployments, users, secrets, configs, events; WAL mode by default.
 - **REST API** — the only control surface; the CLI is a client.
 
@@ -154,4 +155,4 @@ That's it. Nginx is running and reconciled by Ring.
 
 ---
 
-**Ready to get started?** Follow the [installation guide](/documentation/getting-started/installation).
+**Ready to get started?** Follow the [Install and run Ring](/documentation/tutorials/install-and-run) tutorial.

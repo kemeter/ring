@@ -4,7 +4,7 @@ The complete schema for the YAML / JSON files you pass to `ring apply -f`. Every
 
 A manifest has two top-level keys: `namespaces:` (optional) and `deployments:` (required).
 
-> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on the [CH runtime page → Current Limitations](/documentation/runtimes/cloud-hypervisor#current-limitations).
+> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [How-to: deploy on Cloud Hypervisor → Limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
 
 ```yaml
 namespaces:
@@ -53,7 +53,7 @@ A map of deployment declarations. The map key is internal — Ring keys the depl
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [jobs and workers](/documentation/guides/jobs-and-workers). |
+| `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
 | `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only** — rejected at the API on the CH runtime. |
 | `environment` | map | `{}` | Environment variables — plain values or `secretRef` references. See [environment](#environment). |
@@ -81,7 +81,7 @@ environment:
     secretRef: "jwt-secret"
 ```
 
-If a `secretRef` cannot be resolved, the deployment is marked `failed` and an `error` event is emitted (`reason: SecretResolutionError`). See the [secrets guide](/documentation/guides/secrets).
+If a `secretRef` cannot be resolved, the deployment is marked `failed` and an `error` event is emitted (`reason: SecretResolutionError`). See [how-to: deploy with secrets](/documentation/how-to/deploy-with-secrets).
 
 ### Variable interpolation
 
@@ -143,7 +143,7 @@ volumes:
     permission: ro
 ```
 
-For `config` volumes, the `source` is the config's `name` (not its UUID), and the config must live in the **same namespace** as the deployment. See [Cloud Hypervisor → volumes](/documentation/runtimes/cloud-hypervisor#volumes) for runtime-specific lifecycle details.
+For `config` volumes, the `source` is the config's `name` (not its UUID), and the config must live in the **same namespace** as the deployment. See [how-to: deploy on Cloud Hypervisor → Volumes](/documentation/how-to/deploy-on-cloud-hypervisor#volumes-virtiofs) for runtime-specific lifecycle details.
 
 > **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 
@@ -164,7 +164,7 @@ ports:
 
 Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime). If `published` is already in use on the host, the start fails — the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time.
 
-If you do **not** publish a port, the container is reachable only from inside its namespace. See the [networking guide](/documentation/guides/networking).
+If you do **not** publish a port, the container is reachable only from inside its namespace. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network).
 
 ## `labels`
 
@@ -253,11 +253,11 @@ health_checks:
 | Field | Required | Description |
 |---|---|---|
 | `type` | yes | `tcp`, `http`, or `command`. |
-| `interval` | yes | Currently advisory — see [health checks → how they run](/documentation/guides/health-checks#how-they-run). Only `ms` and `s` suffixes parse. |
+| `interval` | yes | Currently advisory — see [health checks (design) → the probe cycle](/documentation/concepts/health-checks-design#the-probe-cycle). Only `ms` and `s` suffixes parse. |
 | `timeout` | yes | Probe timeout. Only `ms` and `s` suffixes parse. |
 | `threshold` | no (default `3`) | Consecutive failures before `on_failure` triggers. |
 | `on_failure` | yes | `restart` (recreate the instance), `stop` (delete the deployment), or `alert` (log only). |
-| `readiness` | no (default `false`) | When `true`, this check gates rolling updates and (for `command` on Docker) is translated into a native `HEALTHCHECK`. See [health checks → readiness gate](/documentation/guides/health-checks#readiness-gate-readiness-true). |
+| `readiness` | no (default `false`) | When `true`, this check gates rolling updates and (for `command` on Docker) is translated into a native `HEALTHCHECK`. See [health checks (design) → the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate). |
 | `min_healthy_time` | no (default `10s`) | Anti-flap window for the readiness gate: the check must be green for this long before the parent is drained. Per-check; the scheduler takes the maximum across readiness checks. Ignored when `readiness: false`. Same syntax as `interval` / `timeout`. |
 
 ### Type-specific fields
@@ -268,9 +268,9 @@ health_checks:
 | `http` | `url` | Full URL. `localhost` is rewritten to the instance's runtime-private IP. Probe succeeds on a 2xx response within `timeout`. Redirects (3xx) are not followed and count as failures. |
 | `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. **Current behavior:** the probe succeeds as soon as `docker exec` *starts the command without an API error*; the command's actual **exit code is not checked**. So a command that runs but exits non-zero will report `success`. This is a known limitation — track the [code source](https://github.com/kemeter/ring/blob/main/src/runtime/docker/health_check.rs) for the fix. |
 
-**Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is rejected at the API — there's no `docker exec` equivalent in the VM model. See the [CH runtime page → Health Checks](/documentation/runtimes/cloud-hypervisor#health-checks).
+**Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is supported via the in-guest `ring-agent` daemon. See [how-to: deploy on Cloud Hypervisor → Health checks](/documentation/how-to/deploy-on-cloud-hypervisor#health-checks).
 
-See the dedicated [health-checks guide](/documentation/guides/health-checks) for tuning, recipes, and the rolling-update interaction.
+See [how-to: configure health checks](/documentation/how-to/configure-health-checks) for tuning and recipes, and [health checks (design)](/documentation/concepts/health-checks-design) for the rolling-update interaction.
 
 ## `config`
 
@@ -426,6 +426,6 @@ The same shape, sent directly to the API:
 
 - [CLI → ring apply](/documentation/reference/cli#ring-apply)
 - [REST API → POST /deployments](/documentation/reference/api#post-deployments)
-- [Health checks](/documentation/guides/health-checks)
-- [Secrets](/documentation/guides/secrets)
-- [Examples](/documentation/guides/examples)
+- [How-to: configure health checks](/documentation/how-to/configure-health-checks)
+- [How-to: deploy with secrets](/documentation/how-to/deploy-with-secrets)
+- [Health checks (design)](/documentation/concepts/health-checks-design)
