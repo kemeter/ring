@@ -18,7 +18,8 @@ use crate::api::server::Db;
 use crate::models::deployment_event;
 use crate::models::deployments;
 use crate::models::deployments::{
-    DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, Resource,
+    DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, NetworkConfig, NetworkMode,
+    Resource,
 };
 use crate::models::namespace;
 use crate::models::users::User;
@@ -34,6 +35,38 @@ fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
             "invalid runtime, supported: [docker, cloud-hypervisor]",
         )),
     }
+}
+
+fn validate_network_constraints(input: &DeploymentInput) -> Result<(), String> {
+    let Some(network) = &input.network else {
+        return Ok(());
+    };
+    if !matches!(network.mode, NetworkMode::Host) {
+        return Ok(());
+    }
+
+    if input.runtime != "docker" {
+        return Err(format!(
+            "network.mode=host is only supported on the docker runtime, got '{}'",
+            input.runtime
+        ));
+    }
+
+    if !input.ports.is_empty() {
+        return Err(
+            "network.mode=host is incompatible with port mappings: host networking bypasses Docker's port bindings, so `ports` would be silently ignored. Remove `ports` and let the container bind directly on the host."
+                .to_string(),
+        );
+    }
+
+    if input.replicas > 1 {
+        return Err(format!(
+            "network.mode=host is incompatible with replicas > 1 (got {}): all replicas would compete for the same host ports. Reduce replicas to 1.",
+            input.replicas
+        ));
+    }
+
+    Ok(())
 }
 
 fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
@@ -228,6 +261,8 @@ pub(crate) struct DeploymentInput {
     resources: Option<Resource>,
     #[serde(default)]
     ports: Vec<DeploymentPort>,
+    #[serde(default)]
+    network: Option<NetworkConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -254,6 +289,11 @@ pub(crate) async fn create(
     match input.validate() {
         Ok(()) => {
             if let Err(msg) = validate_runtime_constraints(&input) {
+                let message = Message { message: msg };
+                return (StatusCode::BAD_REQUEST, Json(message)).into_response();
+            }
+
+            if let Err(msg) = validate_network_constraints(&input) {
                 let message = Message { message: msg };
                 return (StatusCode::BAD_REQUEST, Json(message)).into_response();
             }
@@ -409,6 +449,7 @@ pub(crate) async fn create(
                 ports: input.ports,
                 pending_events: vec![],
                 parent_id: rolling_parent_id,
+                network: input.network.clone(),
             };
 
             match deployments::create(&pool, &deployment).await {
@@ -1931,6 +1972,136 @@ mod tests {
         assert_eq!(ports[0]["target"], 80);
         assert_eq!(ports[1]["published"], 3000);
         assert_eq!(ports[1]["target"], 3000);
+    }
+
+    #[tokio::test]
+    async fn create_with_host_network_mode() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["network"]["mode"], "host");
+    }
+
+    #[tokio::test]
+    async fn create_host_mode_rejects_ports() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" },
+                "ports": [{ "published": 80, "target": 80 }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message.contains("network.mode=host") && body.message.contains("port"),
+            "unexpected message: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn create_host_mode_rejects_replicas_above_one() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" },
+                "replicas": 2
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message.contains("replicas"),
+            "unexpected message: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn create_host_mode_rejected_on_cloud_hypervisor() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "cloud-hypervisor",
+                "name": "vm",
+                "namespace": "edge",
+                "image": "/tmp/fake.raw",
+                "network": { "mode": "host" }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        let body: Message = response.json();
+        assert!(
+            body.message.contains("docker runtime"),
+            "unexpected message: {}",
+            body.message
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_bridge_network_mode_explicit() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "network": { "mode": "bridge" },
+                "ports": [{ "published": 8080, "target": 80 }],
+                "replicas": 2
+            }))
+            .await;
+
+        // bridge mode is the existing default — ports and replicas remain valid.
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]

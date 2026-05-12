@@ -114,6 +114,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Observe and debug](/documentation/how-to/observe-and-debug)
 - [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
 - [Expose HTTP traffic](/documentation/how-to/expose-http-traffic)
+- [Use host network mode](/documentation/how-to/use-host-network)
 - [Manage users](/documentation/how-to/manage-users)
 - [Run Ring as a service](/documentation/how-to/run-as-service)
 - [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)

@@ -435,6 +435,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             parent_id: None,
+            network: None,
         }
     }
 

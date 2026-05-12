@@ -1,5 +1,7 @@
 use super::{DockerImage, tiny_id};
-use crate::models::deployments::{Deployment, EnvValue, parse_cpu_string, parse_memory_string};
+use crate::models::deployments::{
+    Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
+};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
 use bollard::{
@@ -204,8 +206,15 @@ pub(crate) async fn create_container(
         deployment.image_digest = digest;
     }
 
+    let use_host_network = matches!(
+        deployment.network.as_ref().map(|n| n.mode),
+        Some(NetworkMode::Host)
+    );
+
     let network_name = format!("ring_{}", deployment.namespace);
-    create_network(docker.clone(), network_name.clone()).await?;
+    if !use_host_network {
+        create_network(docker.clone(), network_name.clone()).await?;
+    }
 
     let temporary_id = tiny_id();
     let container_name = format!(
@@ -257,6 +266,11 @@ pub(crate) async fn create_container(
     let host_config = HostConfig {
         mounts: Some(mounts),
         privileged: privileged_config,
+        network_mode: if use_host_network {
+            Some("host".to_string())
+        } else {
+            None
+        },
         port_bindings: if port_bindings.is_empty() {
             None
         } else {
@@ -303,25 +317,27 @@ pub(crate) async fn create_container(
             debug!("Docker create container {:?}", container.id);
             deployment.instances.push(container.id.to_string());
 
-            let endpoint_config = EndpointSettings {
-                aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
-                ..Default::default()
-            };
+            if !use_host_network {
+                let endpoint_config = EndpointSettings {
+                    aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
+                    ..Default::default()
+                };
 
-            let connect_request = NetworkConnectRequest {
-                container: container.id.clone(),
-                endpoint_config: Some(endpoint_config),
-            };
+                let connect_request = NetworkConnectRequest {
+                    container: container.id.clone(),
+                    endpoint_config: Some(endpoint_config),
+                };
 
-            docker
-                .connect_network(&network_name, connect_request)
-                .await
-                .map_err(|e| {
-                    RuntimeError::InstanceCreationFailed(format!(
-                        "Docker failed to connect to network: {}",
-                        e
-                    ))
-                })?;
+                docker
+                    .connect_network(&network_name, connect_request)
+                    .await
+                    .map_err(|e| {
+                        RuntimeError::InstanceCreationFailed(format!(
+                            "Docker failed to connect to network: {}",
+                            e
+                        ))
+                    })?;
+            }
 
             let start_options = StartContainerOptionsBuilder::new().build();
             docker

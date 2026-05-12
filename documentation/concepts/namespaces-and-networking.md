@@ -42,6 +42,19 @@ When `replicas > 1`, every replica shares a network alias equal to the **deploym
 
 The network is **not** removed when the last deployment in a namespace is deleted. `ring namespace prune` doesn't touch it either. Manual cleanup: `docker network prune --filter "name=ring_"`.
 
+### Escape hatch: host network mode
+
+A single deployment can opt out of the per-namespace bridge and run directly on the host's network namespace:
+
+```yaml
+network:
+  mode: host
+```
+
+The container then bypasses the bridge entirely — it sees the host's interfaces, can bind privileged ports without a NAT hop, and observes real client IPs. The trade-off is no network isolation and no `ports:` mapping (the process binds the host directly). Ring restricts host mode to a single replica and rejects deployments that combine it with `ports:`.
+
+This is the right tool for L4/L7 reverse proxies, VPN gateways, mDNS / multicast workloads, and packet-capture sidecars. For everything else, keep the default `bridge`. See [how-to: use host network mode](/documentation/how-to/use-host-network).
+
 ## Cloud Hypervisor: per-VM /30 subnets
 
 The Cloud Hypervisor runtime uses a different model entirely. There is no shared bridge per namespace.

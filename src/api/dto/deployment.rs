@@ -1,5 +1,5 @@
 use crate::models::deployments::{
-    Deployment, DeploymentConfig, DeploymentPort, EnvValue, Resource,
+    Deployment, DeploymentConfig, DeploymentPort, EnvValue, NetworkConfig, Resource,
 };
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
@@ -53,6 +53,8 @@ pub(crate) struct DeploymentOutput {
     /// new one is healthy, then the scheduler tears it down.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) network: Option<NetworkConfig>,
 }
 
 impl DeploymentOutput {
@@ -93,6 +95,7 @@ impl DeploymentOutput {
             resources: deployment.resources,
             image_digest: deployment.image_digest,
             parent_id: deployment.parent_id,
+            network: deployment.network,
         }
     }
 }
