@@ -1,0 +1,121 @@
+name: Release
+
+# Triggers on annotated tags matching `v*`, plus a manual button so we can
+# re-run a release without re-tagging (useful when the workflow itself
+# needs a fix). Both paths upload assets to the matching GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re-)build (e.g. v0.8.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write  # required to upload assets to the release
+
+jobs:
+  ring-server:
+    name: Build ring (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-gnu-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --bin ring
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PKG="ring-${TAG}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/${PKG}"
+          cp target/release/ring "dist/${PKG}/"
+          cp README.md LICENSE CHANGELOG.md "dist/${PKG}/" 2>/dev/null || true
+          tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
+          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ring-server
+          path: |
+            ring-*.tar.gz
+            ring-*.tar.gz.sha256
+
+  ring-agent:
+    name: Build ring-agent (x86_64-unknown-linux-musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-release-musl-${{ hashFiles('**/Cargo.lock') }}
+
+      # ring-agent must be a static binary so users can drop it into any
+      # guest image regardless of its libc — musl is the standard choice.
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-musl -p ring-agent
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PKG="ring-agent-${TAG}-x86_64-unknown-linux-musl"
+          mkdir -p "dist/${PKG}"
+          cp target/x86_64-unknown-linux-musl/release/ring-agent "dist/${PKG}/"
+          cp LICENSE "dist/${PKG}/" 2>/dev/null || true
+          tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
+          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ring-agent
+          path: |
+            ring-agent-*.tar.gz
+            ring-agent-*.tar.gz.sha256
+
+  publish:
+    name: Attach to GitHub release
+    needs: [ring-server, ring-agent]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          shopt -s globstar
+          gh release upload "$TAG" artifacts/**/*.tar.gz artifacts/**/*.tar.gz.sha256 --clobber

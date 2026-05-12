@@ -43,7 +43,16 @@ You need all of these on the host:
 
 7. **`virtiofsd`** (only if you use `volumes:`): `apt install virtiofsd`. Ring looks for it at `/usr/libexec/virtiofsd` then `/usr/lib/qemu/virtiofsd`. Override with `RING_VIRTIOFSD=/path/to/virtiofsd`.
 
-8. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`). Build once with `cargo build -p ring-agent --release --target x86_64-unknown-linux-musl`, install it at `/usr/local/bin/ring-agent` in the guest, and run it at boot via a systemd unit. It listens on AF_VSOCK port 2375.
+8. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`). Each Ring release attaches a static musl build:
+
+   ```bash
+   TAG=$(curl -s https://api.github.com/repos/kemeter/ring/releases/latest | grep -oP '"tag_name": "\K[^"]+')
+   curl -L "https://github.com/kemeter/ring/releases/download/${TAG}/ring-agent-${TAG}-x86_64-unknown-linux-musl.tar.gz" \
+     | tar -xz
+   # then copy the extracted ring-agent into the guest image at /usr/local/bin/ring-agent
+   ```
+
+   If you'd rather build it yourself: `cargo build -p ring-agent --release --target x86_64-unknown-linux-musl`. Either way, install it at `/usr/local/bin/ring-agent` in the guest and run it at boot via a systemd unit. It listens on AF_VSOCK port 2375.
 
 Run `ring doctor` to verify everything is in place — it checks each item and prints the missing pieces.
 
