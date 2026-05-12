@@ -73,7 +73,7 @@ Pattern 3 is usually the right answer. Namespaces are isolation boundaries — c
 - **No service mesh.** No sidecars, no mTLS injection, no traffic policy.
 - **No multi-host networking.** Ring is single-node by design.
 
-For production-grade routing, run a reverse proxy as a Ring deployment in front of your services — [Sozune](https://sozune.kemeter.io) is the recommended path (see [how-to: expose with Sozune](/documentation/how-to/expose-with-sozune)), or use Traefik / Caddy / nginx. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) for the cross-namespace details.
+For production-grade routing, run a reverse proxy as a Ring deployment in front of your services — [Sozune](https://sozune.kemeter.io) is the recommended path (see [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic)), or use Traefik / Caddy / nginx. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) for the cross-namespace details.
 
 ## See also
 

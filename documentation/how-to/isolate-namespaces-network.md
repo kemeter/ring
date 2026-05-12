@@ -87,7 +87,7 @@ Production-shaped setup: a single reverse-proxy deployment publishes 80/443; eve
 
 [Sozune](https://sozune.kemeter.io) is the companion proxy of Ring — Docker label discovery, automatic Let's Encrypt, and it natively gates traffic on the Docker `HEALTHCHECK` that Ring writes from `readiness: true` health checks. Use it if you don't already have a proxy in place.
 
-See the dedicated recipe: [how-to: expose a deployment with Sozune](/documentation/how-to/expose-with-sozune).
+See the dedicated recipe: [how-to: expose a deployment with Sozune](/documentation/how-to/expose-http-traffic).
 
 ### Traefik via container labels
 

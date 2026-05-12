@@ -1,8 +1,12 @@
-# Expose a deployment with Sozune
+# Expose HTTP traffic
 
-[Sozune](https://sozune.kemeter.io) is the reverse proxy compagnon of Ring. It reads Docker container labels to route traffic, terminates TLS via Let's Encrypt automatically, and **gates traffic on the container's Docker `HEALTHCHECK`** — which Ring writes for you when you declare a `readiness: true` health check. The two are designed to be used together: deploy Sozune as a Ring deployment, label your services, done.
+To expose a deployment on the public Internet (or on a private hostname behind your firewall), put a reverse proxy in front of it. Ring doesn't terminate TLS or do L7 routing itself — that's a proxy's job.
 
-This page shows the end-to-end recipe. For the underlying mechanism (how Ring translates a `command` readiness check into a Docker `HEALTHCHECK`), see [Health checks (design) → proxy integration](/documentation/concepts/health-checks-design#proxy-integration).
+The recommended path is [Sozune](https://sozune.kemeter.io), the companion proxy of Ring. It reads Docker container labels to route traffic, terminates TLS via Let's Encrypt automatically, and **gates traffic on the container's Docker `HEALTHCHECK`** — which Ring writes for you when you declare a `readiness: true` health check. The two are designed to be used together: deploy Sozune as a Ring deployment, label your services, done.
+
+If you already run Traefik / Caddy / nginx, the broad shape is the same — see [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network#reverse-proxy-in-front-of-ring) for those alternatives.
+
+This page shows the end-to-end recipe with Sozune. For the underlying mechanism (how Ring translates a `command` readiness check into a Docker `HEALTHCHECK`), see [Health checks (design) → proxy integration](/documentation/concepts/health-checks-design#proxy-integration).
 
 ## What you get
 

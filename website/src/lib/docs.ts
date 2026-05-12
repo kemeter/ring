@@ -68,7 +68,7 @@ const PAGE_ORDER: Record<string, string[]> = {
     'run-a-job',
     'observe-and-debug',
     'isolate-namespaces-network',
-    'expose-with-sozune',
+    'expose-http-traffic',
     'manage-users',
     'run-as-service',
     'deploy-on-cloud-hypervisor',

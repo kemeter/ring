@@ -153,7 +153,7 @@ For services that need longer than 10 s to be truly ready (JVM cold start, big i
 - When several readiness checks declare different values, the **maximum** wins — the gate waits on the slowest probe.
 - A typo (unparseable value) logs a warning and falls back to the 10 s default; rollouts aren't blocked.
 
-**Proxy bonus:** a `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK`. [Sozune](https://sozune.kemeter.io) (the companion proxy) and other label-aware proxies gate on `Status: healthy` — they won't route traffic to the new container while the readiness command fails. See [how-to: expose with Sozune](/documentation/how-to/expose-with-sozune) for the integration, or [Health checks design → proxy integration](/documentation/concepts/health-checks-design#proxy-integration) for the why.
+**Proxy bonus:** a `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK`. [Sozune](https://sozune.kemeter.io) (the companion proxy) and other label-aware proxies gate on `Status: healthy` — they won't route traffic to the new container while the readiness command fails. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the integration, or [Health checks design → proxy integration](/documentation/concepts/health-checks-design#proxy-integration) for the why.
 
 For HTTP readiness with proxy gating, wrap the probe in a shell command:
 

@@ -113,7 +113,7 @@ Semantics:
 
 A `readiness: true` check of `type: command` is **also translated** into a native Docker `HEALTHCHECK` on the container. Proxies that read Docker labels gate traffic on `Status: healthy` automatically — they won't route to the new container while the readiness command is failing.
 
-This is the integration designed into [Sozune](https://sozune.kemeter.io), the companion proxy: it reads `State.Health.Status` and only routes to `healthy` containers. Traefik, Caddy and other label-aware proxies offer similar behaviour with their own configuration. See [how-to: expose with Sozune](/documentation/how-to/expose-with-sozune) for the end-to-end recipe.
+This is the integration designed into [Sozune](https://sozune.kemeter.io), the companion proxy: it reads `State.Health.Status` and only routes to `healthy` containers. Traefik, Caddy and other label-aware proxies offer similar behaviour with their own configuration. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the end-to-end recipe.
 
 | Check type | Ring drain gate | Docker `HEALTHCHECK` (proxy gate) |
 |---|---|---|
