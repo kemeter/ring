@@ -1407,6 +1407,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             parent_id: None,
+            network: None,
         };
 
         let (vcpus, memory_mb) = parse_resources(&deployment);
@@ -1446,6 +1447,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             parent_id: None,
+            network: None,
         };
 
         let (vcpus, memory_mb) = parse_resources(&deployment);
@@ -1634,6 +1636,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             parent_id: None,
+            network: None,
         }
     }
 

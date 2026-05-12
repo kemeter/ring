@@ -63,6 +63,7 @@ A map of deployment declarations. The map key is internal — Ring keys the depl
 | `resources` | object | unset | CPU / memory limits and requests. Semantics differ between runtimes. See [resources](#resources). |
 | `health_checks` | object list | `[]` | TCP / HTTP / command health probes. See [health checks](#health-checks). |
 | `config` | object | `{}` | Runtime config: image pull policy, registry credentials. **Docker only** — every field of `config` is silently ignored on the CH runtime, since there is no image to pull. |
+| `network` | object | `{ mode: bridge }` | Network mode. See [network](#network). **Docker only.** |
 
 ## `environment`
 
@@ -165,6 +166,31 @@ ports:
 Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime). If `published` is already in use on the host, the start fails — the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time.
 
 If you do **not** publish a port, the container is reachable only from inside its namespace. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network).
+
+## `network`
+
+Selects the container's network namespace.
+
+```yaml
+network:
+  mode: host
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mode` | enum | `bridge` | `bridge` (default) or `host`. |
+
+**`bridge`** — the deployment is attached to a per-namespace bridge network (`ring_{namespace}`). This is the standard Docker behavior and matches what Ring did before this field existed.
+
+**`host`** — the container shares the host's network namespace directly. It can bind to host ports without `ports:` mapping, sees real client IPs, and can use multicast / broadcast. Useful for L4/L7 reverse proxies (HAProxy, Nginx as edge), packet-capture sidecars, VPN gateways (WireGuard, Tailscale), and service-discovery agents (mDNS, Consul gossip).
+
+When `mode: host`, the API rejects the deployment if:
+
+- `ports:` is non-empty — host networking bypasses Docker's port bindings, so the mapping would be silently ignored. Remove `ports:` and let the container bind directly.
+- `replicas: > 1` — all replicas would compete for the same host ports.
+- `runtime: cloud-hypervisor` — host mode is Docker-only. The CH runtime has its own network model.
+
+See [how-to: use host network mode](/documentation/how-to/use-host-network) for the full walk-through.
 
 ## `labels`
 

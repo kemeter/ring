@@ -80,6 +80,19 @@ struct Deployment {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     ports: Vec<Port>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<NetworkConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct NetworkConfig {
+    #[serde(default = "default_network_mode")]
+    mode: String,
+}
+
+fn default_network_mode() -> String {
+    "bridge".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -627,6 +640,7 @@ mod tests {
             resources: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
+            network: None,
         };
 
         assert!(deployment.validate().is_ok());
@@ -847,6 +861,7 @@ deployments:
             resources: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
+            network: None,
         };
 
         let mut env_vars = HashMap::new();

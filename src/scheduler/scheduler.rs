@@ -967,6 +967,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             parent_id: Some("parent-id".to_string()),
+            network: None,
         }
     }
 

@@ -101,6 +101,41 @@ pub(crate) struct DeploymentPort {
     pub(crate) target: u16,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum NetworkMode {
+    #[default]
+    Bridge,
+    Host,
+}
+
+impl NetworkMode {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Bridge => "bridge",
+            Self::Host => "host",
+        }
+    }
+}
+
+impl std::str::FromStr for NetworkMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "bridge" => Ok(Self::Bridge),
+            "host" => Ok(Self::Host),
+            other => Err(format!("Unknown network mode: {}", other)),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub(crate) struct NetworkConfig {
+    #[serde(default)]
+    pub(crate) mode: NetworkMode,
+}
+
 fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
@@ -213,6 +248,8 @@ pub(crate) struct Deployment {
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) network: Option<NetworkConfig>,
 }
 
 impl Deployment {
@@ -257,6 +294,7 @@ struct DeploymentRow {
     image_digest: Option<String>,
     parent_id: Option<String>,
     ports: Option<String>,
+    network_mode: Option<String>,
 }
 
 fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
@@ -340,6 +378,21 @@ impl From<DeploymentRow> for Deployment {
                 .unwrap_or_default(),
             pending_events: vec![],
             parent_id: row.parent_id,
+            network: row.network_mode.as_deref().and_then(|s| {
+                use std::str::FromStr;
+                NetworkMode::from_str(s)
+                    .map(|mode| NetworkConfig { mode })
+                    .map_err(|e| {
+                        log::warn!(
+                            "Failed to parse network_mode '{}' for deployment {}: {}",
+                            s,
+                            id,
+                            e
+                        );
+                        e
+                    })
+                    .ok()
+            }),
         }
     }
 }
@@ -347,7 +400,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports
+    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports, network_mode
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -421,11 +474,16 @@ pub(crate) async fn create(
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
     let ports_json = serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
 
+    let network_mode = deployment
+        .network
+        .as_ref()
+        .map(|n| n.mode.as_str().to_string());
+
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports, network_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -447,6 +505,7 @@ pub(crate) async fn create(
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
     .bind(&ports_json)
+    .bind(&network_mode)
     .execute(pool)
     .await?;
 
@@ -548,5 +607,42 @@ mod tests {
         assert!(parse_memory_string("abc").is_err());
         assert!(parse_memory_string("Mi").is_err());
         assert!(parse_memory_string("").is_err());
+    }
+
+    #[test]
+    fn network_mode_default_is_bridge() {
+        assert_eq!(NetworkMode::default(), NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn network_config_default_mode_is_bridge() {
+        let cfg: NetworkConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.mode, NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn network_config_deserializes_host_mode() {
+        let cfg: NetworkConfig = serde_json::from_str(r#"{"mode":"host"}"#).unwrap();
+        assert_eq!(cfg.mode, NetworkMode::Host);
+    }
+
+    #[test]
+    fn network_config_deserializes_bridge_mode() {
+        let cfg: NetworkConfig = serde_json::from_str(r#"{"mode":"bridge"}"#).unwrap();
+        assert_eq!(cfg.mode, NetworkMode::Bridge);
+    }
+
+    #[test]
+    fn network_mode_rejects_unknown_value() {
+        let parsed: Result<NetworkConfig, _> = serde_json::from_str(r#"{"mode":"macvlan"}"#);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn network_mode_as_str_round_trips() {
+        use std::str::FromStr;
+        for mode in [NetworkMode::Bridge, NetworkMode::Host] {
+            assert_eq!(NetworkMode::from_str(mode.as_str()).unwrap(), mode);
+        }
     }
 }

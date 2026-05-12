@@ -69,6 +69,7 @@ const PAGE_ORDER: Record<string, string[]> = {
     'observe-and-debug',
     'isolate-namespaces-network',
     'expose-http-traffic',
+    'use-host-network',
     'manage-users',
     'run-as-service',
     'deploy-on-cloud-hypervisor',
