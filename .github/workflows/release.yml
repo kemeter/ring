@@ -36,6 +36,16 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-release-gnu-${{ hashFiles('**/Cargo.lock') }}
 
+      # The dashboard's static build is baked into the Rust binary via
+      # rust-embed, so it must exist before `cargo build` runs. Skipping
+      # this step would silently ship a binary without any UI assets.
+      - uses: oven-sh/setup-bun@v1
+      - name: Build dashboard
+        run: |
+          cd dashboard
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Build release binary
         run: cargo build --release --bin ring
 

@@ -4,7 +4,7 @@ use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use clap::ArgMatches;
-use clap::Command;
+use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -17,10 +17,39 @@ use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use crate::scheduler::scheduler::schedule;
 
 pub(crate) fn command_config() -> Command {
-    Command::new("start")
+    Command::new("start").arg(
+        Arg::new("dashboard")
+            .long("dashboard")
+            .help("Enable the embedded web dashboard for this run (overrides config.toml)")
+            .action(ArgAction::SetTrue),
+    )
 }
 
-pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
+pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
+    // Dashboard activation precedence, strongest first:
+    //   1. `--dashboard` CLI flag (explicit one-off)
+    //   2. `RING_DASHBOARD=true|1|yes` env var (systemd / docker / CI)
+    //   3. `[dashboard] enabled = true` in config.toml (persistent)
+    // The env var lets operators flip the dashboard on without rewriting
+    // the on-disk config — same spirit as `RING_TOKEN` / `RING_SECRET_KEY`.
+    if args.get_flag("dashboard") {
+        configuration.dashboard.enabled = true;
+    } else if let Ok(val) = std::env::var("RING_DASHBOARD") {
+        if matches!(
+            val.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ) {
+            configuration.dashboard.enabled = true;
+        }
+    }
+    // Optional override of the bind address; useful in containers where
+    // the default `127.0.0.1:3031` is unreachable from the host.
+    if let Ok(addr) = std::env::var("RING_DASHBOARD_LISTEN") {
+        if !addr.trim().is_empty() {
+            configuration.dashboard.listen_address = addr;
+        }
+    }
+
     // Validate the encryption key up front. Anything that touches a
     // secret (deployment env vars with `secretRef`, `POST /secrets`, ...)
     // would panic later on a missing or malformed key; failing here gives
@@ -82,6 +111,21 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         configuration.clone(),
         runtimes.clone(),
     ));
+
+    // Embedded dashboard — only spawned when explicitly enabled in config,
+    // so the default surface stays unchanged for existing users. Proxies
+    // to its own API over loopback so the browser sees a single origin.
+    if configuration.dashboard.enabled {
+        let listen = configuration.dashboard.listen_address.clone();
+        let api_port = configuration.api.port;
+        task::spawn(async move {
+            let mode = crate::dashboard::Mode::Embedded { api_port };
+            if let Err(e) = crate::dashboard::server::serve(mode, &listen).await {
+                eprintln!("Dashboard task failed: {}", e);
+            }
+        });
+    }
+
     let scheduler_handler = task::spawn(schedule(
         pool,
         configuration,

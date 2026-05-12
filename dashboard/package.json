@@ -1,0 +1,25 @@
+{
+  "name": "ring-dashboard",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.58.0",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "svelte": "^5.55.5",
+    "svelte-check": "^4.4.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10"
+  }
+}

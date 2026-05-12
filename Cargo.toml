@@ -56,5 +56,9 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 tokio-vsock = "0.7"
+rust-embed = "8"
+mime_guess = "2"
+anyhow = "1"
+
 [dev-dependencies]
 axum-test = "17.3.0"
