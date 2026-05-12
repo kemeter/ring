@@ -197,11 +197,34 @@ health_checks:
 Behaviour with at least one `readiness: true` check:
 
 - The child must produce **at least one `success` result** for **every** readiness check before the parent is touched.
-- Each readiness check must remain green for at least **10 seconds** (`min_healthy_time`, hardcoded — anti-flap window borrowed from Nomad).
+- Each readiness check must remain green for at least its **anti-flap window** (`min_healthy_time`, default **10 s**, configurable per check — see below).
 - Any `failed` or `timeout` on a readiness check resets the gate. The parent stays alive.
 - Non-readiness checks keep their existing role (liveness / restart / alert) and don't influence the gate.
 
 If no check is marked `readiness: true`, the legacy "drain on `Running`" behaviour is preserved — existing manifests are unaffected.
+
+#### Tuning the anti-flap window (`min_healthy_time`)
+
+The default 10 s is a sane minimum, but slow-warming services (JVM apps, large in-memory caches, services that prime a hot path before they're really ready) often want a longer window. Override it on a per-check basis:
+
+```yaml
+health_checks:
+  - type: http
+    url: "http://localhost:8080/ready"
+    interval: "5s"
+    timeout: "3s"
+    on_failure: alert
+    readiness: true
+    min_healthy_time: "30s"   # wait for 30 s of consecutive success before draining the parent
+```
+
+Notes:
+
+- The value uses the same syntax as `interval` / `timeout` (`"500ms"`, `"30s"`).
+- It only matters when `readiness: true`. On non-readiness checks the field is parsed but ignored.
+- When several readiness checks declare different `min_healthy_time` values, the scheduler takes the **maximum** — the most-cautious one wins, so the gate honours the slowest probe.
+- An unparseable value is logged at `warn` and the scheduler falls back to the 10 s default; the rollout is not blocked by a typo.
+- The window borrows the name and semantics from Nomad's `min_healthy_time`.
 
 ### Proxy integration (Traefik / Sozune)
 

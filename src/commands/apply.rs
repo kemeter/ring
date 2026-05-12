@@ -116,6 +116,8 @@ enum HealthCheck {
         on_failure: FailureAction,
         #[serde(default)]
         readiness: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
     Http {
         url: String,
@@ -126,6 +128,8 @@ enum HealthCheck {
         on_failure: FailureAction,
         #[serde(default)]
         readiness: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
     Command {
         command: String,
@@ -136,6 +140,8 @@ enum HealthCheck {
         on_failure: FailureAction,
         #[serde(default)]
         readiness: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_healthy_time: Option<String>,
     },
 }
 

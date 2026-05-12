@@ -665,6 +665,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: false,
+            min_healthy_time: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -680,6 +681,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: true,
+            min_healthy_time: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -693,6 +695,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: true,
+            min_healthy_time: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -706,6 +709,7 @@ mod tests {
             threshold: 3,
             on_failure: FailureAction::Alert,
             readiness: true,
+            min_healthy_time: None,
         }];
         let cfg = build_health_config(&hcs).expect("should translate");
         assert_eq!(
@@ -730,6 +734,7 @@ mod tests {
                 threshold: 3,
                 on_failure: FailureAction::Alert,
                 readiness: true,
+                min_healthy_time: None,
             },
             HealthCheck::Command {
                 command: "/usr/local/bin/ready.sh".to_string(),
@@ -738,6 +743,7 @@ mod tests {
                 threshold: 5,
                 on_failure: FailureAction::Alert,
                 readiness: true,
+                min_healthy_time: None,
             },
         ];
         let cfg = build_health_config(&hcs).expect("should translate the command HC");

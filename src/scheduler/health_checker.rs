@@ -344,6 +344,7 @@ mod tests {
                 threshold: 3,
                 on_failure: FailureAction::Restart,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -374,6 +375,7 @@ mod tests {
                 threshold: 1,
                 on_failure: FailureAction::Restart,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -409,6 +411,7 @@ mod tests {
                 threshold: 3,
                 on_failure: FailureAction::Restart,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -438,6 +441,7 @@ mod tests {
                 threshold: 3,
                 on_failure: FailureAction::Restart,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -467,6 +471,7 @@ mod tests {
                 threshold: 3,
                 on_failure: FailureAction::Restart,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -507,6 +512,7 @@ mod tests {
                 threshold: 1,
                 on_failure: FailureAction::Stop,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
@@ -538,6 +544,7 @@ mod tests {
                 threshold: 1,
                 on_failure: FailureAction::Alert,
                 readiness: false,
+                min_healthy_time: None,
             }],
         );
 
