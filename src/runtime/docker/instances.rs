@@ -6,13 +6,18 @@ fn build_list_options(status: &str) -> bollard::query_parameters::ListContainers
     match status {
         "all" => ListContainersOptionsBuilder::new().all(true).build(),
         "active" => {
+            // We deliberately drop `created` here. A container stuck in
+            // `created` (Docker accepted the spec but `start` failed — e.g.
+            // OCI runtime can't exec the binary) is *not* a live instance.
+            // Counting it as active masked the failure: the scheduler saw
+            // `current_count == target_count`, skipped the retry path, and
+            // restart_count never climbed to MAX_RESTART_COUNT. With it out
+            // of the filter, the next tick sees 0 instances, re-tries,
+            // increments restart_count, and eventually flips the deployment
+            // to CrashLoopBackOff like any other crash loop.
             let filters = HashMap::from([(
                 "status".to_string(),
-                vec![
-                    "running".to_string(),
-                    "created".to_string(),
-                    "restarting".to_string(),
-                ],
+                vec!["running".to_string(), "restarting".to_string()],
             )]);
             ListContainersOptionsBuilder::new()
                 .all(true)
