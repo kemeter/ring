@@ -1,16 +1,26 @@
 //! Per-VM resource stats for the Cloud Hypervisor runtime.
 //!
 //! Docker exposes stats through the daemon's API; we have no equivalent for
-//! CH, so we read `/proc/<pid>/*` directly. Two samples of `/proc/<pid>/stat`
-//! taken `interval` apart give a CPU percentage; `/proc/<pid>/status` gives
-//! a single-shot RSS for memory.
+//! CH, so we read host-side files directly:
 //!
-//! The numbers reflect the cloud-hypervisor *host process* — for a VM whose
-//! guest memory is `MAP_SHARED`, RSS captures both the VMM and the
-//! resident slice of guest RAM, which is the closest single number we can
-//! report without going through cgroups. The user opted for the minimal impl;
-//! network/disk/pids are reported as zero on purpose and can be wired later
-//! once the basic flow is validated in production.
+//! - **CPU**: two samples of `/proc/<pid>/stat` (utime + stime) divided by
+//!   the elapsed wall time, normalised to 100% per online CPU.
+//! - **Memory**: `VmRSS` from `/proc/<pid>/status`. With `MAP_SHARED` guest
+//!   memory this captures both the VMM and the resident slice of guest RAM.
+//! - **Network**: `/sys/class/net/<tap>/statistics/{rx,tx}_{bytes,packets}`.
+//!   We swap host-side semantics to guest-side: host `tx` over the tap
+//!   (bytes the host wrote toward the guest) maps to guest `rx`, matching
+//!   the convention `ring deployment metrics` users expect from Docker.
+//! - **Disk I/O**: `read_bytes` / `write_bytes` from `/proc/<pid>/io` when
+//!   we can read it. Cloud Hypervisor clears `PR_SET_DUMPABLE` early in
+//!   its init for sandboxing, which makes that file return `EACCES` even
+//!   to the parent under `kernel.yama.ptrace_scope >= 1`. When unreadable,
+//!   we report zeros — counted by host alone, with no other reliable
+//!   source short of cgroup `io.stat` (which Ring does not currently set
+//!   up per-VM).
+//! - **PIDs**: `Threads:` from `/proc/<pid>/status` (vCPU threads + io +
+//!   control). CH has no equivalent of a cgroup pids.max, so `limit` is
+//!   reported as 0 (= unlimited) to mirror Docker semantics.
 
 use crate::api::dto::stats::{DiskIoStats, MemoryStats, NetworkStats, PidStats};
 
@@ -85,27 +95,82 @@ pub(crate) fn memory_stats(usage_bytes: u64, limit_bytes: u64) -> MemoryStats {
     }
 }
 
-pub(crate) fn empty_network() -> NetworkStats {
+/// Read the four byte/packet counters under `/sys/class/net/<tap>/statistics/`
+/// and return them as guest-side stats. Mapping: host `tx` (what the host
+/// wrote to the tap, i.e. what the guest receives) → guest `rx`; host `rx`
+/// (what the host read off the tap, i.e. what the guest sent) → guest `tx`.
+/// Missing tap or unreadable counter → 0 for that field.
+pub(crate) async fn network_stats_from_tap(tap_name: &str) -> NetworkStats {
+    let base = format!("/sys/class/net/{}/statistics", tap_name);
     NetworkStats {
-        rx_bytes: 0,
-        tx_bytes: 0,
-        rx_packets: 0,
-        tx_packets: 0,
+        rx_bytes: read_counter(&format!("{}/tx_bytes", base)).await,
+        tx_bytes: read_counter(&format!("{}/rx_bytes", base)).await,
+        rx_packets: read_counter(&format!("{}/tx_packets", base)).await,
+        tx_packets: read_counter(&format!("{}/rx_packets", base)).await,
     }
 }
 
-pub(crate) fn empty_disk_io() -> DiskIoStats {
+async fn read_counter(path: &str) -> u64 {
+    match tokio::fs::read_to_string(path).await {
+        Ok(s) => s.trim().parse().unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+/// Parse `/proc/<pid>/io` and return `(read_bytes, write_bytes)`. The kernel
+/// fields are line-prefixed (`read_bytes: 12345`); anything missing yields 0.
+pub(crate) fn parse_proc_io(content: &str) -> DiskIoStats {
+    let mut read_bytes = 0u64;
+    let mut write_bytes = 0u64;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("read_bytes:") {
+            read_bytes = rest.trim().parse().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("write_bytes:") {
+            write_bytes = rest.trim().parse().unwrap_or(0);
+        }
+    }
     DiskIoStats {
-        read_bytes: 0,
-        write_bytes: 0,
+        read_bytes,
+        write_bytes,
     }
 }
 
-pub(crate) fn empty_pids() -> PidStats {
-    PidStats {
-        current: 0,
-        limit: 0,
+pub(crate) async fn disk_io_stats(pid: u32) -> DiskIoStats {
+    let path = format!("/proc/{}/io", pid);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(s) => parse_proc_io(&s),
+        Err(e) => {
+            tracing::debug!(
+                "disk_io_stats: could not read {} ({}); reporting zeros",
+                path,
+                e
+            );
+            DiskIoStats {
+                read_bytes: 0,
+                write_bytes: 0,
+            }
+        }
     }
+}
+
+/// Parse `Threads:` from `/proc/<pid>/status`. CH has no pid cap, so `limit`
+/// stays at 0 (Docker convention for "unlimited").
+pub(crate) fn parse_threads(status: &str) -> u64 {
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("Threads:") {
+            return rest.trim().parse().unwrap_or(0);
+        }
+    }
+    0
+}
+
+pub(crate) async fn pid_stats(pid: u32) -> PidStats {
+    let path = format!("/proc/{}/status", pid);
+    let current = match tokio::fs::read_to_string(&path).await {
+        Ok(s) => parse_threads(&s),
+        Err(_) => 0,
+    };
+    PidStats { current, limit: 0 }
 }
 
 /// Read `/proc/<pid>/stat` and parse it. Returns `None` if the process is
@@ -205,5 +270,50 @@ mod tests {
     fn memory_stats_zero_limit_yields_zero_percent() {
         let m = memory_stats(50 * 1024 * 1024, 0);
         assert_eq!(m.usage_percent, 0.0);
+    }
+
+    #[test]
+    fn parse_proc_io_typical() {
+        let content = "rchar: 12345\nwchar: 6789\nsyscr: 100\nsyscw: 50\nread_bytes: 4096\nwrite_bytes: 8192\ncancelled_write_bytes: 0\n";
+        let io = parse_proc_io(content);
+        assert_eq!(io.read_bytes, 4096);
+        assert_eq!(io.write_bytes, 8192);
+    }
+
+    #[test]
+    fn parse_proc_io_missing_fields_yields_zero() {
+        let content = "rchar: 12345\nwchar: 6789\n";
+        let io = parse_proc_io(content);
+        assert_eq!(io.read_bytes, 0);
+        assert_eq!(io.write_bytes, 0);
+    }
+
+    #[test]
+    fn parse_proc_io_malformed_lines_dont_panic() {
+        let content = "read_bytes: not-a-number\nwrite_bytes:\n";
+        let io = parse_proc_io(content);
+        assert_eq!(io.read_bytes, 0);
+        assert_eq!(io.write_bytes, 0);
+    }
+
+    #[test]
+    fn parse_threads_typical() {
+        let status = "Name:\tch\nState:\tS (sleeping)\nThreads:\t8\nVmRSS:\t  524288 kB\n";
+        assert_eq!(parse_threads(status), 8);
+    }
+
+    #[test]
+    fn parse_threads_missing_returns_zero() {
+        let status = "Name:\tch\nState:\tS (sleeping)\n";
+        assert_eq!(parse_threads(status), 0);
+    }
+
+    #[tokio::test]
+    async fn network_stats_missing_tap_yields_zeros() {
+        let stats = network_stats_from_tap("ring-test-nonexistent-tap-xyz").await;
+        assert_eq!(stats.rx_bytes, 0);
+        assert_eq!(stats.tx_bytes, 0);
+        assert_eq!(stats.rx_packets, 0);
+        assert_eq!(stats.tx_packets, 0);
     }
 }

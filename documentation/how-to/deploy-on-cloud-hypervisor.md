@@ -236,7 +236,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
 | Port mapping | **Supported** via `socat` userspace forwarders |
 | Deployment logs | **Supported** via serial console with size-based rotation (10 MiB × 3 backups by default, configurable) |
-| Deployment metrics | **Partial.** CPU% and memory from `/proc/<vmm-pid>/*`. `network`, `disk_io`, `pids` are zero pending host-side wiring |
+| Deployment metrics | **Supported.** CPU% and memory from `/proc/<vmm-pid>/{stat,status}`, network from `/sys/class/net/<tap>/statistics/*` (swapped host↔guest), threads from `/proc/<vmm-pid>/status`. Disk I/O reads `/proc/<vmm-pid>/io` when accessible but reports zeros on hardened hosts: CH clears `PR_SET_DUMPABLE` and `kernel.yama.ptrace_scope >= 1` then denies even the parent. PID `limit` reports as 0 (CH has no equivalent of cgroup `pids.max`) |
 | Runtime event stream | None — CH has no live event stream; crash detection is tick-bound |
 | Container DNS aliases between replicas | Not applicable — no shared bridge, no DNS |
 

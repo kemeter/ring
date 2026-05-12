@@ -1364,14 +1364,19 @@ impl CloudHypervisorLifecycle {
         let rss = super::stats::read_rss_bytes(info.pid).await;
         let memory = super::stats::memory_stats(rss, info.memory_limit_bytes);
 
+        let tap_name = InstanceNet::for_instance(instance_id).tap_name;
+        let network = super::stats::network_stats_from_tap(&tap_name).await;
+        let disk_io = super::stats::disk_io_stats(info.pid).await;
+        let pids = super::stats::pid_stats(info.pid).await;
+
         Some(crate::api::dto::stats::InstanceStatsOutput {
             instance_id: instance_id.to_string(),
             instance_name: instance_id.to_string(),
             cpu_usage_percent,
             memory,
-            network: super::stats::empty_network(),
-            disk_io: super::stats::empty_disk_io(),
-            pids: super::stats::empty_pids(),
+            network,
+            disk_io,
+            pids,
             restart_count: 0,
         })
     }
