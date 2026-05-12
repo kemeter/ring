@@ -19,6 +19,38 @@ use futures::stream::{self, Stream, StreamExt};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
+use tracing::{debug, warn};
+
+/// Build the ordered list of files to read for a given live log path: oldest
+/// rotated backup first (`<path>.N`), then `.N-1`, ..., `.1`, then the live
+/// `<path>`. Missing files are skipped silently — rotations may be sparse if
+/// the VM has not produced enough output to fill every slot yet.
+fn rotated_files_in_read_order(path: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    // Discover up to a generous upper bound; in practice the configured
+    // `max_console_log_backups` caps this at 3-10.
+    let mut idx = 1u32;
+    let mut backups: Vec<(u32, PathBuf)> = Vec::new();
+    while idx < 1000 {
+        let candidate = backup_path(path, idx);
+        if !candidate.exists() {
+            break;
+        }
+        backups.push((idx, candidate));
+        idx += 1;
+    }
+    // Sort descending (oldest first when reading: highest index is oldest).
+    backups.sort_by(|a, b| b.0.cmp(&a.0));
+    files.extend(backups.into_iter().map(|(_, p)| p));
+    files.push(path.to_path_buf());
+    files
+}
+
+fn backup_path(path: &Path, idx: u32) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(format!(".{}", idx));
+    PathBuf::from(s)
+}
 
 /// Read the console log for a single instance into a vector of lines.
 ///
@@ -29,16 +61,24 @@ use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader, SeekFrom};
 /// file mtime relative to "now", with all lines treated as appended at the
 /// same moment for now) is older. Approximate by design — the serial
 /// console has no native timestamps.
+///
+/// Reads through any rotated backups (`<path>.1`, `.2`, ...) so a `--tail N`
+/// that spans a rotation boundary still returns the requested history.
 pub(crate) async fn read_lines(path: &Path, tail: Option<&str>, since: Option<i32>) -> Vec<String> {
-    let bytes = match tokio::fs::read(path).await {
-        Ok(b) => b,
-        Err(_) => return Vec::new(),
-    };
-
-    // The serial console is not guaranteed to be UTF-8 (early kernel output
-    // may carry stray bytes). Lossy conversion keeps us robust.
-    let text = String::from_utf8_lossy(&bytes);
-    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+    let mut lines: Vec<String> = Vec::new();
+    for file in rotated_files_in_read_order(path) {
+        let bytes = match tokio::fs::read(&file).await {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        // The serial console is not guaranteed to be UTF-8 (early kernel output
+        // may carry stray bytes). Lossy conversion keeps us robust.
+        let text = String::from_utf8_lossy(&bytes);
+        lines.extend(text.lines().map(|s| s.to_string()));
+    }
+    if lines.is_empty() && !path.exists() {
+        return Vec::new();
+    }
 
     if let Some(n_str) = tail {
         if n_str != "all"
@@ -170,6 +210,101 @@ pub(crate) async fn stream_lines(
     Box::pin(initial_stream.chain(follow))
 }
 
+/// Rotate `<path>` if it has grown past `max_bytes`.
+///
+/// Shifts `<path>.{N-1}` → `<path>.N`, dropping anything past `max_backups`,
+/// then renames `<path>` to `<path>.1`. Cloud Hypervisor re-creates the live
+/// file on its next write (the VMM holds the file by name, not by inode,
+/// because `serial.mode = "File"` is a path-based config) so this is safe to
+/// call while a VM is running.
+///
+/// No-op when:
+/// - `max_bytes == 0` (rotation disabled by config)
+/// - `<path>` doesn't exist (VM not yet booted, or never produced output)
+/// - `<path>` is at or below the threshold
+pub(crate) async fn rotate_if_needed(path: &Path, max_bytes: u64, max_backups: u32) {
+    if max_bytes == 0 {
+        return;
+    }
+    let size = match tokio::fs::metadata(path).await {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if size <= max_bytes {
+        return;
+    }
+
+    // Drop the oldest backup if it would exceed the configured count.
+    if max_backups == 0 {
+        // Just truncate by removing the live file; CH will re-create it.
+        if let Err(e) = tokio::fs::remove_file(path).await {
+            warn!("console log rotate: failed to drop {:?}: {}", path, e);
+        }
+        return;
+    }
+
+    let oldest = backup_path(path, max_backups);
+    if oldest.exists() {
+        if let Err(e) = tokio::fs::remove_file(&oldest).await {
+            warn!(
+                "console log rotate: failed to remove oldest backup {:?}: {}",
+                oldest, e
+            );
+        }
+    }
+
+    // Shift .N-1 → .N down to .1 → .2.
+    for idx in (1..max_backups).rev() {
+        let from = backup_path(path, idx);
+        let to = backup_path(path, idx + 1);
+        if from.exists()
+            && let Err(e) = tokio::fs::rename(&from, &to).await
+        {
+            warn!(
+                "console log rotate: failed to shift {:?} -> {:?}: {}",
+                from, to, e
+            );
+            return;
+        }
+    }
+
+    // Finally, live -> .1.
+    let target = backup_path(path, 1);
+    if let Err(e) = tokio::fs::rename(path, &target).await {
+        warn!(
+            "console log rotate: failed to rotate {:?} -> {:?}: {}",
+            path, target, e
+        );
+        return;
+    }
+    debug!(
+        "console log rotated: {:?} (size {} > {})",
+        path, size, max_bytes
+    );
+}
+
+/// Walk `socket_dir` once and rotate every `*.console.log` that has grown
+/// past the threshold. Called on a 60-second cadence by the rotator task.
+pub(crate) async fn rotate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u32) {
+    if max_bytes == 0 {
+        return;
+    }
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if !name.ends_with(".console.log") {
+            continue;
+        }
+        rotate_if_needed(&path, max_bytes, max_backups).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +410,153 @@ mod tests {
 
         drop(s);
         tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn rotate_no_op_when_under_threshold() {
+        let path = scratch_file("rot-under");
+        tokio::fs::write(&path, b"small").await.unwrap();
+        rotate_if_needed(&path, 1024, 3).await;
+        assert!(path.exists());
+        assert!(!backup_path(&path, 1).exists());
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn rotate_disabled_when_max_bytes_zero() {
+        let path = scratch_file("rot-disabled");
+        tokio::fs::write(&path, b"large-enough-payload")
+            .await
+            .unwrap();
+        rotate_if_needed(&path, 0, 3).await;
+        assert!(path.exists());
+        assert!(!backup_path(&path, 1).exists());
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn rotate_shifts_and_caps_backups() {
+        let path = scratch_file("rot-shift");
+        // Seed an existing .1 and .2 to exercise the shift path.
+        tokio::fs::write(&path, b"current-payload-over-threshold")
+            .await
+            .unwrap();
+        tokio::fs::write(backup_path(&path, 1), b"prev-1")
+            .await
+            .unwrap();
+        tokio::fs::write(backup_path(&path, 2), b"prev-2")
+            .await
+            .unwrap();
+        // max_bytes=8 < 30 bytes in `path`, max_backups=2 so .2 must drop.
+        rotate_if_needed(&path, 8, 2).await;
+        // Live file is gone (CH would re-create it on next write).
+        assert!(!path.exists());
+        // Previous .1 → .2, previous .2 dropped.
+        assert_eq!(
+            tokio::fs::read(backup_path(&path, 2)).await.unwrap(),
+            b"prev-1"
+        );
+        // Old live content → .1.
+        assert_eq!(
+            tokio::fs::read(backup_path(&path, 1)).await.unwrap(),
+            b"current-payload-over-threshold"
+        );
+        // .3 must not exist (we capped at 2).
+        assert!(!backup_path(&path, 3).exists());
+
+        tokio::fs::remove_file(backup_path(&path, 1)).await.ok();
+        tokio::fs::remove_file(backup_path(&path, 2)).await.ok();
+    }
+
+    #[tokio::test]
+    async fn rotate_zero_backups_drops_live() {
+        let path = scratch_file("rot-zero-backups");
+        tokio::fs::write(&path, b"payload-over-threshold")
+            .await
+            .unwrap();
+        rotate_if_needed(&path, 4, 0).await;
+        assert!(!path.exists());
+        assert!(!backup_path(&path, 1).exists());
+    }
+
+    #[tokio::test]
+    async fn read_lines_reads_backup_when_live_missing_or_empty() {
+        // Post-rotation: the live file may not yet exist (CH hasn't written
+        // anything new since the rename). `--tail all` must still return the
+        // history that landed in `.1`.
+        let path = scratch_file("post-rotate-missing");
+        tokio::fs::write(backup_path(&path, 1), b"a\nb\nc\nd\ne\n")
+            .await
+            .unwrap();
+        // Don't create `path` itself — simulate the gap before CH writes.
+        let lines = read_lines(&path, Some("all"), None).await;
+        assert_eq!(lines, vec!["a", "b", "c", "d", "e"]);
+        tokio::fs::remove_file(backup_path(&path, 1)).await.ok();
+
+        // Also when the live file exists but is empty (zero bytes).
+        let path2 = scratch_file("post-rotate-empty");
+        tokio::fs::write(backup_path(&path2, 1), b"a\nb\nc\nd\ne\n")
+            .await
+            .unwrap();
+        tokio::fs::write(&path2, b"").await.unwrap();
+        let lines = read_lines(&path2, Some("all"), None).await;
+        assert_eq!(lines, vec!["a", "b", "c", "d", "e"]);
+        tokio::fs::remove_file(&path2).await.ok();
+        tokio::fs::remove_file(backup_path(&path2, 1)).await.ok();
+    }
+
+    #[tokio::test]
+    async fn read_lines_reads_across_backups_in_chronological_order() {
+        let path = scratch_file("read-across");
+        // Oldest content lives in .2, newer in .1, newest in the live file.
+        tokio::fs::write(backup_path(&path, 2), b"old-a\nold-b\n")
+            .await
+            .unwrap();
+        tokio::fs::write(backup_path(&path, 1), b"mid-a\nmid-b\n")
+            .await
+            .unwrap();
+        tokio::fs::write(&path, b"new-a\nnew-b\n").await.unwrap();
+
+        let lines = read_lines(&path, None, None).await;
+        assert_eq!(
+            lines,
+            vec!["old-a", "old-b", "mid-a", "mid-b", "new-a", "new-b"]
+        );
+
+        // tail=3 must pick the last three across the boundary.
+        let tail = read_lines(&path, Some("3"), None).await;
+        assert_eq!(tail, vec!["mid-b", "new-a", "new-b"]);
+
+        tokio::fs::remove_file(&path).await.ok();
+        tokio::fs::remove_file(backup_path(&path, 1)).await.ok();
+        tokio::fs::remove_file(backup_path(&path, 2)).await.ok();
+    }
+
+    #[tokio::test]
+    async fn rotate_all_in_dir_targets_only_console_logs() {
+        let dir = std::env::temp_dir().join(format!(
+            "ring-rot-dir-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+
+        let log = dir.join("vm1.console.log");
+        let other = dir.join("vm1.raw");
+        tokio::fs::write(&log, b"big-enough-payload").await.unwrap();
+        tokio::fs::write(&other, b"big-enough-payload")
+            .await
+            .unwrap();
+
+        rotate_all_in_dir(&dir, 4, 1).await;
+
+        assert!(!log.exists(), "console log should have been rotated");
+        assert!(backup_path(&log, 1).exists());
+        assert!(other.exists(), "non-console files must be left alone");
+
+        tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }

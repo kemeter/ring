@@ -30,6 +30,11 @@ pub(crate) struct CloudHypervisorRuntimeConfig {
     /// Forwarded to `cloud-hypervisor --seccomp <value>` when set. None means
     /// CH applies its own default (kill on violation).
     pub seccomp: Option<String>,
+    /// Size threshold (bytes) past which the rotation task shifts
+    /// `<id>.console.log` to `.1`, `.1` to `.2`, etc. 0 disables rotation.
+    pub max_console_log_bytes: u64,
+    /// How many rotated backups to keep alongside the live console log.
+    pub max_console_log_backups: u32,
 }
 
 impl Default for CloudHypervisorRuntimeConfig {
@@ -40,6 +45,8 @@ impl Default for CloudHypervisorRuntimeConfig {
             firmware_path: format!("{}/cloud-hypervisor/vmlinux", base_dir),
             socket_dir: format!("{}/cloud-hypervisor/sockets", base_dir),
             seccomp: None,
+            max_console_log_bytes: 10 * 1024 * 1024,
+            max_console_log_backups: 3,
         }
     }
 }
@@ -54,6 +61,12 @@ impl CloudHypervisorRuntimeConfig {
             firmware_path: user.firmware_path.clone().unwrap_or(defaults.firmware_path),
             socket_dir: user.socket_dir.clone().unwrap_or(defaults.socket_dir),
             seccomp: user.seccomp.clone(),
+            max_console_log_bytes: user
+                .max_console_log_bytes
+                .unwrap_or(defaults.max_console_log_bytes),
+            max_console_log_backups: user
+                .max_console_log_backups
+                .unwrap_or(defaults.max_console_log_backups),
         }
     }
 }
@@ -91,6 +104,37 @@ impl CloudHypervisorLifecycle {
             port_forwarders: Mutex::new(HashMap::new()),
             pids: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Spawn a background task that walks the socket directory every 60s and
+    /// rotates any `*.console.log` past the configured size threshold. Returns
+    /// the handle so the caller (typically `ring-server`) can abort it on
+    /// shutdown. No-op (returns a stub task) when rotation is disabled.
+    pub fn spawn_console_log_rotator(&self) -> tokio::task::JoinHandle<()> {
+        let dir = std::path::PathBuf::from(&self.config.socket_dir);
+        let max_bytes = self.config.max_console_log_bytes;
+        let max_backups = self.config.max_console_log_backups;
+        tokio::spawn(async move {
+            if max_bytes == 0 {
+                tracing::info!("CH console log rotation disabled (max_console_log_bytes = 0)");
+                return;
+            }
+            tracing::info!(
+                "CH console log rotator armed: dir={:?} max_bytes={} max_backups={}",
+                dir,
+                max_bytes,
+                max_backups
+            );
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            // Skip the initial tick so we don't run a sweep before the
+            // socket_dir has been populated.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                tracing::debug!("CH console log rotator: sweeping {:?}", dir);
+                super::console_logs::rotate_all_in_dir(&dir, max_bytes, max_backups).await;
+            }
+        })
     }
 
     fn instance_share_dir(&self, instance_id: &str) -> PathBuf {
@@ -732,6 +776,19 @@ impl CloudHypervisorLifecycle {
             }
             // Derive the instance_id by stripping the first suffix
             // (`.raw`, `.console.log`, `.shares`, `.vsock`, `.sock`, etc.).
+            // Rotated console logs end in `.console.log.<N>` — strip the
+            // numeric tail before matching.
+            let stripped_rotation = match name.rfind('.') {
+                Some(idx) if name[idx + 1..].chars().all(|c| c.is_ascii_digit()) => {
+                    let head = &name[..idx];
+                    if head.ends_with(".console.log") {
+                        head
+                    } else {
+                        name.as_str()
+                    }
+                }
+                _ => name.as_str(),
+            };
             for suffix in [
                 ".sock",
                 ".raw",
@@ -740,7 +797,7 @@ impl CloudHypervisorLifecycle {
                 ".vsock",
                 ".shares",
             ] {
-                if let Some(id) = name.strip_suffix(suffix) {
+                if let Some(id) = stripped_rotation.strip_suffix(suffix) {
                     seen_ids.insert(id.to_string());
                     break;
                 }
@@ -773,6 +830,22 @@ impl CloudHypervisorLifecycle {
         let console_log = self.console_log_path(instance_id);
         if let Err(e) = tokio::fs::remove_file(&console_log).await {
             debug!("Failed to remove console log {:?}: {}", console_log, e);
+        }
+        // Sweep any rotated backups (`<id>.console.log.1`, `.2`, ...). The
+        // upper bound matches the largest sane `max_console_log_backups`; any
+        // missing index is silently skipped.
+        for idx in 1u32..=1000 {
+            let backup = {
+                let mut s = console_log.as_os_str().to_os_string();
+                s.push(format!(".{}", idx));
+                PathBuf::from(s)
+            };
+            if !backup.exists() {
+                break;
+            }
+            if let Err(e) = tokio::fs::remove_file(&backup).await {
+                debug!("Failed to remove rotated console log {:?}: {}", backup, e);
+            }
         }
 
         let vsock_path =
@@ -1401,6 +1474,8 @@ mod tests {
             firmware_path: "/tmp/fake-fw".to_string(),
             socket_dir: socket_dir.to_string_lossy().into_owned(),
             seccomp: None,
+            max_console_log_bytes: 10 * 1024 * 1024,
+            max_console_log_backups: 3,
         };
         (CloudHypervisorLifecycle::new(cfg), socket_dir)
     }

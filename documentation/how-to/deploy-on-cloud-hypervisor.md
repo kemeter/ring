@@ -198,7 +198,21 @@ The readiness gate (`readiness: true`) works exactly as on Docker — the schedu
 
 To get application logs into the stream, redirect them to `/dev/console` from inside the guest (systemd: `StandardOutput=tty TTYPath=/dev/console`).
 
-**Append-only — Ring does not rotate.** For long-running VMs, rotate externally (logrotate) or recreate the deployment to start fresh.
+### Rotation
+
+Ring rotates the console log automatically. A background task sweeps the socket directory every 60 seconds and, for each `<instance>.console.log` whose size has crossed the threshold, shifts the existing backups (`.1` → `.2`, `.2` → `.3`, ...) and renames the live file to `.1`. Anything past the configured backup count is dropped.
+
+The defaults — 10 MiB per file, 3 backups kept — give roughly 40 MiB of history per VM and survive a typical noisy boot without churning. Override them in `config.toml` if you need more or less:
+
+```toml
+[runtime.cloud_hypervisor]
+max_console_log_bytes = 10485760    # 10 MiB; set to 0 to disable rotation
+max_console_log_backups = 3
+```
+
+`ring deployment logs` reads through every backup so `--tail N` keeps working across rotation boundaries. `--follow` attaches to the live file; if a rotation happens during a follow session, the stream resets to the new file (no missed lines, the prior content is already streamed).
+
+Rotated files are cleaned up with the rest of the instance artifacts when a VM stops.
 
 ## Limitations (parity with Docker)
 
@@ -221,7 +235,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
 | Port mapping | **Supported** via `socat` userspace forwarders |
-| Deployment logs | **Supported** via serial console (append-only, no rotation by Ring) |
+| Deployment logs | **Supported** via serial console with size-based rotation (10 MiB × 3 backups by default, configurable) |
 | Deployment metrics | **Partial.** CPU% and memory from `/proc/<vmm-pid>/*`. `network`, `disk_io`, `pids` are zero pending host-side wiring |
 | Runtime event stream | None — CH has no live event stream; crash detection is tick-bound |
 | Container DNS aliases between replicas | Not applicable — no shared bridge, no DNS |
