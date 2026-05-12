@@ -214,6 +214,16 @@ max_console_log_backups = 3
 
 Rotated files are cleaned up with the rest of the instance artifacts when a VM stops.
 
+### Log levels
+
+Each line is tagged with a best-effort level (`error`, `warning`, `info`, `debug`, `unknown`) when you request the structured API response (`GET /deployments/{id}/logs` returns JSON; the CLI rendering currently shows the message body only). The classifier recognises:
+
+- **Kernel** — the `<N>` syslog priority prefix (`<0>`..`<3>` → error, `<4>` → warning, `<5>`/`<6>` → info, `<7>` → debug) and crash markers (`BUG:`, `Oops:`, `Kernel panic`).
+- **cloud-init / systemd** — uppercase level words (`ERROR`, `CRITICAL`, `WARNING`, `WARN`, `NOTICE`, `INFO`, `DEBUG`) as they appear in the journal stream piped to the console.
+- **Web apps & boot firmware** — bracketed markers in either case (`[error]` / `[ERROR]`, `[warning]` / `[WARN]`, `[notice]` / `[NOTICE]`, `[info]` / `[INFO]`, `[DEBUG]`, `info:`). `hypervisor-fw`'s own boot lines (`[INFO] Page tables setup`) fall under this rule.
+
+Anything that doesn't match falls back to `unknown`.
+
 ## Limitations (parity with Docker)
 
 This is the canonical parity table. Other pages link here rather than restate it.

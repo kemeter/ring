@@ -87,6 +87,21 @@ if [ "$TAIL_LINES" -gt 8 ]; then
 fi
 log "--tail 5 returned $TAIL_LINES line(s) (within bounds)"
 
+# === level classification: at least one non-unknown level after boot ===
+# The CLI rendering drops `level` from the human format, so we hit the
+# raw API endpoint that returns the full structured Log objects.
+TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
+JSON_LOGS=$(curl -fsS "$RING_URL/deployments/$DEPLOYMENT_ID/logs?tail=200" \
+  -H "Authorization: Bearer $TOKEN")
+LEVEL_COUNTS=$(echo "$JSON_LOGS" | jq -r '[.[] | .level] | group_by(.) | map({level: .[0], n: length})')
+log "log levels: $LEVEL_COUNTS"
+NON_UNKNOWN=$(echo "$JSON_LOGS" | jq -r '[.[] | select(.level != "unknown")] | length')
+if [ "$NON_UNKNOWN" -lt 1 ]; then
+  echo "$JSON_LOGS" | jq '.[0:5]' >&2
+  fail "every log line classified as 'unknown' — kernel/cloud-init markers should have produced at least one info/warning/error"
+fi
+log "$NON_UNKNOWN log line(s) classified as info/warning/error/debug"
+
 # === delete teardown removes the log file ===
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 for _ in $(seq 1 60); do
