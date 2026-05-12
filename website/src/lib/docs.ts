@@ -62,16 +62,16 @@ const FOLDER_ORDER = ['tutorials', 'how-to', 'reference', 'concepts', 'help'];
 const PAGE_ORDER: Record<string, string[]> = {
   tutorials: ['install-and-run', 'first-deployment'],
   'how-to': [
-    'expose-with-sozune',
     'deploy-with-secrets',
     'configure-health-checks',
-    'run-a-job',
     'perform-rolling-update',
-    'isolate-namespaces-network',
+    'run-a-job',
     'observe-and-debug',
+    'isolate-namespaces-network',
+    'expose-with-sozune',
     'manage-users',
-    'deploy-on-cloud-hypervisor',
     'run-as-service',
+    'deploy-on-cloud-hypervisor',
   ],
   reference: ['manifest', 'cli', 'api', 'config-toml', 'environment-variables'],
   concepts: [

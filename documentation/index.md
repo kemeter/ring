@@ -107,16 +107,16 @@ The docs are organized by what you're trying to do. Pick the section that matche
 Once you're past the basics, pick a [how-to guide](#how-to-guides) for the specific feature you need (secrets, rolling updates, health checks, jobs, …).
 
 **How-to guides** — solve a specific problem
-- [Expose a deployment with Sozune](/documentation/how-to/expose-with-sozune) — HTTP/HTTPS routing with the companion proxy
 - [Deploy with secrets](/documentation/how-to/deploy-with-secrets)
 - [Configure health checks](/documentation/how-to/configure-health-checks)
-- [Run a job](/documentation/how-to/run-a-job)
 - [Perform a rolling update](/documentation/how-to/perform-rolling-update)
-- [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
+- [Run a job](/documentation/how-to/run-a-job)
 - [Observe and debug](/documentation/how-to/observe-and-debug)
+- [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
+- [Expose a deployment with Sozune](/documentation/how-to/expose-with-sozune) — HTTP/HTTPS routing with the companion proxy
 - [Manage users](/documentation/how-to/manage-users)
-- [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
 - [Run Ring as a service](/documentation/how-to/run-as-service)
+- [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
 
 **Reference** — exhaustive specs
 - [Manifest](/documentation/reference/manifest) — complete YAML/JSON schema
