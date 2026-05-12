@@ -11,7 +11,7 @@
 
   onMount(() => {
     if (getToken()) {
-      goto('./deployments');
+      goto('/deployments');
     }
   });
 
@@ -22,7 +22,7 @@
     try {
       const token = await login(username, password);
       setToken(token);
-      goto('./deployments');
+      goto('/deployments');
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     } finally {

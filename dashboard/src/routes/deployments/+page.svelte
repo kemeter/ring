@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { listDeployments, type Deployment } from '$lib/api';
   import { getToken } from '$lib/auth';
 
@@ -9,6 +10,81 @@
   let errorMsg = $state<string | null>(null);
   let lastFetch = $state<Date | null>(null);
   let poll: ReturnType<typeof setInterval> | null = null;
+
+  // Filters are mirrored to the URL so a filtered view is shareable and
+  // a back-button restores the state. Empty string means "no filter".
+  let namespaceFilter = $state('');
+  let runtimeFilter = $state('');
+  let statusFilter = $state('');
+  let searchQuery = $state('');
+
+  // One-shot read of the URL on mount; subsequent changes are pushed back
+  // by `syncUrl()` below.
+  function loadFiltersFromUrl(url: URL): void {
+    namespaceFilter = url.searchParams.get('namespace') ?? '';
+    runtimeFilter = url.searchParams.get('runtime') ?? '';
+    statusFilter = url.searchParams.get('status') ?? '';
+    searchQuery = url.searchParams.get('q') ?? '';
+  }
+
+  function syncUrl(): void {
+    const params = new URLSearchParams();
+    if (namespaceFilter) {
+      params.set('namespace', namespaceFilter);
+    }
+    if (runtimeFilter) {
+      params.set('runtime', runtimeFilter);
+    }
+    if (statusFilter) {
+      params.set('status', statusFilter);
+    }
+    if (searchQuery) {
+      params.set('q', searchQuery);
+    }
+    const qs = params.toString();
+    const next = qs ? `?${qs}` : '';
+    // Replace the URL silently — no navigation, no re-mount.
+    history.replaceState(null, '', `${$page.url.pathname}${next}`);
+  }
+
+  function clearFilters() {
+    namespaceFilter = '';
+    runtimeFilter = '';
+    statusFilter = '';
+    searchQuery = '';
+    syncUrl();
+  }
+
+  // Distinct values, derived from the current dataset, used to populate
+  // the dropdowns. Sorted alphabetically so the order is stable.
+  let allNamespaces = $derived(
+    Array.from(new Set(items.map((d) => d.namespace))).sort()
+  );
+  let allRuntimes = $derived(Array.from(new Set(items.map((d) => d.runtime))).sort());
+  let allStatuses = $derived(Array.from(new Set(items.map((d) => d.status))).sort());
+
+  let visible = $derived(
+    items.filter((d) => {
+      if (namespaceFilter && d.namespace !== namespaceFilter) {
+        return false;
+      }
+      if (runtimeFilter && d.runtime !== runtimeFilter) {
+        return false;
+      }
+      if (statusFilter && d.status !== statusFilter) {
+        return false;
+      }
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        return d.name.toLowerCase().includes(q) || d.image.toLowerCase().includes(q);
+      }
+      return true;
+    })
+  );
+
+  let hasActiveFilter = $derived(
+    Boolean(namespaceFilter || runtimeFilter || statusFilter || searchQuery)
+  );
 
   async function refresh() {
     try {
@@ -24,9 +100,10 @@
 
   onMount(() => {
     if (!getToken()) {
-      goto('../');
+      goto('/');
       return;
     }
+    loadFiltersFromUrl($page.url);
     void refresh();
     poll = setInterval(() => void refresh(), 5000);
   });
@@ -65,14 +142,27 @@
     return 'neutral';
   }
 
-  let runningCount = $derived(items.filter((d) => d.status.toLowerCase() === 'running').length);
-  let totalReplicas = $derived(items.reduce((acc, d) => acc + (d.replicas ?? 0), 0));
+  let runningCount = $derived(visible.filter((d) => d.status.toLowerCase() === 'running').length);
+  let totalReplicas = $derived(visible.reduce((acc, d) => acc + (d.replicas ?? 0), 0));
 </script>
 
 <header class="page-header">
   <div>
     <h1>Deployments</h1>
-    <p class="subtitle">All workloads scheduled by this Ring instance</p>
+    <p class="subtitle">
+      {#if hasActiveFilter}
+        Showing {visible.length} of {items.length}
+        — <a
+          href="/deployments"
+          onclick={(e) => {
+            e.preventDefault();
+            clearFilters();
+          }}>clear filters</a
+        >
+      {:else}
+        All workloads scheduled by this Ring instance
+      {/if}
+    </p>
   </div>
   <div class="header-actions">
     {#if lastFetch}
@@ -87,7 +177,7 @@
 <section class="stats">
   <div class="stat-card">
     <div class="stat-label">Running</div>
-    <div class="stat-value">{runningCount}<span class="unit">/ {items.length}</span></div>
+    <div class="stat-value">{runningCount}<span class="unit">/ {visible.length}</span></div>
     <div class="stat-sub">deployments currently healthy</div>
   </div>
   <div class="stat-card">
@@ -97,13 +187,51 @@
   </div>
 </section>
 
+<section class="filters">
+  <div class="filter search">
+    <input
+      type="search"
+      placeholder="Search name or image…"
+      bind:value={searchQuery}
+      oninput={syncUrl}
+    />
+  </div>
+  <div class="filter">
+    <select bind:value={namespaceFilter} onchange={syncUrl}>
+      <option value="">All namespaces</option>
+      {#each allNamespaces as ns}
+        <option value={ns}>{ns}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="filter">
+    <select bind:value={runtimeFilter} onchange={syncUrl}>
+      <option value="">All runtimes</option>
+      {#each allRuntimes as rt}
+        <option value={rt}>{rt}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="filter">
+    <select bind:value={statusFilter} onchange={syncUrl}>
+      <option value="">All statuses</option>
+      {#each allStatuses as st}
+        <option value={st}>{st}</option>
+      {/each}
+    </select>
+  </div>
+  {#if hasActiveFilter}
+    <button class="btn-clear" onclick={clearFilters}>Clear</button>
+  {/if}
+</section>
+
 {#if errorMsg}
   <div class="alert">
     <strong>error</strong> {errorMsg}
   </div>
 {/if}
 
-{#if !loading && items.length > 0}
+{#if !loading && visible.length > 0}
   <section class="card">
     <table>
       <thead>
@@ -117,11 +245,11 @@
         </tr>
       </thead>
       <tbody>
-        {#each items as d (d.id)}
+        {#each visible as d (d.id)}
           {@const kind = statusKind(d.status)}
           <tr>
             <td>{d.namespace}</td>
-            <td><span class="deployment-name">{d.name}</span></td>
+            <td><a class="deployment-name" href="/deployments/{d.id}">{d.name}</a></td>
             <td>{d.runtime}</td>
             <td>
               <span
@@ -148,10 +276,24 @@
   </section>
 {/if}
 
-{#if !loading && items.length === 0 && !errorMsg}
+{#if !loading && visible.length === 0 && !errorMsg}
   <div class="empty">
-    <p>No deployments yet.</p>
-    <p class="muted">Use <code>ring apply -f deployment.yaml</code> to create one.</p>
+    {#if hasActiveFilter}
+      <p>No deployments match the current filters.</p>
+      <p class="muted">
+        <a
+          href="/deployments"
+          onclick={(e) => {
+            e.preventDefault();
+            clearFilters();
+          }}>Clear filters</a
+        >
+        or adjust them.
+      </p>
+    {:else}
+      <p>No deployments yet.</p>
+      <p class="muted">Use <code>ring apply -f deployment.yaml</code> to create one.</p>
+    {/if}
   </div>
 {/if}
 
@@ -198,6 +340,66 @@
   .btn-secondary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    align-items: center;
+  }
+  .filter {
+    min-width: 160px;
+  }
+  .filter.search {
+    flex: 1 1 220px;
+    min-width: 220px;
+  }
+  .filter input,
+  .filter select {
+    width: 100%;
+    background: var(--bg-1);
+    color: var(--fg-0);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.45rem 0.7rem;
+    font-size: 0.82rem;
+    outline: none;
+    transition: border-color 0.1s;
+  }
+  .filter input:focus,
+  .filter select:focus {
+    border-color: var(--accent);
+  }
+  .filter input::placeholder {
+    color: var(--fg-3);
+  }
+  .filter select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--fg-2) 50%),
+      linear-gradient(135deg, var(--fg-2) 50%, transparent 50%);
+    background-position:
+      calc(100% - 14px) center,
+      calc(100% - 9px) center;
+    background-size:
+      5px 5px,
+      5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 1.75rem;
+  }
+  .btn-clear {
+    background: var(--bg-2);
+    color: var(--fg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.45rem 0.8rem;
+    font-size: 0.78rem;
+  }
+  .btn-clear:hover {
+    background: var(--bg-hover);
+    color: var(--fg-0);
   }
 
   .stats {
@@ -280,6 +482,9 @@
   .deployment-name {
     font-weight: 500;
     color: var(--fg-0);
+  }
+  .deployment-name:hover {
+    color: var(--accent);
   }
 
   .status-pill {

@@ -10,15 +10,13 @@
   let currentUser = $state<CurrentUser | null>(null);
 
   const nav = [
-    { href: './deployments', label: 'Deployments', icon: 'grid' }
+    { href: '/deployments', label: 'Deployments', icon: 'grid' },
+    { href: '/namespaces', label: 'Namespaces', icon: 'folder' }
   ];
 
   function isActive(href: string): boolean {
     const current = $page.url.pathname.replace(/\/$/, '');
-    const target = href.replace(/^\.\//, '/').replace(/\/$/, '');
-    if (target === '') {
-      return current === '';
-    }
+    const target = href.replace(/\/$/, '');
     return current === target || current.startsWith(`${target}/`);
   }
 
@@ -29,7 +27,7 @@
       return;
     }
     if (!getToken()) {
-      goto('./');
+      goto('/');
       return;
     }
     try {
@@ -44,7 +42,7 @@
 
   function logout() {
     clearToken();
-    goto('./');
+    goto('/');
   }
 </script>
 
@@ -71,6 +69,17 @@
                   <rect x="9" y="2" width="5" height="5" rx="1" />
                   <rect x="2" y="9" width="5" height="5" rx="1" />
                   <rect x="9" y="9" width="5" height="5" rx="1" />
+                </svg>
+              {:else if item.icon === 'folder'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V4.5z" />
                 </svg>
               {/if}
             </span>

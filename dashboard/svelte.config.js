@@ -11,10 +11,12 @@ const config = {
       fallback: 'index.html',
       precompress: false,
       strict: true
-    }),
-    paths: {
-      relative: true
-    }
+    })
+    // No `paths: { relative: true }` — adapter-static rewrites our absolute
+    // `/foo` URLs to `./foo` relative to the current page, which breaks
+    // dynamic routes (`./deployments/abc` from `/deployments` resolves to
+    // `/deployments/deployments/abc`). Keep paths absolute, served from
+    // root by the Rust backend.
   }
 };
 
