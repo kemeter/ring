@@ -133,7 +133,13 @@
     if (k === 'running') {
       return 'success';
     }
-    if (k === 'failed' || k === 'crashloopbackoff' || k === 'error') {
+    if (
+      k === 'failed' ||
+      k === 'crashloopbackoff' ||
+      k === 'error' ||
+      k === 'createcontainererror' ||
+      k === 'imagepullbackoff'
+    ) {
       return 'danger';
     }
     if (k === 'pending' || k === 'booting' || k === 'created') {

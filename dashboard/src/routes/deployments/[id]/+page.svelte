@@ -75,7 +75,13 @@
     if (k === 'running') {
       return 'success';
     }
-    if (k === 'failed' || k === 'crashloopbackoff' || k === 'error') {
+    if (
+      k === 'failed' ||
+      k === 'crashloopbackoff' ||
+      k === 'error' ||
+      k === 'createcontainererror' ||
+      k === 'imagepullbackoff'
+    ) {
       return 'danger';
     }
     if (k === 'pending' || k === 'booting' || k === 'created') {
@@ -126,6 +132,32 @@
       return iso;
     }
   }
+
+  /** Collapse runs of consecutive events sharing the same level + message
+   *  into a single row with a count. The scheduler emits e.g. "Scaled up"
+   *  on every reconciliation tick, which floods the timeline with no
+   *  added signal — we keep the first occurrence's timestamp and tally
+   *  the rest. */
+  interface GroupedEvent {
+    key: string;
+    first: DeploymentEvent;
+    count: number;
+  }
+  function groupConsecutive(list: DeploymentEvent[]): GroupedEvent[] {
+    const out: GroupedEvent[] = [];
+    for (const ev of list) {
+      const key = `${ev.level ?? ''}|${ev.message ?? ''}|${ev.reason ?? ''}`;
+      const last = out[out.length - 1];
+      if (last && last.key === key) {
+        last.count += 1;
+      } else {
+        out.push({ key, first: ev, count: 1 });
+      }
+    }
+    return out;
+  }
+
+  let groupedEvents = $derived(groupConsecutive(events));
 </script>
 
 {#if loading && !detail}
@@ -332,7 +364,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each Object.entries(detail.environment) as [k, v]}
+          {#each Object.entries(detail.environment).sort(([a], [b]) => a.localeCompare(b)) as [k, v] (k)}
             {@const disp = envDisplay(v)}
             <tr>
               <td class="mono">{k}</td>
@@ -394,13 +426,24 @@
         <span class="count">{events.length}</span>
       </header>
       <ul class="events">
-        {#each events.slice(0, 50) as ev, i (ev.id ?? i)}
+        {#each groupedEvents as g, i (g.first.id ?? i)}
+          {@const ts = g.first.timestamp ?? g.first.created_at}
           <li>
-            <span class="event-time mono">{formatDate(ev.created_at)}</span>
-            {#if ev.level}
-              <span class="event-level event-level-{ev.level.toLowerCase()}">{ev.level}</span>
+            <span class="event-time mono">{formatDate(ts)}</span>
+            {#if g.first.level}
+              <span class="event-level event-level-{g.first.level.toLowerCase()}"
+                >{g.first.level}</span
+              >
             {/if}
-            <span class="event-msg">{ev.message ?? JSON.stringify(ev)}</span>
+            <span class="event-msg">
+              {g.first.message ?? JSON.stringify(g.first)}
+              {#if g.count > 1}
+                <span class="event-multiplier">×{g.count}</span>
+              {/if}
+              {#if g.first.reason}
+                <span class="event-reason">{g.first.reason}</span>
+              {/if}
+            </span>
           </li>
         {/each}
       </ul>
@@ -694,5 +737,24 @@
   .event-msg {
     color: var(--fg-0);
     word-break: break-word;
+  }
+  .event-multiplier {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-2);
+    color: var(--fg-2);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .event-reason {
+    display: inline-block;
+    margin-left: 0.5rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-size: 0.7rem;
   }
 </style>

@@ -112,7 +112,12 @@ export interface DeploymentEvent {
   deployment_id?: string;
   level?: string;
   message?: string;
+  /** Server returns `timestamp` (RFC3339). `created_at` kept as a fallback
+   *  for older API versions. */
+  timestamp?: string;
   created_at?: string;
+  component?: string;
+  reason?: string;
   [key: string]: unknown;
 }
 
