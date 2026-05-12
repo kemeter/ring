@@ -113,7 +113,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Run a job](/documentation/how-to/run-a-job)
 - [Observe and debug](/documentation/how-to/observe-and-debug)
 - [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
-- [Expose a deployment with Sozune](/documentation/how-to/expose-with-sozune) — HTTP/HTTPS routing with the companion proxy
+- [Expose a deployment with Sozune](/documentation/how-to/expose-with-sozune)
 - [Manage users](/documentation/how-to/manage-users)
 - [Run Ring as a service](/documentation/how-to/run-as-service)
 - [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
