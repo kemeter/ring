@@ -175,6 +175,25 @@ async fn handle_job_deployment(
         return deployment;
     }
 
+    // Terminal states: a one-shot job is done either way. Stop reconciling.
+    // `Failed` is the job equivalent of `CrashLoopBackOff` for workers — set
+    // below when restart_count hits MAX_RESTART_COUNT.
+    if matches!(
+        deployment.status,
+        DeploymentStatus::Completed | DeploymentStatus::Failed
+    ) {
+        return deployment;
+    }
+
+    // Cap retries the same way workers do, but flip to `Failed` (terminal,
+    // one-shot) instead of `CrashLoopBackOff` (long-running). A job that
+    // never managed to boot after MAX_RESTART_COUNT tries is functionally
+    // done — surface that to the operator.
+    if deployment.restart_count >= MAX_RESTART_COUNT {
+        deployment.status = DeploymentStatus::Failed;
+        return deployment;
+    }
+
     let all_instances = list_instances(&docker, deployment.id.to_string(), "all").await;
 
     if let Some(instance_id) = all_instances.first() {
@@ -189,15 +208,21 @@ async fn handle_job_deployment(
                 deployment.status = DeploymentStatus::Failed;
             }
         }
-    } else if deployment.status == DeploymentStatus::Creating
-        || deployment.status == DeploymentStatus::Pending
-    {
+    } else {
+        // No instance: either we've never created one (Creating / Pending)
+        // or the previous attempt left a transient error state (e.g.
+        // create_container_error after Docker rejected `start`). Either
+        // way, try again — the retry path is what eventually grows
+        // restart_count past MAX_RESTART_COUNT and converges to Failed.
         match create_container(&mut deployment, &docker, &resolved_mounts).await {
             Ok(_) => {
                 deployment.status = DeploymentStatus::Running;
             }
             Err(err) => {
-                handle_create_error(&mut deployment, err, false);
+                // `true` so the failure counts toward MAX_RESTART_COUNT.
+                // Without this, the job loops on `create_container_error`
+                // forever and the operator never sees a terminal state.
+                handle_create_error(&mut deployment, err, true);
             }
         }
     }
