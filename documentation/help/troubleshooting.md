@@ -122,7 +122,7 @@ Most common causes:
 - **`ImagePullBackOff`** — Docker can't pull the image. Wrong tag, missing credentials, network problem. Verify with `docker pull <image>` from the host
 - **`InstanceCreationFailed`** — Docker rejected the container creation. Common subreasons: port conflict (`bind: address already in use`), invalid bind mount (source path missing), unsupported runtime option
 
-### `ImagePullBackOff`
+### `image_pull_back_off`
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> --level error --limit 20
@@ -140,7 +140,7 @@ config:
 
 See [how-to: deploy with secrets → private registry credentials](/documentation/how-to/deploy-with-secrets#private-registry-credentials-are-different).
 
-### `CrashLoopBackOff`
+### `crash_loop_back_off`
 
 The container has crashed more than `MAX_RESTART_COUNT` times. Look at:
 

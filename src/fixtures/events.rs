@@ -13,7 +13,7 @@ pub async fn load(pool: &SqlitePool) {
         .bind("info")
         .bind("Deployment created successfully")
         .bind("api")
-        .bind("DeploymentCreated")
+        .bind("deployment_created")
         .execute(pool)
         .await
         .unwrap();
@@ -28,7 +28,7 @@ pub async fn load(pool: &SqlitePool) {
         .bind("error")
         .bind("Failed to pull image nginx:latest")
         .bind("docker")
-        .bind("ImagePullError")
+        .bind("image_pull_error")
         .execute(pool)
         .await
         .unwrap();

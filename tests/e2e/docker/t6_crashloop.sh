@@ -44,8 +44,8 @@ if [ "${RESTART_COUNT:-0}" -lt 5 ]; then
 fi
 
 # The deployment must have transitioned to CrashLoopBackOff.
-if [ "$STATUS" != "CrashLoopBackOff" ]; then
-  fail "expected status CrashLoopBackOff, got '$STATUS'"
+if [ "$STATUS" != "crash_loop_back_off" ]; then
+  fail "expected status crash_loop_back_off, got '$STATUS'"
 fi
 
 # Sanity: the total number of containers ever spawned for this deployment must

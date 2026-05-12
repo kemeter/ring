@@ -1000,7 +1000,7 @@ impl CloudHypervisorLifecycle {
                             "info",
                             format!("Job VM {} completed", instance_id),
                             "cloud-hypervisor",
-                            Some("JobCompleted"),
+                            Some("job_completed"),
                         );
                     }
                     other => {
@@ -1028,7 +1028,7 @@ impl CloudHypervisorLifecycle {
                             "error",
                             "Job VM repeatedly crashed before completing".to_string(),
                             "cloud-hypervisor",
-                            Some("JobFailed"),
+                            Some("job_failed"),
                         );
                     }
                 }
@@ -1053,7 +1053,7 @@ impl CloudHypervisorLifecycle {
                 "info",
                 "Job VM exited and CH process terminated; finalized as completed".to_string(),
                 "cloud-hypervisor",
-                Some("JobCompleted"),
+                Some("job_completed"),
             );
         } else if matches!(
             deployment.status,

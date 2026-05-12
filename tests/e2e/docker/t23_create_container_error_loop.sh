@@ -54,8 +54,8 @@ log "observed: restart_count=$RESTART_COUNT status=$STATUS scaled_up_events=$SCA
 
 # 1) The deployment must converge to CrashLoopBackOff. Anything else means
 #    the scheduler keeps trying without a bound.
-if [ "$STATUS" != "CrashLoopBackOff" ]; then
-  fail "expected status CrashLoopBackOff, got '$STATUS'"
+if [ "$STATUS" != "crash_loop_back_off" ]; then
+  fail "expected status crash_loop_back_off, got '$STATUS'"
 fi
 
 # 2) restart_count must have reached at least MAX_RESTART_COUNT (5). If it

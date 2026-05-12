@@ -58,8 +58,8 @@ if [ "${RESTART_COUNT:-0}" -ne 0 ]; then
   fail "scale-down bumped restart_count to $RESTART_COUNT — operator-initiated removals are being counted as crashes"
 fi
 
-if [ "$STATUS" = "CrashLoopBackOff" ]; then
-  fail "deployment is in CrashLoopBackOff after a clean scale-down"
+if [ "$STATUS" = "crash_loop_back_off" ]; then
+  fail "deployment is in crash_loop_back_off after a clean scale-down"
 fi
 
 log "== T7: PASS =="

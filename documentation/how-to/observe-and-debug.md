@@ -11,7 +11,7 @@ When a deployment misbehaves, work through the streams from outside in:
 curl http://localhost:3030/healthz                 # → {"state":"UP"}
 
 # 2. What's the deployment status?
-ring deployment list                                # any failed / CrashLoopBackOff?
+ring deployment list                                # any failed / crash_loop_back_off?
 
 # 3. What did Ring decide to do?
 ring deployment events <ID> --level error --limit 50

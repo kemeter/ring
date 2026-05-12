@@ -36,7 +36,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "missing-image" "ImagePullBackOff" 60
+wait_deployment_status "ring-e2e" "missing-image" "image_pull_back_off" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "missing-image")
 [ -z "$DEPLOYMENT_ID" ] && fail "no deployment id"
 log "deployment landed in ImagePullBackOff: $DEPLOYMENT_ID"

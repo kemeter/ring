@@ -37,22 +37,22 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     let (status, reason, message) = match &err {
         RuntimeError::ImageNotFound(_) => (
             DeploymentStatus::ImagePullBackOff,
-            "ImagePullBackOff",
+            "image_pull_back_off",
             format!("Image '{}' not found", deployment.image),
         ),
         RuntimeError::ImagePullFailed(_) => (
             DeploymentStatus::ImagePullBackOff,
-            "ImagePullBackOff",
+            "image_pull_back_off",
             format!("Failed to pull image '{}'", deployment.image),
         ),
         RuntimeError::InstanceCreationFailed(msg) => (
             DeploymentStatus::CreateContainerError,
-            "InstanceCreationFailed",
+            "instance_creation_failed",
             format!("Container creation failed: {}", msg),
         ),
         RuntimeError::NetworkCreationFailed(_) => (
             DeploymentStatus::NetworkError,
-            "NetworkCreationFailed",
+            "network_creation_failed",
             format!(
                 "Failed to create network for namespace '{}'",
                 deployment.namespace
@@ -60,12 +60,12 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
         ),
         RuntimeError::ConfigNotFound(_) => (
             DeploymentStatus::ConfigError,
-            "ConfigError",
+            "config_error",
             format!("Config not found in namespace '{}'", deployment.namespace),
         ),
         RuntimeError::ConfigKeyNotFound(_) => (
             DeploymentStatus::ConfigError,
-            "ConfigError",
+            "config_error",
             format!(
                 "Config key not found in namespace '{}'",
                 deployment.namespace
@@ -73,24 +73,24 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
         ),
         RuntimeError::StatsFetchFailed(msg) => (
             DeploymentStatus::Error,
-            "StatsFetchFailed",
+            "stats_fetch_failed",
             format!("Stats fetch failed: {}", msg),
         ),
         RuntimeError::Other(msg) => (
             DeploymentStatus::Error,
-            "RuntimeError",
+            "runtime_error",
             format!("Docker error: {}", msg),
         ),
         // CH-specific variants — Docker should never produce them, but the
         // enum is shared so we map them to the closest Docker-side state.
         RuntimeError::FirmwareNotFound(msg) => (
             DeploymentStatus::Failed,
-            "FirmwareNotFound",
+            "firmware_not_found",
             format!("Firmware not found: {}", msg),
         ),
         RuntimeError::VmStartFailed(msg) => (
             DeploymentStatus::Error,
-            "VmStartFailed",
+            "vm_start_failed",
             format!("VM start failed: {}", msg),
         ),
         // The CH runtime emits this; the Docker runtime doesn't (the daemon
@@ -98,17 +98,17 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
         // arm exists to keep the match exhaustive over the shared enum.
         RuntimeError::PortAlreadyInUse(port) => (
             DeploymentStatus::Error,
-            "PortAllocationFailed",
+            "port_allocation_failed",
             format!("Port {} is already allocated", port),
         ),
         RuntimeError::Io(e) => (
             DeploymentStatus::FileSystemError,
-            "FileSystemError",
+            "file_system_error",
             format!("IO error: {}", e),
         ),
         RuntimeError::Json(e) => (
             DeploymentStatus::Error,
-            "RuntimeError",
+            "runtime_error",
             format!("JSON error: {}", e),
         ),
     };
@@ -139,7 +139,7 @@ async fn remove_all_instances(
                 instance_count, kind
             ),
             "docker",
-            Some("ContainerDeletion"),
+            Some("container_deletion"),
         );
     }
 
@@ -256,7 +256,7 @@ async fn handle_worker_deployment(
                                 current_count + 1
                             ),
                             "docker",
-                            Some("ScaleUp"),
+                            Some("scale_up"),
                         );
 
                         if deployment.status == DeploymentStatus::Pending
@@ -302,7 +302,7 @@ async fn handle_worker_deployment(
                             container_id
                         ),
                         "docker",
-                        Some("ScaleDown"),
+                        Some("scale_down"),
                     );
                 }
             }
