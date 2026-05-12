@@ -76,7 +76,7 @@ async fn load_configs(
                 "error",
                 format!("Failed to load configs: {}", e),
                 "scheduler",
-                Some("ConfigLoadError"),
+                Some("config_load_error"),
             )
             .await
             {
@@ -100,7 +100,7 @@ async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Optio
             "error",
             format!("Failed to resolve secrets: {}", e),
             "scheduler",
-            Some("SecretResolutionError"),
+            Some("secret_resolution_error"),
         )
         .await
         {
@@ -133,7 +133,7 @@ async fn apply_runtime(
                     apply_timeout_secs
                 ),
                 "scheduler",
-                Some("ApplyTimeout"),
+                Some("apply_timeout"),
             )
             .await
             {
@@ -169,7 +169,7 @@ async fn handle_status_transitions(
             "info",
             "Deployment marked for cleanup - all containers stopped".to_string(),
             "scheduler",
-            Some("CleanupScheduled"),
+            Some("cleanup_scheduled"),
         )
         .await
         {
@@ -195,7 +195,7 @@ async fn handle_status_transitions(
                 deployment.instances.len()
             ),
             "scheduler",
-            Some("StateTransition"),
+            Some("state_transition"),
         )
         .await
         {
@@ -464,7 +464,7 @@ async fn handle_rolling_update(
             "error",
             format!("Rolling update failed: health checks did not pass. Parent deployment {} is still running.", parent_id),
             "scheduler",
-            Some("RollingUpdateFailed"),
+            Some("rolling_update_failed"),
         )
         .await
         {
@@ -539,7 +539,7 @@ async fn handle_rolling_update(
                 parent.instances.len()
             ),
             "scheduler",
-            Some("RollingUpdateStep"),
+            Some("rolling_update_step"),
         )
         .await
         {
@@ -573,7 +573,7 @@ async fn handle_rolling_update(
                 parent_id
             ),
             "scheduler",
-            Some("RollingUpdateComplete"),
+            Some("rolling_update_complete"),
         )
         .await
         {
@@ -658,7 +658,7 @@ async fn apply_docker_event(
                 "warning",
                 format!("Container {} killed by OOM", container_id),
                 "docker-events",
-                Some("ContainerOom"),
+                Some("container_oom"),
             )
             .await
             {
@@ -683,7 +683,7 @@ async fn apply_docker_event(
                     signal.unwrap_or_else(|| "?".to_string()),
                 ),
                 "docker-events",
-                Some("ContainerKilled"),
+                Some("container_killed"),
             )
             .await
             {
@@ -794,23 +794,25 @@ pub(crate) async fn schedule(
         // Statuses left out on purpose: Completed (terminal job), Failed,
         // CrashLoopBackOff (terminal failure). Anything in those states is
         // done — no point reconciling further.
-        // Status names match what `DeploymentStatus::fmt` writes to the DB
-        // — the error variants are PascalCase, the lifecycle ones lower.
-        // A mismatch here silently drops deployments from reconciliation.
+        //
+        // We go through `DeploymentStatus::to_string()` rather than writing
+        // the literal strings here: the compiler then guarantees the filter
+        // stays in sync with the enum's Display impl. A bare string literal
+        // would silently drift if the enum casing ever changes again.
         let mut filters = HashMap::new();
         filters.insert(
             String::from("status"),
             vec![
-                String::from("pending"),
-                String::from("creating"),
-                String::from("running"),
-                String::from("deleted"),
-                String::from("CreateContainerError"),
-                String::from("ImagePullBackOff"),
-                String::from("NetworkError"),
-                String::from("ConfigError"),
-                String::from("FileSystemError"),
-                String::from("Error"),
+                DeploymentStatus::Pending.to_string(),
+                DeploymentStatus::Creating.to_string(),
+                DeploymentStatus::Running.to_string(),
+                DeploymentStatus::Deleted.to_string(),
+                DeploymentStatus::CreateContainerError.to_string(),
+                DeploymentStatus::ImagePullBackOff.to_string(),
+                DeploymentStatus::NetworkError.to_string(),
+                DeploymentStatus::ConfigError.to_string(),
+                DeploymentStatus::FileSystemError.to_string(),
+                DeploymentStatus::Error.to_string(),
             ],
         );
         let list_deployments = match deployments::find_all(&pool, filters).await {

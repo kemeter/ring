@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed (breaking)
+- **`DeploymentStatus` is now snake_case in the JSON API and DB.** Previously the lifecycle states (`pending`, `running`, …) were lowercase while the error states (`CrashLoopBackOff`, `ImagePullBackOff`, …) were PascalCase — the mismatch silently dropped rows from string-matching filters elsewhere in the code (root cause of PR #84). All variants now share the same convention. Mapping for external consumers:
+  - `CrashLoopBackOff` → `crash_loop_back_off`
+  - `ImagePullBackOff` → `image_pull_back_off`
+  - `CreateContainerError` → `create_container_error`
+  - `NetworkError` → `network_error`
+  - `ConfigError` → `config_error`
+  - `FileSystemError` → `file_system_error`
+  - `Error` → `error` (unchanged shape, lowercased)
+
+  Migration `20220101000015_snake_case_deployment_status.sql` rewrites existing rows. Update any script that does `jq '.status == "CrashLoopBackOff"'` or similar.
+
+  Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
+
 ## [0.8.0] - 2026-05-12
 
 ### Added

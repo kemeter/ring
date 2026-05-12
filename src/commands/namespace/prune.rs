@@ -12,13 +12,13 @@ fn is_prunable(status: &str) -> bool {
         "completed"
             | "failed"
             | "deleted"
-            | "CrashLoopBackOff"
-            | "ImagePullBackOff"
-            | "CreateContainerError"
-            | "NetworkError"
-            | "ConfigError"
-            | "FileSystemError"
-            | "Error"
+            | "crash_loop_back_off"
+            | "image_pull_back_off"
+            | "create_container_error"
+            | "network_error"
+            | "config_error"
+            | "file_system_error"
+            | "error"
     )
 }
 

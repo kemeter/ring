@@ -74,7 +74,7 @@ In both cases, the missing instance is recreated automatically on the next tick.
 
 ## Restart policy
 
-Ring tracks restart attempts per deployment. Past `MAX_RESTART_COUNT` (currently 5) failed boots, the deployment lands in `CrashLoopBackOff` and the reconciler stops trying. The counter is **cumulative for the lifetime of the deployment**, not a sliding window — fix the underlying issue and re-apply the manifest to reset.
+Ring tracks restart attempts per deployment. Past `MAX_RESTART_COUNT` (currently 5) failed boots, the deployment lands in `crash_loop_back_off` and the reconciler stops trying. The counter is **cumulative for the lifetime of the deployment**, not a sliding window — fix the underlying issue and re-apply the manifest to reset.
 
 This protects the host from a tight crash loop pegging Docker / Cloud Hypervisor.
 

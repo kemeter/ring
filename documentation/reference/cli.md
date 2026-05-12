@@ -380,11 +380,9 @@ ring namespace prune <NAMESPACE> [--all]
 
 - `-a` / `--all` — delete every deployment in the namespace, including running ones. Destructive.
 
-**Prunable statuses (default):** `completed`, `failed`, `deleted`, `CrashLoopBackOff`, `ImagePullBackOff`, `CreateContainerError`, `NetworkError`, `ConfigError`, `FileSystemError`, `Error`.
+**Prunable statuses (default):** `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `error`.
 
 **Preserved statuses (default):** `pending`, `creating`, `running`.
-
-> **Casing matters.** The first three (`completed`, `failed`, `deleted`) are stored lowercase; the rest are stored CamelCase (e.g. `CrashLoopBackOff`, not `crashloopbackoff`). The match is case-sensitive against the literal string in the database. Use `ring deployment list -o json | jq '.[].status'` to see the exact form before scripting.
 
 **Examples:**
 

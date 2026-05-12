@@ -460,7 +460,7 @@ pub(crate) async fn create(
                         "info",
                         format!("Deployment '{}' created successfully", deployment.name),
                         "api",
-                        Some("DeploymentCreated"),
+                        Some("deployment_created"),
                     )
                     .await;
 
@@ -501,7 +501,7 @@ pub(crate) async fn create(
                             "warning",
                             message,
                             "api",
-                            Some("ForceReplace"),
+                            Some("force_replace"),
                         )
                         .await;
                     }
@@ -1856,7 +1856,7 @@ mod tests {
             .expect("new deployment must exist");
         let new_id = new_deployment["id"].as_str().unwrap();
         let event: (String, String) = sqlx::query_as(
-            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'ForceReplace'",
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'force_replace'",
         )
         .bind(new_id)
         .fetch_one(&pool)
@@ -1929,7 +1929,7 @@ mod tests {
             .expect("new deployment must exist");
         let new_id = new_deployment["id"].as_str().unwrap();
         let event: (String, String) = sqlx::query_as(
-            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'ForceReplace'",
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'force_replace'",
         )
         .bind(new_id)
         .fetch_one(&pool)

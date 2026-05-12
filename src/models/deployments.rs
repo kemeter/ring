@@ -5,33 +5,32 @@ use std::fmt;
 
 pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 
+/// All variants serialize to snake_case, both on the wire (serde JSON) and
+/// in the SQLite `deployment.status` column (Display). Before this change,
+/// lifecycle states were lowercase (`running`, …) while error states were
+/// PascalCase (`CrashLoopBackOff`, …). The mismatch silently dropped rows
+/// from string-matching filters — see migration `20220101000015` for the DB
+/// rewrite and the PR description for the full trace.
+///
+/// **Breaking change** for any external consumer that parsed the JSON API
+/// or `ring deployment list` output expecting the PascalCase form. Mapping:
+/// `CrashLoopBackOff` → `crash_loop_back_off`, `ImagePullBackOff` →
+/// `image_pull_back_off`, etc.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum DeploymentStatus {
-    #[serde(rename = "pending")]
     Pending,
-    #[serde(rename = "creating")]
     Creating,
-    #[serde(rename = "running")]
     Running,
-    #[serde(rename = "completed")]
     Completed,
-    #[serde(rename = "failed")]
     Failed,
-    #[serde(rename = "deleted")]
     Deleted,
-    #[serde(rename = "CrashLoopBackOff")]
     CrashLoopBackOff,
-    #[serde(rename = "ImagePullBackOff")]
     ImagePullBackOff,
-    #[serde(rename = "CreateContainerError")]
     CreateContainerError,
-    #[serde(rename = "NetworkError")]
     NetworkError,
-    #[serde(rename = "ConfigError")]
     ConfigError,
-    #[serde(rename = "FileSystemError")]
     FileSystemError,
-    #[serde(rename = "Error")]
     Error,
 }
 
@@ -44,13 +43,13 @@ impl fmt::Display for DeploymentStatus {
             Self::Completed => write!(f, "completed"),
             Self::Failed => write!(f, "failed"),
             Self::Deleted => write!(f, "deleted"),
-            Self::CrashLoopBackOff => write!(f, "CrashLoopBackOff"),
-            Self::ImagePullBackOff => write!(f, "ImagePullBackOff"),
-            Self::CreateContainerError => write!(f, "CreateContainerError"),
-            Self::NetworkError => write!(f, "NetworkError"),
-            Self::ConfigError => write!(f, "ConfigError"),
-            Self::FileSystemError => write!(f, "FileSystemError"),
-            Self::Error => write!(f, "Error"),
+            Self::CrashLoopBackOff => write!(f, "crash_loop_back_off"),
+            Self::ImagePullBackOff => write!(f, "image_pull_back_off"),
+            Self::CreateContainerError => write!(f, "create_container_error"),
+            Self::NetworkError => write!(f, "network_error"),
+            Self::ConfigError => write!(f, "config_error"),
+            Self::FileSystemError => write!(f, "file_system_error"),
+            Self::Error => write!(f, "error"),
         }
     }
 }
@@ -66,14 +65,58 @@ impl std::str::FromStr for DeploymentStatus {
             "completed" => Ok(Self::Completed),
             "failed" => Ok(Self::Failed),
             "deleted" => Ok(Self::Deleted),
-            "CrashLoopBackOff" => Ok(Self::CrashLoopBackOff),
-            "ImagePullBackOff" => Ok(Self::ImagePullBackOff),
-            "CreateContainerError" => Ok(Self::CreateContainerError),
-            "NetworkError" => Ok(Self::NetworkError),
-            "ConfigError" => Ok(Self::ConfigError),
-            "FileSystemError" => Ok(Self::FileSystemError),
-            "Error" => Ok(Self::Error),
+            "crash_loop_back_off" => Ok(Self::CrashLoopBackOff),
+            "image_pull_back_off" => Ok(Self::ImagePullBackOff),
+            "create_container_error" => Ok(Self::CreateContainerError),
+            "network_error" => Ok(Self::NetworkError),
+            "config_error" => Ok(Self::ConfigError),
+            "file_system_error" => Ok(Self::FileSystemError),
+            "error" => Ok(Self::Error),
             other => Err(format!("Unknown deployment status: {}", other)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_roundtrip_tests {
+    use super::DeploymentStatus;
+    use std::str::FromStr;
+
+    /// Every variant must round-trip Display ↔ FromStr ↔ serde with the
+    /// exact same string. Catches any future divergence between the three
+    /// representations (the lifecycle/error casing mismatch we just fixed
+    /// went undetected for months because there was no such test).
+    #[test]
+    fn every_variant_round_trips() {
+        let all = [
+            DeploymentStatus::Pending,
+            DeploymentStatus::Creating,
+            DeploymentStatus::Running,
+            DeploymentStatus::Completed,
+            DeploymentStatus::Failed,
+            DeploymentStatus::Deleted,
+            DeploymentStatus::CrashLoopBackOff,
+            DeploymentStatus::ImagePullBackOff,
+            DeploymentStatus::CreateContainerError,
+            DeploymentStatus::NetworkError,
+            DeploymentStatus::ConfigError,
+            DeploymentStatus::FileSystemError,
+            DeploymentStatus::Error,
+        ];
+        for s in all {
+            let txt = s.to_string();
+            // snake_case: lowercase + underscores only.
+            assert!(
+                txt.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{:?} must Display as snake_case, got {:?}",
+                s,
+                txt
+            );
+            let parsed = DeploymentStatus::from_str(&txt).expect("must parse");
+            assert_eq!(parsed, s, "{:?} round-trip via Display/FromStr", s);
+            // serde JSON wraps strings in quotes.
+            let json = serde_json::to_string(&s).expect("must serialize");
+            assert_eq!(json, format!("\"{}\"", txt), "serde matches Display");
         }
     }
 }

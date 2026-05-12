@@ -191,7 +191,7 @@ ports:
 
 Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>` → `<guest_ip>:<target>`. The guest IP is a deterministic /30 under `10.42.0.0/16` derived from the instance ID.
 
-If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `PortAllocationFailed` event. After `MAX_RESTART_COUNT` failed attempts, the deployment lands in `CrashLoopBackOff`.
+If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `PortAllocationFailed` event. After `MAX_RESTART_COUNT` failed attempts, the deployment lands in `crash_loop_back_off`.
 
 TCP only — UDP is not wired up.
 

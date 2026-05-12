@@ -224,7 +224,7 @@ impl HealthChecker {
                         result.message.as_deref().unwrap_or("unknown error")
                     ),
                     "health_checker",
-                    Some("HealthCheckInstanceRestart"),
+                    Some("health_check_instance_restart"),
                 ));
 
                 outcome.instances_to_remove.push(instance_id.to_string());
@@ -245,7 +245,7 @@ impl HealthChecker {
                         result.message.as_deref().unwrap_or("unknown error")
                     ),
                     "health_checker",
-                    Some("HealthCheckStop"),
+                    Some("health_check_stop"),
                 ));
 
                 info!(
@@ -268,7 +268,7 @@ impl HealthChecker {
                         result.message.as_deref().unwrap_or("unknown error")
                     ),
                     "health_checker",
-                    Some("HealthCheckAlert"),
+                    Some("health_check_alert"),
                 ));
             }
         }
@@ -392,7 +392,7 @@ mod tests {
             outcome
                 .events
                 .iter()
-                .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
+                .any(|e| e.reason.as_deref() == Some("health_check_instance_restart"))
         );
     }
 
@@ -493,7 +493,7 @@ mod tests {
             outcome3
                 .events
                 .iter()
-                .any(|e| e.reason.as_deref() == Some("HealthCheckInstanceRestart"))
+                .any(|e| e.reason.as_deref() == Some("health_check_instance_restart"))
         );
     }
 
@@ -524,7 +524,7 @@ mod tests {
             outcome
                 .events
                 .iter()
-                .any(|e| e.reason.as_deref() == Some("HealthCheckStop"))
+                .any(|e| e.reason.as_deref() == Some("health_check_stop"))
         );
         assert!(outcome.instances_to_remove.is_empty());
     }
@@ -557,7 +557,7 @@ mod tests {
             outcome
                 .events
                 .iter()
-                .any(|e| e.reason.as_deref() == Some("HealthCheckAlert"))
+                .any(|e| e.reason.as_deref() == Some("health_check_alert"))
         );
         assert!(outcome.events.iter().any(|e| e.level == "error"));
     }

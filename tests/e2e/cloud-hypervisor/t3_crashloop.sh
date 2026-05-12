@@ -77,8 +77,8 @@ for _ in $(seq 1 180); do
     | jq -r --arg ns "ring-e2e" --arg n "crashloop-vm" \
         '.[] | select(.namespace==$ns and .name==$n) | .status' \
     | head -n1)
-  if [ "$STATUS" = "CrashLoopBackOff" ]; then
-    log "deployment reached CrashLoopBackOff"
+  if [ "$STATUS" = "crash_loop_back_off" ]; then
+    log "deployment reached crash_loop_back_off"
     break
   fi
   sleep 1
@@ -87,8 +87,8 @@ done
 RESTART_COUNT=$(get_restart_count "ring-e2e" "crashloop-vm")
 log "observed: status=$STATUS restart_count=$RESTART_COUNT"
 
-if [ "$STATUS" != "CrashLoopBackOff" ]; then
-  fail "expected status CrashLoopBackOff, got '$STATUS' (restart_count=$RESTART_COUNT)"
+if [ "$STATUS" != "crash_loop_back_off" ]; then
+  fail "expected status crash_loop_back_off, got '$STATUS' (restart_count=$RESTART_COUNT)"
 fi
 
 # restart_count must have actually been incremented by the runtime. If it's
