@@ -62,10 +62,9 @@ pub(crate) async fn execute(_args: &ArgMatches, configuration: Config) {
         ch_runtime_config.socket_dir,
         ch_runtime_config.seccomp,
     );
-    runtimes_map.insert(
-        "cloud-hypervisor".to_string(),
-        Arc::new(CloudHypervisorLifecycle::new(ch_runtime_config)),
-    );
+    let ch_lifecycle = CloudHypervisorLifecycle::new(ch_runtime_config);
+    let _ch_log_rotator = ch_lifecycle.spawn_console_log_rotator();
+    runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
     info!(
         "Registered runtimes: {:?}",
         runtimes_map.keys().collect::<Vec<_>>()
