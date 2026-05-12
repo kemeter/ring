@@ -5,6 +5,41 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-12
+
+### Added
+- **Cloud Hypervisor — readiness gate**: scheduler-side `is_ready_to_drain` with per-health-check anti-flap window. Rolling updates wait for the new instance to be ready before draining the parent. Includes Docker `HEALTHCHECK` translation so the same gate applies to both runtimes (PR #72).
+- **Cloud Hypervisor — `kind: job`**: dispatch worker/job in `apply`, boot one VM, mark `Completed` on guest shutdown. E2E `t21_job_kind.sh` validates the full lifecycle including artifact cleanup.
+- **Cloud Hypervisor — command health checks**: in-guest `ring-agent` over AF_VSOCK port 2375 reads the real exit code (PR #69).
+- **Cloud Hypervisor — full stats parity**: CPU and memory from `/proc/<vmm-pid>/{stat,status}` (PR #70), then network from `/sys/class/net/<tap>/statistics/*` (swapped host↔guest), threads from `/proc/<vmm-pid>/status`, disk I/O from `/proc/<vmm-pid>/io` when accessible (PR #78). Disk I/O degrades gracefully to zero on hardened hosts because CH clears `PR_SET_DUMPABLE`.
+- **Cloud Hypervisor — console log rotation**: size-based rotation with a 60s sweep, configurable via `[runtime.cloud_hypervisor].max_console_log_bytes` / `max_console_log_backups` (defaults 10 MiB × 3 backups). `ring deployment logs --tail N` reads through rotated backups (PR #77).
+- **Cloud Hypervisor — port conflict detection**: pre-check `TcpListener::bind` before VM boot, emit `PortAllocationFailed` event and `CrashLoopBackOff` after `MAX_RESTART_COUNT` — same semantics as Docker Compose.
+- **Cloud Hypervisor — `ring doctor` socat check**: verify `socat` presence when port mapping is requested.
+- **Docker — host network mode**: `network_mode: host` field on Docker deployments, with migration `20220101000014_network_mode.sql` and `documentation/how-to/use-host-network.md`.
+- **Scheduler — configurable anti-flap window**: `min_healthy_time` per health check variant (TCP/HTTP/Command), default 10s, scheduler picks the max across readiness HCs.
+- **API — config filtering**: `GET /configs?name=...`.
+- **API — `ForceReplace` event**: emitted when a rolling update is skipped (PR #71).
+- **Log level classification**: extended `classify_log` for kernel (`<N>` syslog priority, `BUG:`/`Oops:`/`Kernel panic`), cloud-init/systemd (`ERROR`/`WARN`/`INFO:`/`DEBUG`), and bracketed firmware markers (`[INFO]`/`[WARN]`/`[ERROR]`/`[DEBUG]`). Runtime-agnostic — benefits both Docker and CH.
+- **Documentation restructure to Diátaxis**: tutorials, how-to, reference, concepts, help. Sozune integration added as recommended HTTP proxy.
+- **Pre-built release binaries**: GitHub Actions workflow now attaches `ring` (x86_64-unknown-linux-gnu) and `ring-agent` (x86_64-unknown-linux-musl, static) tarballs to each tagged release.
+
+### Changed
+- Health checks (Docker + CH) migrated to a shared `probe` module.
+- E2E tests split into `tests/e2e/docker/` and `tests/e2e/cloud-hypervisor/` with a `run.sh` orchestrator.
+- Cloud Hypervisor stats and logs documented as **Supported** in the parity table (no longer "partial").
+
+### Fixed
+- Cloud Hypervisor cleans up half-created VMs on boot failure.
+- Cloud Hypervisor retries on transient boot failures with exponential backoff and typed errors.
+- Scheduler emits docker-events at level `warning` (was `info`).
+- Anti-flap window no longer re-arms every scheduler cycle (PR #72).
+- Docker `command` health check now honors the exit code (PR #72).
+- `handle_rolling_update` no longer spawns/kills in a loop when the parent finishes draining (PR #72).
+- CLI `apply` serialises the `readiness` flag through to the API (PR #72).
+- `RING_SECRET_KEY` is validated at startup and surfaced in `ring doctor`.
+- Config loader falls back to `current = true` context when the requested name does not match.
+- OpenSSL CVEs (Dependabot high + moderate) addressed via `cargo upgrade`.
+
 ## [0.7.0] - 2026-04-17
 
 ### Added
