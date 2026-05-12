@@ -340,15 +340,21 @@ pub(crate) async fn create_container(
             }
 
             let start_options = StartContainerOptionsBuilder::new().build();
-            docker
+            if let Err(e) = docker
                 .start_container(&container.id, Some(start_options))
                 .await
-                .map_err(|e| {
-                    RuntimeError::InstanceCreationFailed(format!(
-                        "Docker failed to start container: {}",
-                        e
-                    ))
-                })?;
+            {
+                // Docker accepted `create` but `start` failed — leaving the
+                // container in `Created` state. Remove it before returning
+                // the error so the next retry isn't shadowed by an orphan
+                // container that's neither running nor counted toward
+                // restart_count.
+                remove_container(docker.clone(), container.id.clone()).await;
+                return Err(RuntimeError::InstanceCreationFailed(format!(
+                    "Docker failed to start container: {}",
+                    e
+                )));
+            }
 
             info!(
                 "Docker container {} created and started successfully",

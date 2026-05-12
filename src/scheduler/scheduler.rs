@@ -784,13 +784,33 @@ pub(crate) async fn schedule(
         // hit CrashLoopBackOff in the same cycle as the crash that caused it.
         drain_docker_events(&pool, &mut event_rx, &intentional_shutdowns).await;
 
+        // The scheduler picks up every status that can still progress on the
+        // next tick. Pending/Creating need their first apply, Running needs
+        // reconciliation, Deleted needs cleanup, and the transient error
+        // states need to keep retrying until `restart_count` reaches
+        // `MAX_RESTART_COUNT` — at which point the runtime flips the
+        // deployment to `CrashLoopBackOff` and stops being included here.
+        //
+        // Statuses left out on purpose: Completed (terminal job), Failed,
+        // CrashLoopBackOff (terminal failure). Anything in those states is
+        // done — no point reconciling further.
+        // Status names match what `DeploymentStatus::fmt` writes to the DB
+        // — the error variants are PascalCase, the lifecycle ones lower.
+        // A mismatch here silently drops deployments from reconciliation.
         let mut filters = HashMap::new();
         filters.insert(
             String::from("status"),
             vec![
+                String::from("pending"),
                 String::from("creating"),
                 String::from("running"),
                 String::from("deleted"),
+                String::from("CreateContainerError"),
+                String::from("ImagePullBackOff"),
+                String::from("NetworkError"),
+                String::from("ConfigError"),
+                String::from("FileSystemError"),
+                String::from("Error"),
             ],
         );
         let list_deployments = match deployments::find_all(&pool, filters).await {

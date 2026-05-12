@@ -1,0 +1,11 @@
+deployments:
+  oci-create-error:
+    name: oci-create-error
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Docker accepts `create` (the container record is made) but `start`
+    # fails because the OCI runtime can't exec a binary that doesn't
+    # exist. Sets the deployment to CreateContainerError every cycle.
+    command: ["/nonexistent-binary"]
+    replicas: 1
