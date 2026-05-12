@@ -62,6 +62,7 @@ const FOLDER_ORDER = ['tutorials', 'how-to', 'reference', 'concepts', 'help'];
 const PAGE_ORDER: Record<string, string[]> = {
   tutorials: ['install-and-run', 'first-deployment'],
   'how-to': [
+    'expose-with-sozune',
     'deploy-with-secrets',
     'configure-health-checks',
     'run-a-job',

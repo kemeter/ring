@@ -61,7 +61,7 @@ If your workload needs inter-instance discovery, the Docker runtime is currently
 By design, Ring doesn't route between namespaces. Three patterns work:
 
 1. **Publish on the host and connect to the host IP.** The producing deployment publishes a port; the consumer connects to `<host-ip>:<port>`. Works across runtimes and across namespaces. Costs a hop through the host network stack.
-2. **External reverse proxy.** Traefik / Caddy / nginx in front of Ring, attached to multiple Docker networks (`docker network connect ring_<other-namespace> <proxy>`).
+2. **External reverse proxy.** [Sozune](https://sozune.kemeter.io) (the Ring companion proxy) or Traefik / Caddy / nginx in front of Ring, attached to multiple Docker networks (`docker network connect ring_<other-namespace> <proxy>`).
 3. **Move the dependency into the consumer's namespace.** If `api` in `production` needs `redis-cache`, deploy `redis-cache` to `production`.
 
 Pattern 3 is usually the right answer. Namespaces are isolation boundaries — crossing them deliberately should be the exception.
@@ -73,7 +73,7 @@ Pattern 3 is usually the right answer. Namespaces are isolation boundaries — c
 - **No service mesh.** No sidecars, no mTLS injection, no traffic policy.
 - **No multi-host networking.** Ring is single-node by design.
 
-For production-grade routing, run Traefik (or your proxy of choice) as a Ring deployment in front of your services. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network).
+For production-grade routing, run a reverse proxy as a Ring deployment in front of your services — [Sozune](https://sozune.kemeter.io) is the recommended path (see [how-to: expose with Sozune](/documentation/how-to/expose-with-sozune)), or use Traefik / Caddy / nginx. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) for the cross-namespace details.
 
 ## See also
 

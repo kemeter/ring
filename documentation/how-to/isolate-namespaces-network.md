@@ -81,7 +81,13 @@ A deployment without `ports:` is reachable **only from inside its namespace**. T
 
 ## Reverse proxy in front of Ring
 
-Production-shaped setup: a single Traefik / Caddy / Nginx deployment publishes 80/443; every backend is unpublished and reachable via Docker DNS.
+Production-shaped setup: a single reverse-proxy deployment publishes 80/443; every backend is unpublished and reachable via Docker DNS.
+
+### Sozune (recommended)
+
+[Sozune](https://sozune.kemeter.io) is the companion proxy of Ring — Docker label discovery, automatic Let's Encrypt, and it natively gates traffic on the Docker `HEALTHCHECK` that Ring writes from `readiness: true` health checks. Use it if you don't already have a proxy in place.
+
+See the dedicated recipe: [how-to: expose a deployment with Sozune](/documentation/how-to/expose-with-sozune).
 
 ### Traefik via container labels
 

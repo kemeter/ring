@@ -107,6 +107,7 @@ The docs are organized by what you're trying to do. Pick the section that matche
 Once you're past the basics, pick a [how-to guide](#how-to-guides) for the specific feature you need (secrets, rolling updates, health checks, jobs, …).
 
 **How-to guides** — solve a specific problem
+- [Expose a deployment with Sozune](/documentation/how-to/expose-with-sozune) — HTTP/HTTPS routing with the companion proxy
 - [Deploy with secrets](/documentation/how-to/deploy-with-secrets)
 - [Configure health checks](/documentation/how-to/configure-health-checks)
 - [Run a job](/documentation/how-to/run-a-job)

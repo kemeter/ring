@@ -48,7 +48,7 @@ These omissions aren't oversights — they're choices that keep Ring a single pr
 
 - **No multi-node scheduling.** Adding it would require leader election, gossip, a distributed state store. That's the Kubernetes shape, and Kubernetes already exists.
 - **No virtual IPs / `Service` resource.** Ring exposes Docker's DNS alias for a deployment name. Real L4/L7 load balancing is a proxy's job.
-- **No `Ingress` resource.** Run Traefik / Caddy / nginx as a Ring deployment in front of your services.
+- **No `Ingress` resource.** Run [Sozune](https://sozune.kemeter.io) (the companion proxy, label-driven discovery + automatic Let's Encrypt) or Traefik / Caddy / nginx as a Ring deployment in front of your services.
 - **No CRDs / operators.** Ring's API is fixed: deployments, secrets, configs, users, namespaces. Extending it means a PR, not a YAML.
 - **No autoscaling.** Set `replicas:` to what you want; Ring keeps it there.
 - **No cluster networking.** One host, one IP, one Docker bridge per namespace. Multi-host networking is a different problem.
