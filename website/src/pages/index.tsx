@@ -3,6 +3,29 @@ import Hero from '@/components/Hero';
 import FeatureSection from '@/components/FeatureSection';
 import { Link } from 'aplos/navigation';
 
+const SITE_URL = 'https://kemeter.github.io/ring';
+const HOME_TITLE = 'Ring — Lightweight container orchestrator';
+const HOME_DESCRIPTION =
+  'Ring is a single-binary container orchestrator: declarative YAML, REST API, SQLite state. A pragmatic alternative to Kubernetes for single-node deployments.';
+
+export const meta = {
+  title: HOME_TITLE,
+  description: HOME_DESCRIPTION,
+  canonical: SITE_URL,
+  keywords: ['container orchestration', 'docker', 'cloud hypervisor', 'kubernetes alternative', 'rust', 'devops'],
+  og: {
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+    type: 'website',
+    url: SITE_URL,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
+  },
+};
+
 const DECLARATIVE_CODE = `deployments:
   web-app:
     name: web-app

@@ -15,6 +15,36 @@ function extractTitle(markdown: string): string {
   return '';
 }
 
+export function extractDescription(markdown: string, maxLength = 160): string {
+  const lines = markdown.split('\n');
+  let inCode = false;
+  let paragraph = '';
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.startsWith('```')) {
+      inCode = !inCode;
+      continue;
+    }
+    if (inCode) continue;
+    if (!line) {
+      if (paragraph) break;
+      continue;
+    }
+    if (line.startsWith('#')) continue;
+    if (line.startsWith('>') || line.startsWith('|') || line.startsWith('-') || line.startsWith('*')) continue;
+    paragraph += (paragraph ? ' ' : '') + line;
+  }
+  const cleaned = paragraph
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned.length <= maxLength) return cleaned;
+  return cleaned.slice(0, maxLength - 1).replace(/\s\S*$/, '') + '…';
+}
+
 function humanize(segment: string): string {
   return segment
     .split(/[-_]/)
@@ -26,15 +56,33 @@ const ctx = require.context('@docs', true, /\.md$/, 'sync');
 
 // Folder display order in the sidebar. Folders not listed here appear after,
 // in alphabetical order.
-const FOLDER_ORDER = ['getting-started', 'runtimes', 'guides', 'reference', 'help'];
+const FOLDER_ORDER = ['tutorials', 'how-to', 'reference', 'concepts', 'help'];
 
 // Per-folder page order. Pages not listed here fall back to alphabetical.
 const PAGE_ORDER: Record<string, string[]> = {
-  'getting-started': ['installation', 'overview', 'first-deployment', 'managing-deployments'],
-  runtimes: ['docker', 'cloud-hypervisor'],
-  guides: ['examples'],
-  reference: ['cli', 'api'],
-  help: ['faq'],
+  tutorials: ['install-and-run', 'first-deployment'],
+  'how-to': [
+    'deploy-with-secrets',
+    'configure-health-checks',
+    'run-a-job',
+    'perform-rolling-update',
+    'isolate-namespaces-network',
+    'observe-and-debug',
+    'manage-users',
+    'deploy-on-cloud-hypervisor',
+    'run-as-service',
+  ],
+  reference: ['manifest', 'cli', 'api', 'config-toml', 'environment-variables'],
+  concepts: [
+    'architecture',
+    'reconciliation',
+    'runtimes',
+    'namespaces-and-networking',
+    'secrets-encryption',
+    'health-checks-design',
+    'why-not-kubernetes',
+  ],
+  help: ['troubleshooting', 'faq'],
 };
 
 function pageOrderIndex(segments: string[]): number {
