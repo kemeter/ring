@@ -6,22 +6,34 @@ By the end of this tutorial you'll have Ring installed, the server running, and 
 
 - A Linux or macOS machine
 - Docker installed and the daemon running (`docker ps` works for your user)
-- Rust 1.85 or later (Ring uses edition 2024). Install via [rustup](https://rustup.rs/)
 
 Quick check:
 
 ```bash
 docker --version
-rustc --version
 ```
 
 If `docker ps` fails with a permission error, add yourself to the docker group: `sudo usermod -aG docker $USER`, then log out and back in.
 
-## 1. Compile Ring
+## 1. Install Ring
 
-Pre-compiled binaries are not yet published, so we'll build from source.
+### From a pre-built binary (recommended, Linux x86_64)
 
-Install the system libraries Ring needs to link against:
+Each release attaches a pre-built `ring` binary for `x86_64-unknown-linux-gnu`. Grab the latest one:
+
+```bash
+TAG=$(curl -s https://api.github.com/repos/kemeter/ring/releases/latest | grep -oP '"tag_name": "\K[^"]+')
+curl -L "https://github.com/kemeter/ring/releases/download/${TAG}/ring-${TAG}-x86_64-unknown-linux-gnu.tar.gz" \
+  | tar -xz
+sudo install -m 0755 "ring-${TAG}-x86_64-unknown-linux-gnu/ring" /usr/local/bin/ring
+ring --version
+```
+
+The release archive also contains a `.sha256` companion if you want to verify the download.
+
+### From source
+
+If you're on macOS, ARM Linux, or want the latest unreleased changes, build from source. Requires Rust 1.85 or later ([rustup](https://rustup.rs/)) and OpenSSL headers:
 
 ```bash
 # Debian / Ubuntu
@@ -40,16 +52,11 @@ Then clone and build:
 git clone https://github.com/kemeter/ring.git
 cd ring
 cargo build --release
-sudo cp target/release/ring /usr/local/bin/
-```
-
-The release build takes a few minutes the first time. Once it finishes:
-
-```bash
+sudo install -m 0755 target/release/ring /usr/local/bin/ring
 ring --version
 ```
 
-You should see Ring's version number. If not, the binary isn't on your `PATH` — check `which ring`.
+The release build takes a few minutes the first time. If `ring --version` doesn't work after install, the binary isn't on your `PATH` — check `which ring`.
 
 ## 2. Generate the encryption key
 
