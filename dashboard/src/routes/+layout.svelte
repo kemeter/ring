@@ -11,7 +11,9 @@
 
   const nav = [
     { href: '/deployments', label: 'Deployments', icon: 'grid' },
-    { href: '/namespaces', label: 'Namespaces', icon: 'folder' }
+    { href: '/namespaces', label: 'Namespaces', icon: 'folder' },
+    { href: '/secrets', label: 'Secrets', icon: 'key' },
+    { href: '/configs', label: 'Configs', icon: 'file' }
   ];
 
   function isActive(href: string): boolean {
@@ -20,7 +22,7 @@
     return current === target || current.startsWith(`${target}/`);
   }
 
-  let onLoginPage = $derived($page.url.pathname === '/' || $page.url.pathname === '');
+  let onLoginPage = $derived($page.url.pathname === '/');
 
   onMount(async () => {
     if (onLoginPage) {
@@ -80,6 +82,30 @@
                   stroke-linejoin="round"
                 >
                   <path d="M1.5 4.5a1 1 0 0 1 1-1H6l1.5 1.5h6a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V4.5z" />
+                </svg>
+              {:else if item.icon === 'key'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="6" cy="10" r="3" />
+                  <path d="M8.1 8.1L14 2.2M11 5l1.5 1.5" />
+                </svg>
+              {:else if item.icon === 'file'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M3 1.5h6L13 5.5V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5z" />
+                  <path d="M9 1.5V5.5h4" />
                 </svg>
               {/if}
             </span>

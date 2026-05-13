@@ -107,6 +107,30 @@ export interface DeploymentDetail extends Deployment {
   network?: unknown;
 }
 
+export interface Secret {
+  id: string;
+  created_at: string;
+  updated_at: string | null;
+  namespace: string;
+  name: string;
+}
+
+export interface Config {
+  id: string;
+  /** Server returns a SQL-style timestamp like `2026-05-13 19:26:27.93 UTC`,
+   *  not RFC3339. Parse with `Date(s)` may not work on all browsers; pages
+   *  fall back to the raw string when parsing fails. */
+  created_at: string;
+  /** Empty string when never updated; some endpoints return `null` instead. */
+  updated_at: string | null;
+  namespace: string;
+  name: string;
+  data: string;
+  /** Free-form string set by the client (often `key=value,key=value`). The
+   *  API stores it as-is and does not parse it. Empty string means no labels. */
+  labels: string;
+}
+
 export interface DeploymentEvent {
   id?: string;
   deployment_id?: string;
@@ -183,4 +207,12 @@ export function getDeployment(id: string): Promise<DeploymentDetail> {
 
 export function listDeploymentEvents(id: string): Promise<DeploymentEvent[]> {
   return request<DeploymentEvent[]>(`/deployments/${encodeURIComponent(id)}/events`);
+}
+
+export function listSecrets(): Promise<Secret[]> {
+  return request<Secret[]>('/secrets');
+}
+
+export function listConfigs(): Promise<Config[]> {
+  return request<Config[]>('/configs');
 }

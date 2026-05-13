@@ -11,6 +11,7 @@
     type HealthCheck
   } from '$lib/api';
   import { getToken } from '$lib/auth';
+  import { formatDate, timeAgo } from '$lib/utils';
 
   let detail = $state<DeploymentDetail | null>(null);
   let events = $state<DeploymentEvent[]>([]);
@@ -105,31 +106,6 @@
         return hc.url;
       case 'command':
         return hc.command;
-    }
-  }
-
-  function timeAgo(d: Date | null): string {
-    if (!d) {
-      return '';
-    }
-    const s = Math.floor((Date.now() - d.getTime()) / 1000);
-    if (s < 5) {
-      return 'just now';
-    }
-    if (s < 60) {
-      return `${s}s ago`;
-    }
-    return `${Math.floor(s / 60)}m ago`;
-  }
-
-  function formatDate(iso: string | undefined | null): string {
-    if (!iso) {
-      return '—';
-    }
-    try {
-      return new Date(iso).toLocaleString();
-    } catch {
-      return iso;
     }
   }
 
@@ -468,53 +444,22 @@
     color: var(--fg-3);
   }
 
+  /* Override the shared .page-header on this page: the detail layout uses
+   * top-aligned columns because the title block stacks pill + id below the
+   * h1, and we want the action buttons to sit next to the title (not the
+   * bottom of the meta column). */
   .page-header {
-    display: flex;
-    justify-content: space-between;
     align-items: flex-start;
-    margin-bottom: 1.75rem;
   }
   .title-row {
     display: flex;
     align-items: center;
     gap: 0.75rem;
   }
-  h1 {
-    margin: 0;
-    font-size: 1.5rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-  }
-  .subtitle {
-    margin: 0.35rem 0 0;
+  .page-header .subtitle {
+    margin-top: 0.35rem;
     color: var(--fg-3);
     font-size: 0.78rem;
-  }
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-  .refresh-meta {
-    color: var(--fg-3);
-    font-size: 0.75rem;
-  }
-  .btn-secondary {
-    background: var(--bg-2);
-    color: var(--fg-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 0.5rem 0.875rem;
-    font-size: 0.8rem;
-    font-weight: 500;
-  }
-  .btn-secondary:hover {
-    background: var(--bg-hover);
-    color: var(--fg-0);
-  }
-  .btn-secondary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   .grid {
@@ -524,12 +469,10 @@
     margin-bottom: 1rem;
   }
 
+  /* Detail page stacks multiple cards vertically — the shared .card has no
+   * vertical rhythm baked in. */
   .card {
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
     margin-bottom: 1rem;
-    overflow: hidden;
   }
   .card.pad {
     padding: 1.125rem 1.25rem;
@@ -554,9 +497,6 @@
     color: var(--fg-3);
     font-size: 0.75rem;
     font-variant-numeric: tabular-nums;
-  }
-  .muted {
-    color: var(--fg-2);
   }
   .muted.pad {
     padding: 1.25rem;
@@ -681,20 +621,6 @@
     padding: 0.1rem 0.45rem;
     border-radius: var(--radius-sm);
     font-size: 0.75rem;
-  }
-
-  .alert {
-    background: var(--danger-bg);
-    border: 1px solid var(--danger);
-    color: var(--fg-0);
-    padding: 0.85rem 1rem;
-    border-radius: var(--radius);
-    margin-bottom: 1.25rem;
-    font-size: 0.825rem;
-  }
-  .alert strong {
-    color: var(--danger);
-    margin-right: 0.5rem;
   }
 
   .events {

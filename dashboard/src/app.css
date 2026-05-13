@@ -160,3 +160,121 @@ tbody tr:hover {
   background: var(--warning-bg);
   color: var(--warning);
 }
+
+/*
+ * Shared page chrome. Every list/detail page below uses the same header,
+ * card, table, filter-bar, button and alert primitives — keep them here so
+ * a new page is a single import away.
+ */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.75rem;
+}
+.page-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.page-header .subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--fg-2);
+  font-size: 0.85rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.refresh-meta {
+  color: var(--fg-3);
+  font-size: 0.75rem;
+}
+
+.btn-secondary {
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.8rem;
+  color: var(--fg-2);
+}
+.filter-bar select {
+  background: var(--bg-1);
+  color: var(--fg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  overflow: hidden;
+}
+
+.alert {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--fg-0);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  font-size: 0.825rem;
+}
+.alert strong {
+  color: var(--danger);
+  margin-right: 0.5rem;
+}
+
+.empty {
+  background: var(--bg-1);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 3rem 1rem;
+  text-align: center;
+}
+.empty p {
+  margin: 0.35rem 0;
+}
+.empty .muted {
+  color: var(--fg-2);
+  font-size: 0.85rem;
+}
+
+.muted {
+  color: var(--fg-2);
+}
+
+p code,
+.empty code {
+  background: var(--bg-2);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
