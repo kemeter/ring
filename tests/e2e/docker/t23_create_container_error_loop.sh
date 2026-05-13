@@ -73,4 +73,15 @@ if [ "$SCALED_UP_COUNT" -gt 10 ]; then
   fail "too many 'Scaled up' events ($SCALED_UP_COUNT) — scheduler is re-emitting them past CrashLoopBackOff"
 fi
 
+# 4) Orphan containers must be cleaned up. Each failed `start_container`
+#    used to leave a stale container in `Created` state behind it
+#    (PR #84 fix for the start path; this PR generalises the cleanup to
+#    every early-return inside `create_container`). After convergence,
+#    Docker must show zero containers for this deployment.
+ORPHAN_COUNT=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
+if [ "$ORPHAN_COUNT" -gt 0 ]; then
+  docker ps -a --filter "label=ring_deployment=$DEPLOYMENT_ID" --format "{{.ID}} {{.Status}}" >&2
+  fail "$ORPHAN_COUNT orphan container(s) left behind — create_container path doesn't clean up its failures"
+fi
+
 log "== T23: PASS =="

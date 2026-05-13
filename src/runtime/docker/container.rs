@@ -328,15 +328,25 @@ pub(crate) async fn create_container(
                     endpoint_config: Some(endpoint_config),
                 };
 
-                docker
-                    .connect_network(&network_name, connect_request)
-                    .await
-                    .map_err(|e| {
-                        RuntimeError::InstanceCreationFailed(format!(
-                            "Docker failed to connect to network: {}",
-                            e
-                        ))
-                    })?;
+                if let Err(e) = docker.connect_network(&network_name, connect_request).await {
+                    // Same orphan guard as `start_container` below: Docker
+                    // accepted `create` (the container exists, in `Created`
+                    // state) but the follow-up call failed. Without this
+                    // cleanup, the orphan would be picked up by
+                    // `list_instances` on the next reconciliation tick as
+                    // if it were a healthy instance, masking the need to
+                    // retry and accumulating one stale container per failed
+                    // attempt.
+                    remove_container(docker.clone(), container.id.clone()).await;
+                    // Also drop the id from in-memory instances so the
+                    // caller doesn't carry a reference to a container that
+                    // no longer exists.
+                    deployment.instances.pop();
+                    return Err(RuntimeError::InstanceCreationFailed(format!(
+                        "Docker failed to connect to network: {}",
+                        e
+                    )));
+                }
             }
 
             let start_options = StartContainerOptionsBuilder::new().build();
@@ -350,6 +360,7 @@ pub(crate) async fn create_container(
                 // container that's neither running nor counted toward
                 // restart_count.
                 remove_container(docker.clone(), container.id.clone()).await;
+                deployment.instances.pop();
                 return Err(RuntimeError::InstanceCreationFailed(format!(
                     "Docker failed to start container: {}",
                     e
