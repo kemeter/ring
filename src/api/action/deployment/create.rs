@@ -79,6 +79,61 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
     }
 }
 
+/// Cross-field rules that catch configurations which are syntactically valid
+/// but semantically broken. Every rule pushes one violation per affected
+/// field — when a rule could be fixed by changing either of two fields, both
+/// get a violation so the user picks which one to change.
+fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
+    // `ports[] + replicas > 1`: every replica would race for the same
+    // host port. Either drop the ports or scale down to 1.
+    if !input.ports.is_empty() && input.replicas > 1 {
+        errors.push(Violation::new(
+            "ports",
+            format!(
+                "publishing host ports with replicas > 1 ({}) causes port conflicts between replicas — drop `ports` or reduce `replicas` to 1",
+                input.replicas
+            ),
+            "deployment.ports.replicas_conflict",
+        ));
+        errors.push(Violation::new(
+            "replicas",
+            format!(
+                "replicas > 1 ({}) is incompatible with `ports` — drop `ports` or reduce `replicas` to 1",
+                input.replicas
+            ),
+            "deployment.replicas.ports_conflict",
+        ));
+    }
+
+    // `kind: job + replicas > 1`: a job is one-shot. Multiple replicas
+    // would mean N parallel runs of the same task which is not what the
+    // job kind models.
+    if matches!(input.kind, DeploymentKind::Job) && input.replicas > 1 {
+        errors.push(Violation::new(
+            "replicas",
+            format!(
+                "kind=job runs once and exits; replicas must be 1, got {}",
+                input.replicas
+            ),
+            "deployment.replicas.job_must_be_one",
+        ));
+    }
+
+    // `kind: job + readiness check`: readiness gates a rolling update.
+    // Jobs don't roll — they run once. A readiness flag here is a config
+    // gap that would never trigger anything useful.
+    if matches!(input.kind, DeploymentKind::Job)
+        && let Some(hcs) = input.health_checks.as_ref()
+        && hcs.iter().any(|hc| hc.is_readiness())
+    {
+        errors.push(Violation::new(
+            "health_checks",
+            "kind=job is incompatible with readiness health checks (readiness gates rolling updates, which don't apply to one-shot jobs)",
+            "deployment.health_checks.job_readiness_unsupported",
+        ));
+    }
+}
+
 fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
     if input.runtime == "cloud-hypervisor" {
         // `command` health checks are now supported via the in-guest
@@ -314,6 +369,7 @@ pub(crate) async fn create(
     }
     validate_runtime_constraints(&input, &mut violations);
     validate_network_constraints(&input, &mut violations);
+    validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
         return violations.into_response();
     }
@@ -2145,6 +2201,10 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_bridge_network_mode_explicit() {
+        // bridge mode is the existing default — declaring it explicitly
+        // must not change anything. `ports` and `replicas: 1` remain
+        // a valid pair (replicas > 1 with ports is rejected separately,
+        // see `create_rejects_ports_with_replicas_above_one`).
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -2159,11 +2219,10 @@ mod tests {
                 "image": "nginx:latest",
                 "network": { "mode": "bridge" },
                 "ports": [{ "published": 8080, "target": 80 }],
-                "replicas": 2
+                "replicas": 1
             }))
             .await;
 
-        // bridge mode is the existing default — ports and replicas remain valid.
         assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
@@ -2188,5 +2247,134 @@ mod tests {
         let body: serde_json::Value = response.json();
         let ports = body["ports"].as_array().unwrap();
         assert!(ports.is_empty());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Cross-field rules
+    // ────────────────────────────────────────────────────────────────────────
+    //
+    // These rules catch combinations that are syntactically valid but
+    // semantically broken — the apply would silently produce a non-working
+    // deployment. They surface BOTH affected fields so the user can pick
+    // which one to change, as per the convention agreed for cross-field
+    // violations.
+
+    #[tokio::test]
+    async fn create_rejects_ports_with_replicas_above_one() {
+        // Two replicas binding the same host port collide. Either reduce
+        // replicas or drop the ports — surface both options.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "replicas": 3,
+                "ports": [{ "published": 80, "target": 80 }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.ports.replicas_conflict".to_string()),
+            "missing ports code, got {:?}",
+            codes
+        );
+        assert!(
+            codes.contains(&"deployment.replicas.ports_conflict".to_string()),
+            "missing replicas code, got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_job_with_replicas_above_one() {
+        // A job is one-shot by definition. replicas > 1 is meaningless.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "kind": "job",
+                "name": "batch",
+                "namespace": "ring",
+                "image": "busybox:latest",
+                "replicas": 4
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.replicas.job_must_be_one".to_string()),
+            "expected job/replicas violation, got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_job_with_readiness_check() {
+        // Readiness gates a rolling update — but jobs don't roll, they
+        // run once and exit. A readiness check on a job is a config gap.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "kind": "job",
+                "name": "batch",
+                "namespace": "ring",
+                "image": "busybox:latest",
+                "health_checks": [{
+                    "type": "tcp",
+                    "port": 8080,
+                    "interval": "5s",
+                    "timeout": "2s",
+                    "on_failure": "restart",
+                    "readiness": true
+                }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.health_checks.job_readiness_unsupported".to_string()),
+            "expected job/readiness violation, got {:?}",
+            codes
+        );
     }
 }
