@@ -1,3 +1,4 @@
+use crate::commands::problem_json::render_response_error;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -22,11 +23,6 @@ struct NamespaceOutput {
     name: String,
 }
 
-#[derive(Deserialize)]
-struct ErrorResponse {
-    error: String,
-}
-
 pub(crate) async fn execute(
     args: &ArgMatches,
     mut configuration: Config,
@@ -49,19 +45,16 @@ pub(crate) async fn execute(
     match request {
         Ok(response) => {
             let status = response.status();
-            if status == 201 {
+            if status.is_success() {
                 let namespace: NamespaceOutput = response.json().await.unwrap();
                 println!(
                     "Namespace '{}' created (id: {})",
                     namespace.name, namespace.id
                 );
-            } else if status == 409 {
-                let error: ErrorResponse = response.json().await.unwrap();
-                eprintln!("Error: {}", error.error);
-                exit_code::from_http_status(status.as_u16()).exit();
             } else {
-                eprintln!("Failed to create namespace: {}", status);
-                exit_code::from_http_status(status.as_u16()).exit();
+                let context = format!("Failed to create namespace '{}'", name);
+                let code = render_response_error(&context, response).await;
+                exit_code::from_http_status(code).exit();
             }
         }
         Err(error) => {

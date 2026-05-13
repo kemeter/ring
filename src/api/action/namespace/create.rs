@@ -1,17 +1,35 @@
+use crate::api::action::namespace::validation::{
+    NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
+};
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
+use crate::api::validation::{ViolationList, problem_response};
 use crate::models::namespace;
 use crate::models::users::User;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
+use validator::Validate;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Validate)]
 pub(crate) struct NamespaceInput {
+    #[validate(
+        length(
+            min = "NAMESPACE_NAME_MIN",
+            max = "NAMESPACE_NAME_MAX",
+            code = "namespace.name.length",
+            message = "must be 2 to 63 characters"
+        ),
+        regex(
+            path = *NAMESPACE_NAME_PATTERN,
+            code = "namespace.name.format",
+            message = "must contain only lowercase letters, digits and '-', and start and end with an alphanumeric character"
+        )
+    )]
     name: String,
 }
 
@@ -19,9 +37,13 @@ pub(crate) async fn create(
     State(pool): State<Db>,
     _user: User,
     Json(input): Json<NamespaceInput>,
-) -> impl IntoResponse {
-    let utc: DateTime<Utc> = Utc::now();
+) -> Response {
+    if let Err(errs) = input.validate() {
+        let violations: ViolationList = errs.into();
+        return violations.into_response();
+    }
 
+    let utc: DateTime<Utc> = Utc::now();
     let new_namespace = namespace::Namespace {
         id: Uuid::new_v4().to_string(),
         created_at: utc.to_string(),
@@ -38,24 +60,18 @@ pub(crate) async fn create(
             )
                 .into_response()
         }
+        Err(e) if e.to_string().contains("UNIQUE constraint failed") => problem_response(
+            StatusCode::CONFLICT,
+            "Conflict",
+            format!("namespace '{}' already exists", new_namespace.name),
+        ),
         Err(e) => {
-            if e.to_string().contains("UNIQUE constraint failed") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "Namespace with this name already exists"
-                    })),
-                )
-                    .into_response()
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": "Failed to create namespace"
-                    })),
-                )
-                    .into_response()
-            }
+            log::error!("Failed to create namespace: {}", e);
+            problem_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+                "failed to create namespace",
+            )
         }
     }
 }
@@ -67,6 +83,7 @@ mod tests {
     use crate::api::server::tests::new_test_app;
     use axum::http::StatusCode;
     use axum_test::TestServer;
+    use serde_json::json;
 
     #[tokio::test]
     async fn create_namespace() {
@@ -77,9 +94,7 @@ mod tests {
         let response = server
             .post("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
-                "name": "production"
-            }))
+            .json(&json!({ "name": "production" }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
@@ -88,7 +103,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_duplicate_namespace() {
+    async fn create_duplicate_namespace_returns_problem_json_conflict() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let payload = json!({ "name": "duplicate-ns" });
+        let first = server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .await;
+        assert_eq!(first.status_code(), StatusCode::CREATED);
+
+        let response = server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        let ct = response
+            .header("content-type")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with("application/problem+json"), "got: {}", ct);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["status"], 409);
+        assert_eq!(body["title"], "Conflict");
+        assert!(body["detail"].as_str().unwrap().contains("duplicate-ns"));
+    }
+
+    #[tokio::test]
+    async fn create_with_short_name_returns_422_problem_json() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -96,20 +144,62 @@ mod tests {
         let response = server
             .post("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
-                "name": "duplicate-ns"
-            }))
+            .json(&json!({ "name": "a" }))
             .await;
-        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let v = &body["violations"];
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["property_path"], "name");
+        assert_eq!(v[0]["code"], "namespace.name.length");
+    }
+
+    #[tokio::test]
+    async fn create_with_uppercase_name_trips_format() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
 
         let response = server
             .post("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
-                "name": "duplicate-ns"
-            }))
+            .json(&json!({ "name": "Production" }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"namespace.name.format".to_string()));
+    }
+
+    #[tokio::test]
+    async fn create_accumulates_all_violations() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // `-` fails length (1 char) AND format (leading dash).
+        let response = server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": "-" }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"namespace.name.length".to_string()));
+        assert!(codes.contains(&"namespace.name.format".to_string()));
     }
 }
