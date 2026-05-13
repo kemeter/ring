@@ -79,6 +79,50 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
     }
 }
 
+/// Per-port rules. The `DeploymentPort` struct already constrains
+/// `published`/`target` to `u16` so anything > 65535 is caught at deserialize
+/// time; we still need to reject `0` (reserved + "any port" semantics) and
+/// to surface duplicate `published` values that would race for the same host
+/// port. Paths use JSONPath form (`ports[idx].published`) so a client can
+/// point straight at the offending entry.
+fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
+    use std::collections::HashMap;
+
+    let mut published_seen: HashMap<u16, usize> = HashMap::new();
+
+    for (idx, port) in input.ports.iter().enumerate() {
+        if port.published == 0 {
+            errors.push(Violation::new(
+                format!("ports[{}].published", idx),
+                "must be between 1 and 65535",
+                "deployment.ports.published.out_of_range",
+            ));
+        }
+        if port.target == 0 {
+            errors.push(Violation::new(
+                format!("ports[{}].target", idx),
+                "must be between 1 and 65535",
+                "deployment.ports.target.out_of_range",
+            ));
+        }
+
+        if port.published != 0 {
+            if let Some(prev_idx) = published_seen.get(&port.published) {
+                errors.push(Violation::new(
+                    format!("ports[{}].published", idx),
+                    format!(
+                        "duplicates ports[{}].published = {}; each host port can only be bound once",
+                        prev_idx, port.published
+                    ),
+                    "deployment.ports.published.duplicate",
+                ));
+            } else {
+                published_seen.insert(port.published, idx);
+            }
+        }
+    }
+}
+
 /// Cross-field rules that catch configurations which are syntactically valid
 /// but semantically broken. Every rule pushes one violation per affected
 /// field — when a rule could be fixed by changing either of two fields, both
@@ -369,6 +413,7 @@ pub(crate) async fn create(
     }
     validate_runtime_constraints(&input, &mut violations);
     validate_network_constraints(&input, &mut violations);
+    validate_ports(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
         return violations.into_response();
@@ -2247,6 +2292,169 @@ mod tests {
         let body: serde_json::Value = response.json();
         let ports = body["ports"].as_array().unwrap();
         assert!(ports.is_empty());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Property paths
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_violation_paths_use_jsonpath_for_lists() {
+        // A violation on volumes[N].source must surface that exact path so
+        // the operator can point at the right entry in their manifest. The
+        // path adapter in `api/validation.rs` is generic; this test pins
+        // the JSONPath convention for any nested-list validation.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "destination": "/var/run/docker.sock",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let paths: Vec<&str> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["property_path"].as_str().unwrap())
+            .collect();
+        assert!(
+            paths.contains(&"volumes[0].source"),
+            "expected JSONPath `volumes[0].source`, got {:?}",
+            paths
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Port validation
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_rejects_port_zero() {
+        // 0 is reserved by the kernel — Docker uses it to mean "pick any
+        // free port", which is not what the user typed. Reject explicitly.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [{ "published": 0, "target": 80 }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let v = body["violations"].as_array().unwrap();
+        let codes: Vec<&str> = v.iter().map(|x| x["code"].as_str().unwrap()).collect();
+        let paths: Vec<&str> = v
+            .iter()
+            .map(|x| x["property_path"].as_str().unwrap())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.ports.published.out_of_range"),
+            "got codes {:?}",
+            codes
+        );
+        assert!(
+            paths.contains(&"ports[0].published"),
+            "got paths {:?}",
+            paths
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_target_zero() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [{ "published": 8080, "target": 0 }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let v = body["violations"].as_array().unwrap();
+        let codes: Vec<&str> = v.iter().map(|x| x["code"].as_str().unwrap()).collect();
+        let paths: Vec<&str> = v
+            .iter()
+            .map(|x| x["property_path"].as_str().unwrap())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.ports.target.out_of_range"),
+            "got codes {:?}",
+            codes
+        );
+        assert!(paths.contains(&"ports[0].target"), "got paths {:?}", paths);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_duplicate_published_ports() {
+        // Two entries publishing the same host port can't both bind.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [
+                    { "published": 8080, "target": 80 },
+                    { "published": 8080, "target": 81 }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.ports.published.duplicate".to_string()),
+            "got {:?}",
+            codes
+        );
     }
 
     // ────────────────────────────────────────────────────────────────────────
