@@ -79,6 +79,85 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
     }
 }
 
+/// Validate environment variable names against POSIX/Docker rules:
+/// `[A-Za-z_][A-Za-z0-9_]*`. Names like `bad-name` or `1NOT_ALLOWED`
+/// silently become unusable variables in the container shell — surface
+/// them at API time so the user catches typos before deploy.
+fn validate_environment(input: &DeploymentInput, errors: &mut ViolationList) {
+    static ENV_VAR_PATTERN: once_cell::sync::Lazy<regex::Regex> =
+        once_cell::sync::Lazy::new(|| regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").unwrap());
+
+    for key in input.environment.keys() {
+        if !ENV_VAR_PATTERN.is_match(key) {
+            errors.push(Violation::new(
+                format!("environment.{}", key),
+                format!(
+                    "'{}' is not a valid env var name (must match [A-Za-z_][A-Za-z0-9_]*)",
+                    key
+                ),
+                "deployment.environment.key.invalid",
+            ));
+        }
+    }
+}
+
+/// Validate `resources.limits.{cpu,memory}` and `resources.requests.{cpu,memory}`
+/// strings parse correctly. `parse_cpu_string` accepts forms like `"500m"` or
+/// `"2"`; `parse_memory_string` handles binary (`Ki`, `Mi`, …) and decimal
+/// (`K`, `M`, …) suffixes. Anything else used to be a silent runtime crash.
+fn validate_resources(input: &DeploymentInput, errors: &mut ViolationList) {
+    let Some(resources) = &input.resources else {
+        return;
+    };
+    let check = |spec: Option<&crate::models::deployments::ResourceSpec>,
+                 kind: &str,
+                 errors: &mut ViolationList| {
+        let Some(spec) = spec else { return };
+        if let Some(cpu) = &spec.cpu
+            && crate::models::deployments::parse_cpu_string(cpu).is_err()
+        {
+            errors.push(Violation::new(
+                format!("resources.{}.cpu", kind),
+                format!("'{}' is not a valid CPU spec (e.g. '500m' or '2')", cpu),
+                format!("deployment.resources.{}.cpu.invalid", kind),
+            ));
+        }
+        if let Some(memory) = &spec.memory
+            && crate::models::deployments::parse_memory_string(memory).is_err()
+        {
+            errors.push(Violation::new(
+                format!("resources.{}.memory", kind),
+                format!(
+                    "'{}' is not a valid memory spec (e.g. '512Mi' or '2Gi')",
+                    memory
+                ),
+                format!("deployment.resources.{}.memory.invalid", kind),
+            ));
+        }
+    };
+    check(resources.limits.as_ref(), "limits", errors);
+    check(resources.requests.as_ref(), "requests", errors);
+}
+
+/// Validate `config.image_pull_policy` is one of Docker's accepted values.
+/// Anything else is silently ignored at runtime; reject upfront.
+fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
+    let Some(config) = &input.config else {
+        return;
+    };
+    let policy = config.image_pull_policy.as_str();
+    if !matches!(policy, "Always" | "IfNotPresent" | "Never") {
+        errors.push(Violation::new(
+            "config.image_pull_policy",
+            format!(
+                "'{}' is not a supported pull policy (must be one of: Always, IfNotPresent, Never)",
+                policy
+            ),
+            "deployment.config.image_pull_policy.unsupported",
+        ));
+    }
+}
+
 /// Per-port rules. The `DeploymentPort` struct already constrains
 /// `published`/`target` to `u16` so anything > 65535 is caught at deserialize
 /// time; we still need to reject `0` (reserved + "any port" semantics) and
@@ -414,6 +493,9 @@ pub(crate) async fn create(
     validate_runtime_constraints(&input, &mut violations);
     validate_network_constraints(&input, &mut violations);
     validate_ports(&input, &mut violations);
+    validate_environment(&input, &mut violations);
+    validate_resources(&input, &mut violations);
+    validate_config(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
         return violations.into_response();
@@ -2452,6 +2534,159 @@ mod tests {
             .collect();
         assert!(
             codes.contains(&"deployment.ports.published.duplicate".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Environment / Resources / Config rules
+    // ────────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_rejects_invalid_env_var_name() {
+        // POSIX/Docker env var names: [A-Za-z_][A-Za-z0-9_]*. Names with
+        // spaces, dots, or dashes silently become unusable variables in
+        // the container shell. Reject up front.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "environment": {
+                    "bad-name": "value",
+                    "1NOT_ALLOWED": "value",
+                    "GOOD_ONE": "ok"
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes
+                .iter()
+                .filter(|c| *c == "deployment.environment.key.invalid")
+                .count()
+                >= 2,
+            "expected at least 2 invalid env keys, got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_cpu_string() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "resources": {
+                    "limits": { "cpu": "notanumber" }
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.resources.limits.cpu.invalid".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_memory_string() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "resources": {
+                    "requests": { "memory": "lots" }
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.resources.requests.memory.invalid".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_unknown_image_pull_policy() {
+        // Docker accepts: Always, IfNotPresent, Never. Anything else is
+        // silently ignored at runtime — fail at API time instead.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "config": { "image_pull_policy": "Maybe" }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.config.image_pull_policy.unsupported".to_string()),
             "got {:?}",
             codes
         );
