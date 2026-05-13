@@ -28,6 +28,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   `property_path` follows JSONPath conventions for nested collections: `ports[0].published`, `volumes[2].source`, `resources.limits.cpu`.
 
+- **`POST /namespaces` now uses RFC 7807.** Validation failures return `application/problem+json` (422) with codes:
+  - `namespace.name.length` — must be 2 to 63 characters
+  - `namespace.name.format` — lowercase DNS-label rules (`a-z0-9` plus `-`, no leading/trailing dash)
+
+  Conflicts (duplicate name) now return `application/problem+json` (409) with `title: "Conflict"` and a `detail` line naming the offending namespace, instead of the legacy `{"error": "..."}` shape.
+
+- **`POST /secrets` now uses RFC 7807.** Validation codes:
+  - `secret.namespace.length` / `secret.namespace.format`
+  - `secret.name.length` — 2 to 253 characters
+  - `secret.name.format` — DNS-subdomain rules (lowercase alphanumerics plus `.` and `-`)
+  - `secret.value.length` — 1 to 1 MiB (matches Kubernetes' Secret limit)
+
+  404 (namespace missing) and 409 (duplicate) responses are problem+json with `Not Found` / `Conflict` titles.
+
+- **`POST /configs` and `PUT /configs/{id}` now use RFC 7807.** Validation codes:
+  - `config.namespace.length` / `config.namespace.format`
+  - `config.name.length` — 1 to 253 characters
+  - `config.name.format` — same DNS-subdomain rules as secrets
+  - `config.data.length` — 1 to 1 MiB
+  - `config.data.invalid_json` — on PUT, when `data` is non-empty but doesn't round-trip as JSON
+  - `config.labels.length` — at most 1000 characters
+
+  The previous 400 with `{"error": "Validation failed", "details": ...}` is replaced by a 422 with violations. 404 (config missing on PUT) and 409 (duplicate on POST) are problem+json.
+
+- **`POST /login` now emits problem+json on 401/500** with `title: "Unauthorized"` and `detail: "invalid credentials"` (same shape on internal errors with a generic detail). The legacy `{"errors": ["Invalid credentials"]}` body is gone.
+
 - **Validation errors on `POST /users` and `PUT /users/{id}` now use RFC 7807.** The 422 response shape changed from the bare `validator`-derived `{"errors": <map>}` to `application/problem+json`:
 
   ```json
@@ -61,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
 
 ### Added
-- **`ring apply` now renders RFC 7807 problem details from `POST /deployments` and `POST /namespaces`**. On validation failure the CLI prints the title line plus every violation with its property path, e.g.
+- **`ring apply`, `ring namespace create` and `ring secret create` render RFC 7807 problem details.** On validation failure the CLI prints the title line plus every violation with its property path, e.g.
 
   ```
   Unable to apply deployment 'nginx': Validation failed (422)
@@ -69,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     * replicas: replicas > 1 (3) is incompatible with `ports` — drop `ports` or reduce `replicas` to 1
   ```
 
-  instead of the legacy `API returned status 422: <raw body>` one-liner. Non-7807 responses fall back to the previous behaviour.
+  instead of the legacy `API returned status 422: <raw body>` one-liner. Non-validation problems (404, 409) print the same way with the server's `title` and `detail`. Non-7807 responses fall back to the previous behaviour.
 
 ## [0.8.0] - 2026-05-12
 
