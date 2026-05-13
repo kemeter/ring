@@ -237,11 +237,6 @@ pub(crate) mod tests {
         pub(crate) token: String,
     }
 
-    #[derive(Debug, Deserialize)]
-    pub(crate) struct ErrorResponse {
-        pub errors: Vec<String>,
-    }
-
     pub(crate) async fn new_test_app() -> Router {
         let (_, router) = new_test_app_with_pool().await;
         router

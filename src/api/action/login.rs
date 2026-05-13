@@ -1,6 +1,8 @@
 use crate::api::server::Db;
+use crate::api::validation::problem_response;
 use crate::models::users as users_model;
 use axum::extract::State;
+use axum::response::Response;
 use axum::{Json, http::StatusCode, response::IntoResponse};
 use rand::Rng;
 use rand::distr::Alphanumeric;
@@ -8,10 +10,7 @@ use rand::rng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-pub(crate) async fn login(
-    State(pool): State<Db>,
-    Json(input): Json<LoginInput>,
-) -> impl IntoResponse {
+pub(crate) async fn login(State(pool): State<Db>, Json(input): Json<LoginInput>) -> Response {
     debug!("Login attempt");
 
     let option = users_model::find_by_username(&pool, &input.username).await;
@@ -21,17 +20,19 @@ pub(crate) async fn login(
             let matches = match argon2::verify_encoded(&user.password, input.password.as_bytes()) {
                 Ok(m) => m,
                 Err(_) => {
-                    return (
+                    return problem_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "errors": ["Internal server error"] })),
+                        "Internal Server Error",
+                        "credential verification failed",
                     );
                 }
             };
 
             if !matches {
-                return (
+                return problem_response(
                     StatusCode::UNAUTHORIZED,
-                    Json(json!({ "errors": ["Invalid credentials"] })),
+                    "Unauthorized",
+                    "invalid credentials",
                 );
             }
 
@@ -42,21 +43,24 @@ pub(crate) async fn login(
             let token: String = user.token.clone();
 
             if users_model::login(&pool, user).await.is_err() {
-                return (
+                return problem_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": ["Internal server error"] })),
+                    "Internal Server Error",
+                    "failed to record login",
                 );
             }
 
-            (StatusCode::OK, Json(json!({ "token": token })))
+            (StatusCode::OK, Json(json!({ "token": token }))).into_response()
         }
-        Ok(None) => (
+        Ok(None) => problem_response(
             StatusCode::UNAUTHORIZED,
-            Json(json!({ "errors": ["Invalid credentials"] })),
+            "Unauthorized",
+            "invalid credentials",
         ),
-        Err(_) => (
+        Err(_) => problem_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Internal server error"] })),
+            "Internal Server Error",
+            "lookup failed",
         ),
     }
 }
@@ -80,8 +84,8 @@ pub(crate) struct LoginInput {
 
 #[cfg(test)]
 mod tests {
-    use crate::api::server::tests::ErrorResponse;
     use crate::api::server::tests::new_test_app;
+    use axum::http::StatusCode;
     use axum_test::{TestResponse, TestServer};
     use serde::Deserialize;
     use serde_json::json;
@@ -111,7 +115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_fail() {
+    async fn login_fail_returns_problem_json_unauthorized() {
         let server = TestServer::new(new_test_app().await).unwrap();
 
         let response: TestResponse = server
@@ -122,11 +126,16 @@ mod tests {
             }))
             .await;
 
-        let response_body: ErrorResponse = response.json::<ErrorResponse>();
-        assert!(
-            response_body
-                .errors
-                .contains(&"Invalid credentials".to_string())
-        );
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+        let ct = response
+            .header("content-type")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with("application/problem+json"), "got: {}", ct);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["status"], 401);
+        assert_eq!(body["title"], "Unauthorized");
+        assert_eq!(body["detail"], "invalid credentials");
     }
 }
