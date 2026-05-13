@@ -60,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
 
+### Added
+- **`ring apply` now renders RFC 7807 problem details from `POST /deployments` and `POST /namespaces`**. On validation failure the CLI prints the title line plus every violation with its property path, e.g.
+
+  ```
+  Unable to apply deployment 'nginx': Validation failed (422)
+    * ports[0].published: must be between 1 and 65535
+    * replicas: replicas > 1 (3) is incompatible with `ports` — drop `ports` or reduce `replicas` to 1
+  ```
+
+  instead of the legacy `API returned status 422: <raw body>` one-liner. Non-7807 responses fall back to the previous behaviour.
+
 ## [0.8.0] - 2026-05-12
 
 ### Added

@@ -1,3 +1,4 @@
+use crate::commands::problem_json::render_response_error;
 use crate::config::config::{Config, get_config_dir, load_auth_config};
 use crate::exit_code;
 use crate::models::deployments::EnvValue;
@@ -20,6 +21,10 @@ enum ApplyError {
     Validation(String),
     Http(reqwest::Error),
     HttpStatus(u16, String),
+    // The failure has already been printed to stderr (typically by
+    // `render_response_error`). Carry only the status so `apply()` can map
+    // it to the right exit code without re-printing.
+    Reported(u16),
     Auth(String),
 }
 
@@ -33,6 +38,7 @@ impl fmt::Display for ApplyError {
             ApplyError::HttpStatus(status, msg) => {
                 write!(f, "HTTP {} error: {}", status, msg)
             }
+            ApplyError::Reported(status) => write!(f, "request failed with status {}", status),
             ApplyError::Auth(msg) => write!(f, "Auth error: {}", msg),
         }
     }
@@ -366,17 +372,9 @@ async fn create_namespace_on_server(
         println!("Namespace '{}' already exists, skipping", namespace.name);
         Ok(())
     } else {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::HttpStatus(
-            status.as_u16(),
-            format!(
-                "Failed to create namespace '{}': {} {}",
-                namespace.name, status, error_body
-            ),
-        ))
+        let context = format!("Failed to create namespace '{}'", namespace.name);
+        let code = render_response_error(&context, response).await;
+        Err(ApplyError::Reported(code))
     }
 }
 
@@ -413,23 +411,24 @@ async fn deploy_to_server(
         println!("Deployment '{}' created", deployment.name);
         Ok(())
     } else {
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        Err(ApplyError::HttpStatus(
-            status.as_u16(),
-            format!("API returned status {}: {}", status, error_body),
-        ))
+        let context = format!("Unable to apply deployment '{}'", deployment.name);
+        let code = render_response_error(&context, response).await;
+        Err(ApplyError::Reported(code))
     }
 }
 
 pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &reqwest::Client) {
     if let Err(e) = apply_internal(args, configuration, client).await {
-        eprintln!("Error: {}", e);
+        // `Reported` means render_response_error has already written a
+        // structured error to stderr — re-printing would just duplicate the
+        // problem+json output.
+        if !matches!(e, ApplyError::Reported(_)) {
+            eprintln!("Error: {}", e);
+        }
         match e {
             ApplyError::Http(err) => exit_code::from_reqwest_error(&err).exit(),
             ApplyError::HttpStatus(status, _) => exit_code::from_http_status(status).exit(),
+            ApplyError::Reported(status) => exit_code::from_http_status(status).exit(),
             ApplyError::Auth(_) => exit_code::ExitCode::Auth.exit(),
             ApplyError::Validation(_) => exit_code::ExitCode::General.exit(),
             _ => exit_code::ExitCode::General.exit(),
@@ -470,7 +469,9 @@ async fn apply_internal(
         } else if let Err(e) =
             create_namespace_on_server(namespace, &api_url, &auth_config.token, client).await
         {
-            eprintln!("Failed to create namespace '{}': {}", key, e);
+            if !matches!(e, ApplyError::Reported(_)) {
+                eprintln!("Failed to create namespace '{}': {}", key, e);
+            }
             if first_error.is_none() {
                 first_error = Some(e);
             }
@@ -512,7 +513,12 @@ async fn apply_internal(
             {
                 Ok(()) => success_count += 1,
                 Err(e) => {
-                    eprintln!("Failed to deploy '{}': {}", deployment_name, e);
+                    // `Reported` means render_response_error already wrote a
+                    // structured RFC 7807 dump to stderr — duplicating the
+                    // legacy one-liner here just adds noise.
+                    if !matches!(e, ApplyError::Reported(_)) {
+                        eprintln!("Failed to deploy '{}': {}", deployment_name, e);
+                    }
                     error_count += 1;
                     if first_error.is_none() {
                         first_error = Some(e);
