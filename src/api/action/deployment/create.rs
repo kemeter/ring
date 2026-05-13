@@ -15,6 +15,7 @@ use validator::{Validate, ValidationError};
 
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
+use crate::api::validation::{Violation, ViolationList};
 use crate::models::deployment_event;
 use crate::models::deployments;
 use crate::models::deployments::{
@@ -31,45 +32,54 @@ fn default_replicas() -> u32 {
 fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     match runtime {
         "docker" | "cloud-hypervisor" => Ok(()),
-        _ => Err(ValidationError::new(
-            "invalid runtime, supported: [docker, cloud-hypervisor]",
-        )),
+        _ => Err(
+            ValidationError::new("deployment.runtime.unsupported").with_message(Cow::Borrowed(
+                "runtime must be one of: docker, cloud-hypervisor",
+            )),
+        ),
     }
 }
 
-fn validate_network_constraints(input: &DeploymentInput) -> Result<(), String> {
+fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
     let Some(network) = &input.network else {
-        return Ok(());
+        return;
     };
     if !matches!(network.mode, NetworkMode::Host) {
-        return Ok(());
+        return;
     }
 
     if input.runtime != "docker" {
-        return Err(format!(
-            "network.mode=host is only supported on the docker runtime, got '{}'",
-            input.runtime
+        errors.push(Violation::new(
+            "network.mode",
+            format!(
+                "host networking is only supported on the docker runtime, got '{}'",
+                input.runtime
+            ),
+            "deployment.network.host_runtime_unsupported",
         ));
     }
 
     if !input.ports.is_empty() {
-        return Err(
-            "network.mode=host is incompatible with port mappings: host networking bypasses Docker's port bindings, so `ports` would be silently ignored. Remove `ports` and let the container bind directly on the host."
-                .to_string(),
-        );
-    }
-
-    if input.replicas > 1 {
-        return Err(format!(
-            "network.mode=host is incompatible with replicas > 1 (got {}): all replicas would compete for the same host ports. Reduce replicas to 1.",
-            input.replicas
+        errors.push(Violation::new(
+            "ports",
+            "host networking bypasses Docker's port bindings; remove `ports` and let the container bind directly on the host",
+            "deployment.ports.host_network_conflict",
         ));
     }
 
-    Ok(())
+    if input.replicas > 1 {
+        errors.push(Violation::new(
+            "replicas",
+            format!(
+                "host networking is incompatible with replicas > 1 (got {}): all replicas would compete for the same host ports",
+                input.replicas
+            ),
+            "deployment.replicas.host_network_conflict",
+        ));
+    }
 }
 
-fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
+fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
     if input.runtime == "cloud-hypervisor" {
         // `command` health checks are now supported via the in-guest
         // `ring-agent` daemon (vsock). The guest image must ship the agent
@@ -81,9 +91,11 @@ fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
         //  src/runtime/cloud_hypervisor/cloud_init.rs. Requires the guest
         //  image to ship cloud-init, which every standard cloud image does.)
         if !input.command.is_empty() {
-            return Err(
-                "custom commands are not supported on cloud-hypervisor runtime (alpha); the VM boots whatever its image is configured to run".to_string(),
-            );
+            errors.push(Violation::new(
+                "command",
+                "custom commands are not supported on cloud-hypervisor runtime (alpha); the VM boots whatever its image is configured to run",
+                "deployment.command.cloud_hypervisor_unsupported",
+            ));
         }
 
         // CH expects a raw disk image path on the host, not a Docker image
@@ -91,13 +103,16 @@ fn validate_runtime_constraints(input: &DeploymentInput) -> Result<(), String> {
         // a Docker reference (e.g. `nginx:latest`) — fail early instead of
         // letting it fail much later with a confusing "VM image not found".
         if !input.image.starts_with('/') {
-            return Err(format!(
-                "cloud-hypervisor runtime expects an absolute path to a raw disk image, got '{}' (Docker image references are not supported)",
-                input.image
+            errors.push(Violation::new(
+                "image",
+                format!(
+                    "cloud-hypervisor runtime expects an absolute path to a raw disk image, got '{}' (Docker image references are not supported)",
+                    input.image
+                ),
+                "deployment.image.cloud_hypervisor_requires_absolute_path",
             ));
         }
     }
-    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -286,246 +301,242 @@ pub(crate) async fn create(
     filters.push(input.namespace.clone());
     filters.push(input.name.clone());
 
-    match input.validate() {
-        Ok(()) => {
-            if let Err(msg) = validate_runtime_constraints(&input) {
-                let message = Message { message: msg };
-                return (StatusCode::BAD_REQUEST, Json(message)).into_response();
+    // Accumulate every validation error in one pass: a manifest that
+    // violates several rules surfaces the full list in one response so
+    // the user can fix everything in one apply cycle. Order:
+    //   1. `validator` field rules driven by #[validate(...)] attributes
+    //   2. Runtime-specific constraints (e.g. cloud-hypervisor expects an
+    //      absolute image path, no custom command, …)
+    //   3. Cross-field constraints (e.g. host networking + replicas > 1).
+    let mut violations = ViolationList::new();
+    if let Err(errs) = input.validate() {
+        violations.extend_from_validator(errs);
+    }
+    validate_runtime_constraints(&input, &mut violations);
+    validate_network_constraints(&input, &mut violations);
+    if !violations.is_empty() {
+        return violations.into_response();
+    }
+
+    // Auto-create namespace if it doesn't exist
+    match namespace::find_by_name(&pool, &input.namespace).await {
+        Ok(None) => {
+            let new_namespace = namespace::Namespace {
+                id: Uuid::new_v4().to_string(),
+                created_at: Utc::now().to_string(),
+                updated_at: None,
+                name: input.namespace.clone(),
+            };
+            if let Err(e) = namespace::create(&pool, new_namespace).await
+                && !e.to_string().contains("UNIQUE constraint failed")
+            {
+                log::error!("Failed to create namespace '{}': {}", input.namespace, e);
+                let message = Message {
+                    message: "Failed to create namespace".to_string(),
+                };
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
             }
+            info!("Namespace '{}' created automatically", input.namespace);
+        }
+        Ok(Some(_)) => {}
+        Err(e) => {
+            log::error!("Failed to check namespace '{}': {}", input.namespace, e);
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+        }
+    }
 
-            if let Err(msg) = validate_network_constraints(&input) {
-                let message = Message { message: msg };
-                return (StatusCode::BAD_REQUEST, Json(message)).into_response();
-            }
+    let active_deployments =
+        deployments::find_active_by_namespace_name(&pool, &input.namespace, &input.name).await;
 
-            // Auto-create namespace if it doesn't exist
-            match namespace::find_by_name(&pool, &input.namespace).await {
-                Ok(None) => {
-                    let new_namespace = namespace::Namespace {
-                        id: Uuid::new_v4().to_string(),
-                        created_at: Utc::now().to_string(),
-                        updated_at: None,
-                        name: input.namespace.clone(),
-                    };
-                    if let Err(e) = namespace::create(&pool, new_namespace).await
-                        && !e.to_string().contains("UNIQUE constraint failed")
-                    {
-                        log::error!("Failed to create namespace '{}': {}", input.namespace, e);
-                        let message = Message {
-                            message: "Failed to create namespace".to_string(),
-                        };
-                        return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-                    }
-                    info!("Namespace '{}' created automatically", input.namespace);
-                }
-                Ok(Some(_)) => {}
-                Err(e) => {
-                    log::error!("Failed to check namespace '{}': {}", input.namespace, e);
-                    let message = Message {
-                        message: "Internal server error".to_string(),
-                    };
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-                }
-            }
+    // Determine whether rolling update is possible:
+    // - only when there is exactly one active deployment (the current one)
+    // - it has health checks configured
+    // - --force flag is not set
+    let mut rolling_parent_id: Option<String> = None;
+    // Captured to log a `ForceReplace` event on the new deployment once
+    // it exists. We collect the reason here so the caller of the API
+    // gets a clear explanation for why rolling didn't happen, instead
+    // of having to compare timestamps across two deployments.
+    let mut replaced_deployment_ids: Vec<String> = Vec::new();
+    let mut replace_reason: Option<&'static str> = None;
 
-            let active_deployments =
-                deployments::find_active_by_namespace_name(&pool, &input.namespace, &input.name)
-                    .await;
+    match active_deployments {
+        Ok(deployments_list) => {
+            info!(
+                "Checking for existing deployments: namespace='{}', name='{}' - found: {}",
+                input.namespace,
+                input.name,
+                deployments_list.len()
+            );
 
-            // Determine whether rolling update is possible:
-            // - only when there is exactly one active deployment (the current one)
-            // - it has health checks configured
-            // - --force flag is not set
-            let mut rolling_parent_id: Option<String> = None;
-            // Captured to log a `ForceReplace` event on the new deployment once
-            // it exists. We collect the reason here so the caller of the API
-            // gets a clear explanation for why rolling didn't happen, instead
-            // of having to compare timestamps across two deployments.
-            let mut replaced_deployment_ids: Vec<String> = Vec::new();
-            let mut replace_reason: Option<&'static str> = None;
+            if !deployments_list.is_empty() {
+                info!(
+                    "Found {} active deployments with the same namespace and name",
+                    deployments_list.len()
+                );
 
-            match active_deployments {
-                Ok(deployments_list) => {
+                let has_health_checks = input
+                    .health_checks
+                    .as_ref()
+                    .map(|hc| !hc.is_empty())
+                    .unwrap_or(false);
+
+                // Rolling update: keep old deployment running if conditions are met
+                if !params.force && has_health_checks && deployments_list.len() == 1 {
+                    let existing = &deployments_list[0];
                     info!(
-                        "Checking for existing deployments: namespace='{}', name='{}' - found: {}",
-                        input.namespace,
-                        input.name,
-                        deployments_list.len()
+                        "Rolling update: keeping deployment {} running as parent",
+                        existing.id
                     );
-
-                    if !deployments_list.is_empty() {
-                        info!(
-                            "Found {} active deployments with the same namespace and name",
-                            deployments_list.len()
-                        );
-
-                        let has_health_checks = input
-                            .health_checks
-                            .as_ref()
-                            .map(|hc| !hc.is_empty())
-                            .unwrap_or(false);
-
-                        // Rolling update: keep old deployment running if conditions are met
-                        if !params.force && has_health_checks && deployments_list.len() == 1 {
-                            let existing = &deployments_list[0];
-                            info!(
-                                "Rolling update: keeping deployment {} running as parent",
-                                existing.id
+                    rolling_parent_id = Some(existing.id.clone());
+                } else {
+                    // Immediate replace. Pick the most specific reason so
+                    // operators can fix the root cause: `force=true` is a
+                    // deliberate caller choice, the others are config gaps.
+                    replace_reason = Some(if params.force {
+                        "force"
+                    } else if !has_health_checks {
+                        "no_health_checks"
+                    } else {
+                        "multiple_active_deployments"
+                    });
+                    for mut deployment in deployments_list {
+                        info!("Marking deployment {} as deleted", deployment.id);
+                        replaced_deployment_ids.push(deployment.id.clone());
+                        deployment.status = DeploymentStatus::Deleted;
+                        deployment.updated_at = Some(Utc::now().to_string());
+                        if let Err(e) = deployments::update(&pool, &deployment).await {
+                            log::error!(
+                                "Failed to mark deployment {} as deleted: {}",
+                                deployment.id,
+                                e
                             );
-                            rolling_parent_id = Some(existing.id.clone());
-                        } else {
-                            // Immediate replace. Pick the most specific reason so
-                            // operators can fix the root cause: `force=true` is a
-                            // deliberate caller choice, the others are config gaps.
-                            replace_reason = Some(if params.force {
-                                "force"
-                            } else if !has_health_checks {
-                                "no_health_checks"
-                            } else {
-                                "multiple_active_deployments"
-                            });
-                            for mut deployment in deployments_list {
-                                info!("Marking deployment {} as deleted", deployment.id);
-                                replaced_deployment_ids.push(deployment.id.clone());
-                                deployment.status = DeploymentStatus::Deleted;
-                                deployment.updated_at = Some(Utc::now().to_string());
-                                if let Err(e) = deployments::update(&pool, &deployment).await {
-                                    log::error!(
-                                        "Failed to mark deployment {} as deleted: {}",
-                                        deployment.id,
-                                        e
-                                    );
-                                }
-                            }
                         }
                     }
-                }
-                Err(e) => {
-                    log::error!("Database error while checking active deployments: {}", e);
-                    let message = Message {
-                        message: "Internal server error".to_string(),
-                    };
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-                }
-            }
-
-            let utc: DateTime<Utc> = Utc::now();
-
-            let volumes = match serde_json::to_string(&input.volumes) {
-                Ok(json_str) => json_str,
-                Err(e) => {
-                    log::error!("Volume serialization error: {}", e);
-                    let message = Message {
-                        message: "Internal server error".to_string(),
-                    };
-                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-                }
-            };
-
-            let deployment = deployments::Deployment {
-                id: Uuid::new_v4().to_string(),
-                name: input.name.clone(),
-                runtime: input.runtime.clone(),
-                namespace: input.namespace.clone(),
-                kind: match input.kind {
-                    DeploymentKind::Worker => "worker".to_string(),
-                    DeploymentKind::Job => "job".to_string(),
-                },
-                image: input.image.clone(),
-                config: input.config.clone(),
-                status: DeploymentStatus::Creating,
-                created_at: utc.to_string(),
-                updated_at: None,
-                labels: input.labels,
-                environment: input.environment,
-                replicas: input.replicas,
-                command: input.command,
-                instances: [].to_vec(),
-                restart_count: 0,
-                volumes,
-                health_checks: input.health_checks.unwrap_or_default(),
-                resources: input.resources,
-                image_digest: None,
-                ports: input.ports,
-                pending_events: vec![],
-                parent_id: rolling_parent_id,
-                network: input.network.clone(),
-            };
-
-            match deployments::create(&pool, &deployment).await {
-                Ok(deployment) => {
-                    let _ = deployment_event::log_event(
-                        &pool,
-                        deployment.id.clone(),
-                        "info",
-                        format!("Deployment '{}' created successfully", deployment.name),
-                        "api",
-                        Some("deployment_created"),
-                    )
-                    .await;
-
-                    // When a previous active deployment was wiped instead of
-                    // being kept as a rolling parent, surface the reason as a
-                    // dedicated event. Operators inspecting "why didn't my
-                    // rolling update happen?" find the answer in one place
-                    // (event level: warning so it shows up under
-                    // `--level warning` filters).
-                    if let Some(reason) = replace_reason {
-                        let replaced = if replaced_deployment_ids.len() == 1 {
-                            format!("deployment {}", replaced_deployment_ids[0])
-                        } else {
-                            format!(
-                                "{} deployments ({})",
-                                replaced_deployment_ids.len(),
-                                replaced_deployment_ids.join(", ")
-                            )
-                        };
-                        let message = match reason {
-                            "force" => format!(
-                                "Replaced {} immediately because force=true was set on the request — rolling update skipped",
-                                replaced
-                            ),
-                            "no_health_checks" => format!(
-                                "Replaced {} immediately because no health checks are declared — rolling update requires at least one health check",
-                                replaced
-                            ),
-                            "multiple_active_deployments" => format!(
-                                "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
-                                replaced, deployment.namespace, deployment.name
-                            ),
-                            other => format!("Replaced {} immediately ({})", replaced, other),
-                        };
-                        let _ = deployment_event::log_event(
-                            &pool,
-                            deployment.id.clone(),
-                            "warning",
-                            message,
-                            "api",
-                            Some("force_replace"),
-                        )
-                        .await;
-                    }
-
-                    let deployment_output = DeploymentOutput::from_to_model(deployment);
-                    (StatusCode::CREATED, Json(deployment_output)).into_response()
-                }
-                Err(e) => {
-                    error!("Failed to create deployment: {}", e);
-                    let message = Message {
-                        message: format!(
-                            "A deployment with name '{}' already exists in namespace '{}'",
-                            input.name, input.namespace
-                        ),
-                    };
-                    (StatusCode::CONFLICT, Json(message)).into_response()
                 }
             }
         }
         Err(e) => {
+            log::error!("Database error while checking active deployments: {}", e);
             let message = Message {
-                message: e.to_string(),
+                message: "Internal server error".to_string(),
             };
-            (StatusCode::BAD_REQUEST, Json(message)).into_response()
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+        }
+    }
+
+    let utc: DateTime<Utc> = Utc::now();
+
+    let volumes = match serde_json::to_string(&input.volumes) {
+        Ok(json_str) => json_str,
+        Err(e) => {
+            log::error!("Volume serialization error: {}", e);
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+        }
+    };
+
+    let deployment = deployments::Deployment {
+        id: Uuid::new_v4().to_string(),
+        name: input.name.clone(),
+        runtime: input.runtime.clone(),
+        namespace: input.namespace.clone(),
+        kind: match input.kind {
+            DeploymentKind::Worker => "worker".to_string(),
+            DeploymentKind::Job => "job".to_string(),
+        },
+        image: input.image.clone(),
+        config: input.config.clone(),
+        status: DeploymentStatus::Creating,
+        created_at: utc.to_string(),
+        updated_at: None,
+        labels: input.labels,
+        environment: input.environment,
+        replicas: input.replicas,
+        command: input.command,
+        instances: [].to_vec(),
+        restart_count: 0,
+        volumes,
+        health_checks: input.health_checks.unwrap_or_default(),
+        resources: input.resources,
+        image_digest: None,
+        ports: input.ports,
+        pending_events: vec![],
+        parent_id: rolling_parent_id,
+        network: input.network.clone(),
+    };
+
+    match deployments::create(&pool, &deployment).await {
+        Ok(deployment) => {
+            let _ = deployment_event::log_event(
+                &pool,
+                deployment.id.clone(),
+                "info",
+                format!("Deployment '{}' created successfully", deployment.name),
+                "api",
+                Some("deployment_created"),
+            )
+            .await;
+
+            // When a previous active deployment was wiped instead of
+            // being kept as a rolling parent, surface the reason as a
+            // dedicated event. Operators inspecting "why didn't my
+            // rolling update happen?" find the answer in one place
+            // (event level: warning so it shows up under
+            // `--level warning` filters).
+            if let Some(reason) = replace_reason {
+                let replaced = if replaced_deployment_ids.len() == 1 {
+                    format!("deployment {}", replaced_deployment_ids[0])
+                } else {
+                    format!(
+                        "{} deployments ({})",
+                        replaced_deployment_ids.len(),
+                        replaced_deployment_ids.join(", ")
+                    )
+                };
+                let message = match reason {
+                    "force" => format!(
+                        "Replaced {} immediately because force=true was set on the request — rolling update skipped",
+                        replaced
+                    ),
+                    "no_health_checks" => format!(
+                        "Replaced {} immediately because no health checks are declared — rolling update requires at least one health check",
+                        replaced
+                    ),
+                    "multiple_active_deployments" => format!(
+                        "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
+                        replaced, deployment.namespace, deployment.name
+                    ),
+                    other => format!("Replaced {} immediately ({})", replaced, other),
+                };
+                let _ = deployment_event::log_event(
+                    &pool,
+                    deployment.id.clone(),
+                    "warning",
+                    message,
+                    "api",
+                    Some("force_replace"),
+                )
+                .await;
+            }
+
+            let deployment_output = DeploymentOutput::from_to_model(deployment);
+            (StatusCode::CREATED, Json(deployment_output)).into_response()
+        }
+        Err(e) => {
+            error!("Failed to create deployment: {}", e);
+            let message = Message {
+                message: format!(
+                    "A deployment with name '{}' already exists in namespace '{}'",
+                    input.name, input.namespace
+                ),
+            };
+            (StatusCode::CONFLICT, Json(message)).into_response()
         }
     }
 }
@@ -554,7 +565,7 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
@@ -659,12 +670,15 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
         assert!(
-            body.message.contains("custom commands are not supported"),
+            body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("custom commands are not supported"),
             "unexpected error: {}",
-            body.message
+            body["detail"]
         );
     }
 
@@ -685,12 +699,15 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
         assert!(
-            body.message.contains("absolute path to a raw disk image"),
+            body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("absolute path to a raw disk image"),
             "unexpected error: {}",
-            body.message
+            body["detail"]
         );
     }
 
@@ -858,11 +875,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("source is required for bind volumes")
         );
     }
@@ -925,9 +943,14 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("source cannot be empty"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        assert!(
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -955,14 +978,16 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("source is required for config volumes")
-                || error_body
-                    .message
+                || error_body["detail"]
+                    .as_str()
+                    .unwrap()
                     .contains("key is required for config volumes")
         );
     }
@@ -994,11 +1019,17 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body.message.contains("source cannot be empty")
-                || error_body.message.contains("key cannot be empty")
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source cannot be empty")
+                || error_body["detail"]
+                    .as_str()
+                    .unwrap()
+                    .contains("key cannot be empty")
         );
     }
 
@@ -1028,9 +1059,14 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("destination cannot be empty"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        assert!(
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("destination cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -1222,10 +1258,10 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        let message = &error_body.message;
-        assert!(message.contains("source") || message.contains("destination"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        let detail = error_body["detail"].as_str().unwrap_or("");
+        assert!(detail.contains("source") || detail.contains("destination"));
     }
 
     #[tokio::test]
@@ -1254,11 +1290,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("source is required for config volumes")
         );
     }
@@ -1289,11 +1326,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("key is required for config volumes")
         );
     }
@@ -1325,9 +1363,14 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("source cannot be empty"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        assert!(
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -1357,9 +1400,14 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("key cannot be empty"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        assert!(
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("key cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -1387,11 +1435,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("source is required for named volumes")
         );
     }
@@ -1422,9 +1471,14 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
-        assert!(error_body.message.contains("source cannot be empty"));
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
+        assert!(
+            error_body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("source cannot be empty")
+        );
     }
 
     #[tokio::test]
@@ -1454,11 +1508,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let error_body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let error_body: serde_json::Value = response.json();
         assert!(
-            error_body
-                .message
+            error_body["detail"]
+                .as_str()
+                .unwrap()
                 .contains("config volumes must be read-only")
         );
     }
@@ -1696,7 +1751,7 @@ mod tests {
 
         assert!(
             response.status_code() == StatusCode::CREATED
-                || response.status_code() == StatusCode::BAD_REQUEST
+                || response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
                 || response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
         );
     }
@@ -2016,12 +2071,20 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        // Match on the stable `code` slug instead of human text — the
+        // wording of `message` may evolve without breaking clients.
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
         assert!(
-            body.message.contains("network.mode=host") && body.message.contains("port"),
-            "unexpected message: {}",
-            body.message
+            codes.contains(&"deployment.ports.host_network_conflict".to_string()),
+            "expected deployment.ports.host_network_conflict, got {:?}",
+            codes
         );
     }
 
@@ -2044,12 +2107,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
         assert!(
-            body.message.contains("replicas"),
+            body["detail"].as_str().unwrap().contains("replicas"),
             "unexpected message: {}",
-            body.message
+            body["detail"]
         );
     }
 
@@ -2071,12 +2134,12 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
-        let body: Message = response.json();
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
         assert!(
-            body.message.contains("docker runtime"),
+            body["detail"].as_str().unwrap().contains("docker runtime"),
             "unexpected message: {}",
-            body.message
+            body["detail"]
         );
     }
 
