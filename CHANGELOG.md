@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (breaking)
+- **Validation errors on `POST /users` and `PUT /users/{id}` now use RFC 7807.** The 422 response shape changed from the bare `validator`-derived `{"errors": <map>}` to `application/problem+json`:
+
+  ```json
+  {
+    "type": "about:blank",
+    "title": "Validation failed",
+    "status": 422,
+    "detail": "username: must be 2 to 50 characters\npassword: must be 8 to 128 characters",
+    "violations": [
+      { "property_path": "username", "message": "must be 2 to 50 characters", "code": "user.username.length" },
+      { "property_path": "password", "message": "must be 8 to 128 characters", "code": "user.password.length" }
+    ]
+  }
+  ```
+
+  Every violation carries a stable `code` slug (e.g. `user.username.format`) that clients can branch on without parsing the human message. All applicable rules run on every request — the response lists every failure in one shot instead of stopping at the first.
+
+  Username format is now `[a-zA-Z0-9][a-zA-Z0-9._-]*` (2-50 chars), matching GitHub-style conventions for human-facing identifiers. Password rules unchanged (8-128 chars).
+
 - **`DeploymentStatus` is now snake_case in the JSON API and DB.** Previously the lifecycle states (`pending`, `running`, …) were lowercase while the error states (`CrashLoopBackOff`, `ImagePullBackOff`, …) were PascalCase — the mismatch silently dropped rows from string-matching filters elsewhere in the code (root cause of PR #84). All variants now share the same convention. Mapping for external consumers:
   - `CrashLoopBackOff` → `crash_loop_back_off`
   - `ImagePullBackOff` → `image_pull_back_off`

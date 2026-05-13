@@ -1,4 +1,8 @@
+use crate::api::action::user::validation::{
+    PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN, USERNAME_PATTERN,
+};
 use crate::api::server::Db;
+use crate::api::validation::ViolationList;
 use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::models::users::User;
@@ -16,12 +20,13 @@ pub(crate) async fn update(
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    if let Err(errors) = input.validate() {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({ "errors": errors })),
-        )
-            .into_response());
+    // `Validate` skips fields that are `None`, so an empty body falls
+    // through cleanly. Whatever the user passes gets the same rules as
+    // create — the regex / length attributes are declared once and shared
+    // via constants in `validation.rs`.
+    if let Err(errs) = input.validate() {
+        let violations: ViolationList = errs.into();
+        return Err(violations.into_response());
     }
 
     let mut user = match users_model::find(&pool, &id).await.ok().flatten() {
@@ -59,9 +64,26 @@ pub(crate) async fn update(
 
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct UserInput {
-    #[validate(length(min = 2, max = 50))]
+    #[validate(
+        length(
+            min = "USERNAME_MIN",
+            max = "USERNAME_MAX",
+            code = "user.username.length",
+            message = "must be 2 to 50 characters"
+        ),
+        regex(
+            path = *USERNAME_PATTERN,
+            code = "user.username.format",
+            message = "must start with a letter or digit and contain only letters, digits, '.', '-', '_'"
+        )
+    )]
     username: Option<String>,
-    #[validate(length(min = 8, max = 128))]
+    #[validate(length(
+        min = "PASSWORD_MIN",
+        max = "PASSWORD_MAX",
+        code = "user.password.length",
+        message = "must be 8 to 128 characters"
+    ))]
     password: Option<String>,
 }
 
@@ -129,5 +151,133 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn update_with_short_username_returns_violations() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": "a"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let v = &body["violations"];
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["property_path"], "username");
+        assert_eq!(v[0]["code"], "user.username.length");
+    }
+
+    #[tokio::test]
+    async fn update_with_invalid_username_chars_returns_violations() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": "john doe"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let v = &body["violations"];
+        assert_eq!(v[0]["code"], "user.username.format");
+    }
+
+    #[tokio::test]
+    async fn update_with_short_password_returns_violations() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "password": "short"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let v = &body["violations"];
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["property_path"], "password");
+        assert_eq!(v[0]["code"], "user.password.length");
+    }
+
+    #[tokio::test]
+    async fn update_accumulates_all_violations() {
+        // Both fields invalid → response must list everything in one shot.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "username": "@",
+                "password": "x"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"user.username.length".to_string()));
+        assert!(codes.contains(&"user.username.format".to_string()));
+        assert!(codes.contains(&"user.password.length".to_string()));
+    }
+
+    #[tokio::test]
+    async fn update_empty_body_is_a_noop_with_ok() {
+        // PUT with neither username nor password: no validation triggers,
+        // no field changes, and the existing user comes back unchanged.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({}))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn update_unauthenticated_does_not_validate() {
+        // No bearer token: the auth middleware must short-circuit with
+        // 401 before validation runs — we don't want validation behavior
+        // to leak field names to unauthenticated callers.
+        let app = new_test_app().await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .json(&json!({
+                "username": "@"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
 }
