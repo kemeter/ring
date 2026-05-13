@@ -1,10 +1,17 @@
+use crate::api::action::config::validation::{
+    CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
+};
+use crate::api::action::namespace::validation::{
+    NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
+};
 use crate::api::server::Db;
+use crate::api::validation::{ViolationList, problem_response};
 use crate::models::config;
 use crate::models::users::User;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -12,79 +19,93 @@ use validator::Validate;
 
 #[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct ConfigInput {
+    #[validate(
+        length(
+            min = "NAMESPACE_NAME_MIN",
+            max = "NAMESPACE_NAME_MAX",
+            code = "config.namespace.length",
+            message = "must be 2 to 63 characters"
+        ),
+        regex(
+            path = *NAMESPACE_NAME_PATTERN,
+            code = "config.namespace.format",
+            message = "must contain only lowercase letters, digits and '-', and start and end with an alphanumeric character"
+        )
+    )]
     namespace: String,
+    #[validate(
+        length(
+            min = "CONFIG_NAME_MIN",
+            max = "CONFIG_NAME_MAX",
+            code = "config.name.length",
+            message = "must be 1 to 253 characters"
+        ),
+        regex(
+            path = *CONFIG_NAME_PATTERN,
+            code = "config.name.format",
+            message = "must contain only lowercase letters, digits, '.' and '-', and start and end with an alphanumeric character"
+        )
+    )]
     name: String,
+    #[validate(length(
+        min = 1,
+        max = "CONFIG_DATA_MAX",
+        code = "config.data.length",
+        message = "must be 1 to 1048576 bytes (1 MiB)"
+    ))]
     data: String,
+    #[validate(length(
+        max = "CONFIG_LABELS_MAX",
+        code = "config.labels.length",
+        message = "must be at most 1000 characters"
+    ))]
     #[serde(default)]
     labels: Option<String>,
-}
-
-impl ConfigInput {
-    fn validate(&self) -> Result<(), validator::ValidationErrors> {
-        let errors = validator::ValidationErrors::new();
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
 }
 
 pub(crate) async fn create(
     State(pool): State<Db>,
     _user: User,
     Json(input): Json<ConfigInput>,
-) -> impl IntoResponse {
-    match input.validate() {
-        Ok(_) => {
-            let utc: DateTime<Utc> = Utc::now();
+) -> Response {
+    if let Err(errs) = input.validate() {
+        let violations: ViolationList = errs.into();
+        return violations.into_response();
+    }
 
-            let new_config = config::Config {
-                id: Uuid::new_v4().to_string(),
-                created_at: utc.to_string(),
-                updated_at: None,
-                namespace: input.namespace,
-                name: input.name,
-                data: input.data,
-                labels: input.labels.unwrap_or_default(),
-            };
+    let utc: DateTime<Utc> = Utc::now();
+    let new_config = config::Config {
+        id: Uuid::new_v4().to_string(),
+        created_at: utc.to_string(),
+        updated_at: None,
+        namespace: input.namespace,
+        name: input.name,
+        data: input.data,
+        labels: input.labels.unwrap_or_default(),
+    };
 
-            match config::create(&pool, new_config.clone()).await {
-                Ok(_) => (
-                    StatusCode::CREATED,
-                    Json(serde_json::to_value(new_config).unwrap()),
-                )
-                    .into_response(),
-                Err(e) => {
-                    if e.to_string().contains("UNIQUE constraint failed") {
-                        (
-                            StatusCode::CONFLICT,
-                            Json(serde_json::json!({
-                                "error": "Configuration with this name already exists"
-                            })),
-                        )
-                            .into_response()
-                    } else {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(serde_json::json!({
-                                "error": "Failed to create configuration"
-                            })),
-                        )
-                            .into_response()
-                    }
-                }
-            }
-        }
-        Err(validation_errors) => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Validation failed",
-                "details": validation_errors
-            })),
+    match config::create(&pool, new_config.clone()).await {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(serde_json::to_value(new_config).unwrap()),
         )
             .into_response(),
+        Err(e) if e.to_string().contains("UNIQUE constraint failed") => problem_response(
+            StatusCode::CONFLICT,
+            "Conflict",
+            format!(
+                "configuration '{}' already exists in namespace '{}'",
+                new_config.name, new_config.namespace
+            ),
+        ),
+        Err(e) => {
+            log::error!("Failed to create configuration: {}", e);
+            problem_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+                "failed to create configuration",
+            )
+        }
     }
 }
 
@@ -95,6 +116,7 @@ mod tests {
     use crate::api::server::tests::new_test_app;
     use axum::http::StatusCode;
     use axum_test::TestServer;
+    use serde_json::json;
 
     #[tokio::test]
     async fn create_config() {
@@ -105,7 +127,7 @@ mod tests {
         let response = server
             .post("/configs")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
+            .json(&json!({
                 "namespace": "test",
                 "name": "test-config",
                 "data": "test data",
@@ -122,52 +144,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_duplicate_config() {
+    async fn create_duplicate_config_returns_problem_json_conflict() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
-        // Create first config
-        let response = server
-            .post("/configs")
-            .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
-                "namespace": "test",
-                "name": "duplicate-config",
-                "data": "test data"
-            }))
-            .await;
-        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let payload = json!({
+            "namespace": "test",
+            "name": "duplicate-config",
+            "data": "test data"
+        });
 
-        // Try to create duplicate config
+        let first = server
+            .post("/configs")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&payload)
+            .await;
+        assert_eq!(first.status_code(), StatusCode::CREATED);
+
         let response = server
             .post("/configs")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
-                "namespace": "test",
-                "name": "duplicate-config",
-                "data": "test data"
-            }))
+            .json(&payload)
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        let ct = response
+            .header("content-type")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with("application/problem+json"), "got: {}", ct);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["title"], "Conflict");
+        assert!(
+            body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("duplicate-config")
+        );
     }
 
     #[tokio::test]
-    async fn create_invalid_config() {
+    async fn create_with_missing_fields_returns_422_with_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
 
+        // Missing `namespace` and `data` empty → length violation on data,
+        // and an empty namespace fails both length and format.
         let response = server
             .post("/configs")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&serde_json::json!({
+            .json(&json!({
+                "namespace": "",
                 "name": "test-config",
-                "data": "test data"
+                "data": ""
             }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"config.namespace.length".to_string()));
+        assert!(codes.contains(&"config.data.length".to_string()));
     }
 }
