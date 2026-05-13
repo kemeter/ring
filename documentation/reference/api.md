@@ -48,6 +48,35 @@ If `cors_origins` is configured in `config.toml`, the API serves the listed orig
 
 Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoint `GET /deployments/{id}/logs` (used with `?follow=true`) is mounted in a separate router with **no** timeout, so SSE connections can stay open indefinitely.
 
+## Validation errors
+
+Endpoints that accept a JSON body validate it before applying any side effect. If the body is structurally valid (parses as JSON, matches the expected shape) but contains values that violate Ring's rules, the response is `422 Unprocessable Entity` in [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807):
+
+```http
+HTTP/1.1 422 Unprocessable Entity
+Content-Type: application/problem+json
+
+{
+  "type": "about:blank",
+  "title": "Validation failed",
+  "status": 422,
+  "detail": "username: must be 2 to 50 characters\npassword: must be 8 to 128 characters",
+  "violations": [
+    { "property_path": "username", "message": "must be 2 to 50 characters", "code": "user.username.length" },
+    { "property_path": "password", "message": "must be 8 to 128 characters", "code": "user.password.length" }
+  ]
+}
+```
+
+Key points for clients:
+
+- **All violations are reported.** Every rule that applies to the input is evaluated; the response lists every failure in one shot rather than stopping at the first. A single field can produce multiple violations (e.g. `username: "@"` trips both length and format).
+- **Stable `code` slugs.** `user.username.length`, `user.username.format`, `user.password.length`, etc. Branch on `code` rather than parsing `message` — `message` is human text and may change for clarity.
+- **`detail`** mirrors what a CLI tool prints: one line per violation, `<property_path>: <message>`. Useful for logging without parsing the structured `violations` array.
+- A malformed request body (invalid JSON, missing required field) returns `400 Bad Request` instead, with a plain-text reason.
+
+The endpoints that produce validation errors are flagged in their sections below with a "Validation" callout.
+
 ## System
 
 ### `GET /healthz`
@@ -486,6 +515,14 @@ Returns the same shape as a list entry. Values are never returned.
 
 **Response:** `201 Created`
 
+**Validation** (see [Validation errors](#validation-errors) for the response shape):
+
+| Field      | Rule                                                                            | Code                    |
+|------------|---------------------------------------------------------------------------------|-------------------------|
+| `username` | 2-50 characters                                                                 | `user.username.length`  |
+| `username` | starts with a letter or digit, then `[a-zA-Z0-9._-]`                            | `user.username.format`  |
+| `password` | 8-128 characters                                                                | `user.password.length`  |
+
 ### `GET /users/me`
 
 Returns the user attached to the bearer token.
@@ -503,7 +540,7 @@ Returns the user attached to the bearer token.
 
 ### `PUT /users/{id}`
 
-Update a user.
+Update a user. Both fields are optional — sending an empty body is a no-op that returns `200 OK`.
 
 ```json
 {
@@ -513,6 +550,8 @@ Update a user.
 ```
 
 **Response:** `200 OK`
+
+**Validation** (see [Validation errors](#validation-errors)): same rules as `POST /users` applied to whichever fields are present in the body. Omitted fields are skipped.
 
 ### `DELETE /users/{id}`
 
@@ -662,7 +701,9 @@ Returns information about the host running the Ring server.
 
 ## Error format
 
-Ring's error responses are not yet uniform across endpoints. Three shapes appear in the wild:
+Ring's error responses are migrating to [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807). Newly-rewritten endpoints serve that shape — see [Validation errors](#validation-errors) for the canonical example.
+
+The migration is in progress, so three legacy shapes still appear in older handlers:
 
 ```json
 // Most handlers (deployments, namespaces, secrets, configs)
@@ -675,7 +716,7 @@ Ring's error responses are not yet uniform across endpoints. Three shapes appear
 { "errors": ["Invalid credentials"] }
 ```
 
-There is currently no `code` field. Some endpoints attach contextual fields — for instance, `DELETE /secrets/{id}` returns the list of referencing deployments under `deployments` and a `hint` field. Plan to handle all three shapes when consuming the API; standardisation is on the roadmap.
+Plan to handle all four shapes when consuming the API. The endpoints that have moved to RFC 7807 are flagged with a "Validation" callout in their section above. Standardisation onto problem+json is on the roadmap.
 
 ## Examples
 

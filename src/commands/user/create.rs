@@ -3,6 +3,7 @@ use clap::ArgMatches;
 use clap::Command;
 use serde_json::json;
 
+use crate::commands::problem_json::render_response_error;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 
@@ -52,8 +53,8 @@ pub(crate) async fn execute(
             if status == 201 {
                 println!("user creates")
             } else {
-                eprintln!("Unable to create user: {}", status);
-                exit_code::from_http_status(status.as_u16()).exit();
+                let code = render_response_error("Unable to create user", response).await;
+                exit_code::from_http_status(code).exit();
             }
         }
         Err(err) => {

@@ -1,3 +1,5 @@
+use crate::api::dto::user::UserOutput;
+use crate::commands::problem_json::render_response_error;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -5,8 +7,6 @@ use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
 use serde_json::json;
-
-use crate::api::dto::user::UserOutput;
 
 pub(crate) fn command_config() -> Command {
     Command::new("update")
@@ -96,11 +96,14 @@ pub(crate) async fn execute(
     match request {
         Ok(response) => {
             let status = response.status();
-            if status == 201 {
+            // API returns 200 OK on update (was 201 by accident in the
+            // pre-validation code path). Accept any 2xx to stay
+            // forward-compatible with future shape changes.
+            if status.is_success() {
                 println!("user update")
             } else {
-                eprintln!("Unable to update user: {}", status);
-                exit_code::from_http_status(status.as_u16()).exit();
+                let code = render_response_error("Unable to update user", response).await;
+                exit_code::from_http_status(code).exit();
             }
         }
         Err(err) => {
