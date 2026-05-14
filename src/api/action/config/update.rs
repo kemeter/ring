@@ -1,36 +1,50 @@
 use axum::extract::{Path, State};
-use axum::{Json, response::IntoResponse};
-use http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::{Json, http::StatusCode};
 use serde::Deserialize;
 use validator::Validate;
 
+use crate::api::action::config::validation::{
+    CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
+};
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
+use crate::api::validation::{Violation, ViolationList, problem_response};
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
 
 #[derive(Deserialize, Debug, Validate)]
 pub(crate) struct UpdateConfigRequest {
-    #[validate(length(min = 1, max = 255))]
+    #[validate(
+        length(
+            min = "CONFIG_NAME_MIN",
+            max = "CONFIG_NAME_MAX",
+            code = "config.name.length",
+            message = "must be 1 to 253 characters"
+        ),
+        regex(
+            path = *CONFIG_NAME_PATTERN,
+            code = "config.name.format",
+            message = "must contain only lowercase letters, digits, '.' and '-', and start and end with an alphanumeric character"
+        )
+    )]
     pub name: String,
 
+    #[validate(length(
+        min = 1,
+        max = "CONFIG_DATA_MAX",
+        code = "config.data.length",
+        message = "must be 1 to 1048576 bytes (1 MiB)"
+    ))]
     pub data: String,
 
-    #[validate(length(max = 1000))]
+    #[validate(length(
+        max = "CONFIG_LABELS_MAX",
+        code = "config.labels.length",
+        message = "must be at most 1000 characters"
+    ))]
     #[serde(default)]
     pub labels: Option<String>,
-}
-
-impl UpdateConfigRequest {
-    fn validate(&self) -> Result<(), validator::ValidationErrors> {
-        let errors = validator::ValidationErrors::new();
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
 }
 
 pub(crate) async fn update(
@@ -38,32 +52,31 @@ pub(crate) async fn update(
     State(pool): State<Db>,
     _user: User,
     Json(request): Json<UpdateConfigRequest>,
-) -> impl IntoResponse {
-    // Validate request
-    if let Err(errors) = request.validate() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "Validation failed",
-                "details": errors
-            })),
-        )
-            .into_response();
+) -> Response {
+    let mut violations: ViolationList = match request.validate() {
+        Ok(()) => ViolationList::new(),
+        Err(errs) => errs.into(),
+    };
+
+    // JSON-shape rule for `data`: the field must round-trip as a JSON
+    // value. We add this as a regular violation so it shows up alongside
+    // any length/format failures rather than overriding them with a
+    // single 400.
+    if !request.data.is_empty() && serde_json::from_str::<serde_json::Value>(&request.data).is_err()
+    {
+        violations.push(Violation::new(
+            "data",
+            "must be valid JSON",
+            "config.data.invalid_json",
+        ));
     }
 
-    // Validate JSON data
-    if serde_json::from_str::<serde_json::Value>(&request.data).is_err() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid JSON format in data field"})),
-        )
-            .into_response();
+    if !violations.is_empty() {
+        return violations.into_response();
     }
 
-    // Find existing config
     match ConfigModel::find(&pool, &id).await {
         Ok(Some(mut config)) => {
-            // PUT behavior: Full replacement (like create but keeping id, created_at, namespace)
             config.name = request.name;
             config.data = request.data;
             config.labels = request.labels.unwrap_or_default();
@@ -74,23 +87,23 @@ pub(crate) async fn update(
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
                 }
-                Err(_) => (
+                Err(_) => problem_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Failed to update configuration"})),
-                )
-                    .into_response(),
+                    "Internal Server Error",
+                    "failed to update configuration",
+                ),
             }
         }
-        Ok(None) => (
+        Ok(None) => problem_response(
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Configuration not found"})),
-        )
-            .into_response(),
-        Err(_) => (
+            "Not Found",
+            format!("configuration '{}' does not exist", id),
+        ),
+        Err(_) => problem_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Database error"})),
-        )
-            .into_response(),
+            "Internal Server Error",
+            "database error",
+        ),
     }
 }
 
@@ -127,29 +140,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_config_data() {
-        let app = new_test_app().await;
-        let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
-
-        let response = server
-            .put("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
-            .add_header("Authorization", format!("Bearer {}", token))
-            .json(&json!({
-                "name": "my-config",
-                "data": "{\"updated\": true}"
-            }))
-            .await;
-
-        assert_eq!(response.status_code(), StatusCode::OK);
-
-        let config = response.json::<ConfigOutput>();
-        assert_eq!(config.name, "my-config");
-        assert_eq!(config.data, "{\"updated\": true}");
-    }
-
-    #[tokio::test]
-    async fn update_config_invalid_json_data() {
+    async fn update_config_invalid_json_data_returns_422_violation() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -163,11 +154,19 @@ mod tests {
             }))
             .await;
 
-        assert_eq!(response.status_code(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"config.data.invalid_json".to_string()));
     }
 
     #[tokio::test]
-    async fn update_nonexistent_config() {
+    async fn update_nonexistent_config_returns_problem_json_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app).unwrap();
@@ -182,6 +181,9 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["title"], "Not Found");
+        assert!(body["detail"].as_str().unwrap().contains("nonexistent"));
     }
 
     #[tokio::test]

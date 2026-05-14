@@ -40,6 +40,11 @@ Content-Type: application/json
 
 Tokens are stable per user; the CLI saves them in `~/.config/kemeter/ring/auth.json` after `ring login`.
 
+**Errors** (all in `application/problem+json`):
+
+- `401 Unauthorized` — `{"title": "Unauthorized", "detail": "invalid credentials"}` for both unknown username and wrong password.
+- `500 Internal Server Error` — token persistence or credential verification failure.
+
 ## CORS
 
 If `cors_origins` is configured in `config.toml`, the API serves the listed origins with `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS` and the headers `Authorization`, `Content-Type`, `Accept`. Browser clients require this to be set explicitly.
@@ -458,7 +463,15 @@ Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exp
 }
 ```
 
-**Errors:**
+**Validation** (see [Validation errors](#validation-errors) for the response shape):
+
+| Field | Rule | Code |
+| --- | --- | --- |
+| `namespace` | 2-63 lowercase DNS-label characters | `secret.namespace.length`, `secret.namespace.format` |
+| `name` | 2-253 lowercase DNS-subdomain characters | `secret.name.length`, `secret.name.format` |
+| `value` | 1 byte to 1 MiB | `secret.value.length` |
+
+**Errors** (all in `application/problem+json`):
 
 - `404 Not Found` — the namespace doesn't exist yet (POST /secrets does not auto-create it).
 - `409 Conflict` — a secret with this name already exists in this namespace.
@@ -605,6 +618,19 @@ A config is a named blob (typically a config file or JSON document) attached to 
 
 **Response:** `201 Created`
 
+**Validation** (see [Validation errors](#validation-errors) for the response shape):
+
+| Field | Rule | Code |
+| --- | --- | --- |
+| `namespace` | 2-63 lowercase DNS-label characters | `config.namespace.length`, `config.namespace.format` |
+| `name` | 1-253 lowercase DNS-subdomain characters | `config.name.length`, `config.name.format` |
+| `data` | 1 byte to 1 MiB | `config.data.length` |
+| `labels` | at most 1000 characters | `config.labels.length` |
+
+**Errors** (all in `application/problem+json`):
+
+- `409 Conflict` — a configuration with the same name already exists in this namespace.
+
 ### `GET /configs/{id}`
 
 ```json
@@ -630,6 +656,18 @@ Full replacement (not partial). All fields must be provided.
 ```
 
 **Response:** `200 OK`
+
+**Validation** (see [Validation errors](#validation-errors)):
+
+| Field | Rule | Code |
+| --- | --- | --- |
+| `name` | 1-253 lowercase DNS-subdomain characters | `config.name.length`, `config.name.format` |
+| `data` | 1 byte to 1 MiB, must round-trip as JSON when non-empty | `config.data.length`, `config.data.invalid_json` |
+| `labels` | at most 1000 characters | `config.labels.length` |
+
+**Errors** (all in `application/problem+json`):
+
+- `404 Not Found` — no configuration with that id.
 
 ### `DELETE /configs/{id}`
 
@@ -680,7 +718,16 @@ Full replacement (not partial). All fields must be provided.
 }
 ```
 
-**Errors:** `409 Conflict` if a namespace with the same name already exists.
+**Validation** (see [Validation errors](#validation-errors)):
+
+| Field | Rule | Code |
+| --- | --- | --- |
+| `name` | 2-63 characters | `namespace.name.length` |
+| `name` | lowercase DNS-label (`a-z0-9` plus `-`, no leading/trailing dash) | `namespace.name.format` |
+
+**Errors** (all in `application/problem+json`):
+
+- `409 Conflict` — a namespace with the same name already exists.
 
 > Namespaces are also auto-created when a deployment is applied to a non-existent namespace; calling `POST /namespaces` upfront is optional.
 
@@ -720,22 +767,22 @@ Returns information about the host running the Ring server.
 
 ## Error format
 
-Ring's error responses are migrating to [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807). Newly-rewritten endpoints serve that shape — see [Validation errors](#validation-errors) for the canonical example.
+Ring's error responses are [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807). Validation failures carry a `violations[]` array (see [Validation errors](#validation-errors)); non-validation problems (conflicts, not-found, unauthorized, server errors) carry the same envelope without the array:
 
-The migration is in progress, so three legacy shapes still appear in older handlers:
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/problem+json
 
-```json
-// Most handlers (deployments, namespaces, secrets, configs)
-{ "error": "Secret not found" }
-
-// Some handlers (e.g. POST /deployments validation errors)
-{ "message": "Invalid runtime, supported: [docker, cloud-hypervisor]" }
-
-// POST /login on bad credentials
-{ "errors": ["Invalid credentials"] }
+{
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "namespace 'production' already exists",
+  "violations": []
+}
 ```
 
-Plan to handle all four shapes when consuming the API. The endpoints that have moved to RFC 7807 are flagged with a "Validation" callout in their section above. Standardisation onto problem+json is on the roadmap.
+A few read endpoints (e.g. `GET` lookups, `DELETE` referenced-secret checks) still serve the legacy `{"error": "..."}` body; those will move next. Clients should branch on the `Content-Type` header to pick the parser.
 
 ## Examples
 

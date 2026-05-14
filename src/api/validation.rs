@@ -181,6 +181,40 @@ impl IntoResponse for ViolationList {
     }
 }
 
+/// Build a non-validation problem+json response (conflict, not-found,
+/// unauthorized, …). Same envelope as `ViolationList` minus the
+/// `violations` array, so CLI clients render it through the exact same
+/// path (`render_response_error`). `title` lands in the title line,
+/// `detail` becomes the free-form explanation shown to the user.
+pub(crate) fn problem_response(
+    status: StatusCode,
+    title: &'static str,
+    detail: impl Into<String>,
+) -> Response {
+    #[derive(Serialize)]
+    struct Body<'a> {
+        #[serde(rename = "type")]
+        type_: &'static str,
+        title: &'static str,
+        status: u16,
+        detail: String,
+        violations: &'a [Violation],
+    }
+    let body = Body {
+        type_: "about:blank",
+        title,
+        status: status.as_u16(),
+        detail: detail.into(),
+        violations: &[],
+    };
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/problem+json"),
+    );
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +224,29 @@ mod tests {
     async fn empty_list_is_empty() {
         let list = ViolationList::new();
         assert!(list.is_empty());
+    }
+
+    #[tokio::test]
+    async fn problem_response_emits_problem_json_with_given_status() {
+        let response = problem_response(
+            StatusCode::CONFLICT,
+            "Conflict",
+            "namespace 'production' already exists",
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/problem+json"
+        );
+        let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["status"], 409);
+        assert_eq!(body["title"], "Conflict");
+        assert_eq!(body["detail"], "namespace 'production' already exists");
+        assert!(body["violations"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

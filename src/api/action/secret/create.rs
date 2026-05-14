@@ -1,19 +1,59 @@
+use crate::api::action::namespace::validation::{
+    NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
+};
+use crate::api::action::secret::validation::{
+    SECRET_NAME_MAX, SECRET_NAME_MIN, SECRET_NAME_PATTERN, SECRET_VALUE_MAX,
+};
 use crate::api::server::Db;
+use crate::api::validation::{ViolationList, problem_response};
 use crate::models::namespace;
 use crate::models::secret;
 use crate::models::users::User;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use validator::Validate;
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Validate)]
 pub(crate) struct SecretInput {
+    #[validate(
+        length(
+            min = "NAMESPACE_NAME_MIN",
+            max = "NAMESPACE_NAME_MAX",
+            code = "secret.namespace.length",
+            message = "must be 2 to 63 characters"
+        ),
+        regex(
+            path = *NAMESPACE_NAME_PATTERN,
+            code = "secret.namespace.format",
+            message = "must contain only lowercase letters, digits and '-', and start and end with an alphanumeric character"
+        )
+    )]
     namespace: String,
+    #[validate(
+        length(
+            min = "SECRET_NAME_MIN",
+            max = "SECRET_NAME_MAX",
+            code = "secret.name.length",
+            message = "must be 2 to 253 characters"
+        ),
+        regex(
+            path = *SECRET_NAME_PATTERN,
+            code = "secret.name.format",
+            message = "must contain only lowercase letters, digits, '.' and '-', and start and end with an alphanumeric character"
+        )
+    )]
     name: String,
+    #[validate(length(
+        min = 1,
+        max = "SECRET_VALUE_MAX",
+        code = "secret.value.length",
+        message = "must be 1 to 1048576 bytes (1 MiB)"
+    ))]
     value: String,
 }
 
@@ -29,26 +69,27 @@ pub(crate) async fn create(
     State(pool): State<Db>,
     _user: User,
     Json(input): Json<SecretInput>,
-) -> impl IntoResponse {
+) -> Response {
+    if let Err(errs) = input.validate() {
+        let violations: ViolationList = errs.into();
+        return violations.into_response();
+    }
+
     match namespace::find_by_name(&pool, &input.namespace).await {
         Ok(None) => {
-            return (
+            return problem_response(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": format!("Namespace '{}' not found", input.namespace)
-                })),
-            )
-                .into_response();
+                "Not Found",
+                format!("namespace '{}' does not exist", input.namespace),
+            );
         }
         Err(e) => {
             log::error!("Failed to check namespace: {}", e);
-            return (
+            return problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "Failed to verify namespace"
-                })),
-            )
-                .into_response();
+                "Internal Server Error",
+                "failed to verify namespace",
+            );
         }
         Ok(Some(_)) => {}
     }
@@ -74,25 +115,21 @@ pub(crate) async fn create(
             };
             (StatusCode::CREATED, Json(output)).into_response()
         }
+        Err(e) if e.to_string().contains("UNIQUE constraint failed") => problem_response(
+            StatusCode::CONFLICT,
+            "Conflict",
+            format!(
+                "secret '{}' already exists in namespace '{}'",
+                new_secret.name, new_secret.namespace
+            ),
+        ),
         Err(e) => {
-            if e.to_string().contains("UNIQUE constraint failed") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": "Secret with this name already exists in this namespace"
-                    })),
-                )
-                    .into_response()
-            } else {
-                log::error!("Failed to create secret: {}", e);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "error": "Failed to create secret"
-                    })),
-                )
-                    .into_response()
-            }
+            log::error!("Failed to create secret: {}", e);
+            problem_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+                "failed to create secret",
+            )
         }
     }
 }
@@ -145,7 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_secret_in_nonexistent_namespace() {
+    async fn create_secret_in_nonexistent_namespace_returns_problem_json() {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
@@ -162,10 +199,20 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+        let ct = response
+            .header("content-type")
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(ct.starts_with("application/problem+json"), "got: {}", ct);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["status"], 404);
+        assert_eq!(body["title"], "Not Found");
+        assert!(body["detail"].as_str().unwrap().contains("does-not-exist"));
     }
 
     #[tokio::test]
-    async fn create_duplicate_secret() {
+    async fn create_duplicate_secret_returns_problem_json_conflict() {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
@@ -192,5 +239,44 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["title"], "Conflict");
+        assert!(
+            body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("already exists in namespace")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_with_invalid_fields_returns_422_with_violations() {
+        set_test_key();
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Namespace and name both invalid (uppercase / leading dash), value empty.
+        let response = server
+            .post("/secrets")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "namespace": "Production",
+                "name": "-bad",
+                "value": ""
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(codes.contains(&"secret.namespace.format".to_string()));
+        assert!(codes.contains(&"secret.name.format".to_string()));
+        assert!(codes.contains(&"secret.value.length".to_string()));
     }
 }
