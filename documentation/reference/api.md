@@ -208,6 +208,25 @@ Environment values support two forms:
 
 **Response:** `201 Created` with the full deployment object (same shape as `GET /deployments/{id}`).
 
+**Validation** (see [Validation errors](#validation-errors) for the response shape):
+
+| Rule                                                                         | Code                                                       |
+|------------------------------------------------------------------------------|------------------------------------------------------------|
+| `runtime` must be `docker` or `cloud-hypervisor`                             | `deployment.runtime.unsupported`                           |
+| Cloud Hypervisor refuses custom `command`                                    | `deployment.command.cloud_hypervisor_unsupported`          |
+| Cloud Hypervisor needs an absolute path image                                | `deployment.image.cloud_hypervisor_requires_absolute_path` |
+| `network.mode=host` is docker-only                                           | `deployment.network.host_runtime_unsupported`              |
+| `network.mode=host` forbids `ports`                                          | `deployment.ports.host_network_conflict`                   |
+| `network.mode=host` forbids `replicas > 1`                                   | `deployment.replicas.host_network_conflict`                |
+| `ports[i].published` / `target` must be 1-65535                              | `deployment.ports.published.out_of_range` / `target...`    |
+| `ports` must not declare the same `published` twice                          | `deployment.ports.published.duplicate`                     |
+| `ports` set with `replicas > 1` would race; surfaces on both fields          | `deployment.ports.replicas_conflict` + `deployment.replicas.ports_conflict` |
+| `kind: job` requires `replicas: 1`                                           | `deployment.replicas.job_must_be_one`                      |
+| `kind: job` doesn't take readiness checks                                    | `deployment.health_checks.job_readiness_unsupported`       |
+| Environment keys must match `[A-Za-z_][A-Za-z0-9_]*`                         | `deployment.environment.key.invalid`                       |
+| `resources.{limits,requests}.{cpu,memory}` must parse                        | `deployment.resources.{limits,requests}.{cpu,memory}.invalid` |
+| `config.image_pull_policy` must be `Always`, `IfNotPresent`, or `Never`      | `deployment.config.image_pull_policy.unsupported`          |
+
 ### `GET /deployments/{id}`
 
 Retrieve a deployment by UUID.

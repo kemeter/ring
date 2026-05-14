@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (breaking)
+- **`POST /deployments` now uses RFC 7807** with the same shape as `POST /users` (`application/problem+json`, `violations[]` with `property_path`, `message`, `code`). Existing 400/422 responses with `{"message": "..."}` body are replaced. Codes for the rules already in place:
+  - `deployment.runtime.unsupported` — runtime must be one of: docker, cloud-hypervisor
+  - `deployment.command.cloud_hypervisor_unsupported`
+  - `deployment.image.cloud_hypervisor_requires_absolute_path`
+  - `deployment.network.host_runtime_unsupported`
+  - `deployment.ports.host_network_conflict`
+  - `deployment.replicas.host_network_conflict`
+
+  **New rules** (previously not validated, the manifest applied and broke at runtime):
+  - `deployment.ports.published.out_of_range` / `deployment.ports.target.out_of_range` — port 0 is reserved
+  - `deployment.ports.published.duplicate` — two entries publishing the same host port
+  - `deployment.ports.replicas_conflict` + `deployment.replicas.ports_conflict` — publishing host ports with `replicas > 1` causes inter-replica collisions
+  - `deployment.replicas.job_must_be_one` — `kind: job` is one-shot
+  - `deployment.health_checks.job_readiness_unsupported` — readiness checks only gate rolling updates
+  - `deployment.environment.key.invalid` — env var names must match `[A-Za-z_][A-Za-z0-9_]*`
+  - `deployment.resources.{limits,requests}.{cpu,memory}.invalid` — invalid quantity string
+  - `deployment.config.image_pull_policy.unsupported` — must be `Always`, `IfNotPresent` or `Never`
+
+  `property_path` follows JSONPath conventions for nested collections: `ports[0].published`, `volumes[2].source`, `resources.limits.cpu`.
+
 - **Validation errors on `POST /users` and `PUT /users/{id}` now use RFC 7807.** The 422 response shape changed from the bare `validator`-derived `{"errors": <map>}` to `application/problem+json`:
 
   ```json
@@ -39,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Migration `20220101000015_snake_case_deployment_status.sql` rewrites existing rows. Update any script that does `jq '.status == "CrashLoopBackOff"'` or similar.
 
   Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
+
+### Added
+- **`ring apply` now renders RFC 7807 problem details from `POST /deployments` and `POST /namespaces`**. On validation failure the CLI prints the title line plus every violation with its property path, e.g.
+
+  ```
+  Unable to apply deployment 'nginx': Validation failed (422)
+    * ports[0].published: must be between 1 and 65535
+    * replicas: replicas > 1 (3) is incompatible with `ports` — drop `ports` or reduce `replicas` to 1
+  ```
+
+  instead of the legacy `API returned status 422: <raw body>` one-liner. Non-7807 responses fall back to the previous behaviour.
 
 ## [0.8.0] - 2026-05-12
 

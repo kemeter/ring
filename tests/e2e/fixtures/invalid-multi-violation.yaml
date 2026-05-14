@@ -1,0 +1,12 @@
+deployments:
+  bad:
+    name: bad
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 3
+    ports:
+      - published: 0
+        target: 80
+    environment:
+      "1BAD_NAME": "x"
