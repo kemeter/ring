@@ -1,3 +1,5 @@
 target
 ring.db
+ring.db-shm
+ring.db-wal
 .config

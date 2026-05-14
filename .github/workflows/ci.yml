@@ -31,6 +31,9 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+      - uses: oven-sh/setup-bun@v1
+      - name: Build dashboard
+        run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: rustup component add clippy
       - run: cargo clippy --all-targets
 
@@ -48,6 +51,9 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+      - uses: oven-sh/setup-bun@v1
+      - name: Build dashboard
+        run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: docker pull nginx:alpine
       - run: cargo test
 

@@ -1,0 +1,280 @@
+@import url('https://rsms.me/inter/inter.css');
+
+:root {
+  --bg-0: #0a0c10;
+  --bg-1: #0f1216;
+  --bg-2: #151a21;
+  --bg-3: #1c222b;
+  --bg-hover: #1f2631;
+  --border: #242b36;
+  --border-strong: #2f3847;
+
+  --fg-0: #e8ecf1;
+  --fg-1: #b6bdc9;
+  --fg-2: #7a8594;
+  --fg-3: #4d5663;
+
+  --accent: #6ee7b7;
+  --accent-hover: #34d399;
+  --accent-bg: rgba(110, 231, 183, 0.1);
+
+  --success: #3fb950;
+  --success-bg: rgba(63, 185, 80, 0.12);
+  --warning: #f0b429;
+  --warning-bg: rgba(240, 180, 41, 0.12);
+  --danger: #f85149;
+  --danger-bg: rgba(248, 81, 73, 0.12);
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  color-scheme: dark;
+}
+
+@supports (font-variation-settings: normal) {
+  :root {
+    font-family: 'Inter var', var(--font-sans);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-hover);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-3);
+  border-radius: 5px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+  background: var(--bg-2);
+}
+
+tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.status {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius);
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--bg-3);
+  color: var(--fg-1);
+}
+
+.status-running {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.status-failed,
+.status-crashloopbackoff,
+.status-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.status-pending,
+.status-booting,
+.status-created {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+/*
+ * Shared page chrome. Every list/detail page below uses the same header,
+ * card, table, filter-bar, button and alert primitives — keep them here so
+ * a new page is a single import away.
+ */
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 1.75rem;
+}
+.page-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.page-header .subtitle {
+  margin: 0.25rem 0 0;
+  color: var(--fg-2);
+  font-size: 0.85rem;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.refresh-meta {
+  color: var(--fg-3);
+  font-size: 0.75rem;
+}
+
+.btn-secondary {
+  background: var(--bg-2);
+  color: var(--fg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.btn-secondary:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.8rem;
+  color: var(--fg-2);
+}
+.filter-bar select {
+  background: var(--bg-1);
+  color: var(--fg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  overflow: hidden;
+}
+
+.alert {
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  color: var(--fg-0);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  font-size: 0.825rem;
+}
+.alert strong {
+  color: var(--danger);
+  margin-right: 0.5rem;
+}
+
+.empty {
+  background: var(--bg-1);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 3rem 1rem;
+  text-align: center;
+}
+.empty p {
+  margin: 0.35rem 0;
+}
+.empty .muted {
+  color: var(--fg-2);
+  font-size: 0.85rem;
+}
+
+.muted {
+  color: var(--fg-2);
+}
+
+p code,
+.empty code {
+  background: var(--bg-2);
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}

@@ -10,6 +10,7 @@ extern crate env_logger;
 mod commands {
     pub(crate) mod apply;
     pub(crate) mod context;
+    pub(crate) mod dashboard;
     pub(crate) mod deployment;
     pub(crate) mod doctor;
     pub(crate) mod init;
@@ -68,6 +69,7 @@ mod config {
     pub(crate) mod user;
 }
 
+mod dashboard;
 mod database;
 mod exit_code;
 mod serializer;
@@ -100,6 +102,7 @@ async fn main() {
                 .subcommand(commands::server::command_config()),
         )
         .subcommand(commands::apply::command_config())
+        .subcommand(commands::dashboard::command_config())
         .subcommand(commands::doctor::command_config())
         .subcommand(commands::login::command_config())
         .subcommand(
@@ -187,6 +190,9 @@ async fn main() {
         }
         Some(("apply", sub_matches)) => {
             commands::apply::apply(sub_matches, config, &client).await;
+        }
+        Some(("dashboard", sub_matches)) => {
+            commands::dashboard::execute(sub_matches, config, context.to_string()).await;
         }
         Some(("doctor", sub_matches)) => {
             commands::doctor::execute(sub_matches, config);

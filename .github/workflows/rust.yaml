@@ -20,6 +20,9 @@ jobs:
         override: true
     - name: Pull test images
       run: docker pull nginx:alpine
+    - uses: oven-sh/setup-bun@v1
+    - name: Build dashboard
+      run: cd dashboard && bun install --frozen-lockfile && bun run build
     - name: Build
       uses: actions-rs/cargo@v1
       with:

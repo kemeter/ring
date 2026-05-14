@@ -72,6 +72,35 @@ pub(crate) struct CloudHypervisorConfig {
     pub(crate) max_console_log_backups: Option<u32>,
 }
 
+/// User-facing configuration for the embedded web dashboard. Off by default
+/// to keep the server surface minimal until an operator opts in.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct DashboardConfig {
+    /// When true, `ring server start` spawns the dashboard on
+    /// `listen_address`. When false (the default), the dashboard is not
+    /// served by this Ring instance — operators can still run
+    /// `ring dashboard` locally against any API.
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// `host:port` for the dashboard to bind to. Distinct from the API
+    /// port to keep concerns separated.
+    #[serde(default = "default_dashboard_listen_address")]
+    pub(crate) listen_address: String,
+}
+
+fn default_dashboard_listen_address() -> String {
+    "127.0.0.1:3031".to_string()
+}
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_address: default_dashboard_listen_address(),
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, Default)]
 pub(crate) struct RuntimesConfig {
     #[serde(default)]
@@ -92,6 +121,8 @@ pub(crate) struct Config {
     pub(crate) docker: DockerConfig,
     #[serde(default)]
     pub(crate) runtime: RuntimesConfig,
+    #[serde(default)]
+    pub(crate) dashboard: DashboardConfig,
 }
 
 impl Config {
@@ -122,6 +153,7 @@ impl Default for Config {
             scheduler: Scheduler::default(),
             docker: DockerConfig::default(),
             runtime: RuntimesConfig::default(),
+            dashboard: DashboardConfig::default(),
         }
     }
 }
