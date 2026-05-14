@@ -5,4 +5,5 @@ pub(crate) mod login;
 pub(crate) mod namespace;
 pub(crate) mod node;
 pub(crate) mod secret;
+pub(crate) mod stream_ticket;
 pub(crate) mod user;

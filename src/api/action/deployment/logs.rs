@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{
         IntoResponse,
         sse::{KeepAlive, Sse},
@@ -12,10 +12,17 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
-use crate::api::server::{Db, RuntimeMap};
+use crate::api::server::{Db, RuntimeMap, TicketStoreState};
+use crate::api::stream_tickets::TicketStore;
 use crate::models::deployments;
-use crate::models::users::User;
+use crate::models::users as users_model;
 use crate::runtime::lifecycle_trait::Log;
+
+/// Scope string used to bind a stream ticket to a specific deployment's log
+/// endpoint. Keep this in sync with the client that mints the ticket.
+pub(crate) fn logs_scope(deployment_id: &str) -> String {
+    format!("deployment:logs:{}", deployment_id)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct LogsQuery {
@@ -27,6 +34,11 @@ pub struct LogsQuery {
     container: Option<String>,
     #[serde(default)]
     follow: bool,
+    /// Single-use-ish stream ticket as an alternative to the bearer header.
+    /// EventSource can't set custom headers, so the dashboard mints a
+    /// scoped ticket via `POST /auth/stream-ticket` and replays it here.
+    #[serde(default)]
+    ticket: Option<String>,
 }
 
 fn default_tail() -> Option<u64> {
@@ -59,10 +71,15 @@ fn parse_since(since: &str) -> Option<i32> {
 pub(crate) async fn logs(
     Path(id): Path<String>,
     Query(params): Query<LogsQuery>,
-    _user: User,
+    headers: HeaderMap,
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
+    State(tickets): State<TicketStoreState>,
 ) -> impl IntoResponse {
+    if !authorize(&pool, &headers, &params.ticket, &id, &tickets).await {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => {
             let runtime = match runtimes.get(&deployment.runtime) {
@@ -83,9 +100,17 @@ pub(crate) async fn logs(
                     )
                     .await;
 
-                Sse::new(stream)
+                // Prevent the ticket from leaking via Referer if the page
+                // ever links externally. Defense in depth on top of the
+                // short TTL.
+                let mut response = Sse::new(stream)
                     .keep_alive(KeepAlive::default())
-                    .into_response()
+                    .into_response();
+                response.headers_mut().insert(
+                    header::REFERRER_POLICY,
+                    HeaderValue::from_static("no-referrer"),
+                );
+                response
             } else {
                 let logs = runtime
                     .get_logs(
@@ -101,6 +126,33 @@ pub(crate) async fn logs(
         Ok(None) => Json(Vec::<Log>::new()).into_response(),
         Err(_) => Json(Vec::<Log>::new()).into_response(),
     }
+}
+
+/// Accept either a `Authorization: Bearer …` header or a scoped `?ticket=`
+/// query param. Returns true when the caller is authorized to read logs
+/// for `deployment_id`.
+async fn authorize(
+    pool: &Db,
+    headers: &HeaderMap,
+    ticket: &Option<String>,
+    deployment_id: &str,
+    tickets: &TicketStore,
+) -> bool {
+    if let Some(token) = bearer_token(headers) {
+        return users_model::find_by_token(pool, &token).await.is_ok();
+    }
+    if let Some(ticket) = ticket.as_deref() {
+        return tickets
+            .consume(ticket, &logs_scope(deployment_id))
+            .is_some();
+    }
+    false
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let stripped = value.strip_prefix("Bearer ")?;
+    Some(stripped.to_string())
 }
 
 #[cfg(test)]
