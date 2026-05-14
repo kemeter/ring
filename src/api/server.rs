@@ -19,6 +19,7 @@ use tower::{BoxError, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::api::action::login::login;
+use crate::api::action::stream_ticket::stream_ticket;
 use crate::config::config::Config;
 
 use crate::api::action::deployment::create as deployment_create;
@@ -98,11 +99,14 @@ pub(crate) type RuntimeMap = std::sync::Arc<
     >,
 >;
 
+pub(crate) type TicketStoreState = crate::api::stream_tickets::TicketStore;
+
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
     pub(crate) configuration: Config,
     pub(crate) runtimes: RuntimeMap,
+    pub(crate) ticket_store: TicketStoreState,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -112,6 +116,7 @@ pub(crate) fn router(state: AppState) -> Router {
     // All other routes with timeout
     let api_routes = Router::new()
         .route("/login", post(login))
+        .route("/auth/stream-ticket", post(stream_ticket))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route(
             "/deployments/{id}",
@@ -196,6 +201,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes:
         connection: pool,
         configuration,
         runtimes,
+        ticket_store: TicketStoreState::new(),
     };
 
     let app = router(state);
@@ -223,7 +229,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes:
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::api::server::{AppState, RuntimeMap, router};
+    use crate::api::server::{AppState, RuntimeMap, TicketStoreState, router};
     use crate::config::config::Config;
     use axum::Router;
     use axum::http::StatusCode;
@@ -264,6 +270,7 @@ pub(crate) mod tests {
             connection: pool.clone(),
             configuration,
             runtimes,
+            ticket_store: TicketStoreState::new(),
         };
 
         (pool, router(state))
