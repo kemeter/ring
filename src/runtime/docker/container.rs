@@ -1,4 +1,4 @@
-use super::{DockerImage, tiny_id};
+use super::{DockerImage, ImagePullPolicy, ImageReference, parse_image_reference, tiny_id};
 use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
@@ -41,11 +41,35 @@ fn get_privileged_config(
         .and_then(|u| u.privileged)
 }
 
-fn extract_digest(repo_digests: &Option<Vec<String>>) -> Option<String> {
-    repo_digests
-        .as_ref()?
-        .first()
-        .and_then(|d| d.split_once('@').map(|(_, digest)| digest.to_string()))
+/// Pick the digest entry whose repository prefix matches `repo`. Docker stores
+/// one `RepoDigest` per registry an image is tagged with, so blindly taking
+/// the first entry could pin a digest from a sibling tag (e.g. `nginx` and
+/// `myregistry/nginx` pointing at the same content). We match on the part
+/// before `@` so a deployment of `myregistry/nginx:1.25` doesn't end up
+/// recorded with a `docker.io/library/nginx@sha256:...` digest.
+fn extract_digest(repo_digests: &Option<Vec<String>>, repo: &str) -> Option<String> {
+    let entries = repo_digests.as_ref()?;
+    if let Some(digest) = entries.iter().find_map(|d| {
+        let (entry_repo, digest) = d.split_once('@')?;
+        (entry_repo == repo).then(|| digest.to_string())
+    }) {
+        return Some(digest);
+    }
+
+    // Fallback: no entry matched the requested repo. This is expected when
+    // Docker normalizes the name (`nginx` → `docker.io/library/nginx`), but
+    // it can also signal a registry/repo mismatch worth investigating, so we
+    // warn rather than silently substitute.
+    let fallback = entries
+        .iter()
+        .find_map(|d| d.split_once('@').map(|(_, digest)| digest.to_string()));
+    if fallback.is_some() {
+        warn!(
+            "No RepoDigest matched '{}'; using first available digest. Entries: {:?}",
+            repo, entries
+        );
+    }
+    fallback
 }
 
 /// Translate the first readiness HC of `type: command` into a Docker
@@ -95,26 +119,54 @@ fn build_health_config(
 async fn pull_image(
     docker: Docker,
     image_config: DockerImage,
+    policy: ImagePullPolicy,
 ) -> Result<Option<String>, RuntimeError> {
-    let image = image_config.name.clone();
-    let tag = image_config.tag.clone();
-    let image_name = format!("{}:{}", image, tag);
-    info!("Pull docker image: {}", image_name);
+    let image_name = image_config.full_ref();
+    let repo = image_config.name.clone();
 
-    match docker.inspect_image(&image_name).await {
-        Ok(inspect) => {
+    // `Never` is handled by the caller (which fails fast on cache miss) and
+    // never reaches this function; the assertion pins the contract.
+    debug_assert!(
+        !matches!(policy, ImagePullPolicy::Never),
+        "pull_image must not be called with Never policy"
+    );
+
+    // Short-circuit on local cache hit when the reference is immutable
+    // (digest) or the policy explicitly opts into the cache (`IfNotPresent`).
+    // For `Always`, we still go to the registry even on a cache hit — that's
+    // the point of the policy.
+    let prefer_cache = matches!(policy, ImagePullPolicy::IfNotPresent)
+        || matches!(image_config.reference, ImageReference::Digest(_));
+
+    if prefer_cache {
+        if let Ok(inspect) = docker.inspect_image(&image_name).await {
             debug!("Docker image {} already exists locally", image_name);
-            return Ok(extract_digest(&inspect.repo_digests));
+            return Ok(extract_digest(&inspect.repo_digests, &repo));
         }
-        Err(_) => {
-            debug!("Docker image {} not found locally, pulling...", image_name);
-        }
+        debug!("Docker image {} not found locally, pulling...", image_name);
+    } else {
+        info!("Pull docker image: {} (policy: Always)", image_name);
     }
 
-    let create_image_options = CreateImageOptionsBuilder::new()
-        .from_image(&image)
-        .tag(&tag)
-        .build();
+    // `from_image` is the repository (with optional registry host), the
+    // second field is either a tag or a digest. Bollard accepts the digest
+    // form here directly.
+    let (tag_param, digest_param) = match &image_config.reference {
+        ImageReference::Tag(t) => (Some(t.as_str()), None),
+        ImageReference::Digest(d) => (None, Some(d.as_str())),
+    };
+    let mut builder = CreateImageOptionsBuilder::new().from_image(&repo);
+    if let Some(t) = tag_param {
+        builder = builder.tag(t);
+    }
+    // Bollard's `CreateImageOptions` exposes digest via the same `tag` field
+    // in practice (Docker's HTTP API accepts `tag=sha256:...`). The
+    // distinction matters for the from_image value, which must not embed the
+    // digest itself.
+    if let Some(d) = digest_param {
+        builder = builder.tag(d);
+    }
+    let create_image_options = builder.build();
 
     let credentials = image_config
         .auth
@@ -127,36 +179,29 @@ async fn pull_image(
 
     let mut stream = docker.create_image(Some(create_image_options), None, credentials);
 
-    let mut has_error = false;
-    let mut last_error = String::new();
-
     while let Some(pull_result) = stream.next().await {
-        match pull_result {
-            Ok(_) => {}
-            Err(e) => {
-                let error_msg = e.to_string();
-                error!("Docker image pull error: {}", error_msg);
-                has_error = true;
-                last_error = error_msg.clone();
+        if let Err(e) = pull_result {
+            let error_msg = e.to_string();
+            error!("Docker image pull error: {}", error_msg);
 
-                if error_msg.contains("404")
-                    || error_msg.contains("not found")
-                    || error_msg.contains("manifest unknown")
-                {
-                    return Err(RuntimeError::ImageNotFound(last_error));
-                }
+            if error_msg.contains("404")
+                || error_msg.contains("not found")
+                || error_msg.contains("manifest unknown")
+            {
+                return Err(RuntimeError::ImageNotFound(error_msg));
             }
+            // Bail on the first non-404 error instead of draining the rest of
+            // the stream — the previous version kept iterating to find the
+            // "last" error, which delayed the failure and could mask the
+            // root cause behind a later io error.
+            return Err(RuntimeError::ImagePullFailed(error_msg));
         }
-    }
-
-    if has_error {
-        return Err(RuntimeError::ImagePullFailed(last_error));
     }
 
     match docker.inspect_image(&image_name).await {
         Ok(inspect) => {
             info!("Docker successfully pulled image {}", image_name);
-            Ok(extract_digest(&inspect.repo_digests))
+            Ok(extract_digest(&inspect.repo_digests, &repo))
         }
         Err(e) => {
             error!(
@@ -177,14 +222,11 @@ pub(crate) async fn create_container(
     resolved_mounts: &[crate::models::volume::ResolvedMount],
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
-    let (image, tag) = match deployment.image.split_once(':') {
-        Some((image, tag)) => (image.to_string(), tag.to_string()),
-        None => (deployment.image.clone(), "latest".to_string()),
-    };
+    let (name, reference) = parse_image_reference(&deployment.image);
 
     let mut image_config = DockerImage {
-        name: image,
-        tag,
+        name,
+        reference,
         auth: None,
     };
 
@@ -195,15 +237,37 @@ pub(crate) async fn create_container(
         image_config.auth = Some((server.clone(), username.clone(), password.clone()));
     }
 
-    let should_pull = deployment
+    let policy = deployment
         .config
         .as_ref()
-        .map(|config| config.image_pull_policy.as_str() != "Never")
-        .unwrap_or(true);
+        .map(|c| ImagePullPolicy::parse(&c.image_pull_policy))
+        .unwrap_or(ImagePullPolicy::Always);
 
-    if should_pull {
-        let digest = pull_image(docker.clone(), image_config).await?;
-        deployment.image_digest = digest;
+    match policy {
+        ImagePullPolicy::Never => {
+            // Contract: never reach out to a registry. If the image isn't
+            // already cached, surface a clear `ImageNotFound` that mentions
+            // the policy — otherwise the operator sees an opaque bollard 404
+            // and has no way to tell whether the registry is unreachable or
+            // the policy itself blocked the pull.
+            let image_name = image_config.full_ref();
+            match docker.inspect_image(&image_name).await {
+                Ok(inspect) => {
+                    deployment.image_digest =
+                        extract_digest(&inspect.repo_digests, &image_config.name);
+                }
+                Err(_) => {
+                    return Err(RuntimeError::ImageNotFound(format!(
+                        "image '{}' not in local cache and image_pull_policy=Never forbids pulling",
+                        image_name
+                    )));
+                }
+            }
+        }
+        ImagePullPolicy::Always | ImagePullPolicy::IfNotPresent => {
+            let digest = pull_image(docker.clone(), image_config, policy).await?;
+            deployment.image_digest = digest;
+        }
     }
 
     let use_host_network = matches!(
@@ -583,6 +647,52 @@ mod tests {
     }
 
     #[test]
+    fn extract_digest_none_when_repo_digests_missing() {
+        assert_eq!(extract_digest(&None, "nginx"), None);
+    }
+
+    #[test]
+    fn extract_digest_picks_matching_repo() {
+        // Docker can attach the same image content to multiple repos; we must
+        // pin to the one we actually pulled, not whichever happens to come
+        // back first.
+        let digests = Some(vec![
+            "docker.io/library/nginx@sha256:aaa".to_string(),
+            "ghcr.io/kemeter/nginx@sha256:bbb".to_string(),
+        ]);
+        assert_eq!(
+            extract_digest(&digests, "ghcr.io/kemeter/nginx"),
+            Some("sha256:bbb".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_digest_falls_back_to_first_when_no_match() {
+        // Docker may normalize names (`nginx` → `docker.io/library/nginx`).
+        // The fallback preserves the previous behaviour rather than
+        // returning None and losing the digest entirely.
+        let digests = Some(vec!["docker.io/library/nginx@sha256:zzz".to_string()]);
+        assert_eq!(
+            extract_digest(&digests, "nginx"),
+            Some("sha256:zzz".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_digest_handles_malformed_entry() {
+        // An entry without `@` should not panic; it's silently skipped and
+        // the next valid one wins.
+        let digests = Some(vec![
+            "garbage_without_at_sign".to_string(),
+            "nginx@sha256:ok".to_string(),
+        ]);
+        assert_eq!(
+            extract_digest(&digests, "nginx"),
+            Some("sha256:ok".to_string())
+        );
+    }
+
+    #[test]
     fn test_get_privileged_config() {
         let config = Some(crate::models::deployments::DeploymentConfig {
             image_pull_policy: String::from("always"),
@@ -667,24 +777,15 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_digest_from_repo_digests() {
-        let repo_digests = Some(vec!["nginx@sha256:abc123def456".to_string()]);
-        assert_eq!(
-            extract_digest(&repo_digests),
-            Some("sha256:abc123def456".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_digest_none_when_empty() {
-        assert_eq!(extract_digest(&None), None);
-        assert_eq!(extract_digest(&Some(vec![])), None);
-    }
-
-    #[test]
-    fn test_extract_digest_none_when_no_at_sign() {
+    fn extract_digest_none_when_no_at_sign() {
+        // Single entry without `@` is malformed → no digest can be recovered.
         let repo_digests = Some(vec!["nginx:latest".to_string()]);
-        assert_eq!(extract_digest(&repo_digests), None);
+        assert_eq!(extract_digest(&repo_digests, "nginx"), None);
+    }
+
+    #[test]
+    fn extract_digest_none_when_empty_vec() {
+        assert_eq!(extract_digest(&Some(vec![]), "nginx"), None);
     }
 
     use crate::models::health_check::{FailureAction, HealthCheck};
