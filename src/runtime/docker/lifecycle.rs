@@ -35,15 +35,18 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     }
 
     let (status, reason, message) = match &err {
-        RuntimeError::ImageNotFound(_) => (
+        RuntimeError::ImageNotFound(detail) => (
             DeploymentStatus::ImagePullBackOff,
             "image_pull_back_off",
-            format!("Image '{}' not found", deployment.image),
+            // Preserve the inner detail — it carries operator-relevant
+            // context like `image_pull_policy=Never forbids pulling` that a
+            // generic "not found" would drop.
+            format!("Image '{}' not found: {}", deployment.image, detail),
         ),
-        RuntimeError::ImagePullFailed(_) => (
+        RuntimeError::ImagePullFailed(detail) => (
             DeploymentStatus::ImagePullBackOff,
             "image_pull_back_off",
-            format!("Failed to pull image '{}'", deployment.image),
+            format!("Failed to pull image '{}': {}", deployment.image, detail),
         ),
         RuntimeError::InstanceCreationFailed(msg) => (
             DeploymentStatus::CreateContainerError,
