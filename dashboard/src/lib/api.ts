@@ -131,6 +131,14 @@ export interface Config {
   labels: string;
 }
 
+export interface LogEntry {
+  instance: string;
+  message: string;
+  level: string;
+  /** RFC3339 timestamp when the runtime tagged the line, when available. */
+  timestamp?: string | null;
+}
+
 export interface DeploymentEvent {
   id?: string;
   deployment_id?: string;
@@ -215,4 +223,98 @@ export function listSecrets(): Promise<Secret[]> {
 
 export function listConfigs(): Promise<Config[]> {
   return request<Config[]>('/configs');
+}
+
+export interface LogsQuery {
+  tail?: number;
+  since?: string;
+  container?: string;
+}
+
+function logsUrl(id: string, query: LogsQuery & { follow?: boolean; ticket?: string }): string {
+  const params = new URLSearchParams();
+  if (query.tail !== undefined) {
+    params.set('tail', String(query.tail));
+  }
+  if (query.since) {
+    params.set('since', query.since);
+  }
+  if (query.container) {
+    params.set('container', query.container);
+  }
+  if (query.follow) {
+    params.set('follow', 'true');
+  }
+  if (query.ticket) {
+    params.set('ticket', query.ticket);
+  }
+  const qs = params.toString();
+  return `/api/deployments/${encodeURIComponent(id)}/logs${qs ? `?${qs}` : ''}`;
+}
+
+export function fetchLogsSnapshot(id: string, query: LogsQuery = {}): Promise<LogEntry[]> {
+  return request<LogEntry[]>(
+    `/deployments/${encodeURIComponent(id)}/logs${buildLogsQs({ ...query, follow: false })}`
+  );
+}
+
+function buildLogsQs(query: LogsQuery & { follow?: boolean }): string {
+  const params = new URLSearchParams();
+  if (query.tail !== undefined) {
+    params.set('tail', String(query.tail));
+  }
+  if (query.since) {
+    params.set('since', query.since);
+  }
+  if (query.container) {
+    params.set('container', query.container);
+  }
+  if (query.follow) {
+    params.set('follow', 'true');
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+/** Mint a single-use-ish stream ticket scoped to a specific resource.
+ *  Required because `EventSource` cannot send an Authorization header. */
+export function mintStreamTicket(scope: string): Promise<{ ticket: string; expires_in: number }> {
+  return request<{ ticket: string; expires_in: number }>('/auth/stream-ticket', {
+    method: 'POST',
+    body: JSON.stringify({ scope })
+  });
+}
+
+export interface LogStreamHandle {
+  /** Stop reading and close the EventSource. Safe to call twice. */
+  close(): void;
+}
+
+/** Opens a live log stream. Mints a ticket first (because EventSource can't
+ *  set an Authorization header), then connects with `?ticket=…`.  The
+ *  caller is responsible for calling `close()` to release the connection. */
+export async function streamLogs(
+  id: string,
+  query: LogsQuery,
+  onEntry: (entry: LogEntry) => void,
+  onError?: (err: Event) => void
+): Promise<LogStreamHandle> {
+  const { ticket } = await mintStreamTicket(`deployment:logs:${id}`);
+  const url = logsUrl(id, { ...query, follow: true, ticket });
+  const es = new EventSource(url);
+  es.onmessage = (ev) => {
+    try {
+      onEntry(JSON.parse(ev.data) as LogEntry);
+    } catch {
+      // Defensive: ignore malformed frames rather than killing the stream.
+    }
+  };
+  if (onError) {
+    es.onerror = onError;
+  }
+  return {
+    close() {
+      es.close();
+    }
+  };
 }
