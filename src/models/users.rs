@@ -12,6 +12,10 @@ pub(crate) struct User {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
+    /// Coarse authorization role: "user" (default, self-scoped) or "admin"
+    /// (may act on other accounts). Not RBAC — see migration 0016.
+    #[serde(default = "default_role")]
+    pub(crate) role: String,
     pub(crate) username: String,
     #[serde(skip_serializing)]
     pub(crate) password: String,
@@ -27,6 +31,7 @@ struct UserRow {
     created_at: String,
     updated_at: Option<String>,
     status: String,
+    role: String,
     username: String,
     password: String,
     token: Option<String>,
@@ -34,7 +39,18 @@ struct UserRow {
 }
 
 const SELECT_COLUMNS: &str =
-    "id, created_at, updated_at, status, username, password, token, login_at";
+    "id, created_at, updated_at, status, role, username, password, token, login_at";
+
+fn default_role() -> String {
+    "user".to_string()
+}
+
+impl User {
+    /// True when this user may act on accounts other than its own.
+    pub(crate) fn is_admin(&self) -> bool {
+        self.role == "admin"
+    }
+}
 
 impl From<UserRow> for User {
     fn from(row: UserRow) -> Self {
@@ -43,6 +59,7 @@ impl From<UserRow> for User {
             created_at: row.created_at,
             updated_at: row.updated_at,
             status: row.status,
+            role: row.role,
             username: row.username,
             password: row.password,
             token: row.token.unwrap_or_default(),
@@ -106,11 +123,14 @@ pub(crate) async fn create(
     username: &str,
     password: &str,
 ) -> Result<(), sqlx::Error> {
+    // role is hard-coded to 'user': there is no API path to create an admin
+    // (that would be a privilege-escalation vector). Admin is set out of band.
     sqlx::query(
-        "INSERT INTO user (id, created_at, status, username, password, token) VALUES (?, datetime(), ?, ?, ?, ?)"
+        "INSERT INTO user (id, created_at, status, role, username, password, token) VALUES (?, datetime(), ?, ?, ?, ?, ?)"
     )
     .bind(Uuid::new_v4().to_string())
     .bind("active")
+    .bind("user")
     .bind(username)
     .bind(password)
     .bind(Uuid::new_v4().to_string())

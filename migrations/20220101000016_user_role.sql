@@ -1,0 +1,12 @@
+-- Adds a coarse authorization role to users.
+--
+-- The model is intentionally flat: 'user' (default) can only act on its own
+-- account; 'admin' can manage other accounts. This closes two IDOR holes on
+-- PUT/DELETE /users/{id} where any authenticated user could mutate or delete
+-- any other user. No RBAC, no per-resource permissions — just the minimum
+-- distinction needed to make cross-account actions privileged.
+--
+-- Every existing user (prod included) becomes 'user'. We deliberately do NOT
+-- promote any account here: who is admin is decided explicitly elsewhere, not
+-- guessed by a migration.
+ALTER TABLE user ADD COLUMN role VARCHAR(50) NOT NULL DEFAULT 'user';

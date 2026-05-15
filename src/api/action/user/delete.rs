@@ -10,7 +10,10 @@ pub(crate) async fn delete(
     current_user: User,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
-    if current_user.id == id {
+    // Self-deletion is never allowed (an operator locking themselves out).
+    // Deleting *another* account is an admin-only action; without this any
+    // authenticated user could delete every other account (IDOR / DoS).
+    if current_user.id == id || !current_user.is_admin() {
         return StatusCode::FORBIDDEN;
     }
 
@@ -57,6 +60,21 @@ mod tests {
         let server = TestServer::new(app).unwrap();
         let response = server
             .delete("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_delete_another_user() {
+        // IDOR regression: john.doe (role=user) must NOT be able to delete
+        // the admin account.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response = server
+            .delete("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47") // admin's id
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
 

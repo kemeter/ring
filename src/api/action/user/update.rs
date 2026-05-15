@@ -17,9 +17,16 @@ pub(crate) async fn update(
     State(pool): State<Db>,
     State(configuration): State<Config>,
     Path(id): Path<String>,
-    _user: User,
+    current_user: User,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
+    // Authorization: a user may only update its own account; an admin may
+    // update any. Without this an authenticated user could overwrite any
+    // other user's password and take the account over (IDOR).
+    if current_user.id != id && !current_user.is_admin() {
+        return Err((StatusCode::FORBIDDEN, "Forbidden").into_response());
+    }
+
     // `Validate` skips fields that are `None`, so an empty body falls
     // through cleanly. Whatever the user passes gets the same rules as
     // create — the regex / length attributes are declared once and shared
@@ -258,6 +265,55 @@ mod tests {
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({}))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn non_admin_cannot_update_another_user() {
+        // IDOR regression: john.doe (role=user) must NOT be able to change
+        // the admin account's credentials. Expect 403, before validation.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47") // admin's id
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "password": "pwned-by-john" }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn non_admin_can_update_own_account() {
+        // Self-service must still work for a plain user.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/6c6d481b-debf-5gb5-937f-2ffa5e9f8e58") // john.doe's id
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "username": "john.doe2" }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn admin_can_update_another_user() {
+        // Admin retains the ability to manage other accounts.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put("/users/6c6d481b-debf-5gb5-937f-2ffa5e9f8e58") // john.doe's id
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "username": "john.renamed" }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
