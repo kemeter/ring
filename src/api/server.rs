@@ -1,17 +1,12 @@
 use axum::{
-    Json, RequestPartsExt, Router,
+    Router,
     error_handling::HandleErrorLayer,
-    extract::{FromRef, FromRequestParts},
-    http::{HeaderValue, Method, StatusCode, header, request::Parts},
+    http::{HeaderValue, Method, StatusCode, header},
+    middleware::from_fn_with_state,
     routing::{delete, get, post, put},
-};
-use axum_extra::{
-    TypedHeader,
-    headers::{Authorization, authorization::Bearer},
 };
 use axum_macros::FromRef;
 use log::{error, info, warn};
-use serde_json::json;
 use sqlx::SqlitePool;
 use std::time::Duration;
 
@@ -55,42 +50,13 @@ use crate::api::action::secret::list as secret_list;
 
 use crate::api::action::healthz::healthz;
 
-use crate::models::users as users_model;
-use crate::models::users::User;
+use crate::api::auth::auth_middleware;
 
 pub(crate) type Db = SqlitePool;
 
-impl<S> FromRequestParts<S> for User
-where
-    AppState: FromRef<S>,
-    S: Send + Sync,
-{
-    type Rejection = (StatusCode, Json<serde_json::Value>);
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "error": "Invalid token" })),
-                )
-            })?;
-
-        let token = bearer.token();
-        let app_state = AppState::from_ref(state);
-
-        let user = users_model::find_by_token(&app_state.connection, token).await;
-        match user {
-            Ok(user) => Ok(user),
-            Err(_) => Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "Invalid token" })),
-            )),
-        }
-    }
-}
+// Authentication lives in `crate::api::auth`: a single middleware resolves the
+// caller and the `User` extractor just reads the resulting `AuthContext` from
+// request extensions.
 
 pub(crate) type RuntimeMap = std::sync::Arc<
     std::collections::HashMap<
@@ -110,12 +76,22 @@ pub(crate) struct AppState {
 }
 
 pub(crate) fn router(state: AppState) -> Router {
-    // Routes that support long-lived connections (SSE streaming) - no timeout
-    let streaming_routes = Router::new().route("/deployments/{id}/logs", get(deployment_logs));
-
-    // All other routes with timeout
-    let api_routes = Router::new()
+    // Public routes: no auth layer, by construction. Keeping these in their
+    // own router (instead of relying on merge() + route_layer scoping, which
+    // axum does not document) makes the public surface unambiguous.
+    let public_routes = Router::new()
         .route("/login", post(login))
+        .route("/healthz", get(healthz));
+
+    // SSE: protected, but NO timeout layer — a tower Timeout would kill the
+    // long-lived stream. The auth middleware only wraps the request→response
+    // head, so it doesn't interfere with the streaming body.
+    let streaming_routes = Router::new()
+        .route("/deployments/{id}/logs", get(deployment_logs))
+        .route_layer(from_fn_with_state(state.clone(), auth_middleware));
+
+    // All other routes: protected + 10s timeout.
+    let api_routes = Router::new()
         .route("/auth/stream-ticket", post(stream_ticket))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route(
@@ -139,7 +115,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))
         .route("/users/me", get(user_current))
-        .route("/healthz", get(healthz))
+        // Auth via route_layer: runs only when a route matches (so a 404
+        // stays a 404, not a 401) and is scoped to this router's routes.
+        .route_layer(from_fn_with_state(state.clone(), auth_middleware))
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|error: BoxError| async move {
@@ -159,6 +137,7 @@ pub(crate) fn router(state: AppState) -> Router {
     let cors_origins = state.configuration.api.cors_origins.clone();
 
     let mut app = Router::new()
+        .merge(public_routes)
         .merge(streaming_routes)
         .merge(api_routes)
         .with_state(state);
