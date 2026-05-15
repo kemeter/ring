@@ -116,6 +116,38 @@ fn build_health_config(
     })
 }
 
+/// Decide whether to serve the image from the local cache instead of going
+/// to the registry. Pure decision so it can be unit-tested without a Docker
+/// daemon.
+///
+/// We prefer the cache when:
+///   - no registry credentials were provided (`has_auth == false`), or
+///   - the policy is `IfNotPresent` (explicitly opts into the cache), or
+///   - the reference is a `Digest` (immutable content — re-pulling is a
+///     no-op).
+///
+/// The first clause is the design rule, not a fallback: Kemeter only sends
+/// registry credentials when a private registry is actually needed. When it
+/// sends none, that's deliberate — Ring serves the image already present
+/// locally, *whatever the policy*, including `Always`. (`Always` can only
+/// mean "re-check the registry every reconcile" when there *is* a registry
+/// to check; with no registry configured there is nothing to re-check, so
+/// the local image is authoritative.) This is also what kept things working
+/// before 1790c8d, which inadvertently turned this nominal path into an
+/// anonymous pull of a private image and crash-looped prod.
+///
+/// When credentials *are* present, strict `Always` is honoured and we hit
+/// the registry on every reconcile.
+pub(crate) fn prefer_local_cache(
+    policy: ImagePullPolicy,
+    reference: &ImageReference,
+    has_auth: bool,
+) -> bool {
+    !has_auth
+        || matches!(policy, ImagePullPolicy::IfNotPresent)
+        || matches!(reference, ImageReference::Digest(_))
+}
+
 async fn pull_image(
     docker: Docker,
     image_config: DockerImage,
@@ -131,19 +163,20 @@ async fn pull_image(
         "pull_image must not be called with Never policy"
     );
 
-    // Short-circuit on local cache hit when the reference is immutable
-    // (digest) or the policy explicitly opts into the cache (`IfNotPresent`).
-    // For `Always`, we still go to the registry even on a cache hit — that's
-    // the point of the policy.
-    let prefer_cache = matches!(policy, ImagePullPolicy::IfNotPresent)
-        || matches!(image_config.reference, ImageReference::Digest(_));
+    let has_auth = image_config.auth.is_some();
+    let prefer_cache = prefer_local_cache(policy, &image_config.reference, has_auth);
 
     if prefer_cache {
         if let Ok(inspect) = docker.inspect_image(&image_name).await {
-            debug!("Docker image {} already exists locally", image_name);
+            // Nominal path when no registry is configured: the locally
+            // present image is authoritative. Not a degraded mode.
+            debug!("Docker image {} served from local cache", image_name);
             return Ok(extract_digest(&inspect.repo_digests, &repo));
         }
-        debug!("Docker image {} not found locally, pulling...", image_name);
+        // Not in cache: attempt the pull anyway. With no credentials this is
+        // an anonymous pull — it still succeeds for a public image, and
+        // otherwise produces a clear registry error.
+        debug!("Docker image {} not in local cache, pulling...", image_name);
     } else {
         info!("Pull docker image: {} (policy: Always)", image_name);
     }
@@ -882,5 +915,43 @@ mod tests {
         ];
         let cfg = build_health_config(&hcs).expect("should translate the command HC");
         assert_eq!(cfg.test.as_ref().unwrap()[1], "/usr/local/bin/ready.sh");
+    }
+
+    // --- prefer_local_cache: no private registry configured means we serve
+    //     the local image first. This is the nominal design, not a fallback. ---
+
+    #[test]
+    fn prefer_cache_no_registry_serves_local_first_any_policy() {
+        // Design rule: when Kemeter sends no registry credentials (auth=None)
+        // — because none is needed — Ring serves the cached image first,
+        // whatever the policy. Not a degraded mode: this is the intended
+        // behaviour. Always must not force a registry round-trip here.
+        let r = ImageReference::Tag("9809f6b1".to_string());
+        assert!(prefer_local_cache(ImagePullPolicy::Always, &r, false));
+        assert!(prefer_local_cache(ImagePullPolicy::IfNotPresent, &r, false));
+    }
+
+    #[test]
+    fn prefer_cache_ifnotpresent_uses_cache_even_with_registry() {
+        // IfNotPresent always opts into the cache, registry or not.
+        let r = ImageReference::Tag("9809f6b1".to_string());
+        assert!(prefer_local_cache(ImagePullPolicy::IfNotPresent, &r, true));
+    }
+
+    #[test]
+    fn prefer_cache_digest_reference_uses_cache() {
+        // A digest is immutable content — re-pulling buys nothing, so we
+        // prefer the cache even under Always and even with a registry.
+        let r = ImageReference::Digest("sha256:deadbeef".to_string());
+        assert!(prefer_local_cache(ImagePullPolicy::Always, &r, true));
+        assert!(prefer_local_cache(ImagePullPolicy::Always, &r, false));
+    }
+
+    #[test]
+    fn prefer_cache_always_with_registry_goes_to_registry() {
+        // A private registry *was* configured: honour strict Always and hit
+        // the registry on every reconcile.
+        let r = ImageReference::Tag("9809f6b1".to_string());
+        assert!(!prefer_local_cache(ImagePullPolicy::Always, &r, true));
     }
 }
