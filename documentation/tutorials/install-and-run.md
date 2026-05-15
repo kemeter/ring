@@ -149,7 +149,7 @@ Continue with [Your first deployment](/documentation/tutorials/first-deployment)
 
 **`Failed to connect to Docker daemon`** — the daemon isn't running, or your user isn't in the `docker` group. Run `sudo systemctl start docker`, and if needed `sudo usermod -aG docker $USER` then log out and back in.
 
-**`Port 3030 already in use`** — another process owns the port. Either stop it (`sudo ss -tlnp | grep 3030` to find the PID) or change Ring's port in `~/.config/kemeter/ring/config.toml`. The full file requires `current`, `host`, `api`, and `user`:
+**`Port 3030 already in use`** — another process owns the port. Either stop it (`sudo ss -tlnp | grep 3030` to find the PID) or change Ring's port in `~/.config/kemeter/ring/config.toml`. The file requires `current`, `host`, and `api`:
 
 ```toml
 [contexts.default]
@@ -158,8 +158,6 @@ host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3031
-
-user.salt = "your-salt"
 ```
 
 See [reference: config.toml](/documentation/reference/config-toml) for every field.

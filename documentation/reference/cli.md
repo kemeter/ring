@@ -443,14 +443,12 @@ current = true
 host = "127.0.0.1"
 api.scheme = "http"
 api.port = 3030
-user.salt = "changeme"
 
 [contexts.production]
 current = false
 host = "prod.example.com"
 api.scheme = "https"
 api.port = 443
-user.salt = "changeme"
 
 [scheduler]
 interval = 10
