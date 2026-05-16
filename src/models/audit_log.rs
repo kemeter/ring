@@ -6,11 +6,6 @@
 //! deployment is cleaned up), this survives target deletion so a post-mortem
 //! stays possible. Retention is namespace-bound: the trail goes away only
 //! when the namespace itself is deleted.
-//!
-//! NOTE: storage layer lands first; handler call sites, the HTTP endpoint and
-//! the CLI come in follow-up commits. The crate-local `dead_code` allow below
-//! is transitional and removed once those consumers exist.
-#![allow(dead_code)]
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};

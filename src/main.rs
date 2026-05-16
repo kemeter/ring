@@ -125,7 +125,8 @@ async fn main() {
                 .subcommand(commands::namespace::create::command_config())
                 .subcommand(commands::namespace::list::command_config())
                 .subcommand(commands::namespace::prune::command_config())
-                .subcommand(commands::namespace::audit::command_config()),
+                .subcommand(commands::namespace::audit::command_config())
+                .subcommand(commands::namespace::delete::command_config()),
         )
         .subcommand(
             Command::new("node")
@@ -241,6 +242,9 @@ async fn main() {
                 }
                 ("audit", sub_matches) => {
                     commands::namespace::audit::execute(sub_matches, config, &client).await;
+                }
+                ("delete", sub_matches) => {
+                    commands::namespace::delete::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
