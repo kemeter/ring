@@ -4,6 +4,7 @@ use crate::api::action::namespace::validation::{
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
+use crate::models::audit_log;
 use crate::models::namespace;
 use crate::models::users::User;
 use axum::Json;
@@ -35,7 +36,7 @@ pub(crate) struct NamespaceInput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    _user: User,
+    user: User,
     Json(input): Json<NamespaceInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
@@ -53,6 +54,17 @@ pub(crate) async fn create(
 
     match namespace::create(&pool, new_namespace.clone()).await {
         Ok(_) => {
+            // A namespace's own creation is recorded under its own name so it
+            // shows up in `ring namespace audit <ns>` for that namespace.
+            let _ = audit_log::record(
+                &pool,
+                Some(&user.id),
+                "create",
+                "namespace",
+                &new_namespace.name,
+                Some(&new_namespace.name),
+            )
+            .await;
             let output = NamespaceOutput::from_to_model(new_namespace);
             (
                 StatusCode::CREATED,
@@ -80,7 +92,8 @@ pub(crate) async fn create(
 mod tests {
     use crate::api::dto::namespace::NamespaceOutput;
     use crate::api::server::tests::login;
-    use crate::api::server::tests::new_test_app;
+    use crate::api::server::tests::{new_test_app, new_test_app_with_pool};
+    use crate::models::audit_log;
     use axum::http::StatusCode;
     use axum_test::TestServer;
     use serde_json::json;
@@ -100,6 +113,34 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
         let namespace = response.json::<NamespaceOutput>();
         assert_eq!(namespace.name, "production");
+    }
+
+    #[tokio::test]
+    async fn create_namespace_writes_an_audit_entry() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": "production" }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // The write must have produced a namespace-scoped audit entry naming
+        // the action, target and author.
+        let entries = audit_log::find_by_namespace(&pool, "production", None)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].action, "create");
+        assert_eq!(entries[0].target_type, "namespace");
+        assert_eq!(entries[0].target_name, "production");
+        assert!(
+            entries[0].user_id.is_some(),
+            "audit entry must carry the authenticated user's id"
+        );
     }
 
     #[tokio::test]

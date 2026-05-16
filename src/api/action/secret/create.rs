@@ -6,6 +6,7 @@ use crate::api::action::secret::validation::{
 };
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
+use crate::models::audit_log;
 use crate::models::namespace;
 use crate::models::secret;
 use crate::models::users::User;
@@ -67,7 +68,7 @@ struct SecretOutput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    _user: User,
+    user: User,
     Json(input): Json<SecretInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
@@ -107,6 +108,15 @@ pub(crate) async fn create(
 
     match secret::create(&pool, &new_secret).await {
         Ok(_) => {
+            let _ = audit_log::record(
+                &pool,
+                Some(&user.id),
+                "create",
+                "secret",
+                &new_secret.name,
+                Some(&new_secret.namespace),
+            )
+            .await;
             let output = SecretOutput {
                 id: new_secret.id,
                 created_at: new_secret.created_at,

@@ -16,6 +16,7 @@ use validator::{Validate, ValidationError};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList};
+use crate::models::audit_log;
 use crate::models::deployment_event;
 use crate::models::deployments;
 use crate::models::deployments::{
@@ -471,7 +472,7 @@ pub(crate) struct CreateQueryParams {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    _user: User,
+    user: User,
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
@@ -707,6 +708,16 @@ pub(crate) async fn create(
                 )
                 .await;
             }
+
+            let _ = audit_log::record(
+                &pool,
+                Some(&user.id),
+                "create",
+                "deployment",
+                &input.name,
+                Some(&input.namespace),
+            )
+            .await;
 
             let deployment_output = DeploymentOutput::from_to_model(deployment);
             (StatusCode::CREATED, Json(deployment_output)).into_response()
