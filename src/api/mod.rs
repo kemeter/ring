@@ -1,4 +1,5 @@
 pub(crate) mod action;
+pub(crate) mod auth;
 pub(crate) mod dto;
 pub(crate) mod server;
 pub(crate) mod stream_tickets;
