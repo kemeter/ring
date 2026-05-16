@@ -58,25 +58,52 @@ ring --version
 
 The release build takes a few minutes the first time. If `ring --version` doesn't work after install, the binary isn't on your `PATH` — check `which ring`.
 
-## 2. Generate the encryption key
-
-Ring encrypts every secret it stores at rest with AES-256-GCM. The server refuses to start without an encryption key. Generate one now:
-
-```bash
-export RING_SECRET_KEY="$(openssl rand -base64 32)"
-```
-
-Keep this value safe. Lose it and every secret you create becomes unrecoverable; leak it and every secret is compromised. For this tutorial, an exported shell variable is fine — for production, put it in a `systemd EnvironmentFile=`, Vault, or your secret manager of choice. See [Secrets and encryption](/documentation/concepts/secrets-encryption) for the threat model.
-
-## 3. Initialize the config
+## 2. Initialize the config
 
 ```bash
 ring init
 ```
 
-This creates `~/.config/kemeter/ring/` and writes an empty `auth.json`. It **does not** create the database or seed the admin user — that happens the first time the server runs. The command produces no output on success.
+Ring will prompt you for two things:
 
-## 4. Start the server
+- **Which runtime to use** — Docker, Cloud Hypervisor, or both
+- **Which port the API should listen on** — defaults to `3030`
+
+It then writes `~/.config/kemeter/ring/config.toml`, persists a freshly generated `RING_SECRET_KEY` to `~/.config/kemeter/ring/secret-key` (mode `0600`), and prints the same key on stdout for convenience:
+
+```
+$ ring init
+? Which runtime do you want to use? Docker
+? Which port should the API listen on? 3030
+✓ Wrote /home/you/.config/kemeter/ring/config.toml
+✓ Wrote /home/you/.config/kemeter/ring/secret-key (mode 0600)
+
+────────────────────────────────────────────────────────────────────────
+  IMPORTANT — export this key before starting the server:
+
+    export RING_SECRET_KEY="aBc123…=="
+
+  Without it, `ring server start` will refuse to boot.
+  Without it, secrets stored on disk become unrecoverable.
+
+  Also saved to: /home/you/.config/kemeter/ring/secret-key
+  Treat that file like a private key: chmod 0600, never commit, never back up unencrypted.
+────────────────────────────────────────────────────────────────────────
+
+→ Next steps:
+  1. Export the key above
+  2. ring server start             # first boot creates the admin user (admin/changeme)
+  3. ring login -u admin -p changeme
+  4. ring user update --password "<your password>"  # rotate the default password
+```
+
+Copy the `export RING_SECRET_KEY=...` line into your shell, or pin it to a `systemd EnvironmentFile=` for a production install. The on-disk copy under `~/.config/kemeter/ring/secret-key` is a recovery aid if the terminal scrolls past or the install is interrupted — **it is not a substitute for setting the environment variable**, since `ring server start` only reads `RING_SECRET_KEY` from the environment. Lose the key (file deleted *and* env forgotten) and every secret you store becomes unrecoverable; leak it and every secret is compromised. See [Secrets and encryption](/documentation/concepts/secrets-encryption) for the threat model.
+
+If `config.toml` or `secret-key` already exists, `ring init` refuses to overwrite without `--force`. Re-running with `--force` generates a brand-new key — every secret stored under the old one becomes undecryptable, so use it only for fresh installs you don't mind wiping.
+
+In CI or any non-interactive shell, `ring init` skips the prompts and falls back to defaults (Docker, port 3030).
+
+## 3. Start the server
 
 ```bash
 ring server start
@@ -96,7 +123,7 @@ RUST_LOG=info ring server start
 
 Open a second terminal for the rest of the tutorial.
 
-## 5. Verify the API is up
+## 4. Verify the API is up
 
 ```bash
 curl http://localhost:3030/healthz
@@ -110,7 +137,7 @@ Expected output:
 
 If you get a connection refused, check the server's startup log — Ring prints the actual bind address (which might be your LAN IP, not `localhost`).
 
-## 6. Log in
+## 5. Log in
 
 ```bash
 ring login --username admin --password changeme
@@ -126,7 +153,7 @@ ring user update --password "your-secure-password"
 
 The default `admin/changeme` credentials only work until the password is changed.
 
-## 7. Sanity check
+## 6. Sanity check
 
 ```bash
 ring deployment list
