@@ -62,7 +62,7 @@ pub(crate) async fn record(
         namespace,
     );
 
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO audit_log (id, timestamp, user_id, action, target_type, target_name, namespace)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
@@ -74,9 +74,23 @@ pub(crate) async fn record(
     .bind(&entry.target_name)
     .bind(&entry.namespace)
     .execute(pool)
-    .await?;
+    .await;
 
-    Ok(())
+    // Audit failures must never break the caller's request, so callers
+    // discard the result. Log here so a missed entry is still visible
+    // instead of vanishing silently — this is the only place that needs it.
+    if let Err(ref e) = result {
+        log::warn!(
+            "Failed to record audit entry ({} {} '{}' in namespace {:?}): {}",
+            entry.action,
+            entry.target_type,
+            entry.target_name,
+            entry.namespace,
+            e
+        );
+    }
+
+    result.map(|_| ())
 }
 
 /// All audit entries for a namespace, most recent first.
@@ -106,9 +120,17 @@ pub(crate) async fn delete_by_namespace(
     let result = sqlx::query("DELETE FROM audit_log WHERE namespace = ?")
         .bind(namespace)
         .execute(pool)
-        .await?;
+        .await;
 
-    Ok(result.rows_affected())
+    if let Err(ref e) = result {
+        log::warn!(
+            "Failed to purge audit trail for namespace '{}': {}",
+            namespace,
+            e
+        );
+    }
+
+    result.map(|r| r.rows_affected())
 }
 
 #[cfg(test)]

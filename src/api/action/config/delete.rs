@@ -18,14 +18,14 @@ pub(crate) async fn delete(
         Ok(None) => return StatusCode::NOT_FOUND,
         Err(err) => {
             log::error!("Failed to look up configuration {}: {}", id, err);
-            return StatusCode::NOT_FOUND;
+            return StatusCode::INTERNAL_SERVER_ERROR;
         }
     };
 
     let result = ConfigModel::delete(&pool, &id).await;
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
-        return StatusCode::NOT_FOUND;
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
 
     let _ = audit_log::record(
