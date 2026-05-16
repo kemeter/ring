@@ -114,7 +114,6 @@ pub(crate) struct Config {
     pub(crate) name: String,
     pub(crate) host: String,
     pub(crate) api: config::api::Api,
-    pub(crate) user: config::user::User,
     #[serde(default)]
     pub(crate) scheduler: Scheduler,
     #[serde(default)]
@@ -146,9 +145,6 @@ impl Default for Config {
                 scheme: "http".to_string(),
                 port: 3030,
                 cors_origins: Vec::new(),
-            },
-            user: config::user::User {
-                salt: "changeme".to_string(),
             },
             scheduler: Scheduler::default(),
             docker: DockerConfig::default(),
@@ -345,7 +341,6 @@ host = "0.0.0.0"
 current = true
 api.scheme = "http"
 api.port = 3030
-user.salt = "changeme"
 
 [contexts.dev.runtime.cloud_hypervisor]
 seccomp = "false"
@@ -355,7 +350,6 @@ host = "10.0.0.1"
 current = false
 api.scheme = "http"
 api.port = 3030
-user.salt = "changeme"
 "#;
 
     #[test]
@@ -397,7 +391,6 @@ host = "1.1.1.1"
 current = false
 api.scheme = "http"
 api.port = 3030
-user.salt = "x"
 "#;
         let contexts = make_contexts(toml_str);
         assert!(pick_context(contexts, "missing").is_none());

@@ -4,7 +4,6 @@ use crate::api::action::user::validation::{
 use crate::api::dto::user::UserOutput;
 use crate::api::server::Db;
 use crate::api::validation::ViolationList;
-use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::models::users::User;
 use axum::response::{IntoResponse, Response};
@@ -15,7 +14,6 @@ use validator::Validate;
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    State(configuration): State<Config>,
     _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, Json<UserOutput>), Response> {
@@ -24,14 +22,13 @@ pub(crate) async fn create(
         return Err(violations.into_response());
     }
 
-    let password_hash = users_model::hash_password(&input.password, &configuration.user.salt)
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "errors": ["Password hashing failed"] })),
-            )
-                .into_response()
-        })?;
+    let password_hash = users_model::hash_password(&input.password).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "errors": ["Password hashing failed"] })),
+        )
+            .into_response()
+    })?;
 
     users_model::create(&pool, &input.username, &password_hash)
         .await

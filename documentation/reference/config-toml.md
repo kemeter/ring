@@ -42,11 +42,7 @@ You can declare multiple `[contexts.<name>]` tables in the same file. The one wi
 | `port` | int | yes | — | TCP port. Default in the auto-fallback context is `3030`; explicit configs must set it |
 | `cors_origins` | array of string | no | `[]` | List of `Origin` values allowed by the API's CORS layer. Leave empty to disallow browser cross-origin calls |
 
-### `[contexts.<name>.user]`
-
-| Field | Type | Required | Default | Purpose |
-|---|---|---|---|---|
-| `salt` | string | yes | — | Salt used in the password-hashing pipeline. **Change from `"changeme"`** before exposing the API. Changing the salt invalidates all existing password hashes |
+> **No password salt to configure.** Earlier versions required a `[contexts.<name>.user]` table with a global `salt`. Ring now generates a unique random salt for every password hash, so there is nothing to set or keep secret. A leftover `user.salt` line in an existing config is ignored.
 
 ### `[contexts.<name>.scheduler]`
 
@@ -82,8 +78,6 @@ host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3030
-
-user.salt = "$(openssl rand -hex 16)"     # replace with a real value
 ```
 
 ### Production with Cloud Hypervisor and TLS-fronted API
@@ -96,8 +90,6 @@ host = "0.0.0.0"
 api.scheme = "https"                       # because nginx in front terminates TLS
 api.port = 3030
 api.cors_origins = ["https://dashboard.example.com"]
-
-user.salt = "..."                          # your own value, kept secret
 
 [contexts.default.scheduler]
 interval = 5
@@ -119,21 +111,18 @@ current = true
 host = "127.0.0.1"
 api.scheme = "http"
 api.port = 3030
-user.salt = "local-dev-salt"
 
 [contexts.staging]
 current = false
 host = "ring-staging.example.com"
 api.scheme = "https"
 api.port = 443
-user.salt = "shared-with-staging-server"
 
 [contexts.production]
 current = false
 host = "ring-prod.example.com"
 api.scheme = "https"
 api.port = 443
-user.salt = "shared-with-prod-server"
 ```
 
 Switch context per command:

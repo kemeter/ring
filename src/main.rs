@@ -66,7 +66,6 @@ mod api;
 mod config {
     pub(crate) mod api;
     pub(crate) mod config;
-    pub(crate) mod user;
 }
 
 mod dashboard;

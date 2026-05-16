@@ -30,7 +30,7 @@ Another process owns the port. Either stop it:
 sudo ss -tlnp | grep 3030              # find the PID
 ```
 
-Or change Ring's port in `~/.config/kemeter/ring/config.toml`. The full schema requires `current`, `host`, `api`, and `user`:
+Or change Ring's port in `~/.config/kemeter/ring/config.toml`. The schema requires `current`, `host`, and `api`:
 
 ```toml
 [contexts.default]
@@ -39,8 +39,6 @@ host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3031                        # was 3030
-
-user.salt = "your-salt"
 ```
 
 See [reference: config.toml](/documentation/reference/config-toml) for every field.

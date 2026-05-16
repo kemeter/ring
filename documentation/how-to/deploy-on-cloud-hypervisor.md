@@ -66,7 +66,6 @@ current = true
 host = "127.0.0.1"
 api.scheme = "http"
 api.port = 3030
-user.salt = "changeme"
 
 [contexts.default.runtime.cloud_hypervisor]
 firmware_path = "/path/to/hypervisor-fw"      # optional, defaults to ~/.config/kemeter/ring/cloud-hypervisor/vmlinux

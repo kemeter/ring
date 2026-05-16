@@ -75,7 +75,6 @@ current = true
 host = "127.0.0.1"
 api.scheme = "http"
 api.port = 8080            # change here
-user.salt = "changeme"
 ```
 
 Then restart `ring server start`.

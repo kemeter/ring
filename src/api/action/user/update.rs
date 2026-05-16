@@ -3,7 +3,6 @@ use crate::api::action::user::validation::{
 };
 use crate::api::server::Db;
 use crate::api::validation::ViolationList;
-use crate::config::config::Config;
 use crate::models::users as users_model;
 use crate::models::users::User;
 use axum::extract::State;
@@ -15,7 +14,6 @@ use validator::Validate;
 
 pub(crate) async fn update(
     State(pool): State<Db>,
-    State(configuration): State<Config>,
     Path(id): Path<String>,
     current_user: User,
     Json(input): Json<UserInput>,
@@ -46,14 +44,13 @@ pub(crate) async fn update(
     }
 
     if let Some(password) = input.password {
-        let password_hash = users_model::hash_password(&password, &configuration.user.salt)
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "errors": ["Password hashing failed"] })),
-                )
-                    .into_response()
-            })?;
+        let password_hash = users_model::hash_password(&password).map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["Password hashing failed"] })),
+            )
+                .into_response()
+        })?;
 
         user.password = password_hash;
     }

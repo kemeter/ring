@@ -1,3 +1,5 @@
+use aes_gcm::aead::OsRng;
+use aes_gcm::aead::rand_core::RngCore;
 use argon2::{self, Config as Argon2Config};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -160,8 +162,21 @@ pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<(), sqlx::E
     Ok(())
 }
 
-/// Hash a password using Argon2id
-pub(crate) fn hash_password(password: &str, salt: &str) -> Result<String, argon2::Error> {
+/// Hash a password using Argon2id with a unique, randomly generated salt.
+///
+/// The salt MUST be unique per password (OWASP Password Storage): a shared or
+/// static salt lets an attacker who obtains the database attack every hash in
+/// parallel and reveals which users share a password. `hash_encoded` embeds
+/// this salt in the returned string, so `verify_encoded` reads it back from
+/// the stored hash — no salt needs to be carried in config.
+///
+/// We use `OsRng` (OS entropy) rather than a thread-local PRNG: Ring forks
+/// processes (the scheduler), and a userspace CSPRNG isn't guaranteed to
+/// reseed across fork. This mirrors the nonce generation in `models::secret`.
+pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
     let argon2_config = Argon2Config {
         variant: argon2::Variant::Argon2id,
         version: argon2::Version::Version13,
@@ -173,5 +188,40 @@ pub(crate) fn hash_password(password: &str, salt: &str) -> Result<String, argon2
         hash_length: 32,
     };
 
-    argon2::hash_encoded(password.as_bytes(), salt.as_bytes(), &argon2_config)
+    argon2::hash_encoded(password.as_bytes(), &salt, &argon2_config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_password;
+
+    #[test]
+    fn same_password_yields_distinct_hashes() {
+        // Unique per-password salt (OWASP): the same password hashed twice
+        // must not collide, otherwise shared passwords are detectable in DB.
+        let a = hash_password("hunter2").unwrap();
+        let b = hash_password("hunter2").unwrap();
+        assert_ne!(a, b, "salt is not unique per call");
+    }
+
+    #[test]
+    fn fresh_hash_verifies() {
+        let h = hash_password("hunter2").unwrap();
+        assert!(argon2::verify_encoded(&h, b"hunter2").unwrap());
+        assert!(!argon2::verify_encoded(&h, b"wrong").unwrap());
+    }
+
+    #[test]
+    fn legacy_shared_salt_hash_still_verifies() {
+        // Regression guard: accounts created by the OLD code path used a
+        // shared static salt. argon2 embeds the salt in the encoded string,
+        // so `verify_encoded` reads it back from the stored hash — switching
+        // hash_password to a random salt must NOT lock out existing users.
+        // This is a real "changeme"/salt="changeme" argon2id hash.
+        let legacy = "$argon2id$v=19$m=65536,t=2,p=4$Y2hhbmdlbWU$HxyGA81ORfjb63QVOi3+t/eBaFPmdSbf4OZc4pBG8DM";
+        assert!(
+            argon2::verify_encoded(legacy, b"changeme").unwrap(),
+            "an existing account's password must still verify after the fix"
+        );
+    }
 }
