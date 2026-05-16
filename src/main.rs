@@ -49,6 +49,7 @@ mod runtime {
 }
 
 mod models {
+    pub(crate) mod audit_log;
     pub(crate) mod config;
     pub(crate) mod deployment_event;
     pub(crate) mod deployments;
