@@ -33,6 +33,7 @@ use crate::api::action::config::list as config_list;
 use crate::api::action::config::update as config_update;
 use crate::api::action::node::get as node_get;
 
+use crate::api::action::namespace::audit as namespace_audit;
 use crate::api::action::namespace::create as namespace_create;
 use crate::api::action::namespace::get as namespace_get;
 use crate::api::action::namespace::list as namespace_list;
@@ -104,6 +105,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/node/get", get(node_get))
         .route("/namespaces", get(namespace_list).post(namespace_create))
         .route("/namespaces/{id}", get(namespace_get))
+        .route("/namespaces/{name}/audit", get(namespace_audit))
         .route("/configs", get(config_list).post(config_create))
         .route(
             "/configs/{id}",
