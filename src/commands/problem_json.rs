@@ -146,9 +146,55 @@ pub(crate) fn http_error_global_list(status: u16, kind: &str) -> String {
     }
 }
 
+/// Turn a transport-level `reqwest::Error` (no HTTP response was ever
+/// received) into one human line, instead of dumping reqwest's nested
+/// source chain (`error sending request for url (...): error trying to
+/// connect: tcp connect error: Connection refused (os error 111)`).
+///
+/// This is the counterpart of the status-based path (`render_response_error`):
+/// that one handles a server that *answered* with a status; this one
+/// handles a server that never answered at all (down, unreachable, slow).
+/// `endpoint` is the base URL the command was trying to reach, surfaced
+/// so the user can check it.
+pub(crate) fn transport_error(err: &reqwest::Error, endpoint: &str) -> String {
+    if err.is_connect() {
+        format!(
+            "error: cannot reach the server at {endpoint} — is it running? (connection refused)"
+        )
+    } else if err.is_timeout() {
+        format!("error: the server at {endpoint} did not respond in time (timeout)")
+    } else if err.is_request() {
+        format!("error: could not send the request to {endpoint} (malformed request)")
+    } else {
+        // Body/decode error or anything else without an HTTP status: keep
+        // it short, the detailed chain helps no one at the CLI.
+        format!("error: request to {endpoint} failed")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `reqwest::Error` can't be constructed by hand, so drive a real
+    // connection to a port nothing listens on: that yields a connect
+    // error deterministically and fast (no network, no DNS).
+    #[tokio::test]
+    async fn transport_error_on_refused_connection_is_human() {
+        let err = reqwest::Client::new()
+            .get("http://127.0.0.1:1/login") // port 1: nothing binds it
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("connecting to a dead port must fail");
+
+        let msg = transport_error(&err, "http://127.0.0.1:1");
+        assert!(msg.starts_with("error: "), "got: {msg}");
+        assert!(msg.contains("http://127.0.0.1:1"), "got: {msg}");
+        // Must not leak reqwest's nested source chain.
+        assert!(!msg.contains("os error"), "leaked OS detail: {msg}");
+        assert!(!msg.contains("tcp connect error"), "leaked chain: {msg}");
+    }
 
     #[test]
     fn http_error_global_list_has_no_scope() {

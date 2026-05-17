@@ -85,6 +85,18 @@ ring login --username admin --password changeme
 ring login -u alice -p secret
 ```
 
+If the server is unreachable (down, wrong host/port), the CLI prints a
+single actionable line and exits non-zero — not the underlying transport
+trace:
+
+```
+$ ring login -u admin -p changeme
+error: cannot reach the server at http://localhost:3030 — is it running? (connection refused)
+```
+
+A timeout (`the server ... did not respond in time`) and a malformed
+request are reported the same way: one line, no nested error chain.
+
 ## Deployments
 
 ### `ring apply`
