@@ -1,10 +1,11 @@
 use crate::commands::problem_json::http_error_list;
+use crate::commands::style;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{Table, WithTitle, print_stdout};
+use cli_table::{Table, WithTitle};
 use serde::Deserialize;
 
 pub(crate) fn command_config() -> Command {
@@ -79,7 +80,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("{}", http_error_list(status.as_u16(), "secrets", &ns_label));
+                style::print_error(&http_error_list(status.as_u16(), "secrets", &ns_label));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -102,7 +103,7 @@ pub(crate) async fn execute(
                 })
                 .collect();
 
-            print_stdout(secrets.with_title()).expect("Failed to print table");
+            style::print_table(secrets.with_title());
         }
         Err(error) => {
             eprintln!("Failed to fetch secrets: {}", error);

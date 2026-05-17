@@ -29,6 +29,7 @@ serde_json = "1.0"
 toml = "0.8.1"
 local-ip-address = "0.6.1"
 cli-table = "0.5.0"
+owo-colors = { version = "4", features = ["supports-colors"] }
 axum = { version = "0.8.4" }
 axum-extra = { version = "0.10.1", features = ["typed-header", "query", "json-deserializer"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }

@@ -3,6 +3,7 @@ use clap::ArgMatches;
 use clap::Command;
 
 use crate::commands::problem_json::http_error;
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -35,9 +36,9 @@ pub(crate) async fn execute(
             Ok(response) => {
                 let status = response.status();
                 if status == 204 {
-                    println!("Config {} deleted ", deployment);
+                    style::print_success(&format!("Config {} deleted", deployment));
                 } else {
-                    eprintln!("{}", http_error(status.as_u16(), "config", deployment));
+                    style::print_error(&http_error(status.as_u16(), "config", deployment));
                     exit_code::from_http_status(status.as_u16()).exit();
                 }
             }

@@ -5,6 +5,7 @@ use serde::Deserialize;
 use std::io::{self, Write};
 
 use crate::commands::problem_json::http_error;
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -55,7 +56,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             match status.as_u16() {
-                204 => println!("Secret {} deleted", id),
+                204 => style::print_success(&format!("Secret {} deleted", id)),
                 404 => {
                     eprintln!("Secret {} not found", id);
                     exit_code::from_http_status(404).exit();
@@ -90,7 +91,7 @@ pub(crate) async fn execute(
                                     Ok(resp) => {
                                         let retry_status = resp.status();
                                         if retry_status.as_u16() == 204 {
-                                            println!("Secret {} deleted", id);
+                                            style::print_success(&format!("Secret {} deleted", id));
                                         } else {
                                             eprintln!("Failed to delete secret: {}", retry_status);
                                             exit_code::from_http_status(retry_status.as_u16())
@@ -112,7 +113,7 @@ pub(crate) async fn execute(
                     }
                 }
                 _ => {
-                    eprintln!("{}", http_error(status.as_u16(), "secret", id));
+                    style::print_error(&http_error(status.as_u16(), "secret", id));
                     exit_code::from_http_status(status.as_u16()).exit();
                 }
             }

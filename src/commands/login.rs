@@ -1,4 +1,5 @@
 use crate::commands::problem_json::{render_response_error, transport_error};
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::exit_code;
 use clap::Arg;
@@ -94,10 +95,10 @@ pub(crate) async fn execute(
                 eprintln!("Failed to write auth file: {}", e);
                 exit_code::ExitCode::General.exit();
             }
-            println!("Logging in as {}", username);
+            style::print_success(&format!("Logging in as {}", username));
         }
         Err(err) => {
-            eprintln!("{}", transport_error(&err, &base_url));
+            style::print_error(&transport_error(&err, &base_url));
             exit_code::from_reqwest_error(&err).exit();
         }
     }

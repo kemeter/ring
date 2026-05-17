@@ -1,9 +1,10 @@
 use crate::commands::problem_json::http_error_global_list;
+use crate::commands::style;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{Table, WithTitle, print_stdout};
+use cli_table::{Table, WithTitle};
 use serde::Deserialize;
 
 pub(crate) fn command_config() -> Command {
@@ -45,7 +46,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("{}", http_error_global_list(status.as_u16(), "namespaces"));
+                style::print_error(&http_error_global_list(status.as_u16(), "namespaces"));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -68,7 +69,7 @@ pub(crate) async fn execute(
                 });
             }
 
-            print_stdout(namespaces.with_title()).expect("");
+            style::print_table(namespaces.with_title());
         }
         Err(error) => {
             eprintln!("Failed to fetch namespaces: {}", error);

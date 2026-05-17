@@ -1,12 +1,13 @@
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::commands::problem_json::http_error;
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{Table, WithTitle, print_stdout};
+use cli_table::{Table, WithTitle};
 
 pub(crate) fn command_config() -> Command {
     Command::new("inspect")
@@ -62,7 +63,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("{}", http_error(status.as_u16(), "deployment", id));
+                style::print_error(&http_error(status.as_u16(), "deployment", id));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -138,7 +139,7 @@ pub(crate) async fn execute(
                 });
             }
 
-            print_stdout(volumes.with_title()).expect("");
+            style::print_table(volumes.with_title());
         }
         Err(err) => {
             eprintln!("Error fetching deployment: {}", err);

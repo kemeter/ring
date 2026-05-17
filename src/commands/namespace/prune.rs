@@ -1,5 +1,6 @@
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::commands::problem_json::http_error_list;
+use crate::commands::style;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -59,10 +60,7 @@ pub(crate) async fn execute(
             let status = response.status();
             if status != 200 {
                 let ns_label = namespace_filter.map(String::as_str).unwrap_or("all");
-                eprintln!(
-                    "{}",
-                    http_error_list(status.as_u16(), "deployments", ns_label)
-                );
+                style::print_error(&http_error_list(status.as_u16(), "deployments", ns_label));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -98,7 +96,7 @@ pub(crate) async fn execute(
                 match request {
                     Ok(response) => {
                         if response.status() == 204 {
-                            println!("Deployment {} deleted", id);
+                            style::print_success(&format!("Deployment {} deleted", id));
                             deleted_count += 1;
                         } else {
                             eprintln!(
