@@ -1,4 +1,4 @@
-use crate::commands::problem_json::render_response_error;
+use crate::commands::problem_json::{render_response_error, transport_error};
 use crate::config::config::Config;
 use crate::exit_code;
 use clap::Arg;
@@ -42,7 +42,8 @@ pub(crate) async fn execute(
     let config_directory = get_config_dir();
     let config_file = format!("{}/auth.json", config_directory);
 
-    let api_url = format!("{}/login", configuration.get_api_url());
+    let base_url = configuration.get_api_url();
+    let api_url = format!("{}/login", base_url);
     let request = client
         .post(&api_url)
         .json(&json!({
@@ -96,7 +97,7 @@ pub(crate) async fn execute(
             println!("Logging in as {}", username);
         }
         Err(err) => {
-            eprintln!("Connection failed: {}", err);
+            eprintln!("{}", transport_error(&err, &base_url));
             exit_code::from_reqwest_error(&err).exit();
         }
     }
