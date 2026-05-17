@@ -1,4 +1,5 @@
 use crate::api::dto::deployment::DeploymentOutput;
+use crate::commands::problem_json::http_error_list;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -57,7 +58,11 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch deployments: {}", status);
+                let ns_label = namespace_filter.map(String::as_str).unwrap_or("all");
+                eprintln!(
+                    "{}",
+                    http_error_list(status.as_u16(), "deployments", ns_label)
+                );
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

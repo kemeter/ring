@@ -98,9 +98,102 @@ pub(crate) async fn render_response_error(context: &str, response: Response) -> 
     status_u16
 }
 
+/// Compose a human message for a *category* HTTP status from what the CLI
+/// already knows — no response body required.
+///
+/// The status code is a category, not a sentence: the API answers `404`,
+/// and the client (which knows the command and its arguments) decides what
+/// to say. Keeping the wording here means one source of truth instead of
+/// the same phrase copy-pasted across a dozen commands, and zero per-route
+/// copy to maintain server-side.
+///
+/// This is *not* for `422` validation failures: there the server carries
+/// structured violations the client cannot invent — route those through
+/// [`render_response_error`] instead.
+///
+/// `kind` is the resource noun (`"deployment"`, `"config"`, …), `name` the
+/// identifier the user typed.
+pub(crate) fn http_error(status: u16, kind: &str, name: &str) -> String {
+    match status {
+        404 => format!("error: {kind} '{name}' not found"),
+        409 => format!("error: {kind} '{name}' already exists or still has dependents"),
+        401 | 403 => format!("error: not authorized to act on {kind} '{name}'"),
+        _ => format!("error: {kind} '{name}': request failed ({status})"),
+    }
+}
+
+/// Same idea as [`http_error`] but for *collection* endpoints (`list`),
+/// which have no single resource identifier. The namespace is the only
+/// context that scopes the failure, so it carries the message.
+///
+/// `kind` is the plural noun (`"deployments"`, `"secrets"`, …).
+pub(crate) fn http_error_list(status: u16, kind: &str, namespace: &str) -> String {
+    let scope = format!("cannot list {kind} in namespace '{namespace}'");
+    match status {
+        401 | 403 => format!("error: {scope}: not authorized"),
+        404 => format!("error: {scope}: namespace not found"),
+        _ => format!("error: {scope}: request failed ({status})"),
+    }
+}
+
+/// Like [`http_error_list`] but for *global* collections that no namespace
+/// scopes (`namespace list`, `user list`). No identifier, no namespace —
+/// just the category and the plural noun.
+pub(crate) fn http_error_global_list(status: u16, kind: &str) -> String {
+    match status {
+        401 | 403 => format!("error: not authorized to list {kind}"),
+        _ => format!("error: cannot list {kind}: request failed ({status})"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_error_global_list_has_no_scope() {
+        assert_eq!(
+            http_error_global_list(403, "namespaces"),
+            "error: not authorized to list namespaces"
+        );
+        assert_eq!(
+            http_error_global_list(502, "users"),
+            "error: cannot list users: request failed (502)"
+        );
+    }
+
+    #[test]
+    fn http_error_list_scopes_message_to_namespace() {
+        assert_eq!(
+            http_error_list(403, "deployments", "prod"),
+            "error: cannot list deployments in namespace 'prod': not authorized"
+        );
+        assert_eq!(
+            http_error_list(500, "secrets", "default"),
+            "error: cannot list secrets in namespace 'default': request failed (500)"
+        );
+    }
+
+    #[test]
+    fn http_error_maps_categories_to_human_messages() {
+        assert_eq!(
+            http_error(404, "deployment", "web"),
+            "error: deployment 'web' not found"
+        );
+        assert_eq!(
+            http_error(409, "namespace", "prod"),
+            "error: namespace 'prod' already exists or still has dependents"
+        );
+        assert_eq!(
+            http_error(403, "secret", "db-pass"),
+            "error: not authorized to act on secret 'db-pass'"
+        );
+        // Unknown status falls back to a status-tagged line, never a panic.
+        assert_eq!(
+            http_error(503, "config", "app"),
+            "error: config 'app': request failed (503)"
+        );
+    }
 
     #[test]
     fn problem_details_round_trips_full_shape() {

@@ -1,3 +1,4 @@
+use crate::commands::problem_json::http_error;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -91,7 +92,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch health checks: {}", status);
+                eprintln!("{}", http_error(status.as_u16(), "deployment", id));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

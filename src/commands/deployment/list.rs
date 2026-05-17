@@ -1,4 +1,5 @@
 use crate::api::dto::deployment::DeploymentOutput;
+use crate::commands::problem_json::http_error_list;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -73,13 +74,20 @@ pub(crate) async fn execute(
     let mut query = format!("{}/deployments", api_url);
     let mut params: Vec<String> = Vec::new();
 
+    let mut ns_scope: Vec<String> = Vec::new();
     if args.contains_id("namespace") {
         let namespace = args.get_many::<String>("namespace").unwrap();
 
         for namespace in namespace {
             params.push(format!("namespace[]={}", namespace));
+            ns_scope.push(namespace.clone());
         }
     }
+    let ns_label = if ns_scope.is_empty() {
+        "all".to_string()
+    } else {
+        ns_scope.join(",")
+    };
 
     if args.contains_id("status") {
         let statuses = args.get_many::<String>("status").unwrap();
@@ -108,7 +116,10 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch deployments: {}", status);
+                eprintln!(
+                    "{}",
+                    http_error_list(status.as_u16(), "deployments", &ns_label)
+                );
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

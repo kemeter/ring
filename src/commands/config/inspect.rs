@@ -1,4 +1,5 @@
 use crate::api::dto::config::ConfigOutput;
+use crate::commands::problem_json::http_error;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -48,10 +49,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!(
-                    "Error: Failed to retrieve configuration details: {}",
-                    status
-                );
+                eprintln!("{}", http_error(status.as_u16(), "config", id));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

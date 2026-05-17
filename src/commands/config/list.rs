@@ -1,4 +1,5 @@
 use crate::api::dto::config::ConfigOutput;
+use crate::commands::problem_json::http_error_list;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -42,13 +43,20 @@ pub(crate) async fn execute(
     let query = format!("{}/configs", api_url);
     let mut params: Vec<String> = Vec::new();
 
+    let mut ns_scope: Vec<String> = Vec::new();
     if args.contains_id("namespace") {
         let namespace = args.get_many::<String>("namespace").unwrap();
 
         for namespace in namespace {
             params.push(format!("namespace[]={}", namespace));
+            ns_scope.push(namespace.clone());
         }
     }
+    let ns_label = if ns_scope.is_empty() {
+        "all".to_string()
+    } else {
+        ns_scope.join(",")
+    };
 
     let query = if !params.is_empty() {
         format!("{}?{}", query, params.join("&"))
@@ -66,7 +74,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch configurations list: {}", status);
+                eprintln!("{}", http_error_list(status.as_u16(), "configs", &ns_label));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
