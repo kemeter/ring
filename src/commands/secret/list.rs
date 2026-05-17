@@ -1,3 +1,4 @@
+use crate::commands::problem_json::http_error_list;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;
@@ -47,13 +48,20 @@ pub(crate) async fn execute(
     let auth_config = load_auth_config(configuration.name.clone());
     let mut params: Vec<String> = Vec::new();
 
+    let mut ns_scope: Vec<String> = Vec::new();
     if args.contains_id("namespace")
         && let Some(namespaces) = args.get_many::<String>("namespace")
     {
         for namespace in namespaces {
             params.push(format!("namespace[]={}", namespace));
+            ns_scope.push(namespace.clone());
         }
     }
+    let ns_label = if ns_scope.is_empty() {
+        "all".to_string()
+    } else {
+        ns_scope.join(",")
+    };
 
     let query = if !params.is_empty() {
         format!("{}/secrets?{}", api_url, params.join("&"))
@@ -71,7 +79,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch secrets list: {}", status);
+                eprintln!("{}", http_error_list(status.as_u16(), "secrets", &ns_label));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 

@@ -747,3 +747,36 @@ For a single-command help on any subcommand:
 ```bash
 ring <command> --help
 ```
+
+## Error messages
+
+When a command fails, the CLI prints a single human line to `stderr`,
+prefixed with `error:`, and exits non-zero. It does **not** echo the raw
+HTTP status — the status code is a category, and the message is composed
+from what the command already knows (the resource and the name you typed).
+
+```bash
+$ ring deployment delete web
+error: deployment 'web' not found
+
+$ ring deployment inspect web
+error: deployment 'web' not found
+
+$ ring config delete app
+error: config 'app' not found
+```
+
+Mapping by status category:
+
+| Situation                         | Message                                                   |
+| --------------------------------- | --------------------------------------------------------- |
+| Resource missing (`404`)          | `error: <kind> '<name>' not found`                        |
+| Conflict / has dependents (`409`) | `error: <kind> '<name>' already exists or still has dependents` |
+| Not authorized (`401`/`403`)      | `error: not authorized to act on <kind> '<name>'`         |
+| Listing, not authorized           | `error: cannot list <kind> in namespace '<ns>': not authorized` |
+| Anything else                     | `error: <kind> '<name>': request failed (<status>)`       |
+
+Validation failures on `apply` / `user` create are the exception: the
+server returns a structured RFC 7807 `problem+json` body, and the CLI
+renders every violation with its property path (see `ring apply`). The
+exit code still reflects the HTTP status in all cases.

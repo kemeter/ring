@@ -1,4 +1,5 @@
 use crate::api::dto::stats::DeploymentStatsOutput;
+use crate::commands::problem_json::http_error;
 use crate::config::config::{Config, load_auth_config};
 use clap::{Arg, ArgMatches, Command};
 
@@ -38,7 +39,7 @@ pub(crate) async fn execute(
     match response {
         Ok(res) => {
             if res.status() != 200 {
-                eprintln!("Unable to fetch metrics: {}", res.status());
+                eprintln!("{}", http_error(res.status().as_u16(), "deployment", id));
                 return;
             }
 

@@ -1,5 +1,5 @@
 use crate::api::dto::user::UserOutput;
-use crate::commands::problem_json::render_response_error;
+use crate::commands::problem_json::{http_error, render_response_error};
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -52,7 +52,7 @@ pub(crate) async fn execute(
         Ok(resp) => {
             let status = resp.status();
             if !status.is_success() {
-                eprintln!("Unable to fetch current user: {}", status);
+                eprintln!("{}", http_error(status.as_u16(), "user", "current"));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
             resp

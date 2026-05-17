@@ -1,3 +1,4 @@
+use crate::commands::problem_json::http_error_global_list;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::ArgMatches;
@@ -44,7 +45,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("Unable to fetch namespaces: {}", status);
+                eprintln!("{}", http_error_global_list(status.as_u16(), "namespaces"));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
