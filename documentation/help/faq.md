@@ -6,7 +6,7 @@ Common questions about Ring.
 
 ### What is Ring?
 
-Ring is a lightweight container orchestrator. It runs as a single binary, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML; Ring keeps it that way.
+Ring is a lightweight workload orchestrator. It runs as a single binary, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML; Ring keeps it that way.
 
 ### How is Ring different from Kubernetes?
 

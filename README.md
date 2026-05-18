@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/badge/version-0.5.0-blue.svg)](https://github.com/kemeter/ring/releases/tag/v0.5.0)
 
-A lightweight container orchestrator with declarative deployments — single binary, no control plane.
+A lightweight workload orchestrator with declarative deployments — single binary, no control plane.
 
 ## Why Ring?
 

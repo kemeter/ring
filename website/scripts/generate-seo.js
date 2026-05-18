@@ -82,7 +82,7 @@ function injectAllJsonLd() {
     '@type': 'SoftwareApplication',
     name: 'Ring',
     description:
-      'Ring is a single-binary container orchestrator: declarative YAML, REST API, SQLite state. A pragmatic alternative to Kubernetes for single-node deployments.',
+      'Ring is a single-binary workload orchestrator: declarative YAML, REST API, SQLite state. A pragmatic alternative to Kubernetes for single-node deployments.',
     applicationCategory: 'DeveloperApplication',
     operatingSystem: 'Linux',
     url: SITE_URL,

@@ -10,7 +10,7 @@ Create `/etc/systemd/system/ring.service`:
 
 ```toml
 [Unit]
-Description=Ring container orchestrator
+Description=Ring workload orchestrator
 After=docker.service
 Requires=docker.service
 

@@ -35,13 +35,13 @@ module.exports = {
     },
   ],
   head: {
-    defaultTitle: 'Ring - Lightweight Container Orchestrator',
+    defaultTitle: 'Ring - Lightweight Workload Orchestrator',
     titleTemplate: '%s | Ring',
     meta: [
-      { name: 'description', content: 'A lightweight container orchestrator. Deploy and manage containerized applications with declarative YAML, a REST API, and zero complexity.' },
+      { name: 'description', content: 'A lightweight workload orchestrator. Deploy and manage workloads with declarative YAML, a REST API, and zero complexity.' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-      { property: 'og:title', content: 'Ring - Lightweight Container Orchestrator' },
-      { property: 'og:description', content: 'Deploy and manage containerized applications with declarative YAML, a REST API, and zero complexity.' },
+      { property: 'og:title', content: 'Ring - Lightweight Workload Orchestrator' },
+      { property: 'og:description', content: 'Deploy and manage workloads with declarative YAML, a REST API, and zero complexity.' },
       { property: 'og:type', content: 'website' },
     ],
     link: [

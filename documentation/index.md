@@ -1,6 +1,6 @@
 # Ring
 
-Ring is a lightweight container orchestrator that lets you deploy and manage containerized applications declaratively, with a REST API and a single binary — no control plane, no etcd, no operators to install.
+Ring is a lightweight workload orchestrator that lets you deploy and manage containers and micro-VMs declaratively, with a REST API and a single binary — no control plane, no etcd, no operators to install.
 
 ## What is Ring?
 

@@ -9,6 +9,7 @@ export default function Footer() {
         <span>&copy; {new Date().getFullYear()} Ring by <a href="https://kemeter.cloud" target="_blank" rel="noopener noreferrer">kemeter</a>. MIT License.</span>
         <div className="footer-links">
           <Link to="/documentation">Documentation</Link>
+          <Link to="/help">Help</Link>
           <a
             href="https://github.com/kemeter/ring"
             target="_blank"

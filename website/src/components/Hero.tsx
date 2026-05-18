@@ -8,9 +8,9 @@ export default function Hero() {
   return (
     <section className="hero">
       <div className="hero-inner">
-        <h1>Lightweight container orchestration, simplified</h1>
+        <h1>Lightweight workload orchestration, simplified</h1>
         <p className="hero-subtitle">
-          Deploy and manage containerized applications with declarative YAML,
+          Deploy and manage workloads with declarative YAML,
           a REST API, and zero complexity. A lightweight alternative to Kubernetes.
         </p>
 
