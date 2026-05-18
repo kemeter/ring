@@ -34,9 +34,9 @@ struct SecretTableItem {
     name: String,
     #[table(title = "Namespace")]
     namespace: String,
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
 }
 
@@ -98,8 +98,8 @@ pub(crate) async fn execute(
                     id: s.id,
                     name: s.name,
                     namespace: s.namespace,
-                    created_at: s.created_at,
-                    updated_at: s.updated_at.unwrap_or_default(),
+                    created_at: style::format_date(&s.created_at),
+                    updated_at: style::format_date(&s.updated_at.unwrap_or_default()),
                 })
                 .collect();
 

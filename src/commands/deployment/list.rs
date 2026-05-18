@@ -45,9 +45,9 @@ pub(crate) fn command_config() -> Command {
 struct DeploymentTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
     #[table(title = "Namespace")]
     namespace: String,
@@ -151,8 +151,8 @@ pub(crate) async fn execute(
             for deployment in deployments_list {
                 deployments.push(DeploymentTableItem {
                     id: deployment.id,
-                    created_at: deployment.created_at,
-                    updated_at: deployment.updated_at,
+                    created_at: style::format_date(&deployment.created_at),
+                    updated_at: style::format_date(&deployment.updated_at),
                     namespace: deployment.namespace,
                     name: deployment.name,
                     image: deployment.image,

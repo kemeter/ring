@@ -144,7 +144,12 @@ ring deployment list [OPTIONS]
 
 **Output (table):**
 
-The table has ten columns: `Id`, `Created at`, `Updated at`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
+The table has ten columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
+
+Timestamps are rendered to the second (`2026-05-03 22:22:21`); sub-second
+digits and the `UTC` suffix are dropped from the cells since every Ring
+timestamp is UTC — the column header says so. The `json` output keeps the
+raw timestamp untouched, so scripts that parse it are unaffected.
 
 **Examples:**
 

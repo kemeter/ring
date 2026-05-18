@@ -17,10 +17,10 @@ struct UserTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
 
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
 
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
 
     #[table(title = "Status")]
@@ -29,7 +29,7 @@ struct UserTableItem {
     #[table(title = "Username")]
     username: String,
 
-    #[table(title = "Login at")]
+    #[table(title = "Login at (UTC)")]
     login_at: String,
 }
 
@@ -62,11 +62,11 @@ pub(crate) async fn execute(
             for user in users_list {
                 users.push(UserTableItem {
                     id: user.id,
-                    created_at: user.created_at,
-                    updated_at: user.updated_at,
+                    created_at: style::format_date(&user.created_at),
+                    updated_at: style::format_date(&user.updated_at),
                     status: user.status,
                     username: user.username,
-                    login_at: user.login_at,
+                    login_at: style::format_date(&user.login_at),
                 })
             }
 

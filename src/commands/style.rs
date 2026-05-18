@@ -61,6 +61,30 @@ pub(crate) fn print_success(msg: &str) {
     println!("{}", success(msg));
 }
 
+/// Trim a timestamp down to second precision for table display.
+///
+/// The API returns chrono's `DateTime<Utc>` `Display` form —
+/// `2026-05-03 22:22:21.595408437 UTC`. The sub-second digits and the
+/// `UTC` suffix are noise in a list: every Ring timestamp is UTC, so we
+/// say it once in the column header instead. Returns `2026-05-03
+/// 22:22:21`.
+///
+/// Anything we can't parse is returned untouched — a surprising date
+/// shape stays visible to the user rather than being silently blanked.
+pub(crate) fn format_date(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    // chrono's `parse_from_str` won't accept the `UTC` zone *name* (it
+    // wants a numeric offset), so strip the suffix ourselves and parse
+    // the naive datetime. Every Ring timestamp is UTC by construction.
+    let trimmed = raw.trim_end_matches(" UTC");
+    match chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f") {
+        Ok(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+        Err(_) => raw.to_string(),
+    }
+}
+
 /// Colour a deployment status string by its meaning. Unknown values are
 /// returned uncoloured rather than guessed at.
 pub(crate) fn status(s: &str) -> String {
@@ -175,6 +199,34 @@ mod tests {
     fn status_unknown_is_passed_through_even_when_enabled() {
         // We don't invent a colour for a status we have no meaning for.
         assert_eq!(colour_status(true, "weird"), "weird");
+    }
+
+    #[test]
+    fn format_date_trims_subseconds_and_zone() {
+        // The exact shape the API hands us.
+        assert_eq!(
+            format_date("2026-05-03 22:22:21.595408437 UTC"),
+            "2026-05-03 22:22:21"
+        );
+        // No sub-second digits, still has the zone name.
+        assert_eq!(
+            format_date("2026-05-03 22:22:21 UTC"),
+            "2026-05-03 22:22:21"
+        );
+    }
+
+    #[test]
+    fn format_date_empty_stays_empty() {
+        // An absent updated_at must render as a blank cell, not "now" or junk.
+        assert_eq!(format_date(""), "");
+    }
+
+    #[test]
+    fn format_date_unparseable_is_returned_verbatim() {
+        // A surprising shape stays visible rather than being blanked —
+        // the user should see that something is off, not a silent gap.
+        assert_eq!(format_date("not a date"), "not a date");
+        assert_eq!(format_date("2026-05-03"), "2026-05-03");
     }
 
     #[test]

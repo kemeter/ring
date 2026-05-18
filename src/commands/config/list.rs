@@ -24,9 +24,9 @@ struct ConfigTableItem {
     id: String,
     #[table(title = "Name")]
     name: String,
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
     #[table(title = "Namespace")]
     namespace: String,
@@ -101,8 +101,8 @@ pub(crate) async fn execute(
 
                 configs.push(ConfigTableItem {
                     id: config.id.to_string(),
-                    created_at: config.created_at.to_string(),
-                    updated_at: config.updated_at.unwrap_or_default(),
+                    created_at: style::format_date(&config.created_at.to_string()),
+                    updated_at: style::format_date(&config.updated_at.unwrap_or_default()),
                     name: config.name,
                     namespace: config.namespace,
                     data: data_config.len(),

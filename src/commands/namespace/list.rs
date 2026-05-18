@@ -17,7 +17,7 @@ struct NamespaceTableItem {
     id: String,
     #[table(title = "Name")]
     name: String,
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
 }
 
@@ -65,7 +65,7 @@ pub(crate) async fn execute(
                 namespaces.push(NamespaceTableItem {
                     id: ns.id,
                     name: ns.name,
-                    created_at: ns.created_at,
+                    created_at: style::format_date(&ns.created_at),
                 });
             }
 
