@@ -37,9 +37,6 @@ export default function Header() {
           </button>
 
           <nav className={`header-product-nav ${menuOpen ? 'open' : ''}`}>
-            <NavLink to="/" end onClick={() => setMenuOpen(false)}>
-              Overview
-            </NavLink>
             <NavLink to="/documentation" onClick={() => setMenuOpen(false)}>
               Documentation
             </NavLink>
