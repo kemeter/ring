@@ -2,19 +2,41 @@ use axum::extract::{Path, State};
 use http::StatusCode;
 
 use crate::api::server::Db;
+use crate::models::audit_log;
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User,
+    user: User,
 ) -> StatusCode {
+    // Load the row before deleting so the audit entry carries the real
+    // namespace and name (same pattern as deployment/secret delete).
+    let config = match ConfigModel::find(&pool, &id).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return StatusCode::NOT_FOUND,
+        Err(err) => {
+            log::error!("Failed to look up configuration {}: {}", id, err);
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
     let result = ConfigModel::delete(&pool, &id).await;
     if let Err(ref err) = result {
         log::error!("Failed to delete configuration with ID {}: {}", id, err);
-        return StatusCode::NOT_FOUND;
+        return StatusCode::INTERNAL_SERVER_ERROR;
     }
+
+    let _ = audit_log::record(
+        &pool,
+        Some(&user.id),
+        "delete",
+        "config",
+        &config.name,
+        Some(&config.namespace),
+    )
+    .await;
 
     StatusCode::NO_CONTENT
 }

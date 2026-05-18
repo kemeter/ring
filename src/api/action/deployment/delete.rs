@@ -2,13 +2,14 @@ use axum::extract::State;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
 use crate::api::server::Db;
+use crate::models::audit_log;
 use crate::models::deployments::{self, DeploymentStatus};
 use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User,
+    user: User,
 ) -> impl IntoResponse {
     let option = deployments::find(&pool, &id).await;
 
@@ -16,7 +17,18 @@ pub(crate) async fn delete(
         Ok(Some(mut deployment)) => {
             deployment.status = DeploymentStatus::Deleted;
             match deployments::update(&pool, &deployment).await {
-                Ok(_) => StatusCode::NO_CONTENT,
+                Ok(_) => {
+                    let _ = audit_log::record(
+                        &pool,
+                        Some(&user.id),
+                        "delete",
+                        "deployment",
+                        &deployment.name,
+                        Some(&deployment.namespace),
+                    )
+                    .await;
+                    StatusCode::NO_CONTENT
+                }
                 Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
             }
         }

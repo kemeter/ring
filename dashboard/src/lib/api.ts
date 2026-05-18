@@ -209,6 +209,21 @@ export function listNamespaces(): Promise<Namespace[]> {
   return request<Namespace[]>('/namespaces');
 }
 
+export interface AuditEntry {
+  id: string;
+  timestamp: string;
+  user_id: string | null;
+  action: string;
+  target_type: string;
+  target_name: string;
+  namespace: string | null;
+}
+
+export function getNamespaceAudit(name: string, limit?: number): Promise<AuditEntry[]> {
+  const q = limit ? `?limit=${limit}` : '';
+  return request<AuditEntry[]>(`/namespaces/${encodeURIComponent(name)}/audit${q}`);
+}
+
 export function getDeployment(id: string): Promise<DeploymentDetail> {
   return request<DeploymentDetail>(`/deployments/${encodeURIComponent(id)}`);
 }

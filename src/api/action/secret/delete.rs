@@ -5,6 +5,7 @@ use http::StatusCode;
 use serde::Deserialize;
 
 use crate::api::server::Db;
+use crate::models::audit_log;
 use crate::models::deployments;
 use crate::models::secret as SecretModel;
 use crate::models::users::User;
@@ -19,7 +20,7 @@ pub(crate) async fn delete(
     Path(id): Path<String>,
     Query(query): Query<DeleteQuery>,
     State(pool): State<Db>,
-    _user: User,
+    user: User,
 ) -> impl IntoResponse {
     // First, find the secret to get namespace and name
     let secret = match SecretModel::find(&pool, &id).await {
@@ -79,7 +80,18 @@ pub(crate) async fn delete(
     }
 
     match SecretModel::delete(&pool, &id).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Ok(_) => {
+            let _ = audit_log::record(
+                &pool,
+                Some(&user.id),
+                "delete",
+                "secret",
+                &secret.name,
+                Some(&secret.namespace),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => {
             log::error!("Failed to delete secret with ID {}: {}", id, e);
             (

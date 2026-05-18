@@ -103,6 +103,7 @@
           <th class="num">Running</th>
           <th>Created</th>
           <th>Updated</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -125,6 +126,9 @@
             </td>
             <td class="muted">{formatDate(ns.created_at)}</td>
             <td class="muted">{ns.updated_at ? formatDate(ns.updated_at) : '—'}</td>
+            <td>
+              <a class="ns-link" href="/namespaces/{ns.name}/audit">Audit</a>
+            </td>
           </tr>
         {/each}
       </tbody>

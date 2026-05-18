@@ -50,6 +50,7 @@ mod runtime {
 }
 
 mod models {
+    pub(crate) mod audit_log;
     pub(crate) mod config;
     pub(crate) mod deployment_event;
     pub(crate) mod deployments;
@@ -124,7 +125,9 @@ async fn main() {
                 .flatten_help(true)
                 .subcommand(commands::namespace::create::command_config())
                 .subcommand(commands::namespace::list::command_config())
-                .subcommand(commands::namespace::prune::command_config()),
+                .subcommand(commands::namespace::prune::command_config())
+                .subcommand(commands::namespace::audit::command_config())
+                .subcommand(commands::namespace::delete::command_config()),
         )
         .subcommand(
             Command::new("node")
@@ -237,6 +240,12 @@ async fn main() {
                 }
                 ("prune", sub_matches) => {
                     commands::namespace::prune::execute(sub_matches, config, &client).await;
+                }
+                ("audit", sub_matches) => {
+                    commands::namespace::audit::execute(sub_matches, config, &client).await;
+                }
+                ("delete", sub_matches) => {
+                    commands::namespace::delete::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }

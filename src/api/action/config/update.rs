@@ -10,6 +10,7 @@ use crate::api::action::config::validation::{
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList, problem_response};
+use crate::models::audit_log;
 use crate::models::config as ConfigModel;
 use crate::models::users::User;
 
@@ -50,7 +51,7 @@ pub(crate) struct UpdateConfigRequest {
 pub(crate) async fn update(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User,
+    user: User,
     Json(request): Json<UpdateConfigRequest>,
 ) -> Response {
     let mut violations: ViolationList = match request.validate() {
@@ -84,6 +85,15 @@ pub(crate) async fn update(
 
             match ConfigModel::update(&pool, config.clone()).await {
                 Ok(_) => {
+                    let _ = audit_log::record(
+                        &pool,
+                        Some(&user.id),
+                        "update",
+                        "config",
+                        &config.name,
+                        Some(&config.namespace),
+                    )
+                    .await;
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
                 }

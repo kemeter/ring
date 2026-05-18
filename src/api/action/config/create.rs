@@ -6,6 +6,7 @@ use crate::api::action::namespace::validation::{
 };
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
+use crate::models::audit_log;
 use crate::models::config;
 use crate::models::users::User;
 use axum::Json;
@@ -65,7 +66,7 @@ pub(crate) struct ConfigInput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    _user: User,
+    user: User,
     Json(input): Json<ConfigInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
@@ -85,11 +86,22 @@ pub(crate) async fn create(
     };
 
     match config::create(&pool, new_config.clone()).await {
-        Ok(_) => (
-            StatusCode::CREATED,
-            Json(serde_json::to_value(new_config).unwrap()),
-        )
-            .into_response(),
+        Ok(_) => {
+            let _ = audit_log::record(
+                &pool,
+                Some(&user.id),
+                "create",
+                "config",
+                &new_config.name,
+                Some(&new_config.namespace),
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::to_value(new_config).unwrap()),
+            )
+                .into_response()
+        }
         Err(e) if e.to_string().contains("UNIQUE constraint failed") => problem_response(
             StatusCode::CONFLICT,
             "Conflict",
