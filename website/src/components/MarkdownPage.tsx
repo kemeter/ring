@@ -36,6 +36,13 @@ export default function MarkdownPage({ content, title }: MarkdownPageProps) {
                       return <CodeBlock code={code} language={match[1]} />;
                     }
 
+                    // A fenced block with no language still routes here.
+                    // Multi-line content means it's a block, not inline
+                    // code, so give it the proper CodeBlock chrome.
+                    if (code.includes('\n')) {
+                      return <CodeBlock code={code} language="text" />;
+                    }
+
                     return <code className={className} {...props}>{children}</code>;
                   },
                   a({ href, children, ...props }) {
