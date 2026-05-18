@@ -1,0 +1,40 @@
+.code-tabs {
+  margin: var(--space-4) 0;
+
+  .code-tabs-bar {
+    display: inline-flex;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    margin-bottom: var(--space-2);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    border: 1px solid var(--color-code-border);
+  }
+
+  .code-tabs-tab {
+    padding: var(--space-1) var(--space-4);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+
+    &:hover {
+      color: var(--color-text);
+    }
+
+    &.is-active {
+      color: var(--color-bg);
+      background: var(--color-accent);
+    }
+  }
+
+  /* The bar already provides spacing above the code block */
+  .code-block {
+    margin: 0;
+  }
+}
