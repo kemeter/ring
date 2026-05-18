@@ -136,7 +136,7 @@ deployments:
 
 If each replica is its own deployment (each publishing on a different host port), you can hand-write upstreams:
 
-```nginx
+```
 upstream ring_app {
     server 127.0.0.1:32768;
     server 127.0.0.1:32769;
@@ -160,7 +160,7 @@ More work than Traefik, but sidesteps cross-namespace concerns.
 
 Ring does not terminate TLS. To expose the API beyond loopback, front it with nginx:
 
-```nginx
+```
 server {
     listen 443 ssl http2;
     server_name ring.example.com;

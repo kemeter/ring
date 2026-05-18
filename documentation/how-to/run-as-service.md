@@ -8,7 +8,7 @@ Two common shapes:
 
 Create `/etc/systemd/system/ring.service`:
 
-```ini
+```toml
 [Unit]
 Description=Ring container orchestrator
 After=docker.service
