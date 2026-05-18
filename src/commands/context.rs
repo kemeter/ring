@@ -1,7 +1,8 @@
+use crate::commands::style;
 use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
 use clap::ArgMatches;
 use clap::{Arg, Command};
-use cli_table::{Table, WithTitle, format::Justify, print_stdout};
+use cli_table::{Table, WithTitle, format::Justify};
 use std::fs;
 use toml::de::Error as TomlError;
 
@@ -67,6 +68,6 @@ pub(crate) fn execute(args: &ArgMatches, configuration: Config) {
             }
         }
 
-        print_stdout(configs.with_title()).expect("");
+        style::print_table(configs.with_title());
     }
 }

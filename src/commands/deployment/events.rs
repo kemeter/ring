@@ -1,5 +1,6 @@
+use crate::commands::style;
 use clap::{Arg, ArgMatches, Command};
-use cli_table::{Table, WithTitle, print_stdout};
+use cli_table::{Table, WithTitle};
 use serde::Deserialize;
 
 use crate::config::config::{Config, load_auth_config};
@@ -232,7 +233,7 @@ fn display_events(events: &[EventItem]) {
         })
         .collect();
 
-    print_stdout(table_items.with_title()).expect("Failed to print table");
+    style::print_table(table_items.with_title());
 }
 
 fn format_timestamp(timestamp: &str) -> String {

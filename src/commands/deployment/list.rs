@@ -1,12 +1,13 @@
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::commands::problem_json::http_error_list;
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
 use clap::{ArgAction, Command};
-use cli_table::{Table, WithTitle, format::Justify, print_stdout};
+use cli_table::{Table, WithTitle, format::Justify};
 
 pub(crate) fn command_config() -> Command {
     Command::new("list")
@@ -44,9 +45,9 @@ pub(crate) fn command_config() -> Command {
 struct DeploymentTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
     #[table(title = "Namespace")]
     namespace: String,
@@ -116,10 +117,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!(
-                    "{}",
-                    http_error_list(status.as_u16(), "deployments", &ns_label)
-                );
+                style::print_error(&http_error_list(status.as_u16(), "deployments", &ns_label));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -153,19 +151,19 @@ pub(crate) async fn execute(
             for deployment in deployments_list {
                 deployments.push(DeploymentTableItem {
                     id: deployment.id,
-                    created_at: deployment.created_at,
-                    updated_at: deployment.updated_at,
+                    created_at: style::format_date(&deployment.created_at),
+                    updated_at: style::format_date(&deployment.updated_at),
                     namespace: deployment.namespace,
                     name: deployment.name,
                     image: deployment.image,
                     runtime: deployment.runtime,
                     kind: deployment.kind,
                     replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
-                    status: deployment.status,
+                    status: style::status(&deployment.status),
                 })
             }
 
-            print_stdout(deployments.with_title()).expect("");
+            style::print_table(deployments.with_title());
         }
         Err(error) => {
             eprintln!("Error fetching deployments: {}", error);

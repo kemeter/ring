@@ -1,10 +1,11 @@
 use crate::commands::problem_json::http_error_global_list;
+use crate::commands::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
 use clap::ArgMatches;
 use clap::Command;
-use cli_table::{Table, WithTitle, format::Justify, print_stdout};
+use cli_table::{Table, WithTitle, format::Justify};
 use serde::{Deserialize, Serialize};
 
 pub(crate) fn command_config() -> Command {
@@ -16,10 +17,10 @@ struct UserTableItem {
     #[table(title = "ID", justify = "Justify::Right")]
     id: String,
 
-    #[table(title = "Created at")]
+    #[table(title = "Created at (UTC)")]
     created_at: String,
 
-    #[table(title = "Updated at")]
+    #[table(title = "Updated at (UTC)")]
     updated_at: String,
 
     #[table(title = "Status")]
@@ -28,7 +29,7 @@ struct UserTableItem {
     #[table(title = "Username")]
     username: String,
 
-    #[table(title = "Login at")]
+    #[table(title = "Login at (UTC)")]
     login_at: String,
 }
 
@@ -52,7 +53,7 @@ pub(crate) async fn execute(
         Ok(response) => {
             let status = response.status();
             if status != 200 {
-                eprintln!("{}", http_error_global_list(status.as_u16(), "users"));
+                style::print_error(&http_error_global_list(status.as_u16(), "users"));
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
@@ -61,15 +62,15 @@ pub(crate) async fn execute(
             for user in users_list {
                 users.push(UserTableItem {
                     id: user.id,
-                    created_at: user.created_at,
-                    updated_at: user.updated_at,
+                    created_at: style::format_date(&user.created_at),
+                    updated_at: style::format_date(&user.updated_at),
                     status: user.status,
                     username: user.username,
-                    login_at: user.login_at,
+                    login_at: style::format_date(&user.login_at),
                 })
             }
 
-            print_stdout(users.with_title()).expect("");
+            style::print_table(users.with_title());
         }
         Err(err) => {
             eprintln!("Error fetching users: {}", err);

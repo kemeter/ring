@@ -144,7 +144,12 @@ ring deployment list [OPTIONS]
 
 **Output (table):**
 
-The table has ten columns: `Id`, `Created at`, `Updated at`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
+The table has ten columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
+
+Timestamps are rendered to the second (`2026-05-03 22:22:21`); sub-second
+digits and the `UTC` suffix are dropped from the cells since every Ring
+timestamp is UTC — the column header says so. The `json` output keeps the
+raw timestamp untouched, so scripts that parse it are unaffected.
 
 **Examples:**
 
@@ -792,3 +797,21 @@ Validation failures on `apply` / `user` create are the exception: the
 server returns a structured RFC 7807 `problem+json` body, and the CLI
 renders every violation with its property path (see `ring apply`). The
 exit code still reflects the HTTP status in all cases.
+
+## Colour
+
+Output is colourised only when **stdout is a real terminal** and the
+[`NO_COLOR`](https://no-color.org) environment variable is unset:
+
+- Errors (`error: …`) are red, success lines green.
+- In `ring deployment list`, the `Status` column is colour-coded:
+  green = `running` / `completed`, yellow = `pending` / `starting` /
+  `deleted`, red = the failure states (`failed`, `crash_loop_back_off`,
+  `create_container_error`, …). Unknown values are left uncoloured.
+
+When the output is piped, redirected to a file, run under CI, or
+`NO_COLOR=1` is set, **no ANSI escape is emitted at all** — the bytes are
+identical to a plain run. `--output json` is never colourised. This means
+`ring deployment list | grep`, `... -o json | jq`, and existing scripts
+keep working unchanged. There is no `--color` flag; the automatic
+detection is the whole contract.
