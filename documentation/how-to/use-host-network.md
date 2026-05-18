@@ -57,7 +57,7 @@ The rejection happens at `ring apply` time with a 400 response — no half-deplo
 
 Example rejection:
 
-```text
+```bash
 $ ring apply -f bad.yaml
 HTTP 400 error: network.mode=host is incompatible with port mappings: host networking bypasses Docker's port bindings, so `ports` would be silently ignored. Remove `ports` and let the container bind directly on the host.
 ```

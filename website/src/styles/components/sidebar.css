@@ -16,6 +16,36 @@
   max-height: calc(100vh - var(--header-height) - var(--space-16));
   overflow-y: auto;
 
+  /* Thin, discreet scrollbar — only tints on hover */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+
+  &:hover {
+    scrollbar-color: var(--color-border) transparent;
+  }
+
+  &::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+    transition: background var(--transition-fast);
+  }
+
+  &:hover::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-muted);
+  }
+
   .sidebar-section {
     margin-bottom: var(--space-6);
 

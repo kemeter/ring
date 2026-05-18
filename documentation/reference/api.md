@@ -20,7 +20,7 @@ curl -H "Authorization: Bearer $TOKEN" http://localhost:3030/deployments
 
 ### Get a token
 
-```http
+```
 POST /login
 Content-Type: application/json
 
@@ -57,7 +57,7 @@ Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeou
 
 Endpoints that accept a JSON body validate it before applying any side effect. If the body is structurally valid (parses as JSON, matches the expected shape) but contains values that violate Ring's rules, the response is `422 Unprocessable Entity` in [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807):
 
-```http
+```
 HTTP/1.1 422 Unprocessable Entity
 Content-Type: application/problem+json
 
@@ -769,7 +769,7 @@ Returns information about the host running the Ring server.
 
 Ring's error responses are [RFC 7807 `application/problem+json`](https://datatracker.ietf.org/doc/html/rfc7807). Validation failures carry a `violations[]` array (see [Validation errors](#validation-errors)); non-validation problems (conflicts, not-found, unauthorized, server errors) carry the same envelope without the array:
 
-```http
+```
 HTTP/1.1 409 Conflict
 Content-Type: application/problem+json
 

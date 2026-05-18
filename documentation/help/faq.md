@@ -128,7 +128,7 @@ deployments:
 
 **Nginx upstream block (manual):**
 
-```nginx
+```
 upstream ring_app {
     server 127.0.0.1:32768;
     server 127.0.0.1:32769;
@@ -306,7 +306,7 @@ Run as a dedicated user via systemd (`User=ring`, `Group=ring`).
 
 Ring doesn't terminate TLS. Use a reverse proxy:
 
-```nginx
+```
 server {
     listen 443 ssl http2;
     server_name ring.example.com;

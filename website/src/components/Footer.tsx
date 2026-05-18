@@ -6,7 +6,7 @@ export default function Footer() {
   return (
     <footer className="site-footer">
       <div className="footer-inner">
-        <span>&copy; {new Date().getFullYear()} Ring by <a href="https://kemeter.io" target="_blank" rel="noopener noreferrer">kemeter</a>. MIT License.</span>
+        <span>&copy; {new Date().getFullYear()} Ring by <a href="https://kemeter.cloud" target="_blank" rel="noopener noreferrer">kemeter</a>. MIT License.</span>
         <div className="footer-links">
           <Link to="/documentation">Documentation</Link>
           <a
