@@ -1,6 +1,7 @@
 import Head from 'aplos/head';
 import Hero from '@/components/Hero';
 import FeatureSection from '@/components/FeatureSection';
+import FeatureGrid from '@/components/FeatureGrid';
 import { Link } from 'aplos/navigation';
 
 const SITE_URL = 'https://kemeter.github.io/ring';
@@ -155,6 +156,8 @@ export default function HomePage() {
         language="yaml"
         filename="multi-env.yaml"
       />
+
+      <FeatureGrid />
 
       <section className="section" style={{ textAlign: 'center' }}>
         <div className="container">

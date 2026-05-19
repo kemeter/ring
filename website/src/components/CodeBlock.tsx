@@ -29,6 +29,9 @@ export default function CodeBlock({ code, language = 'bash', filename }: CodeBlo
     <div className={`code-block ${filename ? 'has-header' : ''}`}>
       {filename && (
         <div className="code-block-header">
+          <div className="code-block-dots">
+            <span /><span /><span />
+          </div>
           <span className="code-block-filename">{filename}</span>
           <CopyButton text={code} />
         </div>

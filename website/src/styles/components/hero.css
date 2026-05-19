@@ -8,20 +8,23 @@
     padding: 0 var(--space-6);
   }
 
-  h1 {
+  .hero-title {
     font-size: var(--text-5xl);
-    letter-spacing: -0.03em;
+    font-weight: 600;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
     margin-bottom: var(--space-6);
-    background: linear-gradient(135deg, var(--color-text) 0%, var(--color-text-secondary) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    color: var(--color-text);
+  }
+
+  .hero-title-accent {
+    color: var(--color-accent);
   }
 
   .hero-subtitle {
     font-size: var(--text-lg);
     color: var(--color-text-secondary);
-    line-height: var(--leading-relaxed);
+    line-height: var(--leading-normal);
     max-width: 600px;
     margin: 0 auto var(--space-10);
   }
@@ -77,9 +80,10 @@
     padding: var(--space-3) var(--space-6);
     background: var(--color-accent);
     color: #fff;
-    font-weight: 600;
+    font-weight: 500;
     font-size: var(--text-sm);
-    border-radius: var(--radius-md);
+    border: 1.5px solid transparent;
+    border-radius: var(--radius-pill);
     transition: background var(--transition-fast);
 
     &:hover {
@@ -93,17 +97,18 @@
     align-items: center;
     gap: var(--space-2);
     padding: var(--space-3) var(--space-6);
-    background: var(--color-surface);
+    background: transparent;
     color: var(--color-text);
+    font-family: var(--font-mono);
     font-weight: 500;
-    font-size: var(--text-sm);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
+    font-size: var(--text-xs);
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-pill);
     transition: all var(--transition-fast);
 
     &:hover {
       background: var(--color-surface-hover);
-      border-color: var(--color-border-light);
+      border-color: var(--color-text);
     }
   }
 }
@@ -112,7 +117,7 @@
   .hero {
     padding-top: calc(var(--header-height) + var(--space-16));
 
-    h1 {
+    .hero-title {
       font-size: var(--text-3xl);
     }
 

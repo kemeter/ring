@@ -11,9 +11,9 @@ export default function Header() {
       <div className="header-bottom">
         <div className="header-bottom-inner">
           <Link to="/" className="header-product-logo">
-            <svg width="24" height="24" viewBox="0 0 64 64" fill="none">
-              <circle cx="32" cy="32" r="24" stroke="#22c55e" strokeWidth="5" fill="none"/>
-              <circle cx="32" cy="32" r="12" stroke="#22c55e" strokeWidth="3" fill="none" opacity="0.5"/>
+            <svg width="24" height="24" viewBox="0 0 64 64" fill="none" style={{ color: 'var(--color-accent)' }}>
+              <circle cx="32" cy="32" r="24" stroke="currentColor" strokeWidth="5" fill="none"/>
+              <circle cx="32" cy="32" r="12" stroke="currentColor" strokeWidth="3" fill="none" opacity="0.5"/>
             </svg>
             <div className="header-product-name">
               <span>Ring</span>
