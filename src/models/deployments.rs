@@ -142,6 +142,11 @@ pub(crate) struct DeploymentConfig {
 pub(crate) struct DeploymentPort {
     pub(crate) published: u16,
     pub(crate) target: u16,
+    /// Host interface to bind the published port on. Defaults to `0.0.0.0`
+    /// (all interfaces) when omitted, preserving prior behavior. Set to
+    /// `127.0.0.1` to expose the port on loopback only.
+    #[serde(default)]
+    pub(crate) host_ip: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]

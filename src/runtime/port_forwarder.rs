@@ -1,9 +1,11 @@
 //! Userspace TCP port forwarding via `socat`.
 //!
-//! For each `DeploymentPort { published, target }` declared on a VM-runtime
-//! deployment, Ring spawns one `socat` process that listens on
-//! `0.0.0.0:<published>` on the host and forwards every accepted connection
-//! to `<vm_ip>:<target>`. The lifetime of each forwarder is tied to the VM
+//! For each `DeploymentPort { published, target, host_ip }` declared on a
+//! VM-runtime deployment, Ring spawns one `socat` process that listens on
+//! `<host_ip>:<published>` on the host (defaulting to `0.0.0.0`, all
+//! interfaces) and forwards every accepted connection to `<vm_ip>:<target>`.
+//! This mirrors the Docker runtime's `host_ip` binding. The forwarder's
+//! lifetime is tied to the VM
 //! through [`PortForwarder`]'s `Drop`: when the owning struct is dropped,
 //! `socat` is killed and the listening port is freed.
 //!
@@ -24,14 +26,23 @@ use std::net::TcpListener;
 use std::process::Stdio;
 use tokio::process::{Child, Command};
 
-/// True when the host can currently bind `0.0.0.0:<port>`. We bind then drop
+/// Host interface a forwarder binds to when the deployment leaves `host_ip`
+/// unset. All interfaces, matching the Docker runtime's default.
+pub(crate) const DEFAULT_HOST_IP: &str = "0.0.0.0";
+
+/// True when the host can currently bind `<host_ip>:<port>`. We bind then drop
 /// immediately — `socat` re-binds milliseconds later thanks to `SO_REUSEADDR`.
 /// The window between drop and re-bind is the same race docker's daemon
 /// itself has when checking port availability, and it's harmless: if someone
 /// snatches the port in between, the socat process exits and the caller
 /// already has a clear "port allocated" path to fall back to.
-pub(crate) fn host_port_available(port: u16) -> bool {
-    TcpListener::bind(("0.0.0.0", port)).is_ok()
+///
+/// A port bound on `0.0.0.0` and the same port bound on `127.0.0.1` are
+/// distinct allocations to the kernel, so the check is interface-scoped on
+/// purpose: two deployments may legitimately publish the same port number on
+/// different host IPs.
+pub(crate) fn host_port_available(host_ip: &str, port: u16) -> bool {
+    TcpListener::bind((host_ip, port)).is_ok()
 }
 
 /// One running `socat` instance forwarding `published_port` on the host to
@@ -50,20 +61,25 @@ impl Drop for PortForwarder {
     }
 }
 
-/// Spawn a `socat` that forwards `0.0.0.0:<published>` to `<guest_ip>:<target>`.
-/// Returns once the child has been spawned (we do not wait for the listener
-/// to bind — if the port is taken, socat exits within milliseconds and the
-/// next connection attempt from the user surfaces the failure cleanly).
+/// Spawn a `socat` that forwards `<host_ip>:<published>` to
+/// `<guest_ip>:<target>`. `host_ip` is `None` for the default (all
+/// interfaces). Returns once the child has been spawned (we do not wait for
+/// the listener to bind — if the port is taken, socat exits within
+/// milliseconds and the next connection attempt from the user surfaces the
+/// failure cleanly).
 pub(crate) async fn spawn_forwarder(
     guest_ip: &str,
     published_port: u16,
     target_port: u16,
+    host_ip: Option<&str>,
 ) -> Result<PortForwarder, RuntimeError> {
+    let host_ip = host_ip.unwrap_or(DEFAULT_HOST_IP);
+
     // Match docker compose's contract: refuse to start the workload when a
     // requested host port is already bound. Without this pre-check, socat
     // would silently exit after `Bind: Address already in use`, the VM
     // would still boot, and the port would be a black hole.
-    if !host_port_available(published_port) {
+    if !host_port_available(host_ip, published_port) {
         return Err(RuntimeError::PortAlreadyInUse(published_port));
     }
 
@@ -72,7 +88,17 @@ pub(crate) async fn spawn_forwarder(
     // a forwarder fast across deployment recreations without TIME_WAIT.
     // `fork` spawns a child per accepted connection — without it, socat
     // serves a single client and exits.
-    let listen = format!("TCP4-LISTEN:{},reuseaddr,fork", published_port);
+    // socat's TCP4-LISTEN binds 0.0.0.0 by default; `bind=<ip>` scopes it to
+    // a single interface. We only emit `bind=` for a non-default host_ip so
+    // the common case stays byte-for-byte the prior command line.
+    let listen = if host_ip == DEFAULT_HOST_IP {
+        format!("TCP4-LISTEN:{},reuseaddr,fork", published_port)
+    } else {
+        format!(
+            "TCP4-LISTEN:{},reuseaddr,fork,bind={}",
+            published_port, host_ip
+        )
+    };
     let connect = format!("TCP4:{}:{}", guest_ip, target_port);
 
     let child = Command::new("socat")
@@ -137,7 +163,7 @@ mod tests {
         // The "guest" side is unreachable; that's fine — we only check that
         // socat actually binds the listening port and that Drop tears it
         // down. A connection attempt is the cheapest signal of "bound".
-        let fw = spawn_forwarder("127.0.0.99", host_port, 9999)
+        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, None)
             .await
             .unwrap();
 
@@ -171,7 +197,9 @@ mod tests {
             return;
         }
         let host_port = pick_free_port();
-        let fw = spawn_forwarder("10.0.0.1", host_port, 5432).await.unwrap();
+        let fw = spawn_forwarder("10.0.0.1", host_port, 5432, None)
+            .await
+            .unwrap();
         assert_eq!(fw.published_port, host_port);
         assert_eq!(fw.target_port, 5432);
         drop(fw);
@@ -186,7 +214,7 @@ mod tests {
         let _holder = TcpListener::bind(format!("0.0.0.0:{}", host_port))
             .expect("test setup: holder must bind the port");
 
-        let err = spawn_forwarder("10.0.0.1", host_port, 5432)
+        let err = spawn_forwarder("10.0.0.1", host_port, 5432, None)
             .await
             .expect_err("spawn_forwarder should refuse a bound port");
 
@@ -194,5 +222,45 @@ mod tests {
             RuntimeError::PortAlreadyInUse(p) => assert_eq!(p, host_port),
             other => panic!("expected PortAlreadyInUse, got {:?}", other),
         }
+    }
+
+    /// A loopback-scoped forwarder must bind 127.0.0.1 only, leaving the same
+    /// port free on other interfaces. This is the contract that makes
+    /// `host_ip: 127.0.0.1` actually mean "loopback only" on the CH runtime.
+    #[tokio::test]
+    async fn forwarder_with_host_ip_binds_only_that_interface() {
+        if socat_or_skip("forwarder_with_host_ip_binds_only_that_interface") {
+            return;
+        }
+
+        let host_port = pick_free_port();
+        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, Some("127.0.0.1"))
+            .await
+            .unwrap();
+
+        // socat holds 127.0.0.1:<port> — a fresh bind there must fail.
+        let busy = TcpListener::bind(format!("127.0.0.1:{}", host_port));
+        assert!(
+            busy.is_err(),
+            "socat should hold 127.0.0.1:{} but bind succeeded",
+            host_port
+        );
+
+        drop(fw);
+    }
+
+    /// host_port_available is interface-scoped: a port held on loopback must
+    /// still report available on a different host IP.
+    #[test]
+    fn host_port_available_is_interface_scoped() {
+        let port = pick_free_port();
+        let _holder = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .expect("test setup: holder must bind loopback");
+
+        assert!(
+            !host_port_available("127.0.0.1", port),
+            "loopback port {} is held, must report unavailable",
+            port
+        );
     }
 }

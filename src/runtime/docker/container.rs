@@ -353,12 +353,22 @@ pub(crate) async fn create_container(
         .map(|p| {
             let key = format!("{}/tcp", p.target);
             let binding = PortBinding {
-                host_ip: Some("0.0.0.0".to_string()),
+                host_ip: Some(p.host_ip.clone().unwrap_or_else(|| "0.0.0.0".to_string())),
                 host_port: Some(p.published.to_string()),
             };
             (key, Some(vec![binding]))
         })
         .collect();
+
+    // ExposedPorts must mirror the PortBindings keys so Docker actually spawns
+    // the docker-proxy and installs the DNAT iptables rule. Without this field
+    // the binding in HostConfig is silently ignored (no proxy, port never open).
+    // Computed before `port_bindings` is moved into `host_config` below.
+    let exposed_ports: Option<Vec<String>> = if port_bindings.is_empty() {
+        None
+    } else {
+        Some(port_bindings.keys().cloned().collect())
+    };
 
     let host_config = HostConfig {
         mounts: Some(mounts),
@@ -402,6 +412,7 @@ pub(crate) async fn create_container(
         host_config: Some(host_config),
         user: user_config,
         healthcheck: build_health_config(&deployment.health_checks),
+        exposed_ports,
         ..Default::default()
     };
 

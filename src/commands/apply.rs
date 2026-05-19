@@ -105,6 +105,12 @@ fn default_network_mode() -> String {
 struct Port {
     published: u16,
     target: u16,
+    /// Host interface to bind the published port on. Defaults to `0.0.0.0`
+    /// (all interfaces) when omitted. `skip_serializing_if` keeps the payload
+    /// to the API identical to the pre-`host_ip` shape when unset, so the
+    /// server's `#[serde(default)]` fills in the default unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    host_ip: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
