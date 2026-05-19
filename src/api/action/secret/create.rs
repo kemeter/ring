@@ -45,7 +45,7 @@ pub(crate) struct SecretInput {
         regex(
             path = *SECRET_NAME_PATTERN,
             code = "secret.name.format",
-            message = "must contain only lowercase letters, digits, '.' and '-', and start and end with an alphanumeric character"
+            message = "must contain only letters, digits, '_', '.' and '-', and start and end with an alphanumeric character"
         )
     )]
     name: String,
@@ -189,6 +189,77 @@ mod tests {
         let body: serde_json::Value = response.json();
         assert_eq!(body["name"], "db-password");
         assert_eq!(body["namespace"], "production");
+    }
+
+    #[tokio::test]
+    async fn create_secret_with_uppercase_env_style_name() {
+        // Secret names mirror the env-variable keys consumers inject
+        // (SCREAMING_SNAKE_CASE), so uppercase and underscore must be
+        // accepted, otherwise such pushes 422 and namespaces stay empty.
+        set_test_key();
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        create_namespace(&server, &token, "alpacode").await;
+
+        let response = server
+            .post("/secrets")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({
+                "namespace": "alpacode",
+                "name": "POSTGRESQL_ADDON_PASSWORD",
+                "value": "s3cret"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["name"], "POSTGRESQL_ADDON_PASSWORD");
+        assert_eq!(body["namespace"], "alpacode");
+    }
+
+    #[tokio::test]
+    async fn create_secret_with_underscore_boundary_is_rejected() {
+        // Underscore is allowed *inside* the name but the value must still
+        // start and end with an alphanumeric character: `_FOO` and `FOO_`
+        // must 422 so the regex anchors can't silently regress.
+        set_test_key();
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        create_namespace(&server, &token, "alpacode").await;
+
+        for invalid_name in ["_LEADING_UNDERSCORE", "TRAILING_UNDERSCORE_"] {
+            let response = server
+                .post("/secrets")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&serde_json::json!({
+                    "namespace": "alpacode",
+                    "name": invalid_name,
+                    "value": "s3cret"
+                }))
+                .await;
+
+            assert_eq!(
+                response.status_code(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "expected `{}` to be rejected",
+                invalid_name
+            );
+            let body: serde_json::Value = response.json();
+            assert!(
+                body["violations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|v| v["code"] == "secret.name.format"),
+                "expected a secret.name.format violation for `{}`, got {}",
+                invalid_name,
+                body
+            );
+        }
     }
 
     #[tokio::test]

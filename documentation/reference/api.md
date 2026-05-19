@@ -468,7 +468,7 @@ Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exp
 | Field | Rule | Code |
 | --- | --- | --- |
 | `namespace` | 2-63 lowercase DNS-label characters | `secret.namespace.length`, `secret.namespace.format` |
-| `name` | 2-253 lowercase DNS-subdomain characters | `secret.name.length`, `secret.name.format` |
+| `name` | 2-253 characters: letters (any case), digits, `_`, `.`, `-`; must start and end with an alphanumeric character | `secret.name.length`, `secret.name.format` |
 | `value` | 1 byte to 1 MiB | `secret.value.length` |
 
 **Errors** (all in `application/problem+json`):

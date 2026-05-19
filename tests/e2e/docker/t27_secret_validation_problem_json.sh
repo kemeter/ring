@@ -18,9 +18,12 @@ ring_login
 OUTPUT_FILE=$(mktemp -t ring-e2e-t27-XXXXXX)
 trap 'rm -f "$OUTPUT_FILE"' EXIT
 
-# Case 1: invalid name → 422 with violations.
+# Case 1: invalid name → 422 with violations. `!` is outside the allowed
+# character set; uppercase + underscore are now valid, so they no longer
+# serve as the invalid example. (A leading dash would trip CLI arg parsing
+# instead of the validator, so it can't be used here.)
 set +e
-"$RING_BIN" secret create "BAD_NAME" --namespace ring-e2e --value "x" \
+"$RING_BIN" secret create "bad!name" --namespace ring-e2e --value "x" \
   > "$OUTPUT_FILE" 2>&1
 EXIT_CODE=$?
 set -e
@@ -32,7 +35,7 @@ sed 's/^/  | /' "$OUTPUT_FILE"
 if [ "$EXIT_CODE" -eq 0 ]; then
   fail "expected secret create to fail on invalid name"
 fi
-if ! grep -q "Failed to create secret 'BAD_NAME'" "$OUTPUT_FILE"; then
+if ! grep -q "Failed to create secret 'bad!name'" "$OUTPUT_FILE"; then
   fail "missing context line with the secret name"
 fi
 if ! grep -q "(422)" "$OUTPUT_FILE"; then
