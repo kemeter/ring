@@ -8,15 +8,28 @@
   .code-block-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: var(--space-2) var(--space-4);
-    border-bottom: 1px solid var(--color-code-border);
-    background: var(--color-surface);
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+
+    .code-block-dots {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+
+      span {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.15);
+      }
+    }
 
     .code-block-filename {
+      flex: 1;
       font-family: var(--font-mono);
       font-size: var(--text-xs);
-      color: var(--color-text-secondary);
+      color: rgba(255, 255, 255, 0.45);
     }
   }
 
@@ -25,33 +38,37 @@
     padding: var(--space-4) var(--space-6);
     overflow-x: auto;
     font-size: var(--text-sm);
-    line-height: var(--leading-relaxed);
+    line-height: var(--leading-normal);
+    color: var(--color-text-on-code);
 
     code {
       font-family: var(--font-mono);
       background: none;
       padding: 0;
+      color: inherit;
     }
   }
 
   .copy-btn {
     position: absolute;
     top: var(--space-2);
-    right: var(--space-2);
-    padding: var(--space-2);
+    right: var(--space-3);
+    padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-sm);
-    color: var(--color-text-muted);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.55);
     transition: all var(--transition-fast);
     opacity: 0;
     z-index: 1;
 
     &:hover {
-      color: var(--color-text);
-      background: var(--color-surface-hover);
+      color: rgba(255, 255, 255, 0.9);
+      border-color: rgba(255, 255, 255, 0.3);
     }
 
     &.copied {
-      color: var(--color-accent);
+      color: #4ade80;
+      border-color: #4ade80;
     }
   }
 
@@ -65,13 +82,13 @@
   }
 }
 
-/* Prism theme - light */
+/* Prism — sober palette, readable on the dark code surface (both themes) */
 .token.comment,
 .token.prolog,
 .token.doctype,
-.token.cdata { color: #6b7280; }
+.token.cdata { color: #6b7280; font-style: italic; }
 
-.token.punctuation { color: #374151; }
+.token.punctuation { color: #9ca3af; }
 
 .token.property,
 .token.tag,
@@ -79,70 +96,30 @@
 .token.number,
 .token.constant,
 .token.symbol,
-.token.deleted { color: #dc2626; }
+.token.deleted { color: #d4a574; }
 
 .token.selector,
 .token.attr-name,
 .token.string,
 .token.char,
 .token.builtin,
-.token.inserted { color: #16a34a; }
+.token.inserted { color: #8fb1d4; }
 
 .token.operator,
 .token.entity,
-.token.url { color: #0284c7; }
+.token.url { color: var(--color-text-on-code); }
 
 .token.atrule,
 .token.attr-value,
-.token.keyword { color: #7c3aed; }
+.token.keyword { color: #c08bdc; }
 
 .token.function,
-.token.class-name { color: #2563eb; }
+.token.class-name { color: #8fb1d4; }
 
 .token.regex,
 .token.important,
-.token.variable { color: #d97706; }
+.token.variable { color: #d4a574; }
 
 .token.important,
 .token.bold { font-weight: bold; }
 .token.italic { font-style: italic; }
-
-/* Prism theme - dark */
-[data-theme="dark"] {
-  .token.comment,
-  .token.prolog,
-  .token.doctype,
-  .token.cdata { color: #5a6478; }
-
-  .token.punctuation { color: #8892a4; }
-
-  .token.property,
-  .token.tag,
-  .token.boolean,
-  .token.number,
-  .token.constant,
-  .token.symbol,
-  .token.deleted { color: #f87171; }
-
-  .token.selector,
-  .token.attr-name,
-  .token.string,
-  .token.char,
-  .token.builtin,
-  .token.inserted { color: #22c55e; }
-
-  .token.operator,
-  .token.entity,
-  .token.url { color: #38bdf8; }
-
-  .token.atrule,
-  .token.attr-value,
-  .token.keyword { color: #c084fc; }
-
-  .token.function,
-  .token.class-name { color: #60a5fa; }
-
-  .token.regex,
-  .token.important,
-  .token.variable { color: #fbbf24; }
-}

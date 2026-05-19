@@ -8,7 +8,11 @@ export default function Hero() {
   return (
     <section className="hero">
       <div className="hero-inner">
-        <h1>Lightweight workload orchestration, simplified</h1>
+        <h1 className="hero-title">
+          Lightweight workload orchestration,
+          <br />
+          <span className="hero-title-accent">simplified.</span>
+        </h1>
         <p className="hero-subtitle">
           Deploy and manage workloads with declarative YAML,
           a REST API, and zero complexity. A lightweight alternative to Kubernetes.

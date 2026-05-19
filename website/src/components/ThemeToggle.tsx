@@ -1,19 +1,42 @@
 import { useState, useEffect } from 'react';
 
+type Theme = 'light' | 'dark';
+
+function systemTheme(): Theme {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return 'light';
+}
+
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+  // The icon reflects the *effective* theme. The actual theming is done by
+  // CSS (@media prefers-color-scheme) until the user makes an explicit choice,
+  // at which point we set data-theme to override the OS default.
+  const [theme, setTheme] = useState<Theme>(() => {
     if (typeof window !== 'undefined') {
-      return (localStorage.getItem('theme') as 'light' | 'dark') || 'light';
+      const stored = localStorage.getItem('theme') as Theme | null;
+      return stored ?? systemTheme();
     }
     return 'light';
   });
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-  }, [theme]);
+    const stored = localStorage.getItem('theme') as Theme | null;
+    // Only pin data-theme when the user has explicitly chosen a theme.
+    // Without a stored choice, leave the DOM untouched so the pure-CSS
+    // OS default applies with no flash.
+    if (stored) {
+      document.documentElement.setAttribute('data-theme', stored);
+    }
+  }, []);
 
-  const toggle = () => setTheme(theme === 'light' ? 'dark' : 'light');
+  const toggle = () => {
+    const next: Theme = theme === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    localStorage.setItem('theme', next);
+    document.documentElement.setAttribute('data-theme', next);
+  };
 
   return (
     <button
