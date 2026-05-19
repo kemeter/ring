@@ -186,6 +186,19 @@ fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
             ));
         }
 
+        // `host_ip` reaches Docker's PortBindings / socat's bind= verbatim.
+        // A malformed value would otherwise surface only at runtime as an
+        // opaque error event, so reject it here with a field-scoped path.
+        if let Some(host_ip) = &port.host_ip {
+            if host_ip.parse::<std::net::IpAddr>().is_err() {
+                errors.push(Violation::new(
+                    format!("ports[{}].host_ip", idx),
+                    format!("'{}' is not a valid IP address", host_ip),
+                    "deployment.ports.host_ip.invalid",
+                ));
+            }
+        }
+
         if port.published != 0 {
             if let Some(prev_idx) = published_seen.get(&port.published) {
                 errors.push(Violation::new(
@@ -2547,6 +2560,70 @@ mod tests {
             codes.contains(&"deployment.ports.published.duplicate".to_string()),
             "got {:?}",
             codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_invalid_host_ip() {
+        // host_ip is forwarded verbatim to Docker / socat. A non-IP value
+        // must be caught at the API with a field-scoped path, not as an
+        // opaque runtime event later.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [{ "published": 8080, "target": 80, "host_ip": "not-an-ip" }]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let v = body["violations"].as_array().unwrap();
+        let codes: Vec<&str> = v.iter().map(|x| x["code"].as_str().unwrap()).collect();
+        let paths: Vec<&str> = v
+            .iter()
+            .map(|x| x["property_path"].as_str().unwrap())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.ports.host_ip.invalid"),
+            "got codes {:?}",
+            codes
+        );
+        assert!(paths.contains(&"ports[0].host_ip"), "got paths {:?}", paths);
+    }
+
+    #[tokio::test]
+    async fn create_accepts_valid_host_ip() {
+        // A well-formed loopback address must pass validation untouched.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "ports": [{ "published": 8080, "target": 80, "host_ip": "127.0.0.1" }]
+            }))
+            .await;
+
+        assert_ne!(
+            response.status_code(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "valid host_ip must not trip validation: {:?}",
+            response.json::<serde_json::Value>()
         );
     }
 

@@ -393,7 +393,11 @@ impl CloudHypervisorLifecycle {
         // surfaces a CrashLoopBackOff with a clear PortAllocationFailed
         // event in the deployment history.
         for p in &deployment.ports {
-            if !port_forwarder::host_port_available(p.published) {
+            let host_ip = p
+                .host_ip
+                .as_deref()
+                .unwrap_or(port_forwarder::DEFAULT_HOST_IP);
+            if !port_forwarder::host_port_available(host_ip, p.published) {
                 return Err(RuntimeError::PortAlreadyInUse(p.published));
             }
         }
@@ -698,7 +702,14 @@ impl CloudHypervisorLifecycle {
         if let Some(net) = &net_alloc {
             let mut forwarders = Vec::with_capacity(deployment.ports.len());
             for p in &deployment.ports {
-                match port_forwarder::spawn_forwarder(&net.guest_ip, p.published, p.target).await {
+                match port_forwarder::spawn_forwarder(
+                    &net.guest_ip,
+                    p.published,
+                    p.target,
+                    p.host_ip.as_deref(),
+                )
+                .await
+                {
                     Ok(fw) => forwarders.push(fw),
                     Err(e) => {
                         self.stop_vm(instance_id).await;
