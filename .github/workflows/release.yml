@@ -24,11 +24,11 @@ jobs:
     name: Build ring (x86_64-unknown-linux-gnu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -39,7 +39,7 @@ jobs:
       # The dashboard's static build is baked into the Rust binary via
       # rust-embed, so it must exist before `cargo build` runs. Skipping
       # this step would silently ship a binary without any UI assets.
-      - uses: oven-sh/setup-bun@v1
+      - uses: oven-sh/setup-bun@v2
       - name: Build dashboard
         run: |
           cd dashboard
@@ -60,7 +60,7 @@ jobs:
           tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ring-server
           path: |
@@ -71,11 +71,11 @@ jobs:
     name: Build ring-agent (x86_64-unknown-linux-musl)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -105,7 +105,7 @@ jobs:
           tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ring-agent
           path: |
@@ -117,7 +117,7 @@ jobs:
     needs: [ring-server, ring-agent]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
