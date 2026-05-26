@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 # T12: a `volume.type: config` mount must materialise the value of the
 # referenced config (a key inside a Ring config object) as a file inside
-# the container. The whole flow exercised here: create a Ring config via
-# the API, deploy a container that mounts one of its keys, then read the
-# mounted file from inside the container.
+# the container.
+#
+# This exercises the *fully declarative* path: a single manifest carries
+# both the `configs:` block and a deployment that mounts one of its keys.
+# `ring apply` must create the config (POST /configs) before the deployment
+# so the `type: config` volume resolves on first apply — no out-of-band
+# `ring config create` / `POST /configs`. Then we read the mounted file from
+# inside the container.
+#
+# Before `ring apply` honored the top-level `configs:` block, this required
+# a separate API call to seed the config; carrying it in the manifest left
+# the deployment stuck in `creating` ("Config '...' not found"). This test
+# locks in that the manifest alone is self-sufficient.
 
 set -euo pipefail
 
@@ -11,38 +21,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T12: docker config volume =="
+log "== T12: docker config volume (declarative configs: block) =="
 
 start_ring
 ring_login
 
-# === Create a Ring config via the API ===
-# The CLI has no `ring config create` yet (see ROADMAP). We hit the REST
-# API directly. The data field is a JSON-encoded map<string, string>; one
-# key per "file" we want to materialise.
-TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
-CONFIG_PAYLOAD=$(cat <<'EOF'
-{
-  "namespace": "ring-e2e",
-  "name": "app-conf",
-  "data": "{\"app.conf\":\"hello-from-ring-config\\n\"}"
-}
-EOF
-)
-HTTP_CODE=$(curl -s -o /tmp/ring-config-create.out -w '%{http_code}' \
-  -X POST "$RING_URL/configs" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "$CONFIG_PAYLOAD")
-if [ "$HTTP_CODE" != "201" ]; then
-  cat /tmp/ring-config-create.out >&2
-  fail "POST /configs returned $HTTP_CODE (expected 201)"
-fi
-log "Ring config 'app-conf' created via API"
-
-# === Deploy a container that mounts the config key ===
+# === Single manifest: configs: block + a deployment that mounts a key ===
+# `data` is a JSON-encoded map<string, string>; one key per "file" to
+# materialise. The config is declared inline — no separate POST /configs.
 FIXTURE="$RING_TEST_DIR/cfg-volume.yaml"
 cat > "$FIXTURE" <<'EOF'
+configs:
+  app-conf:
+    namespace: ring-e2e
+    name: app-conf
+    data: '{"app.conf":"hello-from-ring-config\n"}'
+
 deployments:
   cfg-vm:
     name: cfg-vm
@@ -56,11 +50,19 @@ deployments:
         source: app-conf
         key: app.conf
         destination: /etc/app/app.conf
-        driver: local
-        permission: ro
 EOF
 
-"$RING_BIN" apply --file "$FIXTURE"
+APPLY_OUT=$("$RING_BIN" apply --file "$FIXTURE" 2>&1) || { echo "$APPLY_OUT" >&2; fail "ring apply failed"; }
+echo "$APPLY_OUT"
+# The config must have been created by apply, not assumed pre-existing.
+echo "$APPLY_OUT" | grep -qF "Config 'app-conf' created" \
+  || { echo "$APPLY_OUT" >&2; fail "apply did not create the config from the configs: block"; }
+
+# The config is listable in its namespace after apply.
+"$RING_BIN" config list -n ring-e2e 2>&1 | grep -qF "app-conf" \
+  || fail "config 'app-conf' not listable after apply"
+log "config 'app-conf' created and listable via the manifest's configs: block"
+
 wait_deployment_status "ring-e2e" "cfg-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "cfg-vm")

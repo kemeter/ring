@@ -2,7 +2,7 @@
 
 The complete schema for the YAML / JSON files you pass to `ring apply -f`. Every field, what Ring expects in it, and what happens if you omit it.
 
-A manifest has two top-level keys: `namespaces:` (optional) and `deployments:` (required).
+A manifest has three top-level keys: `namespaces:` (optional), `configs:` (optional) and `deployments:` (required).
 
 > **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [How-to: deploy on Cloud Hypervisor → Limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
 
@@ -33,6 +33,28 @@ namespaces:
   staging:
     name: staging
 ```
+
+### `configs:` (optional)
+
+A map of config declarations. When present, Ring creates them after namespaces and before deployments, so a deployment that mounts one via a [`type: config` volume](#volumes) can resolve it on first apply. Already-existing configs (same `name` + `namespace`) are reported as "already exists, skipping" — re-applying an unchanged manifest is idempotent and never errors. The map key is internal; Ring keys the config by its `name` + `namespace`.
+
+```yaml
+configs:
+  nginx-config:
+    namespace: production
+    name: "nginx-config"
+    data: '{"site.conf":"server { listen 80; }"}'
+    # labels: "tier=frontend"   # optional
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `namespace` | string | yes | Namespace the config lives in. Must match the namespace of any deployment mounting it. |
+| `name` | string | yes | Config name. This is what a `type: config` volume's `source` references. |
+| `data` | string | yes | JSON object mapping keys to payloads, e.g. `{"site.conf":"..."}`. A `type: config` volume's `key` selects which entry to mount. Subject to `$VAR` interpolation like deployment fields. |
+| `labels` | string | no | Free-form labels. |
+
+> A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass — no out-of-band `ring config create` needed.
 
 ### `deployments:` (required)
 

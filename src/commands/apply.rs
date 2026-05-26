@@ -208,10 +208,21 @@ struct NamespaceDefinition {
     name: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct ConfigDefinition {
+    namespace: String,
+    name: String,
+    data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    labels: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ConfigFile {
     #[serde(default)]
     namespaces: HashMap<String, NamespaceDefinition>,
+    #[serde(default)]
+    configs: HashMap<String, ConfigDefinition>,
     deployments: HashMap<String, Deployment>,
 }
 
@@ -263,6 +274,16 @@ impl Deployment {
 
         for arg in self.command.iter_mut() {
             *arg = env_resolver(arg, env_vars);
+        }
+
+        // The API rejects a `config` volume whose permission is not `ro`. The
+        // CLI default is `rw`, so force `ro` here — a manifest carrying a
+        // `type: config` volume must apply without the user spelling out the
+        // permission the server is going to require anyway.
+        for volume in self.volumes.iter_mut() {
+            if volume.volume_type == "config" {
+                volume.permission = "ro".to_string();
+            }
         }
     }
 }
@@ -384,6 +405,51 @@ async fn create_namespace_on_server(
     }
 }
 
+async fn create_config_on_server(
+    config: &ConfigDefinition,
+    api_url: &str,
+    auth_token: &str,
+    client: &reqwest::Client,
+) -> Result<(), ApplyError> {
+    let url = format!("{}/configs", api_url);
+
+    let response = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .json(&json!(config))
+        .send()
+        .await
+        .map_err(ApplyError::Http)?;
+
+    let status = response.status();
+
+    if status.is_success() {
+        info!(
+            "Config '{}' created successfully in namespace '{}'",
+            config.name, config.namespace
+        );
+        println!(
+            "Config '{}' created in namespace '{}'",
+            config.name, config.namespace
+        );
+        Ok(())
+    } else if status == reqwest::StatusCode::CONFLICT {
+        info!(
+            "Config '{}' already exists in namespace '{}', skipping",
+            config.name, config.namespace
+        );
+        println!(
+            "Config '{}' already exists in namespace '{}', skipping",
+            config.name, config.namespace
+        );
+        Ok(())
+    } else {
+        let context = format!("Failed to create config '{}'", config.name);
+        let code = render_response_error(&context, response).await;
+        Err(ApplyError::Reported(code))
+    }
+}
+
 async fn deploy_to_server(
     deployment: &Deployment,
     api_url: &str,
@@ -477,6 +543,30 @@ async fn apply_internal(
         {
             if !matches!(e, ApplyError::Reported(_)) {
                 eprintln!("Failed to create namespace '{}': {}", key, e);
+            }
+            if first_error.is_none() {
+                first_error = Some(e);
+            }
+        }
+    }
+
+    // Create configs after namespaces, before deployments: a deployment with a
+    // `type: config` volume can only resolve once the config exists.
+    for (key, mut config) in config_file.configs {
+        config.namespace = env_resolver(&config.namespace, &env_vars);
+        config.name = env_resolver(&config.name, &env_vars);
+        config.data = env_resolver(&config.data, &env_vars);
+
+        if is_dry_run {
+            println!(
+                "DRY RUN - Would create config '{}' in namespace '{}'",
+                config.name, config.namespace
+            );
+        } else if let Err(e) =
+            create_config_on_server(&config, &api_url, &auth_config.token, client).await
+        {
+            if !matches!(e, ApplyError::Reported(_)) {
+                eprintln!("Failed to create config '{}': {}", key, e);
             }
             if first_error.is_none() {
                 first_error = Some(e);
@@ -881,6 +971,82 @@ deployments:
         deployment.resolve_env_vars(&env_vars);
 
         assert_eq!(deployment.command[2], "serve --port 8080");
+    }
+
+    #[test]
+    fn test_config_volume_permission_forced_to_ro() {
+        let yaml_content = r#"
+deployments:
+  nginx:
+    name: nginx
+    image: nginx:1.19.5
+    volumes:
+      - type: config
+        source: test-config2
+        key: "test.conf"
+        destination: /var/config/test.conf
+        permission: rw
+      - type: bind
+        source: /tmp/data
+        destination: /data
+        permission: rw
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let mut nginx = config.deployments["nginx"].clone();
+        nginx.resolve_env_vars(&HashMap::new());
+
+        // The config volume is forced to `ro` (the API rejects anything else);
+        // the bind volume keeps its declared `rw`.
+        assert_eq!(nginx.volumes[0].volume_type, "config");
+        assert_eq!(nginx.volumes[0].permission, "ro");
+        assert_eq!(nginx.volumes[1].volume_type, "bind");
+        assert_eq!(nginx.volumes[1].permission, "rw");
+    }
+
+    #[test]
+    fn test_config_file_with_configs() {
+        let yaml_content = r#"
+configs:
+  entrypoints:
+    namespace: ring
+    name: "test-config2"
+    data: '{"test.conf":"server {}"}'
+
+deployments:
+  nginx:
+    name: nginx
+    namespace: ring
+    image: nginx:1.19.5
+    volumes:
+      - type: config
+        source: test-config2
+        key: "test.conf"
+        destination: /var/config/test.conf
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+
+        assert_eq!(config.configs.len(), 1);
+        let entry = &config.configs["entrypoints"];
+        assert_eq!(entry.namespace, "ring");
+        assert_eq!(entry.name, "test-config2");
+        assert_eq!(entry.data, r#"{"test.conf":"server {}"}"#);
+        assert_eq!(entry.labels, None);
+        assert_eq!(config.deployments.len(), 1);
+    }
+
+    #[test]
+    fn test_config_file_without_configs() {
+        let yaml_content = r#"
+deployments:
+  api:
+    name: api
+    image: myapp:latest
+    runtime: docker
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        assert_eq!(config.configs.len(), 0);
     }
 
     #[test]
