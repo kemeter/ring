@@ -40,8 +40,8 @@ deployments:
               source: test-config2
               key: "test.conf"
               destination: /var/config/test.conf
-              driver: local
-              permission: rw
+              # config volumes are always mounted read-only; `ring apply`
+              # forces `ro` regardless of what is written here.
 
         labels:
             - sozune.host: "nginx.localhost"
