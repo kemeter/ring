@@ -125,24 +125,25 @@ Interpolation also applies to `image`, `name`, `namespace`, and `command` argume
 
 ## `volumes`
 
-A list of volume objects. **Three** types are supported:
+A list of volume objects. **Four** types are supported:
 
 | `type` | Source | Description |
 |---|---|---|
 | `bind` | host path | Mount a directory or file from the host into the container. |
 | `volume` | volume name | Mount a named Docker volume (driver `local` or `nfs`). |
 | `config` | config name | Mount a file rendered from a `ring config` entry in the same namespace. |
+| `secret` | secret name | Mount a file rendered from a `ring secret` entry in the same namespace. Always read-only. |
 
 ### Schema
 
 | Field | Required | Used by | Description |
 |---|---|---|---|
-| `type` | yes | all | `bind`, `volume`, or `config`. |
-| `source` | yes | all | Host path (bind), volume name (volume), or config name (config). |
-| `key` | yes for `config`, ignored otherwise | `config` only | Selects which key inside the named config to mount. A config can carry multiple key/value entries; `key` picks one. The API rejects a `config` volume without `key` (or with empty `key`). |
-| `destination` | yes | all | Path inside the container. For `config` volumes, this is the file path the selected `key`'s payload will be written to. |
+| `type` | yes | all | `bind`, `volume`, `config`, or `secret`. |
+| `source` | yes | all | Host path (bind), volume name (volume), config name (config), or secret name (secret). |
+| `key` | yes for `config`, ignored otherwise | `config` only | Selects which key inside the named config to mount. A config can carry multiple key/value entries; `key` picks one. The API rejects a `config` volume without `key` (or with empty `key`). Not used for `secret` — a secret has a single opaque value. |
+| `destination` | yes | all | Path inside the container. For `config` and `secret` volumes, this is the file path the payload will be written to. |
 | `driver` | no (default `local`) | `volume` (otherwise informational) | `local` or `nfs`. Only meaningful for `volume`. |
-| `permission` | no | `bind` and `volume` | `ro` or `rw`. Defaults to `rw` for `bind` and `volume`. **For `config`, the API forces `ro`** regardless of what you write. |
+| `permission` | no | `bind` and `volume` | `ro` or `rw`. Defaults to `rw` for `bind` and `volume`. **For `config` and `secret`, the API forces `ro`** regardless of what you write. |
 
 ```yaml
 volumes:
@@ -164,9 +165,20 @@ volumes:
     destination: /etc/nginx/conf.d/site.conf
     driver: local
     permission: ro
+
+  - type: secret
+    source: api-bearer-token        # name of an existing `ring secret`
+    destination: /run/secrets/api-token
+    driver: local
+    permission: ro
 ```
 
-For `config` volumes, the `source` is the config's `name` (not its UUID), and the config must live in the **same namespace** as the deployment. See [how-to: deploy on Cloud Hypervisor → Volumes](/documentation/how-to/deploy-on-cloud-hypervisor#volumes-virtiofs) for runtime-specific lifecycle details.
+For `config` and `secret` volumes, the `source` is the config's or secret's `name` (not its UUID), and the resource must live in the **same namespace** as the deployment. See [how-to: deploy on Cloud Hypervisor → Volumes](/documentation/how-to/deploy-on-cloud-hypervisor#volumes-virtiofs) for runtime-specific lifecycle details.
+
+For `secret` volumes specifically:
+- The whole decrypted value becomes the file contents (no `key:` field).
+- Containers should treat the path as read-only — Ring forces `ro`.
+- If you update the underlying `ring secret`, the running container keeps the old value until it is restarted. Trigger a redeploy to pick up the new value.
 
 > **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 

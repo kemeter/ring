@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
 
 ### Added
+- **`volumes: type: secret`** — mount a `ring secret` as a read-only file inside the container. The decrypted value becomes the file contents, with no `key:` field (a secret holds a single opaque value). Pattern matches `type: config` but reads from the encrypted secret store instead of the plaintext config store. Use when an app expects a credentials *file path* rather than an env var (Prometheus `credentials_file`, TLS material, etc.). The mount is always read-only; rotation requires a redeploy. See [Deploy with secrets → Mount a secret as a file](/documentation/how-to/deploy-with-secrets#mount-a-secret-as-a-file).
 - **`ring apply`, `ring namespace create` and `ring secret create` render RFC 7807 problem details.** On validation failure the CLI prints the title line plus every violation with its property path, e.g.
 
   ```
