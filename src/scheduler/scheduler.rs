@@ -87,6 +87,64 @@ async fn load_configs(
     }
 }
 
+/// Load only the secrets actually referenced as `type: secret` volumes on
+/// this deployment. We avoid loading the full namespace's secret set so a
+/// runaway deployment can't accidentally pull plaintext for unrelated
+/// secrets into memory.
+async fn load_secrets_for_volumes(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+) -> Option<HashMap<String, SecretModel::Secret>> {
+    // The volumes field is JSON in the DB row; the same struct is later
+    // re-parsed by resolve_volumes. Tolerate a parse error here by
+    // returning an empty map — resolve_volumes will surface a clearer error.
+    let volumes: Vec<crate::api::dto::deployment::DeploymentVolume> =
+        serde_json::from_str(&deployment.volumes).unwrap_or_default();
+
+    let mut secrets = HashMap::new();
+    for volume in volumes.iter().filter(|v| v.r#type == "secret") {
+        let name = match volume.source.as_ref() {
+            Some(n) => n,
+            None => continue, // resolve_volumes will report the missing source
+        };
+
+        if secrets.contains_key(name) {
+            continue;
+        }
+
+        match SecretModel::find_by_namespace_name(pool, &deployment.namespace, name).await {
+            Ok(Some(secret)) => {
+                secrets.insert(name.clone(), secret);
+            }
+            Ok(None) => {
+                // Don't fail here — let resolve_volumes produce the canonical
+                // "Secret 'X' not found" error so the message format matches
+                // what configs do.
+            }
+            Err(e) => {
+                error!(
+                    "Failed to load secret '{}' for deployment {}: {}",
+                    name, deployment.id, e
+                );
+                if let Err(log_err) = deployment_event::log_event(
+                    pool,
+                    deployment.id.clone(),
+                    "error",
+                    format!("Failed to load secret '{}': {}", name, e),
+                    "scheduler",
+                    Some("secret_load_error"),
+                )
+                .await
+                {
+                    warn!("Failed to log secret load error event: {}", log_err);
+                }
+                return None;
+            }
+        }
+    }
+    Some(secrets)
+}
+
 async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Option<Deployment> {
     let mut resolved = deployment.clone();
     if let Err(e) = resolve_environment(&mut resolved, pool).await {
@@ -855,22 +913,45 @@ pub(crate) async fn schedule(
                 None => continue,
             };
 
+            let volume_secrets = match load_secrets_for_volumes(&pool, &deployment).await {
+                Some(s) => s,
+                None => continue,
+            };
+
             let resolved = match prepare_deployment(&pool, &deployment).await {
                 Some(d) => d,
                 None => continue,
             };
 
-            let resolved_mounts =
-                match crate::models::volume::resolve_volumes(&deployment.volumes, &configs) {
-                    Ok(mounts) => mounts,
-                    Err(e) => {
-                        error!(
-                            "Failed to resolve volumes for deployment {}: {}",
-                            deployment.id, e
-                        );
-                        continue;
+            let resolved_mounts = match crate::models::volume::resolve_volumes(
+                &deployment.volumes,
+                &configs,
+                &volume_secrets,
+            ) {
+                Ok(mounts) => mounts,
+                Err(e) => {
+                    error!(
+                        "Failed to resolve volumes for deployment {}: {}",
+                        deployment.id, e
+                    );
+                    // Surface to the operator via `ring deployment events`.
+                    // The message contains only the resource name (e.g.
+                    // "Secret 'X' not found"), never plaintext values.
+                    if let Err(log_err) = deployment_event::log_event(
+                        &pool,
+                        deployment.id.clone(),
+                        "error",
+                        format!("Failed to resolve volumes: {}", e),
+                        "scheduler",
+                        Some("volume_resolution_error"),
+                    )
+                    .await
+                    {
+                        warn!("Failed to log volume resolution error event: {}", log_err);
                     }
-                };
+                    continue;
+                }
+            };
 
             let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(

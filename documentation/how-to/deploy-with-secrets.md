@@ -61,6 +61,52 @@ Inside the container, `secretRef` values are indistinguishable from plain values
 
 **If a referenced secret does not exist in the namespace:** Ring emits an `error` event with `reason: SecretResolutionError`, the scheduler skips the deployment on that tick, and the deployment stays in `creating`. Inspect with `ring deployment events <id> --level error`.
 
+## Mount a secret as a file
+
+Some apps will not read credentials from an environment variable — they want a file path. Prometheus is a typical example: its `authorization.credentials_file` only takes a path, not the credential itself. For those cases, declare the secret as a `volume` of `type: secret`:
+
+```yaml
+deployments:
+  prometheus:
+    name: prometheus
+    namespace: monitoring
+    runtime: docker
+    image: "prom/prometheus:v2.55.1"
+    args:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+
+    volumes:
+      - type: config
+        source: prometheus-config
+        key: prometheus.yml
+        destination: /etc/prometheus/prometheus.yml
+        permission: ro
+
+      - type: secret
+        source: synomilia-metrics-token   # `ring secret` in same namespace
+        destination: /etc/prometheus/secrets/synomilia.token
+        permission: ro
+```
+
+Then in the mounted `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: synomilia
+    scheme: https
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/synomilia.token
+    static_configs:
+      - targets: ['synomilia.example.com:443']
+```
+
+Ring decrypts the secret at reconciliation time, writes the plaintext to a per-deployment temp file, and mounts that file at `destination` inside the container. The mount is always read-only.
+
+A secret has **no `key:` field** — its single decrypted value becomes the entire file contents. If you need to mount multiple files, declare one `type: secret` volume per file.
+
+**Rotating a secret mounted as a file** follows the same pattern as env-var secrets: delete + recreate the secret, then `ring apply` to trigger a rolling restart. The running container keeps the old file contents until it is recreated.
+
 ## Same secret name across environments
 
 Secret names are unique **per namespace**, so the same name resolves to different values in `staging` vs `production`:
@@ -152,7 +198,7 @@ This is **not** an encrypted secret — it lives in the deployment row in the da
 ## Limits
 
 - **No multi-line `-v`.** For PEM keys, JSON blobs, use the API directly with `--data-binary @file.json`, or shell-escape.
-- **Practical size limit.** Keep secrets under a few KB. Big blobs (full TLS chains, keystores) belong in a `ring config` mounted as a file.
+- **Practical size limit.** Keep secrets under a few KB. Big binary blobs (keystores, full TLS chains) work, but consider whether a `ring config` mounted as a file is a better fit — configs are larger and don't carry the AES-GCM overhead.
 - **No expiration / rotation reminders.** Track rotation cadence externally.
 - **No value-read audit log.** Ring logs `secret create` and `secret delete` events but not which deployment resolved which secret on a given tick.
 

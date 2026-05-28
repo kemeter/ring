@@ -315,6 +315,7 @@ pub enum VolumeType {
     Bind,
     Config,
     Volume,
+    Secret,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -422,6 +423,46 @@ impl Validate for Volume {
                 }
                 _ => {}
             },
+            VolumeType::Secret => {
+                match &self.source {
+                    None => {
+                        errors.add(
+                            "source",
+                            ValidationError::new("source is required for secret volumes"),
+                        );
+                    }
+                    Some(source) if source.is_empty() => {
+                        errors.add("source", ValidationError::new("source cannot be empty"));
+                    }
+                    _ => {}
+                }
+
+                // A secret holds a single opaque value — there is no `key:`
+                // to pick. Reject explicitly so users coming from Kubernetes
+                // (where Secret resources are multi-key dicts) get a clear
+                // error instead of silent omission.
+                if let Some(key) = &self.key {
+                    if !key.is_empty() {
+                        let error = ValidationError {
+                            code: Cow::from("unexpected_field"),
+                            message: Some(Cow::from(
+                                "secret volumes have no key — a secret holds a single opaque value",
+                            )),
+                            params: HashMap::new(),
+                        };
+                        errors.add("key", error);
+                    }
+                }
+
+                if !matches!(self.permission, Permission::Ro) {
+                    let error = ValidationError {
+                        code: Cow::from("invalid_permission"),
+                        message: Some(Cow::from("secret volumes must be read-only (ro)")),
+                        params: HashMap::new(),
+                    };
+                    errors.add("permission", error);
+                }
+            }
         }
 
         if errors.is_empty() {

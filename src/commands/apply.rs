@@ -276,12 +276,12 @@ impl Deployment {
             *arg = env_resolver(arg, env_vars);
         }
 
-        // The API rejects a `config` volume whose permission is not `ro`. The
-        // CLI default is `rw`, so force `ro` here — a manifest carrying a
-        // `type: config` volume must apply without the user spelling out the
-        // permission the server is going to require anyway.
+        // The API rejects a `config` or `secret` volume whose permission is
+        // not `ro`. The CLI default is `rw`, so force `ro` here — a manifest
+        // carrying one of these volume types must apply without the user
+        // spelling out the permission the server is going to require anyway.
         for volume in self.volumes.iter_mut() {
-            if volume.volume_type == "config" {
+            if volume.volume_type == "config" || volume.volume_type == "secret" {
                 volume.permission = "ro".to_string();
             }
         }
