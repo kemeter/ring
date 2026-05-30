@@ -363,6 +363,29 @@ fn min_healthy_time_for(child: &Deployment) -> Duration {
     window
 }
 
+/// True when the child has been alive longer than the rollout deadline.
+///
+/// Used as a safety valve: if a child's readiness probe never turns green, the
+/// parent would otherwise stay up forever. After this deadline we force the
+/// drain so a broken probe can't pin two instances indefinitely. Configurable
+/// via RING_ROLLOUT_DEADLINE (seconds, default 600). A child with an
+/// unparseable created_at is treated as not-yet-expired (fail safe: never force
+/// a drain on bad data).
+fn rollout_deadline_exceeded(child: &Deployment) -> bool {
+    let deadline_secs: i64 = std::env::var("RING_ROLLOUT_DEADLINE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(600);
+
+    let created = match chrono::DateTime::parse_from_rfc3339(&child.created_at) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return false,
+    };
+
+    (chrono::Utc::now() - created).num_seconds() >= deadline_secs
+}
+
 /// True when the child either has no readiness HC at all (legacy behaviour)
 /// or all of its readiness HCs have been green for the configured anti-flap
 /// window.
@@ -541,8 +564,31 @@ async fn handle_rolling_update(
     // green for at least `min_healthy_time`. Deployments without any
     // readiness HC keep the legacy behaviour (drain on `Running`) so this
     // change is fully opt-in for existing manifests.
+    //
+    // Deadline guard: a child whose readiness probe never turns green would
+    // otherwise pin the parent forever — leaving two instances running
+    // indefinitely (e.g. a broken probe). Once the child has been alive past
+    // RING_ROLLOUT_DEADLINE (default 600s), force the drain: the child is
+    // serving traffic regardless, so one instance is strictly better than a
+    // stuck pair. Operators still get a warning + event to fix the probe.
     if !is_ready_to_drain(pool, child).await {
-        return;
+        if rollout_deadline_exceeded(child) {
+            warn!(
+                "Rolling update: child {} still not ready after deadline — forcing parent drain to avoid a stuck duplicate (check its readiness probe)",
+                child.id
+            );
+            let _ = deployment_event::log_event(
+                pool,
+                child.id.clone(),
+                "warning",
+                "Rolling update: readiness never turned green before the deadline; draining the previous deployment anyway to avoid running two instances. Check the readiness health check.".to_string(),
+                "scheduler",
+                Some("rolling_update_deadline_forced"),
+            )
+            .await;
+        } else {
+            return;
+        }
     }
 
     // Load the parent deployment.
@@ -1072,6 +1118,29 @@ mod tests {
             parent_id: Some("parent-id".to_string()),
             network: None,
         }
+    }
+
+    #[test]
+    fn rollout_deadline_not_exceeded_for_fresh_child() {
+        // created_at = now → well within the 600s default deadline.
+        let child = child_with_health_checks("fresh", vec![]);
+        assert!(!rollout_deadline_exceeded(&child));
+    }
+
+    #[test]
+    fn rollout_deadline_exceeded_for_old_child() {
+        let mut child = child_with_health_checks("old", vec![]);
+        // created 20 minutes ago → past the 600s default deadline.
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_rfc3339();
+        assert!(rollout_deadline_exceeded(&child));
+    }
+
+    #[test]
+    fn rollout_deadline_safe_on_unparseable_created_at() {
+        let mut child = child_with_health_checks("bad", vec![]);
+        child.created_at = "not-a-date".to_string();
+        // Bad data must never force a drain.
+        assert!(!rollout_deadline_exceeded(&child));
     }
 
     /// Insert a health_check row directly so the gate has something to read.
