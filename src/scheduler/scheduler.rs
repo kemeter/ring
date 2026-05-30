@@ -378,8 +378,13 @@ fn rollout_deadline_exceeded(child: &Deployment) -> bool {
         .filter(|&v| v > 0)
         .unwrap_or(600);
 
-    let created = match chrono::DateTime::parse_from_rfc3339(&child.created_at) {
-        Ok(dt) => dt.with_timezone(&chrono::Utc),
+    // Ring stores timestamps as `Utc::now().to_string()`, e.g.
+    // "2026-05-30 20:07:20.341309196 UTC" — a space (not `T`) and a trailing
+    // ` UTC` zone *name*, which chrono's RFC3339/strptime parsers reject. Strip
+    // the zone name and parse the naive datetime; every Ring timestamp is UTC.
+    let trimmed = child.created_at.trim_end_matches(" UTC").trim();
+    let created = match chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S%.f") {
+        Ok(dt) => dt.and_utc(),
         Err(_) => return false,
     };
 
@@ -1094,7 +1099,9 @@ mod tests {
     fn child_with_health_checks(id: &str, hcs: Vec<HealthCheck>) -> Deployment {
         Deployment {
             id: id.to_string(),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            // Match how Ring actually stores timestamps (`Utc::now().to_string()`),
+            // not RFC3339 — the deadline parser must handle this exact format.
+            created_at: chrono::Utc::now().to_string(),
             updated_at: None,
             status: DeploymentStatus::Running,
             restart_count: 0,
@@ -1130,8 +1137,9 @@ mod tests {
     #[test]
     fn rollout_deadline_exceeded_for_old_child() {
         let mut child = child_with_health_checks("old", vec![]);
-        // created 20 minutes ago → past the 600s default deadline.
-        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_rfc3339();
+        // created 20 minutes ago → past the 600s default deadline. Uses Ring's
+        // real timestamp format (to_string, not RFC3339).
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_string();
         assert!(rollout_deadline_exceeded(&child));
     }
 
