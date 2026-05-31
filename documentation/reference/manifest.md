@@ -270,6 +270,8 @@ resources:
 
 Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are also optional.
 
+> **Memory admission control.** Before creating a container or booting a VM, Ring checks the deployment's requested memory against the host's currently-available memory. The figure it admits against is `requests.memory` if set, otherwise `limits.memory` (and, on Cloud Hypervisor, the 256 MiB default when neither is set). If the host can't hold it, the deployment goes to the terminal status `insufficient_resources` with an event naming the gap (`needs X MiB but only Y MiB is available`), instead of starting and getting OOM-killed (Docker) or failing the VM spawn opaquely (CH). The check is best-effort and point-in-time — it catches gross over-asks, not fine-grained contention — and it is *not* applied to CPU, since CPU overcommit is non-fatal. A deployment that declares no memory request or limit is not gated.
+
 > **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot only; Ring does not use Cloud Hypervisor's `vm.resize` API to live-resize a running VM, so changing `resources` requires a redeploy.
 
 ### CPU values

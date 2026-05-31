@@ -901,8 +901,10 @@ pub(crate) async fn schedule(
         // deployment to `CrashLoopBackOff` and stops being included here.
         //
         // Statuses left out on purpose: Completed (terminal job), Failed,
-        // CrashLoopBackOff (terminal failure). Anything in those states is
-        // done — no point reconciling further.
+        // CrashLoopBackOff (terminal failure), InsufficientResources (the host
+        // is short on memory — a retry won't conjure more, so we stop instead
+        // of crash-looping). Anything in those states is done — no point
+        // reconciling further.
         //
         // We go through `DeploymentStatus::to_string()` rather than writing
         // the literal strings here: the compiler then guarantees the filter

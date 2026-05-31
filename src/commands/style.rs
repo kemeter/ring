@@ -103,7 +103,8 @@ fn colour_status(enabled: bool, s: &str) -> String {
         | "create_container_error"
         | "network_error"
         | "config_error"
-        | "file_system_error" => paint(enabled, || s.red().to_string(), s),
+        | "file_system_error"
+        | "insufficient_resources" => paint(enabled, || s.red().to_string(), s),
         _ => s.to_string(),
     }
 }

@@ -30,6 +30,13 @@ pub enum RuntimeError {
     /// would silently never be reachable.
     #[error("port {0} is already allocated")]
     PortAlreadyInUse(u16),
+    /// Permanent (best-effort): the host doesn't have enough free memory to
+    /// honour the deployment's requested/limited memory at boot time. Retrying
+    /// on the next scheduler tick won't help — the memory isn't coming back on
+    /// its own — so this maps to a terminal status rather than a crash loop.
+    /// The string carries the actionable "need X, have Y" detail.
+    #[error("insufficient resources: {0}")]
+    InsufficientResources(String),
     #[error("runtime error: {0}")]
     Other(String),
     #[error(transparent)]

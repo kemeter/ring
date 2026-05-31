@@ -149,6 +149,22 @@ ring deployment logs <DEPLOYMENT_ID> --tail 200          # what the app said
 
 After fixing the root cause, re-apply the manifest. Ring resets the counter on a fresh apply.
 
+### `insufficient_resources`
+
+The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it — *before* creating any container or booting any VM. The event names the gap:
+
+```bash
+ring deployment events <DEPLOYMENT_ID> --level error --limit 5
+# insufficient host memory for 'web': needs 4096 MiB but only 1800 MiB is available — …
+```
+
+This status is **terminal** — Ring does not retry, because the memory isn't going to reappear on its own. Two ways out:
+
+- Free memory on the host (stop other workloads), then re-apply the manifest.
+- Lower the deployment's `resources.requests.memory` (or `resources.limits.memory` if no request is set) to fit, then re-apply.
+
+The check compares against memory available *at that moment*; it's a guard against gross over-asks, not a precise reservation system. CPU is not gated — CPU overcommit is allowed.
+
 ### Health checks flap
 
 ```bash
