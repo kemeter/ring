@@ -126,7 +126,13 @@ Most common causes:
 ring deployment events <DEPLOYMENT_ID> --level error --limit 20
 ```
 
-The event's message includes Docker's exact rejection. For private registries, set `config.username` / `config.password` in the manifest:
+The event message names the likely cause and the fix, and keeps Docker's exact rejection in `(original error: …)` for the full detail. Three cases are distinguished:
+
+- **`… not found …`** — the tag or digest doesn't exist in the registry (or `image_pull_policy: Never` and the image isn't cached locally). Check the image reference.
+- **`registry authentication failed … — check config.server, config.username and config.password`** — the registry refused the credentials (or required some and none were sent). Fix the credentials below.
+- **`cannot reach the registry … — is it up and the registry host correct?`** — a transport failure (connection refused, host not found, timeout). The registry host is wrong or down; verify with `docker pull <image>` from the host.
+
+For private registries, set `config.server` / `config.username` / `config.password` in the manifest:
 
 ```yaml
 config:
