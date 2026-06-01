@@ -695,7 +695,13 @@ pub(crate) async fn remove_container(docker: Docker, container_id: String) {
         Err(e) => debug!("Error stopping container {}: {:?}", container_id, e),
     }
 
-    let remove_options = RemoveContainerOptionsBuilder::new().build();
+    // `v(true)` removes the *anonymous* volumes attached to this container —
+    // the ones Docker auto-creates from an image's `VOLUME` directive and which
+    // would otherwise pile up as untracked orphans across redeploys. Docker
+    // never deletes *named* volumes via this flag, so Ring-managed and
+    // operator-named data is preserved. This is a per-container, zero-blast-
+    // radius cleanup, not a daemon-wide volume prune.
+    let remove_options = RemoveContainerOptionsBuilder::new().v(true).build();
     match docker
         .remove_container(&container_id, Some(remove_options))
         .await
@@ -711,7 +717,9 @@ pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String
         .stop_container(&container_id, Some(stop_options))
         .await;
 
-    let remove_options = RemoveContainerOptionsBuilder::new().build();
+    // See `remove_container`: `v(true)` reaps anonymous volumes only; named
+    // (Ring-managed / operator) volumes are untouched.
+    let remove_options = RemoveContainerOptionsBuilder::new().v(true).build();
     match docker
         .remove_container(&container_id, Some(remove_options))
         .await

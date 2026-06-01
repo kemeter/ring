@@ -81,6 +81,14 @@ impl Drop for VirtiofsMount {
 /// given `tag`. Returns once the socket file appears on disk (up to ~5s).
 ///
 /// `shared_dir` must already exist. `socket_path`'s parent must already exist.
+///
+/// `durable` selects the cache policy. virtiofsd's default (`auto`) caches data
+/// with timeouts, so a guest write can linger in the daemon's page cache and be
+/// lost on an unclean host shutdown. For persistent writable volumes we pass
+/// `--cache never`, the virtio-fs analogue of Docker's `o=sync`: every guest
+/// write goes through to the host filesystem. Non-durable shares (read-only
+/// binds, rendered config files) keep the faster default — they hold no data
+/// the operator expects to survive a crash.
 pub(crate) async fn spawn_virtiofsd(
     binary_path: &Path,
     shared_dir: &Path,
@@ -88,6 +96,7 @@ pub(crate) async fn spawn_virtiofsd(
     tag: &str,
     destination: &str,
     read_only: bool,
+    durable: bool,
 ) -> Result<VirtiofsMount, RuntimeError> {
     if !shared_dir.exists() {
         return Err(RuntimeError::Other(format!(
@@ -124,6 +133,12 @@ pub(crate) async fn spawn_virtiofsd(
 
     if read_only {
         command.arg("--readonly");
+    }
+
+    if durable {
+        // `never` == no virtiofsd-side data caching: writes are not held back,
+        // matching the durability contract of a synchronous mount.
+        command.arg("--cache").arg("never");
     }
 
     let child = command.spawn().map_err(|e| {
@@ -223,7 +238,7 @@ mod tests {
         std::fs::write(shared.join("hello.txt"), b"hi").unwrap();
         let socket = dir.join("vfs.sock");
 
-        let mount = spawn_virtiofsd(&virtiofsd, &shared, &socket, "tag-x", "/mnt/x", false)
+        let mount = spawn_virtiofsd(&virtiofsd, &shared, &socket, "tag-x", "/mnt/x", false, true)
             .await
             .expect("spawn should succeed");
 
@@ -262,6 +277,7 @@ mod tests {
             "tag-y",
             "/mnt/y",
             false,
+            false,
         )
         .await;
         assert!(result.is_err(), "expected error for missing shared dir");
@@ -282,7 +298,7 @@ mod tests {
         // virtiofsd's bind() would fail with EADDRINUSE.
         std::fs::write(&socket, b"stale").unwrap();
 
-        let mount = spawn_virtiofsd(&virtiofsd, &shared, &socket, "tag-z", "/mnt/z", true)
+        let mount = spawn_virtiofsd(&virtiofsd, &shared, &socket, "tag-z", "/mnt/z", true, false)
             .await
             .expect("spawn should overwrite the stale file");
         assert!(mount.read_only);

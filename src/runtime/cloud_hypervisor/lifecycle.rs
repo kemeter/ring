@@ -265,7 +265,12 @@ impl CloudHypervisorLifecycle {
         for (idx, m) in resolved.iter().enumerate() {
             let socket_path = self.virtiofs_socket_path(instance_id, idx);
 
-            let (tag, source, destination, read_only) = match m {
+            // `durable` mirrors the Docker `o=sync` durability contract: only
+            // a writable persistent (Named) volume holds data the operator
+            // expects to survive a crash, so only it gets the synchronous
+            // `--cache never` policy. Binds and rendered configs keep the
+            // faster default cache.
+            let (tag, source, destination, read_only, durable) = match m {
                 ResolvedMount::Bind {
                     source,
                     destination,
@@ -275,6 +280,7 @@ impl CloudHypervisorLifecycle {
                     PathBuf::from(source),
                     destination.clone(),
                     *read_only,
+                    false,
                 ),
                 ResolvedMount::Named {
                     name,
@@ -286,7 +292,13 @@ impl CloudHypervisorLifecycle {
                     tokio::fs::create_dir_all(&dir)
                         .await
                         .map_err(RuntimeError::Io)?;
-                    (format!("vol-{}", idx), dir, destination.clone(), *read_only)
+                    (
+                        format!("vol-{}", idx),
+                        dir,
+                        destination.clone(),
+                        *read_only,
+                        !*read_only,
+                    )
                 }
                 ResolvedMount::Content {
                     content,
@@ -318,7 +330,7 @@ impl CloudHypervisorLifecycle {
                     // Mount the *parent* directory inside the guest. The file
                     // we wrote shows up at `<parent>/<basename>` == the
                     // user-supplied destination.
-                    (format!("cfg-{}", idx), cfg_dir, parent, true)
+                    (format!("cfg-{}", idx), cfg_dir, parent, true, false)
                 }
             };
 
@@ -329,6 +341,7 @@ impl CloudHypervisorLifecycle {
                 &tag,
                 &destination,
                 read_only,
+                durable,
             )
             .await?;
 
