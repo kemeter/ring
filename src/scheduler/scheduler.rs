@@ -1254,6 +1254,33 @@ pub(crate) async fn schedule(
                 }
             };
 
+            // Retro-compat: register any named volume this deployment mounts
+            // into the volume registry if it isn't there yet, so volumes
+            // created via inline `volumes JSON` (the pre-entity shape) become
+            // first-class and traceable. Best-effort — a registry hiccup must
+            // not block the deployment from being applied.
+            let volume_backend = if deployment.runtime == "cloud-hypervisor" {
+                "directory"
+            } else {
+                "local"
+            };
+            for mount in &resolved_mounts {
+                if let crate::models::volume::ResolvedMount::Named { name, .. } = mount
+                    && let Err(e) = crate::models::volumes::register_if_absent(
+                        &pool,
+                        &deployment.namespace,
+                        name,
+                        volume_backend,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to register volume '{}' for deployment {}: {}",
+                        name, deployment.id, e
+                    );
+                }
+            }
+
             let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(
                 &pool,

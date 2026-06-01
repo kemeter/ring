@@ -622,6 +622,30 @@ pub(crate) async fn find_referencing_secret(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
+pub(crate) async fn find_referencing_volume(
+    pool: &SqlitePool,
+    namespace: &str,
+    volume_name: &str,
+) -> Result<Vec<Deployment>, sqlx::Error> {
+    // A named volume appears in a deployment's `volumes JSON` as
+    // {"type":"volume","source":"<name>",...}. Match the source on the volumes
+    // column, scoped to live deployments — deleting a volume a stopped/failed
+    // deployment once used is fine.
+    let pattern = format!("%\"source\":\"{}\"%", volume_name);
+    let sql = format!(
+        "SELECT {} FROM deployment WHERE namespace = ? AND volumes LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
+        SELECT_COLUMNS
+    );
+
+    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(namespace)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+
+    Ok(rows.into_iter().map(Deployment::from).collect())
+}
+
 pub(crate) async fn delete_batch(
     pool: &SqlitePool,
     deleted: Vec<String>,
