@@ -288,6 +288,64 @@ async fn pull_image(
     }
 }
 
+/// Provision named volumes explicitly before they are mounted, instead of
+/// letting Docker auto-create them on first mount. Auto-created volumes carry
+/// no labels (untraceable, unprunable) and no durability options. Here we:
+///   - tag the volume with Ring labels so it can be attributed and pruned,
+///   - request `o=sync` on the `local` driver so writes hit disk on each fsync
+///     boundary rather than lingering in the page cache (durability on unclean
+///     shutdown — the property a stateful workload like a database needs).
+///
+/// `create_volume` is idempotent in the Docker Engine: creating a volume whose
+/// name already exists returns the existing volume rather than erroring, so this
+/// is safe to call on every (re)deploy. Existing volumes keep their original
+/// options — Docker does not retro-apply driver opts — which is the intended
+/// "preserve data across deploys" behaviour.
+async fn ensure_named_volume(
+    docker: &Docker,
+    name: &str,
+    driver: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<(), RuntimeError> {
+    let driver = if driver.is_empty() { "local" } else { driver };
+
+    let mut labels = HashMap::new();
+    labels.insert("ring.managed".to_string(), "true".to_string());
+    labels.insert("ring.namespace".to_string(), namespace.to_string());
+    labels.insert("ring.deployment".to_string(), deployment_name.to_string());
+
+    // Durability opts only make sense for the built-in local driver; other
+    // drivers (nfs, etc.) interpret DriverOpts differently and would reject
+    // `o=sync` — leave them to the operator's driver configuration.
+    let driver_opts = if driver == "local" {
+        let mut opts = HashMap::new();
+        opts.insert("o".to_string(), "sync".to_string());
+        Some(opts)
+    } else {
+        None
+    };
+
+    let request = bollard::models::VolumeCreateRequest {
+        name: Some(name.to_string()),
+        driver: Some(driver.to_string()),
+        driver_opts,
+        labels: Some(labels),
+        ..Default::default()
+    };
+
+    match docker.create_volume(request).await {
+        Ok(_) => {
+            debug!("Ensured named volume '{}' (driver={})", name, driver);
+            Ok(())
+        }
+        Err(e) => Err(RuntimeError::InstanceCreationFailed(format!(
+            "failed to provision named volume '{}': {}",
+            name, e
+        ))),
+    }
+}
+
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
@@ -387,6 +445,18 @@ pub(crate) async fn create_container(
 
     let mut mounts: Vec<Mount> = vec![];
     for resolved in resolved_mounts {
+        // Provision named volumes explicitly (labels + durability) before the
+        // mount, rather than relying on Docker's implicit on-first-mount create.
+        if let ResolvedMount::Named { name, driver, .. } = resolved {
+            ensure_named_volume(
+                docker,
+                name,
+                driver,
+                &deployment.namespace,
+                &deployment.name,
+            )
+            .await?;
+        }
         mounts.push(create_mount_from_resolved(resolved, &deployment.id).await?);
     }
 

@@ -249,6 +249,28 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
         ));
     }
 
+    // `volume (rw) + replicas > 1`: every replica would mount the same named
+    // volume read-write. The local driver gives no cross-container coordination,
+    // so concurrent writers (e.g. a database) corrupt each other's data silently.
+    // Read-only sharing is safe. Either scale down to 1 or mount the volume `ro`.
+    if input.replicas > 1 {
+        for (idx, volume) in input.volumes.iter().enumerate() {
+            if matches!(volume.r#type, VolumeType::Volume)
+                && matches!(volume.permission, Permission::Rw)
+            {
+                let source = volume.source.as_deref().unwrap_or("<unnamed>");
+                errors.push(Violation::new(
+                    format!("volumes[{}].permission", idx),
+                    format!(
+                        "named volume '{}' is mounted read-write with replicas > 1 ({}); replicas share the same volume with no write coordination, which corrupts data — reduce `replicas` to 1 or mount the volume `ro`",
+                        source, input.replicas
+                    ),
+                    "deployment.volumes.shared_rw_replicas",
+                ));
+            }
+        }
+    }
+
     // `kind: job + replicas > 1`: a job is one-shot. Multiple replicas
     // would mean N parallel runs of the same task which is not what the
     // job kind models.
@@ -1003,6 +1025,102 @@ mod tests {
             "unexpected error: {}",
             body["detail"]
         );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_shared_rw_volume_with_replicas() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "db-scaled-rw",
+                "namespace": "ring",
+                "image": "couchdb:latest",
+                "replicas": 2,
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "db-data",
+                        "destination": "/opt/couchdb/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["detail"].as_str().unwrap().contains("corrupts data"),
+            "unexpected error: {}",
+            body["detail"]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_shared_ro_volume_with_replicas() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "app-scaled-ro",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "replicas": 2,
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "assets",
+                        "destination": "/usr/share/nginx/html",
+                        "driver": "local",
+                        "permission": "ro"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_accepts_rw_volume_with_single_replica() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "db-single-rw",
+                "namespace": "ring",
+                "image": "couchdb:latest",
+                "replicas": 1,
+                "volumes": [
+                    {
+                        "type": "volume",
+                        "source": "db-data",
+                        "destination": "/opt/couchdb/data",
+                        "driver": "local",
+                        "permission": "rw"
+                    }
+                ]
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]
