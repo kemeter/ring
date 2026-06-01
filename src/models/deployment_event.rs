@@ -38,6 +38,12 @@ pub(crate) async fn create_event(
     pool: &SqlitePool,
     event: &DeploymentEvent,
 ) -> Result<(), sqlx::Error> {
+    // Insert the event and bump the deployment's `last_event_at` atomically.
+    // Outside a transaction a concurrent reader could see the new event row
+    // before `last_event_at` is updated (or the update could land without the
+    // row if the second statement fails), leaving the two out of sync.
+    let mut tx = pool.begin().await?;
+
     sqlx::query(
         "INSERT INTO deployment_event (id, deployment_id, timestamp, level, message, component, reason)
          VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -49,16 +55,16 @@ pub(crate) async fn create_event(
     .bind(&event.message)
     .bind(&event.component)
     .bind(&event.reason)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("UPDATE deployment SET last_event_at = ? WHERE id = ?")
         .bind(&event.timestamp)
         .bind(&event.deployment_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-    Ok(())
+    tx.commit().await
 }
 
 pub(crate) async fn find_events_by_deployment(
