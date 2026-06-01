@@ -79,6 +79,11 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             "stats_fetch_failed",
             format!("Stats fetch failed: {}", msg),
         ),
+        RuntimeError::InsufficientResources(detail) => (
+            DeploymentStatus::InsufficientResources,
+            "insufficient_resources",
+            detail.clone(),
+        ),
         RuntimeError::Other(msg) => (
             DeploymentStatus::Error,
             "runtime_error",

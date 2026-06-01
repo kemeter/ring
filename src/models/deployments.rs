@@ -31,6 +31,7 @@ pub(crate) enum DeploymentStatus {
     NetworkError,
     ConfigError,
     FileSystemError,
+    InsufficientResources,
     Error,
 }
 
@@ -49,6 +50,7 @@ impl fmt::Display for DeploymentStatus {
             Self::NetworkError => write!(f, "network_error"),
             Self::ConfigError => write!(f, "config_error"),
             Self::FileSystemError => write!(f, "file_system_error"),
+            Self::InsufficientResources => write!(f, "insufficient_resources"),
             Self::Error => write!(f, "error"),
         }
     }
@@ -71,6 +73,7 @@ impl std::str::FromStr for DeploymentStatus {
             "network_error" => Ok(Self::NetworkError),
             "config_error" => Ok(Self::ConfigError),
             "file_system_error" => Ok(Self::FileSystemError),
+            "insufficient_resources" => Ok(Self::InsufficientResources),
             "error" => Ok(Self::Error),
             other => Err(format!("Unknown deployment status: {}", other)),
         }
@@ -101,6 +104,7 @@ mod status_roundtrip_tests {
             DeploymentStatus::NetworkError,
             DeploymentStatus::ConfigError,
             DeploymentStatus::FileSystemError,
+            DeploymentStatus::InsufficientResources,
             DeploymentStatus::Error,
         ];
         for s in all {

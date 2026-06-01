@@ -402,6 +402,12 @@ impl CloudHypervisorLifecycle {
             }
         }
 
+        // Admission control before image copy / virtiofsd / VM boot. A CH VM
+        // reserves its whole memory at boot, so an over-ask fails the spawn with
+        // an opaque "Cannot allocate memory". Catch it here with a clear
+        // need/have message instead.
+        crate::runtime::resources::check_host_memory(deployment)?;
+
         let instance_image = self.instance_image_path(instance_id);
         if !instance_image.exists() {
             let output = Command::new("cp")
@@ -1125,6 +1131,13 @@ fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'sta
             (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
         }
         RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
+        // Terminal, not transient: the host is short on memory now and a retry
+        // on the next tick won't conjure more. Crash-looping would only spam
+        // events without changing the outcome — surface it and stop.
+        RuntimeError::InsufficientResources(_) => (
+            Some(DeploymentStatus::InsufficientResources),
+            "insufficient_resources",
+        ),
         _ => (None, "VmStartFailed"),
     }
 }

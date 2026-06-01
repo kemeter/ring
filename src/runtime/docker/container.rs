@@ -255,6 +255,13 @@ pub(crate) async fn create_container(
     resolved_mounts: &[crate::models::volume::ResolvedMount],
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
+
+    // Admission control before any expensive work (image pull, network create):
+    // if the host can't hold the requested memory, the container would only get
+    // OOM-killed at runtime (or, with no limit, take the host down with it).
+    // Fail here with an actionable message instead.
+    crate::runtime::resources::check_host_memory(deployment)?;
+
     let (name, reference) = parse_image_reference(&deployment.image);
 
     let mut image_config = DockerImage {
