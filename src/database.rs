@@ -9,7 +9,13 @@ pub(crate) async fn get_database_pool() -> SqlitePool {
         .expect("Invalid database path")
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        // Without a busy timeout, a write that hits a momentarily locked
+        // database (another connection mid-write) fails instantly with
+        // "database is locked". WAL allows concurrent readers but still
+        // serializes writers, and the scheduler + API can write at the same
+        // time. 5s lets SQLite retry internally instead of bubbling the error.
+        .busy_timeout(std::time::Duration::from_secs(5));
 
     let max_connections = env::var("RING_DB_POOL_SIZE")
         .ok()
