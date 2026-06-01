@@ -74,20 +74,6 @@ pub(crate) async fn insert(pool: &SqlitePool, volume: &Volume) -> Result<(), sql
     Ok(())
 }
 
-pub(crate) async fn get_by_name(
-    pool: &SqlitePool,
-    name: &str,
-    namespace: &str,
-) -> Result<Option<Volume>, sqlx::Error> {
-    sqlx::query_as::<_, Volume>(&format!(
-        "SELECT {COLUMNS} FROM volumes WHERE name = ? AND namespace = ?"
-    ))
-    .bind(name)
-    .bind(namespace)
-    .fetch_optional(pool)
-    .await
-}
-
 pub(crate) async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Volume>, sqlx::Error> {
     sqlx::query_as::<_, Volume>(&format!("SELECT {COLUMNS} FROM volumes WHERE id = ?"))
         .bind(id)
@@ -146,7 +132,23 @@ pub(crate) async fn register_if_absent(
     name: &str,
     backend_type: &str,
 ) -> Result<bool, sqlx::Error> {
-    if get_by_name(pool, name, namespace).await?.is_some() {
+    // Check-then-insert inside one transaction so two concurrent reconciles
+    // can't both pass the existence check and race to insert. The unique index
+    // on (namespace, name) is the final backstop: if a concurrent writer wins,
+    // our insert hits a unique violation, which we treat as "already
+    // registered" (Ok(false)) rather than a real error.
+    let mut tx = pool.begin().await?;
+
+    let exists = sqlx::query_as::<_, Volume>(&format!(
+        "SELECT {COLUMNS} FROM volumes WHERE name = ? AND namespace = ?"
+    ))
+    .bind(name)
+    .bind(namespace)
+    .fetch_optional(&mut *tx)
+    .await?
+    .is_some();
+
+    if exists {
         return Ok(false);
     }
 
@@ -159,38 +161,30 @@ pub(crate) async fn register_if_absent(
         HashMap::new(),
     );
 
-    match insert(pool, &volume).await {
-        Ok(_) => Ok(true),
-        // A concurrent reconcile may have inserted the same (namespace, name)
-        // between our check and insert — the unique index makes that a no-op,
-        // not an error worth surfacing.
-        Err(e) if e.to_string().contains("UNIQUE constraint failed") => Ok(false),
+    let insert_result = sqlx::query(
+        "INSERT INTO volumes (id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&volume.id)
+    .bind(&volume.name)
+    .bind(&volume.namespace)
+    .bind(volume.size)
+    .bind(&volume.backend_type)
+    .bind(&volume.host_path)
+    .bind(&volume.labels)
+    .bind(&volume.created_at)
+    .bind(&volume.updated_at)
+    .execute(&mut *tx)
+    .await;
+
+    match insert_result {
+        Ok(_) => {
+            tx.commit().await?;
+            Ok(true)
+        }
+        // Use sqlx's typed constraint classification rather than matching on
+        // the error message string, which varies across SQLite builds.
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => Ok(false),
         Err(e) => Err(e),
     }
-}
-
-pub(crate) async fn list_by_namespace(
-    pool: &SqlitePool,
-    namespace: &str,
-) -> Result<Vec<Volume>, sqlx::Error> {
-    sqlx::query_as::<_, Volume>(&format!(
-        "SELECT {COLUMNS} FROM volumes WHERE namespace = ? ORDER BY created_at DESC"
-    ))
-    .bind(namespace)
-    .fetch_all(pool)
-    .await
-}
-
-pub(crate) async fn delete_by_name(
-    pool: &SqlitePool,
-    name: &str,
-    namespace: &str,
-) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query("DELETE FROM volumes WHERE name = ? AND namespace = ?")
-        .bind(name)
-        .bind(namespace)
-        .execute(pool)
-        .await?;
-
-    Ok(result.rows_affected())
 }
