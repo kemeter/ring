@@ -1,18 +1,26 @@
-use rusqlite::{Connection, ToSql, Result, Row};
-use rusqlite::named_params;
+// Ported from rusqlite to sqlx to complete the database-layer migration: this
+// was the last module still importing `rusqlite`, which is no longer a
+// dependency. The module has no callers yet (a first-class Volume entity is on
+// the roadmap); `allow(dead_code)` keeps the faithful port in-tree and building
+// without papering over real dead code elsewhere. The wiring that exercises
+// these functions lands with the Volume entity feature, which removes this
+// attribute.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
-use tokio::sync::MutexGuard;
+use sqlx::SqlitePool;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub(crate) struct Volume {
     pub id: String,
     pub name: String,
     pub namespace: String,
-    pub size: Option<u64>,
+    pub size: Option<i64>,
     pub backend_type: String,
     pub host_path: String,
-    pub labels: HashMap<String, String>,
+    /// Stored as a JSON string in the column; use [`labels_map`] to decode.
+    pub labels: String,
     pub created_at: String,
     pub updated_at: Option<String>,
 }
@@ -21,7 +29,7 @@ impl Volume {
     pub(crate) fn create(
         name: String,
         namespace: String,
-        size: Option<u64>,
+        size: Option<i64>,
         backend_type: String,
         host_path: String,
         labels: HashMap<String, String>,
@@ -33,142 +41,103 @@ impl Volume {
             size,
             backend_type,
             host_path,
-            labels,
+            labels: serde_json::to_string(&labels).unwrap_or_else(|_| "{}".to_string()),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: None,
         }
     }
 
-    pub(crate) fn insert(&self, connection: &MutexGuard<Connection>) -> Result<usize> {
-        let labels_json = serde_json::to_string(&self.labels)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
-        connection.execute(
-            "INSERT INTO volumes (id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at)
-             VALUES (:id, :name, :namespace, :size, :backend_type, :host_path, :labels, :created_at, :updated_at)",
-            named_params! {
-                ":id": self.id,
-                ":name": self.name,
-                ":namespace": self.namespace,
-                ":size": self.size,
-                ":backend_type": self.backend_type,
-                ":host_path": self.host_path,
-                ":labels": labels_json,
-                ":created_at": self.created_at,
-                ":updated_at": self.updated_at,
-            },
-        )
+    pub(crate) fn labels_map(&self) -> HashMap<String, String> {
+        serde_json::from_str(&self.labels).unwrap_or_default()
     }
+}
 
-    pub(crate) fn update(&mut self, connection: &MutexGuard<Connection>) -> Result<usize> {
-        self.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        let labels_json = serde_json::to_string(&self.labels)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+const COLUMNS: &str =
+    "id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at";
 
-        connection.execute(
-            "UPDATE volumes SET name = :name, namespace = :namespace, size = :size,
-             backend_type = :backend_type, host_path = :host_path, labels = :labels, updated_at = :updated_at
-             WHERE id = :id",
-            named_params! {
-                ":id": self.id,
-                ":name": self.name,
-                ":namespace": self.namespace,
-                ":size": self.size,
-                ":backend_type": self.backend_type,
-                ":host_path": self.host_path,
-                ":labels": labels_json,
-                ":updated_at": self.updated_at,
-            },
-        )
-    }
+pub(crate) async fn insert(pool: &SqlitePool, volume: &Volume) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO volumes (id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&volume.id)
+    .bind(&volume.name)
+    .bind(&volume.namespace)
+    .bind(volume.size)
+    .bind(&volume.backend_type)
+    .bind(&volume.host_path)
+    .bind(&volume.labels)
+    .bind(&volume.created_at)
+    .bind(&volume.updated_at)
+    .execute(pool)
+    .await?;
 
-    pub(crate) fn get_by_name(name: &str, namespace: &str, connection: &MutexGuard<Connection>) -> Result<Option<Self>> {
-        let mut stmt = connection.prepare(
-            "SELECT id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at
-             FROM volumes WHERE name = :name AND namespace = :namespace"
-        )?;
+    Ok(())
+}
 
-        let volume_iter = stmt.query_map(
-            named_params! {
-                ":name": name,
-                ":namespace": namespace,
-            },
-            |row| Volume::from_row(row)
-        )?;
+pub(crate) async fn update(pool: &SqlitePool, volume: &Volume) -> Result<(), sqlx::Error> {
+    let updated_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE volumes SET name = ?, namespace = ?, size = ?, backend_type = ?, \
+         host_path = ?, labels = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&volume.name)
+    .bind(&volume.namespace)
+    .bind(volume.size)
+    .bind(&volume.backend_type)
+    .bind(&volume.host_path)
+    .bind(&volume.labels)
+    .bind(&updated_at)
+    .bind(&volume.id)
+    .execute(pool)
+    .await?;
 
-        for volume in volume_iter {
-            return Ok(Some(volume?));
-        }
+    Ok(())
+}
 
-        Ok(None)
-    }
+pub(crate) async fn get_by_name(
+    pool: &SqlitePool,
+    name: &str,
+    namespace: &str,
+) -> Result<Option<Volume>, sqlx::Error> {
+    sqlx::query_as::<_, Volume>(&format!(
+        "SELECT {COLUMNS} FROM volumes WHERE name = ? AND namespace = ?"
+    ))
+    .bind(name)
+    .bind(namespace)
+    .fetch_optional(pool)
+    .await
+}
 
-    pub(crate) fn get_by_id(id: &str, connection: &MutexGuard<Connection>) -> Result<Option<Self>> {
-        let mut stmt = connection.prepare(
-            "SELECT id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at
-             FROM volumes WHERE id = :id"
-        )?;
+pub(crate) async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Volume>, sqlx::Error> {
+    sqlx::query_as::<_, Volume>(&format!("SELECT {COLUMNS} FROM volumes WHERE id = ?"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
 
-        let volume_iter = stmt.query_map(
-            named_params! {
-                ":id": id,
-            },
-            |row| Volume::from_row(row)
-        )?;
+pub(crate) async fn list_by_namespace(
+    pool: &SqlitePool,
+    namespace: &str,
+) -> Result<Vec<Volume>, sqlx::Error> {
+    sqlx::query_as::<_, Volume>(&format!(
+        "SELECT {COLUMNS} FROM volumes WHERE namespace = ? ORDER BY created_at DESC"
+    ))
+    .bind(namespace)
+    .fetch_all(pool)
+    .await
+}
 
-        for volume in volume_iter {
-            return Ok(Some(volume?));
-        }
+pub(crate) async fn delete_by_name(
+    pool: &SqlitePool,
+    name: &str,
+    namespace: &str,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM volumes WHERE name = ? AND namespace = ?")
+        .bind(name)
+        .bind(namespace)
+        .execute(pool)
+        .await?;
 
-        Ok(None)
-    }
-
-    pub(crate) fn list_by_namespace(namespace: &str, connection: &MutexGuard<Connection>) -> Result<Vec<Self>> {
-        let mut stmt = connection.prepare(
-            "SELECT id, name, namespace, size, backend_type, host_path, labels, created_at, updated_at
-             FROM volumes WHERE namespace = :namespace ORDER BY created_at DESC"
-        )?;
-
-        let volume_iter = stmt.query_map(
-            named_params! {
-                ":namespace": namespace,
-            },
-            |row| Volume::from_row(row)
-        )?;
-
-        let mut volumes = Vec::new();
-        for volume in volume_iter {
-            volumes.push(volume?);
-        }
-
-        Ok(volumes)
-    }
-
-    pub(crate) fn delete_by_name(name: &str, namespace: &str, connection: &MutexGuard<Connection>) -> Result<usize> {
-        connection.execute(
-            "DELETE FROM volumes WHERE name = :name AND namespace = :namespace",
-            named_params! {
-                ":name": name,
-                ":namespace": namespace,
-            },
-        )
-    }
-
-    fn from_row(row: &Row) -> Result<Self> {
-        let labels_json: String = row.get("labels")?;
-        let labels: HashMap<String, String> = serde_json::from_str(&labels_json)
-            .unwrap_or_else(|_| HashMap::new());
-
-        Ok(Volume {
-            id: row.get("id")?,
-            name: row.get("name")?,
-            namespace: row.get("namespace")?,
-            size: row.get("size")?,
-            backend_type: row.get("backend_type")?,
-            host_path: row.get("host_path")?,
-            labels,
-            created_at: row.get("created_at")?,
-            updated_at: row.get("updated_at")?,
-        })
-    }
+    Ok(result.rows_affected())
 }

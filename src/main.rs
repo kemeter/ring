@@ -61,6 +61,7 @@ mod models {
     pub(crate) mod secret;
     pub(crate) mod users;
     pub(crate) mod volume;
+    pub(crate) mod volumes;
 }
 
 mod api;
