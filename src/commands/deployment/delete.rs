@@ -1,4 +1,5 @@
 use clap::Arg;
+use clap::ArgAction;
 use clap::ArgMatches;
 use clap::Command;
 
@@ -10,8 +11,14 @@ use crate::exit_code;
 
 pub(crate) fn command_config() -> Command {
     Command::new("delete")
-        .about("Delete deployment")
-        .arg(Arg::new("id"))
+        .about("Delete one or more deployments")
+        .arg(
+            Arg::new("id")
+                .required(true)
+                .num_args(1..)
+                .action(ArgAction::Append)
+                .help("One or more deployment ids to delete"),
+        )
 }
 
 pub(crate) async fn execute(
@@ -19,15 +26,18 @@ pub(crate) async fn execute(
     mut configuration: Config,
     client: &reqwest::Client,
 ) {
-    let id = args.get_one::<String>("id").unwrap();
+    let ids: Vec<&String> = args.get_many::<String>("id").unwrap().collect();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
 
-    let deployments: Vec<&str> = id.split(" ").collect();
+    let mut had_error = false;
 
-    for deployment in deployments {
+    // Attempt every id even if some fail, then let the exit code reflect
+    // whether anything failed. A batch delete shouldn't abort halfway and
+    // leave the operator guessing which ids went through.
+    for id in ids {
         let request = client
-            .delete(format!("{}/deployments/{}", api_url, deployment))
+            .delete(format!("{}/deployments/{}", api_url, id))
             .header("Authorization", format!("Bearer {}", auth_config.token))
             .send()
             .await;
@@ -36,16 +46,20 @@ pub(crate) async fn execute(
             Ok(response) => {
                 let status = response.status();
                 if status == 204 {
-                    style::print_success(&format!("Deployment {} deleted", deployment));
+                    style::print_success(&format!("Deployment {} deleted", id));
                 } else {
-                    style::print_error(&http_error(status.as_u16(), "deployment", deployment));
-                    exit_code::from_http_status(status.as_u16()).exit();
+                    style::print_error(&http_error(status.as_u16(), "deployment", id));
+                    had_error = true;
                 }
             }
             Err(err) => {
-                eprintln!("Cannot delete deployment {}: {}", deployment, err);
-                exit_code::from_reqwest_error(&err).exit();
+                eprintln!("Cannot delete deployment {}: {}", id, err);
+                had_error = true;
             }
         }
+    }
+
+    if had_error {
+        exit_code::ExitCode::General.exit();
     }
 }
