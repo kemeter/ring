@@ -99,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   instead of the legacy `API returned status 422: <raw body>` one-liner. Non-validation problems (404, 409) print the same way with the server's `title` and `detail`. Non-7807 responses fall back to the previous behaviour.
 
+### Changed
+- **Failed Docker image pulls now surface an actionable reason instead of a raw daemon dump.** A `ImagePullBackOff` event previously read `Failed to pull image '…': <bollard string>`. Ring now classifies the failure and rewrites it: authentication refused → `registry authentication failed … — check config.server, config.username and config.password`; registry unreachable (connection refused, host not found, timeout) → `cannot reach the registry … — is it up and the registry host correct?`; missing tag/digest stays as `not found`. The original daemon string is preserved verbatim in `(original error: …)`. The deployment status (`image_pull_back_off`) and event reason are unchanged.
+
 ## [0.8.0] - 2026-05-12
 
 ### Added

@@ -148,6 +148,50 @@ pub(crate) fn prefer_local_cache(
         || matches!(reference, ImageReference::Digest(_))
 }
 
+/// Classify a Docker image-pull error into a `RuntimeError` whose message
+/// names the likely cause *and* the fix. Bollard surfaces registry failures
+/// as opaque strings; left untouched they reach the operator as
+/// `Failed to pull image '…': <bollard dump>`, which says what failed but not
+/// why or what to do. We match on the substrings Docker/registries emit and
+/// rewrite them into one actionable line. The `image` argument lets the
+/// "registry unreachable" case name the host the operator must check.
+///
+/// Order matters: a missing image (404) is distinct from an unreachable or
+/// auth-refusing registry, so it's matched first and kept as `ImageNotFound`.
+fn classify_pull_error(msg: &str, image: &str) -> RuntimeError {
+    let lower = msg.to_lowercase();
+
+    if lower.contains("404") || lower.contains("not found") || lower.contains("manifest unknown") {
+        return RuntimeError::ImageNotFound(msg.to_string());
+    }
+
+    if lower.contains("unauthorized")
+        || lower.contains("authentication required")
+        || lower.contains("denied")
+        || lower.contains("forbidden")
+    {
+        return RuntimeError::ImagePullFailed(format!(
+            "registry authentication failed for '{image}' — check config.server, \
+             config.username and config.password (original error: {msg})"
+        ));
+    }
+
+    if lower.contains("connection refused")
+        || lower.contains("no such host")
+        || lower.contains("dial tcp")
+        || lower.contains("timeout")
+        || lower.contains("i/o timeout")
+        || lower.contains("connection reset")
+    {
+        return RuntimeError::ImagePullFailed(format!(
+            "cannot reach the registry for '{image}' — is it up and the registry \
+             host correct? (original error: {msg})"
+        ));
+    }
+
+    RuntimeError::ImagePullFailed(msg.to_string())
+}
+
 async fn pull_image(
     docker: Docker,
     image_config: DockerImage,
@@ -217,17 +261,12 @@ async fn pull_image(
             let error_msg = e.to_string();
             error!("Docker image pull error: {}", error_msg);
 
-            if error_msg.contains("404")
-                || error_msg.contains("not found")
-                || error_msg.contains("manifest unknown")
-            {
-                return Err(RuntimeError::ImageNotFound(error_msg));
-            }
-            // Bail on the first non-404 error instead of draining the rest of
-            // the stream — the previous version kept iterating to find the
-            // "last" error, which delayed the failure and could mask the
-            // root cause behind a later io error.
-            return Err(RuntimeError::ImagePullFailed(error_msg));
+            // Bail on the first error instead of draining the rest of the
+            // stream — the previous version kept iterating to find the "last"
+            // error, which delayed the failure and could mask the root cause
+            // behind a later io error. `classify_pull_error` rewrites registry
+            // failures into an actionable message (auth / unreachable / 404).
+            return Err(classify_pull_error(&error_msg, &image_name));
         }
     }
 
@@ -971,5 +1010,78 @@ mod tests {
         // the registry on every reconcile.
         let r = ImageReference::Tag("9809f6b1".to_string());
         assert!(!prefer_local_cache(ImagePullPolicy::Always, &r, true));
+    }
+
+    #[test]
+    fn classify_pull_error_missing_image_stays_not_found() {
+        // 404 / manifest unknown is a missing image, not an unreachable or
+        // auth-refusing registry — it must keep the ImageNotFound variant so
+        // the deployment lands in ImagePullBackOff with the right reason.
+        let e = classify_pull_error(
+            "manifest unknown: manifest unknown",
+            "registry.example.com/app:v1",
+        );
+        assert!(matches!(e, RuntimeError::ImageNotFound(_)));
+
+        let e = classify_pull_error("received unexpected HTTP status: 404 Not Found", "app:v1");
+        assert!(matches!(e, RuntimeError::ImageNotFound(_)));
+    }
+
+    #[test]
+    fn classify_pull_error_auth_names_the_credentials_fix() {
+        for raw in [
+            "unauthorized: authentication required",
+            "denied: requested access to the resource is denied",
+            "pull access denied, repository does not exist or may require authorization",
+        ] {
+            let e = classify_pull_error(raw, "private.io/app:v1");
+            match e {
+                RuntimeError::ImagePullFailed(msg) => {
+                    assert!(
+                        msg.contains("config.username") && msg.contains("config.password"),
+                        "auth error should point at the credential config, got: {msg}"
+                    );
+                    assert!(msg.contains("private.io/app:v1"), "should name the image");
+                }
+                other => panic!("expected ImagePullFailed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn classify_pull_error_unreachable_names_the_registry() {
+        for raw in [
+            "dial tcp 10.0.0.1:5000: connect: connection refused",
+            "dial tcp: lookup registry.invalid: no such host",
+            "Get \"https://registry.invalid/v2/\": net/http: request canceled (Client.Timeout exceeded)",
+        ] {
+            let e = classify_pull_error(raw, "registry.invalid/app:v1");
+            match e {
+                RuntimeError::ImagePullFailed(msg) => {
+                    assert!(
+                        msg.contains("cannot reach the registry"),
+                        "unreachable error should say so, got: {msg}"
+                    );
+                    assert!(
+                        msg.contains("registry.invalid/app:v1"),
+                        "should name the image"
+                    );
+                }
+                other => panic!("expected ImagePullFailed, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn classify_pull_error_unknown_keeps_the_original_detail() {
+        // An error we don't recognise must still surface its detail rather
+        // than being swallowed — operator clarity beats a tidy generic string.
+        let e = classify_pull_error("some unexpected daemon hiccup", "app:v1");
+        match e {
+            RuntimeError::ImagePullFailed(msg) => {
+                assert!(msg.contains("some unexpected daemon hiccup"));
+            }
+            other => panic!("expected ImagePullFailed, got {other:?}"),
+        }
     }
 }
