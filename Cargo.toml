@@ -19,7 +19,7 @@ tokio = { version = "1.20", features = ["full"] }
 log = "0.4.0"
 env_logger = "0.11.2"
 bollard = "0.20.2"
-clap = "4.5.1"
+clap = { version = "4.5.1", features = ["derive"] }
 chrono = "0.4"
 uuid = { version = "1.4.1", features = ["v4"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }

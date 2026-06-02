@@ -103,6 +103,19 @@ If `config.toml` or `secret-key` already exists, `ring init` refuses to overwrit
 
 In CI or any non-interactive shell, `ring init` skips the prompts and falls back to defaults (Docker, port 3030).
 
+### Scripting `ring init`
+
+To configure a non-default runtime or port without a prompt (CI, Ansible, etc.), pass the flags explicitly:
+
+```bash
+ring init --runtime cloud-hypervisor --port 4030
+```
+
+- `--runtime` — `docker`, `cloud-hypervisor`, or `both`.
+- `--port` — the API port (default `3030`).
+
+Flags take precedence over prompts and over the non-interactive defaults, and compose per-field: passing only `--port` still prompts for the runtime on a TTY (or defaults to Docker when there's no TTY), and vice versa.
+
 ## 3. Start the server
 
 ```bash

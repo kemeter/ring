@@ -16,7 +16,7 @@
 use crate::config::config::get_config_dir;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use rand::RngCore;
 use std::fs;
 use std::io::IsTerminal;
@@ -24,12 +24,28 @@ use std::path::Path;
 
 pub(crate) fn command_config() -> Command {
     Command::new("init")
-        .about("Initialize Ring configuration interactively")
+        .about("Initialize Ring configuration (interactive, or scriptable via flags)")
         .arg(
             Arg::new("force")
                 .long("force")
                 .help("Overwrite an existing config.toml")
                 .action(ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("runtime")
+                .long("runtime")
+                .value_name("RUNTIME")
+                .help(
+                    "Runtime to configure, skipping the prompt: docker, cloud-hypervisor, or both",
+                )
+                .value_parser(clap::value_parser!(RuntimeChoice)),
+        )
+        .arg(
+            Arg::new("port")
+                .long("port")
+                .value_name("PORT")
+                .help("API port to configure, skipping the prompt (default 3030)")
+                .value_parser(clap::value_parser!(u16).range(1..)),
         )
 }
 
@@ -40,7 +56,10 @@ pub(crate) struct InitSettings {
     pub port: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `ValueEnum` lets clap parse and validate `--runtime` directly into this
+/// type (kebab-case CLI spellings: `docker`, `cloud-hypervisor`, `both`) — no
+/// hand-rolled string matching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum RuntimeChoice {
     Docker,
     CloudHypervisor,
@@ -85,7 +104,7 @@ pub(crate) fn init(args: &ArgMatches) {
         std::process::exit(1);
     }
 
-    let settings = collect_settings();
+    let settings = collect_settings(args);
     let toml_content = build_config_toml(&settings);
 
     if let Err(e) = fs::create_dir_all(&config_dir) {
@@ -115,42 +134,66 @@ pub(crate) fn init(args: &ArgMatches) {
     print_next_steps();
 }
 
-/// Either prompt the user or fall back to sensible defaults when stdin is
-/// not interactive (CI, piped scripts, etc.). The defaults match the most
-/// common deployment shape: Docker on port 3030.
-fn collect_settings() -> InitSettings {
+const DEFAULT_PORT: u16 = 3030;
+
+/// Resolve the runtime + port, in this order of precedence:
+///   1. an explicit `--runtime` / `--port` flag (scriptable, no prompt),
+///   2. an interactive prompt when stdin is a TTY,
+///   3. a sensible default (Docker, port 3030) when stdin is not a TTY.
+///
+/// Flags and prompts compose per-field: passing only `--runtime` on a TTY
+/// still prompts for the port, and vice versa. This makes `ring init` fully
+/// scriptable (`--runtime cloud-hypervisor --port 4030`) without a TTY, while
+/// keeping the friendly prompts for an interactive first run.
+fn collect_settings(args: &ArgMatches) -> InitSettings {
+    let runtime_flag = args.get_one::<RuntimeChoice>("runtime").copied();
+    let port_flag = args.get_one::<u16>("port").copied();
+
+    // Fully specified by flags → no prompt, no TTY needed.
+    if let (Some(runtime), Some(port)) = (runtime_flag, port_flag) {
+        return InitSettings { runtime, port };
+    }
+
     if !is_tty() {
-        println!("(non-interactive stdin detected — using defaults: Docker, port 3030)");
-        return InitSettings {
-            runtime: RuntimeChoice::Docker,
-            port: 3030,
-        };
+        let runtime = runtime_flag.unwrap_or(RuntimeChoice::Docker);
+        let port = port_flag.unwrap_or(DEFAULT_PORT);
+        println!(
+            "(non-interactive stdin detected — using runtime: {}, port: {})",
+            runtime, port
+        );
+        return InitSettings { runtime, port };
     }
 
     use inquire::{CustomType, Select};
 
-    let runtime = Select::new(
-        "Which runtime do you want to use?",
-        vec![
-            RuntimeChoice::Docker,
-            RuntimeChoice::CloudHypervisor,
-            RuntimeChoice::Both,
-        ],
-    )
-    .prompt()
-    .unwrap_or_else(|e| {
-        eprintln!("Aborted: {}", e);
-        std::process::exit(1);
-    });
-
-    let port: u16 = CustomType::<u16>::new("Which port should the API listen on?")
-        .with_default(3030)
-        .with_error_message("Enter a number between 1 and 65535")
+    let runtime = match runtime_flag {
+        Some(r) => r,
+        None => Select::new(
+            "Which runtime do you want to use?",
+            vec![
+                RuntimeChoice::Docker,
+                RuntimeChoice::CloudHypervisor,
+                RuntimeChoice::Both,
+            ],
+        )
         .prompt()
         .unwrap_or_else(|e| {
             eprintln!("Aborted: {}", e);
             std::process::exit(1);
-        });
+        }),
+    };
+
+    let port = match port_flag {
+        Some(p) => p,
+        None => CustomType::<u16>::new("Which port should the API listen on?")
+            .with_default(DEFAULT_PORT)
+            .with_error_message("Enter a number between 1 and 65535")
+            .prompt()
+            .unwrap_or_else(|e| {
+                eprintln!("Aborted: {}", e);
+                std::process::exit(1);
+            }),
+    };
 
     InitSettings { runtime, port }
 }
@@ -274,6 +317,33 @@ fn print_next_steps() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_command_parses_runtime_and_port_flags() {
+        // The CLI must parse `--runtime` / `--port` so the command is
+        // scriptable. clap's ValueEnum gives us a typed RuntimeChoice directly.
+        let m = command_config()
+            .try_get_matches_from(["init", "--runtime", "cloud-hypervisor", "--port", "4030"])
+            .expect("valid flags must parse");
+        assert_eq!(
+            *m.get_one::<RuntimeChoice>("runtime").unwrap(),
+            RuntimeChoice::CloudHypervisor
+        );
+        assert_eq!(*m.get_one::<u16>("port").unwrap(), 4030u16);
+
+        // Unknown runtime is rejected by ValueEnum.
+        assert!(
+            command_config()
+                .try_get_matches_from(["init", "--runtime", "podman"])
+                .is_err()
+        );
+        // Port 0 is out of the 1.. range.
+        assert!(
+            command_config()
+                .try_get_matches_from(["init", "--port", "0"])
+                .is_err()
+        );
+    }
 
     #[test]
     fn build_config_docker_only() {
