@@ -13,7 +13,8 @@
     { href: '/deployments', label: 'Deployments', icon: 'grid' },
     { href: '/namespaces', label: 'Namespaces', icon: 'folder' },
     { href: '/secrets', label: 'Secrets', icon: 'key' },
-    { href: '/configs', label: 'Configs', icon: 'file' }
+    { href: '/configs', label: 'Configs', icon: 'file' },
+    { href: '/node', label: 'Node', icon: 'server' }
   ];
 
   function isActive(href: string): boolean {
@@ -106,6 +107,19 @@
                 >
                   <path d="M3 1.5h6L13 5.5V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5z" />
                   <path d="M9 1.5V5.5h4" />
+                </svg>
+              {:else if item.icon === 'server'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="2" y="2.5" width="12" height="4.5" rx="1" />
+                  <rect x="2" y="9" width="12" height="4.5" rx="1" />
+                  <path d="M4.5 4.75h.01M4.5 11.25h.01" />
                 </svg>
               {/if}
             </span>
