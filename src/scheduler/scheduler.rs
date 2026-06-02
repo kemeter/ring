@@ -950,10 +950,44 @@ pub(crate) async fn schedule(
                 }
             };
 
-            // Honour the retry backoff. Deletes always go through so the
-            // user can wipe a stuck deployment without waiting.
-            if deployment.status != DeploymentStatus::Deleted && backoff.is_blocked(&deployment.id)
-            {
+            // A deleted deployment is on its way out: its only remaining job is
+            // to tear down its containers and be purged. Resolving configs /
+            // secrets / volumes is both pointless and actively harmful here —
+            // those resources are often deleted alongside the deployment, and a
+            // missing one makes the resolution step `continue` before we ever
+            // reach `handle_status_transitions`, leaving the deployment stuck in
+            // `deleted` forever. The runtime's delete path removes containers
+            // without reading env or mounts, so reconcile with the unresolved
+            // deployment and go straight to cleanup.
+            if deployment.status == DeploymentStatus::Deleted {
+                backoff.clear(&deployment.id);
+                let mut result = match apply_runtime(
+                    &pool,
+                    &deployment,
+                    deployment.clone(),
+                    Vec::new(),
+                    apply_timeout,
+                    apply_timeout_secs,
+                    runtime.as_ref(),
+                )
+                .await
+                {
+                    Some(d) => d,
+                    None => continue,
+                };
+
+                persist_pending_events(&pool, &mut result).await;
+                handle_status_transitions(&pool, &mut result, &mut deleted).await;
+
+                if let Err(e) = deployments::update(&pool, &result).await {
+                    error!("Failed to update deployment {}: {}", result.id, e);
+                }
+                continue;
+            }
+
+            // Honour the retry backoff. (Deletes are handled above and never
+            // reach this point, so they're never blocked by backoff.)
+            if backoff.is_blocked(&deployment.id) {
                 debug!(
                     "Deployment {} in retry backoff, skipping cycle",
                     deployment.id
