@@ -528,6 +528,7 @@ esac
 
 Notes:
 
+- Every command that talks to the API honours this table: a command that cannot reach the API or gets a non-2xx response exits non-zero (never `0`), so `set -e`, CI gates and `&&` chains detect the failure.
 - `ring apply` processes multiple deployments; if any fail, the command exits with the code of the **first** failure.
 - Follow modes (`logs --follow`, `events --follow`) keep running on transient errors and only exit if the initial request fails.
 

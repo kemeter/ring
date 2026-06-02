@@ -1,4 +1,6 @@
+use crate::commands::problem_json::transport_error;
 use crate::commands::style;
+use crate::exit_code::{self, ExitCode};
 use clap::{Arg, ArgMatches, Command};
 use cli_table::{Table, WithTitle};
 use serde::Deserialize;
@@ -81,8 +83,9 @@ pub(crate) async fn execute(
                     display_events(&events);
                 }
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
+            Err((message, code)) => {
+                eprintln!("{}", message);
+                code.exit();
             }
         }
     }
@@ -94,7 +97,7 @@ async fn fetch_events(
     limit: u32,
     config: &mut Config,
     client: &reqwest::Client,
-) -> Result<Vec<EventItem>, String> {
+) -> Result<Vec<EventItem>, (String, ExitCode)> {
     let mut url = format!(
         "{}/deployments/{}/events?limit={}",
         config.get_api_url(),
@@ -116,20 +119,26 @@ async fn fetch_events(
 
     match response {
         Ok(response) => {
-            let events: Vec<EventItem> = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse response as JSON: {}", e))?;
+            let status = response.status();
+            if !status.is_success() {
+                let message = match status.as_u16() {
+                    401 | 403 => {
+                        "Authentication failed. Please login again with 'ring login'".to_string()
+                    }
+                    404 => format!("Deployment '{}' not found", deployment_id),
+                    other => format!("Failed to fetch events: server returned {}", other),
+                };
+                return Err((message, exit_code::from_http_status(status.as_u16())));
+            }
 
-            Ok(events)
+            response.json().await.map_err(|e| {
+                (
+                    format!("Failed to parse response as JSON: {}", e),
+                    ExitCode::General,
+                )
+            })
         }
-        Err(e) if e.to_string().contains("401") => {
-            Err("Authentication failed. Please login again with 'ring login'".to_string())
-        }
-        Err(e) if e.to_string().contains("404") => {
-            Err(format!("Deployment '{}' not found", deployment_id))
-        }
-        Err(e) => Err(format!("Failed to fetch events: {}", e)),
+        Err(e) => Err((transport_error(&e, &url), exit_code::from_reqwest_error(&e))),
     }
 }
 
@@ -148,11 +157,16 @@ async fn follow_events(
     let mut last_seen_id: Option<String> = None;
     let mut all_events: Vec<EventItem> = Vec::new();
 
-    // Show initial events and store them
-    let initial_events = fetch_events(deployment_id, level, limit, config, client).await;
-    if let Ok(events) = initial_events
-        && !events.is_empty()
-    {
+    // Show initial events and store them. A failure here (server down, auth, not
+    // found) is fatal: bail out non-zero instead of spinning the polling loop blind.
+    let events = match fetch_events(deployment_id, level, limit, config, client).await {
+        Ok(events) => events,
+        Err((message, code)) => {
+            eprintln!("{}", message);
+            code.exit();
+        }
+    };
+    if !events.is_empty() {
         // Reverse the events to show oldest first (tail -f style)
         all_events = events.clone();
         all_events.reverse();
@@ -195,8 +209,10 @@ async fn follow_events(
                     last_seen_id = new_events.first().map(|e| e.id.clone());
                 }
             }
-            Err(e) => {
-                eprintln!("Error fetching events: {}", e);
+            Err((message, _code)) => {
+                // Transient failure mid-follow: report and keep polling rather
+                // than tearing down the stream on a single hiccup.
+                eprintln!("Error fetching events: {}", message);
             }
         }
     }

@@ -1,7 +1,8 @@
 use crate::api::dto::stats::DeploymentStatsOutput;
-use crate::commands::problem_json::http_error;
+use crate::commands::problem_json::{http_error, transport_error};
 use crate::commands::style;
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::{Arg, ArgMatches, Command};
 
 pub(crate) fn command_config() -> Command {
@@ -30,18 +31,20 @@ pub(crate) async fn execute(
     let id = args.get_one::<String>("id").unwrap();
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name.clone());
+    let endpoint = format!("{}/deployments/{}/metrics", api_url, id);
 
     let response = client
-        .get(format!("{}/deployments/{}/metrics", api_url, id))
+        .get(&endpoint)
         .header("Authorization", format!("Bearer {}", auth_config.token))
         .send()
         .await;
 
     match response {
         Ok(res) => {
-            if res.status() != 200 {
-                style::print_error(&http_error(res.status().as_u16(), "deployment", id));
-                return;
+            let status = res.status();
+            if status != 200 {
+                style::print_error(&http_error(status.as_u16(), "deployment", id));
+                exit_code::from_http_status(status.as_u16()).exit();
             }
 
             match res.json::<DeploymentStatsOutput>().await {
@@ -93,9 +96,15 @@ pub(crate) async fn execute(
                         println!();
                     }
                 }
-                Err(e) => eprintln!("Failed to parse metrics: {}", e),
+                Err(e) => {
+                    eprintln!("Failed to parse metrics: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
             }
         }
-        Err(e) => eprintln!("Failed to fetch metrics: {}", e),
+        Err(e) => {
+            style::print_error(&transport_error(&e, &endpoint));
+            exit_code::from_reqwest_error(&e).exit();
+        }
     }
 }
