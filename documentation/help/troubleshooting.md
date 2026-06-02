@@ -120,6 +120,12 @@ Most common causes:
 - **`ImagePullBackOff`** — Docker can't pull the image. Wrong tag, missing credentials, network problem. Verify with `docker pull <image>` from the host
 - **`InstanceCreationFailed`** — Docker rejected the container creation. Common subreasons: port conflict (`bind: address already in use`), invalid bind mount (source path missing), unsupported runtime option
 
+### Stuck in `deleted`
+
+A deployment shown as `deleted` should disappear within a scheduler cycle or two once its containers are gone — the row is purged automatically. If it lingers and `ring deployment events <ID>` keeps logging `secret_resolution_error` / `config_load_error` / `volume_resolution_error`, you are on a build prior to the fix where the scheduler tried to resolve a deployment's secrets/configs/volumes *before* tearing it down. A resource deleted alongside the deployment (e.g. the secret a `secretRef` pointed at) then made resolution fail every tick, so cleanup was never reached.
+
+Current builds reconcile a `deleted` deployment straight to teardown and purge, ignoring secret/config/volume resolution. If you hit this on an older server, upgrade; the stuck row clears on the next cycle after restart.
+
 ### `image_pull_back_off`
 
 ```bash
