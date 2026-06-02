@@ -1,5 +1,8 @@
 use crate::api::dto::node::NodeRootDto;
+use crate::commands::problem_json::transport_error;
+use crate::commands::style;
 use crate::config::config::{Config, load_auth_config};
+use crate::exit_code;
 use clap::{ArgMatches, Command};
 
 pub(crate) fn command_config() -> Command {
@@ -42,10 +45,12 @@ pub(crate) async fn execute(
             }
             Err(e) => {
                 eprintln!("Failed to parse JSON: {}", e);
+                exit_code::ExitCode::General.exit();
             }
         },
         Err(err) => {
-            eprintln!("Failed to fetch node info: {}", err);
+            style::print_error(&transport_error(&err, &query));
+            exit_code::from_reqwest_error(&err).exit();
         }
     }
 }
