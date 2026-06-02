@@ -18,6 +18,7 @@
   }
 
   const nav = [
+    { href: '/', label: 'Overview', icon: 'home' },
     { href: '/deployments', label: 'Deployments', icon: 'grid' },
     { href: '/namespaces', label: 'Namespaces', icon: 'folder' },
     { href: '/secrets', label: 'Secrets', icon: 'key' },
@@ -28,10 +29,15 @@
   function isActive(href: string): boolean {
     const current = $page.url.pathname.replace(/\/$/, '');
     const target = href.replace(/\/$/, '');
+    // Overview lives at the root: only an exact match should highlight it,
+    // otherwise every page (which all start with "/") would mark it active.
+    if (target === '') {
+      return current === '';
+    }
     return current === target || current.startsWith(`${target}/`);
   }
 
-  let onLoginPage = $derived($page.url.pathname === '/');
+  let onLoginPage = $derived($page.url.pathname === '/login');
 
   onMount(async () => {
     // Apply the persisted (or system-preferred) theme as early as possible so
@@ -43,7 +49,7 @@
       return;
     }
     if (!getToken()) {
-      goto('/');
+      goto('/login');
       return;
     }
     try {
@@ -58,7 +64,7 @@
 
   function logout() {
     clearToken();
-    goto('/');
+    goto('/login');
   }
 </script>
 
@@ -79,7 +85,18 @@
         {#each nav as item}
           <a href={item.href} class="nav-item" class:active={isActive(item.href)}>
             <span class="nav-icon">
-              {#if item.icon === 'grid'}
+              {#if item.icon === 'home'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M2 6.5L8 2l6 4.5V13a1 1 0 0 1-1 1h-3v-4H6v4H3a1 1 0 0 1-1-1V6.5z" />
+                </svg>
+              {:else if item.icon === 'grid'}
                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
                   <rect x="2" y="2" width="5" height="5" rx="1" />
                   <rect x="9" y="2" width="5" height="5" rx="1" />
