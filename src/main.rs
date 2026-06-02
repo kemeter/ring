@@ -14,10 +14,7 @@ mod commands {
     pub(crate) mod deployment;
     pub(crate) mod doctor;
     pub(crate) mod init;
-    pub(crate) mod output;
-    pub(crate) mod problem_json;
     pub(crate) mod server;
-    pub(crate) mod style;
 
     pub(crate) mod config;
     pub(crate) mod login;
@@ -25,6 +22,14 @@ mod commands {
     pub(crate) mod node;
     pub(crate) mod secret;
     pub(crate) mod user;
+}
+
+/// Cross-cutting CLI presentation helpers, shared by the commands above:
+/// terminal styling, the `--output` format enum, and RFC 7807 error rendering.
+mod cli {
+    pub(crate) mod output;
+    pub(crate) mod problem_json;
+    pub(crate) mod style;
 }
 
 mod scheduler {

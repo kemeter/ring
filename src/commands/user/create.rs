@@ -3,7 +3,7 @@ use clap::ArgMatches;
 use clap::Command;
 use serde_json::json;
 
-use crate::commands::problem_json::render_response_error;
+use crate::cli::problem_json::render_response_error;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 
