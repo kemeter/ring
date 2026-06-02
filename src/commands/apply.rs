@@ -20,7 +20,6 @@ enum ApplyError {
     YamlParse(serde_yaml::Error),
     Validation(String),
     Http(reqwest::Error),
-    HttpStatus(u16, String),
     // The failure has already been printed to stderr (typically by
     // `render_response_error`). Carry only the status so `apply()` can map
     // it to the right exit code without re-printing.
@@ -35,9 +34,6 @@ impl fmt::Display for ApplyError {
             ApplyError::YamlParse(e) => write!(f, "Invalid YAML: {}", e),
             ApplyError::Validation(msg) => write!(f, "Validation error: {}", msg),
             ApplyError::Http(e) => write!(f, "HTTP error: {}", e),
-            ApplyError::HttpStatus(status, msg) => {
-                write!(f, "HTTP {} error: {}", status, msg)
-            }
             ApplyError::Reported(status) => write!(f, "request failed with status {}", status),
             ApplyError::Auth(msg) => write!(f, "Auth error: {}", msg),
         }
@@ -499,7 +495,6 @@ pub(crate) async fn apply(args: &ArgMatches, configuration: Config, client: &req
         }
         match e {
             ApplyError::Http(err) => exit_code::from_reqwest_error(&err).exit(),
-            ApplyError::HttpStatus(status, _) => exit_code::from_http_status(status).exit(),
             ApplyError::Reported(status) => exit_code::from_http_status(status).exit(),
             ApplyError::Auth(_) => exit_code::ExitCode::Auth.exit(),
             ApplyError::Validation(_) => exit_code::ExitCode::General.exit(),

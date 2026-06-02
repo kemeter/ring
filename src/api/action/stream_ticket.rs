@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::api::server::TicketStoreState;
-use crate::api::stream_tickets::TicketStore;
 use crate::models::users::User;
 
 #[derive(Debug, Deserialize)]
@@ -32,7 +31,7 @@ pub(crate) async fn stream_ticket(
             .into_response();
     }
 
-    let token = TicketStore::from(store).mint(user.id.clone(), input.scope);
+    let token = store.mint(user.id.clone(), input.scope);
     (
         StatusCode::OK,
         Json(StreamTicketOutput {

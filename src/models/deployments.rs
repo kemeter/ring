@@ -485,8 +485,8 @@ pub(crate) async fn find_active_by_namespace_name(
     );
 
     let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
-        .bind(&namespace)
-        .bind(&name)
+        .bind(namespace)
+        .bind(name)
         .fetch_all(pool)
         .await?;
 
@@ -497,7 +497,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Deploymen
     let sql = format!("SELECT {} FROM deployment WHERE id = ?", SELECT_COLUMNS);
 
     let row = sqlx::query_as::<_, DeploymentRow>(&sql)
-        .bind(&id)
+        .bind(id)
         .fetch_optional(pool)
         .await?;
 

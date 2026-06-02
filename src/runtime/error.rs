@@ -8,8 +8,11 @@ pub enum RuntimeError {
     ImagePullFailed(String),
     #[error("instance creation failed: {0}")]
     InstanceCreationFailed(String),
+    // Part of the runtime error contract; not constructed on every code path yet.
+    #[allow(dead_code)]
     #[error("config not found: {0}")]
     ConfigNotFound(String),
+    #[allow(dead_code)]
     #[error("config key not found: {0}")]
     ConfigKeyNotFound(String),
     #[error("network creation failed: {0}")]

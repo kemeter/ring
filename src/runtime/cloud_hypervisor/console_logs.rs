@@ -40,7 +40,7 @@ fn rotated_files_in_read_order(path: &Path) -> Vec<PathBuf> {
         idx += 1;
     }
     // Sort descending (oldest first when reading: highest index is oldest).
-    backups.sort_by(|a, b| b.0.cmp(&a.0));
+    backups.sort_by_key(|(idx, _)| std::cmp::Reverse(*idx));
     files.extend(backups.into_iter().map(|(_, p)| p));
     files.push(path.to_path_buf());
     files
@@ -80,13 +80,12 @@ pub(crate) async fn read_lines(path: &Path, tail: Option<&str>, since: Option<i3
         return Vec::new();
     }
 
-    if let Some(n_str) = tail {
-        if n_str != "all"
-            && let Ok(n) = n_str.parse::<usize>()
-            && lines.len() > n
-        {
-            lines = lines.split_off(lines.len() - n);
-        }
+    if let Some(n_str) = tail
+        && n_str != "all"
+        && let Ok(n) = n_str.parse::<usize>()
+        && lines.len() > n
+    {
+        lines = lines.split_off(lines.len() - n);
     }
 
     if let Some(secs) = since
@@ -244,13 +243,13 @@ pub(crate) async fn rotate_if_needed(path: &Path, max_bytes: u64, max_backups: u
     }
 
     let oldest = backup_path(path, max_backups);
-    if oldest.exists() {
-        if let Err(e) = tokio::fs::remove_file(&oldest).await {
-            warn!(
-                "console log rotate: failed to remove oldest backup {:?}: {}",
-                oldest, e
-            );
-        }
+    if oldest.exists()
+        && let Err(e) = tokio::fs::remove_file(&oldest).await
+    {
+        warn!(
+            "console log rotate: failed to remove oldest backup {:?}: {}",
+            oldest, e
+        );
     }
 
     // Shift .N-1 → .N down to .1 → .2.

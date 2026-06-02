@@ -49,7 +49,9 @@ pub(crate) fn host_port_available(host_ip: &str, port: u16) -> bool {
 /// `<guest_ip>:target_port` inside the VM. Dropping it kills the daemon.
 #[derive(Debug)]
 pub(crate) struct PortForwarder {
+    #[allow(dead_code)] // Retained for diagnostics / future introspection of active forwards.
     pub published_port: u16,
+    #[allow(dead_code)]
     pub target_port: u16,
     /// Owned: dropping the forwarder kills the socat process.
     child: Child,

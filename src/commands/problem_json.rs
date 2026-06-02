@@ -60,31 +60,29 @@ pub(crate) async fn render_response_error(context: &str, response: Response) -> 
     // print (when the structured parse fails).
     let body = response.bytes().await.unwrap_or_default();
 
-    if is_problem {
-        if let Ok(problem) = serde_json::from_slice::<ProblemDetails>(&body) {
-            // Title line: `<context>: <title> (<status>)`. e.g.
-            // `Unable to create user: Validation failed (422)`.
-            let title = if problem.title.is_empty() {
-                status.canonical_reason().unwrap_or("error").to_string()
-            } else {
-                problem.title
-            };
-            eprintln!("{}: {} ({})", context, title, status_u16);
-            if !problem.violations.is_empty() {
-                for v in &problem.violations {
-                    eprintln!("  * {}: {}", v.property_path, v.message);
-                }
-            } else if !problem.detail.is_empty() {
-                // No structured violations but a free-form detail string:
-                // surface it as-is. RFC 7807 servers may use this for
-                // non-validation errors (auth, business rules, …).
-                eprintln!("  {}", problem.detail);
+    if is_problem && let Ok(problem) = serde_json::from_slice::<ProblemDetails>(&body) {
+        // Title line: `<context>: <title> (<status>)`. e.g.
+        // `Unable to create user: Validation failed (422)`.
+        let title = if problem.title.is_empty() {
+            status.canonical_reason().unwrap_or("error").to_string()
+        } else {
+            problem.title
+        };
+        eprintln!("{}: {} ({})", context, title, status_u16);
+        if !problem.violations.is_empty() {
+            for v in &problem.violations {
+                eprintln!("  * {}: {}", v.property_path, v.message);
             }
-            return status_u16;
+        } else if !problem.detail.is_empty() {
+            // No structured violations but a free-form detail string:
+            // surface it as-is. RFC 7807 servers may use this for
+            // non-validation errors (auth, business rules, …).
+            eprintln!("  {}", problem.detail);
         }
-        // problem+json header but body didn't parse — fall through to the
-        // legacy path so we still print *something*.
+        return status_u16;
     }
+    // problem+json header but body didn't parse — fall through to the
+    // legacy path so we still print *something*.
 
     // Legacy / unknown shape: just print the status and dump the body if
     // it's plausibly text. Avoids drowning the terminal in binary on a

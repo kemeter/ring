@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use tokio::sync::mpsc;
 
 /// Events sent from Docker Event Listener to Scheduler
+// The `Container` prefix is intentional — these mirror Docker's own event
+// names. Some payload fields are carried for logging/future use, not all read.
+#[allow(clippy::enum_variant_names, dead_code)]
 #[derive(Debug, Clone)]
 pub enum DockerEvent {
     /// Container died (crashed, stopped, killed)

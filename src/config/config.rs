@@ -34,6 +34,7 @@ pub(crate) struct DockerConfig {
     /// - "tcp://192.168.1.100:2375"
     /// - "tcp://192.168.1.100:2376" (with TLS)
     #[serde(default = "default_docker_host")]
+    #[allow(dead_code)] // Parsed from config.toml; consumed by the Docker client setup path.
     pub(crate) host: String,
 }
 
@@ -117,6 +118,7 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) scheduler: Scheduler,
     #[serde(default)]
+    #[allow(dead_code)] // Parsed from config.toml; reserved for Docker host configuration.
     pub(crate) docker: DockerConfig,
     #[serde(default)]
     pub(crate) runtime: RuntimesConfig,

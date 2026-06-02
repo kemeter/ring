@@ -34,20 +34,20 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // the on-disk config — same spirit as `RING_TOKEN` / `RING_SECRET_KEY`.
     if args.get_flag("dashboard") {
         configuration.dashboard.enabled = true;
-    } else if let Ok(val) = std::env::var("RING_DASHBOARD") {
-        if matches!(
+    } else if let Ok(val) = std::env::var("RING_DASHBOARD")
+        && matches!(
             val.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
-        ) {
-            configuration.dashboard.enabled = true;
-        }
+        )
+    {
+        configuration.dashboard.enabled = true;
     }
     // Optional override of the bind address; useful in containers where
     // the default `127.0.0.1:3031` is unreachable from the host.
-    if let Ok(addr) = std::env::var("RING_DASHBOARD_LISTEN") {
-        if !addr.trim().is_empty() {
-            configuration.dashboard.listen_address = addr;
-        }
+    if let Ok(addr) = std::env::var("RING_DASHBOARD_LISTEN")
+        && !addr.trim().is_empty()
+    {
+        configuration.dashboard.listen_address = addr;
     }
 
     // Validate the encryption key up front. Anything that touches a

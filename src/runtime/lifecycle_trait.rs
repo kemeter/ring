@@ -144,7 +144,7 @@ pub(crate) fn extract_date(log: &str) -> Option<String> {
 }
 
 #[async_trait]
-pub trait RuntimeLifecycle: Send + Sync {
+pub(crate) trait RuntimeLifecycle: Send + Sync {
     async fn apply(
         &self,
         deployment: Deployment,
