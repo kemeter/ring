@@ -6,6 +6,9 @@ declare global {
     // interface PageData {}
     // interface Platform {}
   }
+
+  /** Injected by Vite `define` from the workspace Cargo.toml version. */
+  const __RING_VERSION__: string;
 }
 
 export {};
