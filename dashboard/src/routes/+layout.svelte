@@ -5,9 +5,17 @@
   import { goto } from '$app/navigation';
   import { getCurrentUser, type CurrentUser } from '$lib/api';
   import { clearToken, getToken } from '$lib/auth';
+  import { applyTheme, loadTheme, saveTheme, type Theme } from '$lib/theme';
 
   let { children } = $props();
   let currentUser = $state<CurrentUser | null>(null);
+  let theme = $state<Theme>('dark');
+
+  function toggleTheme() {
+    theme = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(theme);
+    saveTheme(theme);
+  }
 
   const nav = [
     { href: '/deployments', label: 'Deployments', icon: 'grid' },
@@ -26,6 +34,11 @@
   let onLoginPage = $derived($page.url.pathname === '/');
 
   onMount(async () => {
+    // Apply the persisted (or system-preferred) theme as early as possible so
+    // the dashboard doesn't briefly flash the opposite palette.
+    theme = loadTheme();
+    applyTheme(theme);
+
     if (onLoginPage) {
       return;
     }
@@ -154,6 +167,28 @@
           </svg>
           <span>Documentation</span>
         </a>
+        <button
+          class="theme-toggle"
+          onclick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {#if theme === 'dark'}
+            <!-- Sun: shown in dark mode → click to go light -->
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="8" cy="8" r="3" />
+              <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.4 1.4M11.55 11.55l1.4 1.4M3.05 12.95l1.4-1.4M11.55 4.45l1.4-1.4" />
+            </svg>
+            <span>Light mode</span>
+          {:else}
+            <!-- Moon: shown in light mode → click to go dark -->
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M13.5 9.2A5.5 5.5 0 0 1 6.8 2.5 6 6 0 1 0 13.5 9.2z" />
+            </svg>
+            <span>Dark mode</span>
+          {/if}
+        </button>
+        <div class="version mono">v{__RING_VERSION__}</div>
       </div>
     </aside>
 
@@ -214,6 +249,17 @@
     color: var(--fg-2);
     text-transform: uppercase;
     letter-spacing: 0.08em;
+  }
+
+  .version {
+    margin-left: auto;
+    align-self: flex-start;
+    font-size: 0.65rem;
+    color: var(--fg-3);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.1rem 0.35rem;
   }
 
   nav {
@@ -279,6 +325,37 @@
     color: var(--fg-2);
     text-transform: uppercase;
     letter-spacing: 0.06em;
+  }
+
+  .theme-toggle {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.625rem;
+    border-radius: var(--radius);
+    color: var(--fg-2);
+    font-size: 0.75rem;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+  }
+  .theme-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--fg-0);
+  }
+  .theme-toggle :global(svg) {
+    width: 14px;
+    height: 14px;
+  }
+
+  .version {
+    color: var(--fg-3);
+    font-size: 0.7rem;
+    padding: 0.25rem 0.625rem 0;
   }
 
   .logout {

@@ -40,6 +40,42 @@
   color-scheme: dark;
 }
 
+/* Light theme — applied to <html data-theme="light"> by the sidebar toggle.
+ * Values stay on the same semantic ramp (bg-0 lightest surface, fg-0
+ * highest-contrast text) so every page that uses the tokens inverts cleanly.
+ * Status colours keep their hue but lose saturation so they don't bleed on a
+ * white background. */
+:root[data-theme='light'] {
+  --bg-0: #ffffff;
+  --bg-1: #f7f8fa;
+  --bg-2: #eef0f4;
+  --bg-3: #e3e7ee;
+  --bg-hover: #dde2ea;
+  --border: #d8dde6;
+  --border-strong: #b9c2cf;
+
+  --fg-0: #0f172a;
+  --fg-1: #2d3a52;
+  --fg-2: #5b6779;
+  --fg-3: #8a93a3;
+
+  --accent: #0f766e;
+  --accent-hover: #0b5d57;
+  --accent-bg: rgba(15, 118, 110, 0.1);
+
+  --success: #1f9b4a;
+  --success-bg: rgba(31, 155, 74, 0.12);
+  --warning: #b8860b;
+  --warning-bg: rgba(184, 134, 11, 0.12);
+  --danger: #c93838;
+  --danger-bg: rgba(201, 56, 56, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+
+  color-scheme: light;
+}
+
 @supports (font-variation-settings: normal) {
   :root {
     font-family: 'Inter var', var(--font-sans);
