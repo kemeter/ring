@@ -14,6 +14,7 @@ mod commands {
     pub(crate) mod deployment;
     pub(crate) mod doctor;
     pub(crate) mod init;
+    pub(crate) mod output;
     pub(crate) mod problem_json;
     pub(crate) mod server;
     pub(crate) mod style;
