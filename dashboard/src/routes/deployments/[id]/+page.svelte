@@ -5,20 +5,24 @@
   import {
     fetchLogsSnapshot,
     getDeployment,
+    getDeploymentMetrics,
     listDeploymentEvents,
     streamLogs,
     type DeploymentDetail,
     type DeploymentEvent,
+    type DeploymentStats,
     type EnvValue,
     type HealthCheck,
     type LogEntry,
     type LogStreamHandle
   } from '$lib/api';
   import { getToken } from '$lib/auth';
-  import { formatDate, timeAgo } from '$lib/utils';
+  import { formatBytes, formatDate, timeAgo } from '$lib/utils';
 
   let detail = $state<DeploymentDetail | null>(null);
   let events = $state<DeploymentEvent[]>([]);
+  let metrics = $state<DeploymentStats | null>(null);
+  let metricsError = $state<string | null>(null);
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
   let lastFetch = $state<Date | null>(null);
@@ -155,12 +159,24 @@
       return;
     }
     try {
-      // Events can fail (e.g. older versions of the API) without invalidating
-      // the rest of the page — degrade gracefully.
-      const [d, ev] = await Promise.all([
+      // Events and metrics can fail (older API, or a deployment with no live
+      // instances) without invalidating the rest of the page — degrade
+      // gracefully. Metrics carry their own error so the card can explain why
+      // it's empty instead of silently showing nothing.
+      const [d, ev, m] = await Promise.all([
         getDeployment(id),
-        listDeploymentEvents(id).catch(() => [] as DeploymentEvent[])
+        listDeploymentEvents(id).catch(() => [] as DeploymentEvent[]),
+        getDeploymentMetrics(id)
+          .then((stats) => {
+            metricsError = null;
+            return stats;
+          })
+          .catch((e) => {
+            metricsError = e instanceof Error ? e.message : String(e);
+            return null;
+          })
       ]);
+      metrics = m;
       // The API omits empty collections in some shapes (e.g. health_checks
       // is missing entirely when none are configured). Normalize so the
       // template can safely read `.length`, `Object.keys`, etc.
@@ -391,6 +407,87 @@
           <li class="mono">{inst}</li>
         {/each}
       </ul>
+    {/if}
+  </section>
+
+  <section class="card">
+    <header class="section-head">
+      <h2>Metrics</h2>
+      <span class="count">live</span>
+    </header>
+    {#if metrics && metrics.instance_count > 0}
+      <div class="metrics-totals">
+        <div class="metric">
+          <span class="metric-label">CPU</span>
+          <span class="metric-value mono">{metrics.total_cpu_usage_percent.toFixed(1)}%</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Memory</span>
+          <span class="metric-value mono">
+            {formatBytes(metrics.total_memory.usage_bytes)}
+            <span class="metric-sub"
+              >/ {formatBytes(metrics.total_memory.limit_bytes)} ({metrics.total_memory.usage_percent.toFixed(
+                1
+              )}%)</span
+            >
+          </span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Net I/O</span>
+          <span class="metric-value mono">
+            {formatBytes(metrics.total_network.rx_bytes)} rx
+            <span class="metric-sub">/ {formatBytes(metrics.total_network.tx_bytes)} tx</span>
+          </span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Disk I/O</span>
+          <span class="metric-value mono">
+            {formatBytes(metrics.total_disk_io.read_bytes)} read
+            <span class="metric-sub">/ {formatBytes(metrics.total_disk_io.write_bytes)} write</span>
+          </span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">PIDs</span>
+          <span class="metric-value mono">{metrics.total_pids}</span>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Instance</th>
+            <th class="num">CPU</th>
+            <th class="num">Memory</th>
+            <th class="num">Net rx / tx</th>
+            <th class="num">Disk r / w</th>
+            <th class="num">PIDs</th>
+            <th class="num">Restarts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each metrics.instances as inst (inst.instance_id)}
+            <tr>
+              <td class="mono" title={inst.instance_id}>{inst.instance_name}</td>
+              <td class="num mono">{inst.cpu_usage_percent.toFixed(1)}%</td>
+              <td class="num mono">
+                {formatBytes(inst.memory.usage_bytes)}
+                <span class="metric-sub">({inst.memory.usage_percent.toFixed(1)}%)</span>
+              </td>
+              <td class="num mono">
+                {formatBytes(inst.network.rx_bytes)} / {formatBytes(inst.network.tx_bytes)}
+              </td>
+              <td class="num mono">
+                {formatBytes(inst.disk_io.read_bytes)} / {formatBytes(inst.disk_io.write_bytes)}
+              </td>
+              <td class="num mono">{inst.pids.current} / {inst.pids.limit}</td>
+              <td class="num mono">{inst.restart_count}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else if metricsError}
+      <p class="muted pad">Metrics unavailable: {metricsError}</p>
+    {:else}
+      <p class="muted pad">No live instances to report metrics for.</p>
     {/if}
   </section>
 
@@ -683,6 +780,35 @@
   }
   .muted.pad {
     padding: 1.25rem;
+  }
+
+  .metrics-totals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.85rem 1.5rem;
+    padding: 1rem 1.125rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .metric {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .metric-label {
+    color: var(--fg-2);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .metric-value {
+    color: var(--fg-0);
+    font-size: 0.95rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .metric-sub {
+    color: var(--fg-3);
+    font-size: 0.72rem;
+    font-weight: 400;
   }
 
   dl {

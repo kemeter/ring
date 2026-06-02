@@ -79,9 +79,14 @@ Local mode is always available — there's nothing to disable, it only runs when
 
 ## What the dashboard currently shows
 
-This is the v0.9 MVP — intentionally minimal:
-
 - A login screen
-- A list of all deployments visible to your account, with namespace / name / runtime / status / replicas / image
+- A list of all deployments visible to your account, with namespace / name / runtime / status / replicas / image, plus namespace filters
+- A deployment **detail page** (`/deployments/{id}`) with:
+  - Overview and configured resources
+  - Running instances
+  - **Live metrics** — per-instance and aggregated CPU, memory, network I/O, disk I/O and PID counts, refreshed every few seconds (sourced from `GET /deployments/{id}/metrics`). The card shows a message instead when the deployment has no live instances.
+  - Ports, volumes, environment variables, and configured health checks
+  - Streamed logs (live tail) and a recent-events timeline
+- Read-only views for namespaces, secrets, and configs
 
-Future cycles will add drill-down (instances, events, live logs) and actions (restart, scale, delete). Until then, the CLI remains the source of truth for anything mutating.
+The dashboard is read-only: the CLI and manifest remain the source of truth for anything mutating (create, scale, restart, delete).
