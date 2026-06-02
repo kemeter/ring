@@ -36,13 +36,25 @@ export function formatDate(iso: string | null | undefined): string {
   return d.toLocaleString();
 }
 
+/** Human-readable byte size (binary units), mirroring the CLI's `format_bytes`. */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1_073_741_824) {
+    return `${(bytes / 1_073_741_824).toFixed(2)} GiB`;
+  }
+  if (bytes >= 1_048_576) {
+    return `${(bytes / 1_048_576).toFixed(2)} MiB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(2)} KiB`;
+  }
+  return `${bytes} B`;
+}
+
 function normaliseTimestamp(input: string): string {
   // SQL-style: `YYYY-MM-DD HH:MM:SS[.nnn...] UTC` → `YYYY-MM-DDTHH:MM:SS[.nnn]Z`.
   // We keep at most 3 fractional digits because `Date` ignores anything beyond
   // milliseconds and some browsers complain about longer precision.
-  const m = input.match(
-    /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)? UTC$/
-  );
+  const m = input.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)? UTC$/);
   if (m) {
     const frac = m[3] ? m[3].slice(0, 4) : '';
     return `${m[1]}T${m[2]}${frac}Z`;

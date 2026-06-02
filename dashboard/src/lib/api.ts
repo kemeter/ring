@@ -107,6 +107,53 @@ export interface DeploymentDetail extends Deployment {
   network?: unknown;
 }
 
+export interface MemoryStats {
+  usage_bytes: number;
+  limit_bytes: number;
+  usage_percent: number;
+}
+
+export interface NetworkStats {
+  rx_bytes: number;
+  tx_bytes: number;
+  rx_packets: number;
+  tx_packets: number;
+}
+
+export interface DiskIoStats {
+  read_bytes: number;
+  write_bytes: number;
+}
+
+export interface PidStats {
+  current: number;
+  limit: number;
+}
+
+export interface InstanceStats {
+  instance_id: string;
+  instance_name: string;
+  cpu_usage_percent: number;
+  memory: MemoryStats;
+  network: NetworkStats;
+  disk_io: DiskIoStats;
+  pids: PidStats;
+  restart_count: number;
+}
+
+/** Mirrors `DeploymentStatsOutput` from `src/api/dto/stats.rs`. */
+export interface DeploymentStats {
+  deployment_id: string;
+  deployment_name: string;
+  instance_count: number;
+  total_cpu_usage_percent: number;
+  total_memory: MemoryStats;
+  total_network: NetworkStats;
+  total_disk_io: DiskIoStats;
+  total_pids: number;
+  instances: InstanceStats[];
+}
+
 export interface Secret {
   id: string;
   created_at: string;
@@ -230,6 +277,10 @@ export function getDeployment(id: string): Promise<DeploymentDetail> {
 
 export function listDeploymentEvents(id: string): Promise<DeploymentEvent[]> {
   return request<DeploymentEvent[]>(`/deployments/${encodeURIComponent(id)}/events`);
+}
+
+export function getDeploymentMetrics(id: string): Promise<DeploymentStats> {
+  return request<DeploymentStats>(`/deployments/${encodeURIComponent(id)}/metrics`);
 }
 
 export function listSecrets(): Promise<Secret[]> {
