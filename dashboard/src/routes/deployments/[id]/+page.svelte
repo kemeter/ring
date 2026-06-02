@@ -5,6 +5,7 @@
   import {
     fetchLogsSnapshot,
     getDeployment,
+    getDeploymentHealthChecks,
     getDeploymentMetrics,
     listDeploymentEvents,
     streamLogs,
@@ -13,6 +14,7 @@
     type DeploymentStats,
     type EnvValue,
     type HealthCheck,
+    type HealthCheckResult,
     type LogEntry,
     type LogStreamHandle
   } from '$lib/api';
@@ -23,6 +25,7 @@
   let events = $state<DeploymentEvent[]>([]);
   let metrics = $state<DeploymentStats | null>(null);
   let metricsError = $state<string | null>(null);
+  let hcHistory = $state<HealthCheckResult[]>([]);
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
   let lastFetch = $state<Date | null>(null);
@@ -163,7 +166,7 @@
       // instances) without invalidating the rest of the page — degrade
       // gracefully. Metrics carry their own error so the card can explain why
       // it's empty instead of silently showing nothing.
-      const [d, ev, m] = await Promise.all([
+      const [d, ev, m, hc] = await Promise.all([
         getDeployment(id),
         listDeploymentEvents(id).catch(() => [] as DeploymentEvent[]),
         getDeploymentMetrics(id)
@@ -174,9 +177,11 @@
           .catch((e) => {
             metricsError = e instanceof Error ? e.message : String(e);
             return null;
-          })
+          }),
+        getDeploymentHealthChecks(id).catch(() => [] as HealthCheckResult[])
       ]);
       metrics = m;
+      hcHistory = hc;
       // The API omits empty collections in some shapes (e.g. health_checks
       // is missing entirely when none are configured). Normalize so the
       // template can safely read `.length`, `Object.keys`, etc.
@@ -202,7 +207,7 @@
 
   onMount(() => {
     if (!getToken()) {
-      goto('/');
+      goto('/login');
       return;
     }
     void refresh();
@@ -253,6 +258,19 @@
       case 'command':
         return hc.command;
     }
+  }
+
+  /** Map a recorded probe status to a colour class. `success` → green,
+   *  `failed`/`timeout` → red, anything else neutral. */
+  function hcStatusClass(status: string): string {
+    const s = status.toLowerCase();
+    if (s === 'success') {
+      return 'hc-ok';
+    }
+    if (s === 'failed' || s === 'timeout') {
+      return 'hc-fail';
+    }
+    return 'hc-unknown';
   }
 
   /** Collapse runs of consecutive events sharing the same level + message
@@ -622,6 +640,41 @@
     {/if}
   </section>
 
+  {#if detail.health_checks.length > 0}
+    <section class="card">
+      <header class="section-head">
+        <h2>Health check history</h2>
+        <span class="count">{hcHistory.length}</span>
+      </header>
+      {#if hcHistory.length === 0}
+        <p class="muted pad">No probe results recorded yet.</p>
+      {:else}
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Message</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each hcHistory as r (r.id)}
+              <tr>
+                <td class="mono">{formatDate(r.finished_at)}</td>
+                <td>{r.check_type}</td>
+                <td>
+                  <span class="hc-status {hcStatusClass(r.status)}">{r.status}</span>
+                </td>
+                <td class="mono small">{r.message ?? '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    </section>
+  {/if}
+
   <section class="card">
     <header class="section-head logs-head">
       <h2>Logs</h2>
@@ -930,6 +983,31 @@
     padding: 0.1rem 0.45rem;
     border-radius: var(--radius-sm);
     font-size: 0.75rem;
+  }
+
+  .hc-status {
+    display: inline-block;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .hc-ok {
+    color: var(--success);
+    background: var(--success-bg);
+  }
+  .hc-fail {
+    color: var(--danger);
+    background: var(--danger-bg);
+  }
+  .hc-unknown {
+    color: var(--fg-3);
+    background: var(--bg-2);
+  }
+  td.small {
+    font-size: 0.78rem;
+    color: var(--fg-1);
   }
 
   .events {

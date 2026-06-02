@@ -283,6 +283,28 @@ export function getDeploymentMetrics(id: string): Promise<DeploymentStats> {
   return request<DeploymentStats>(`/deployments/${encodeURIComponent(id)}/metrics`);
 }
 
+/** One recorded health-check probe. Mirrors `HealthCheckResultRecord` from
+ *  `src/models/health_check_logs.rs`. `status` is `success` | `failed` |
+ *  `timeout`; timestamps are RFC3339. */
+export interface HealthCheckResult {
+  id: string;
+  deployment_id: string;
+  check_type: string;
+  status: string;
+  message?: string | null;
+  created_at: string;
+  started_at: string;
+  finished_at: string;
+}
+
+/** Recent probe history for a deployment, newest first (server default).
+ *  `limit` caps how many records come back. */
+export function getDeploymentHealthChecks(id: string, limit = 50): Promise<HealthCheckResult[]> {
+  return request<HealthCheckResult[]>(
+    `/deployments/${encodeURIComponent(id)}/health-checks?limit=${limit}`
+  );
+}
+
 /** Mirrors `NodeRootDto` from `src/api/dto/node.rs`. Memory figures are GiB. */
 export interface NodeInfo {
   hostname: string;
