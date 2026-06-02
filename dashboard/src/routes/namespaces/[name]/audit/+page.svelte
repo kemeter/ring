@@ -27,7 +27,7 @@
 
   onMount(() => {
     if (!getToken()) {
-      goto('/');
+      goto('/login');
       return;
     }
     void refresh();

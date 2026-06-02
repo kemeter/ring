@@ -36,7 +36,7 @@
 
   onMount(() => {
     if (!getToken()) {
-      goto('/');
+      goto('/login');
       return;
     }
     nsFilter = $page.url.searchParams.get('namespace') ?? '';

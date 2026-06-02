@@ -101,7 +101,7 @@
 
   onMount(() => {
     if (!getToken()) {
-      goto('/');
+      goto('/login');
       return;
     }
     loadFiltersFromUrl($page.url);
