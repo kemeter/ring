@@ -169,13 +169,6 @@ impl CloudHypervisorLifecycle {
         PathBuf::from(&self.config.socket_dir).join(format!("{}.console.log", instance_id))
     }
 
-    /// Public for the e2e test only — production callers go through
-    /// `get_logs` / `stream_logs`.
-    #[cfg(test)]
-    pub(crate) fn console_log_path_for_test(&self, instance_id: &str) -> PathBuf {
-        self.console_log_path(instance_id)
-    }
-
     fn deployment_prefix(deployment_id: &str) -> String {
         format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())])
     }
@@ -214,10 +207,10 @@ impl CloudHypervisorLifecycle {
             }
 
             let client = CloudHypervisorClient::new(&socket_str);
-            if let Ok(info) = client.info().await {
-                if accepted_states.contains(&info.state.as_str()) {
-                    instances.push(instance_id);
-                }
+            if let Ok(info) = client.info().await
+                && accepted_states.contains(&info.state.as_str())
+            {
+                instances.push(instance_id);
             }
         }
 
@@ -377,7 +370,7 @@ impl CloudHypervisorLifecycle {
         // Ensure socket directory exists
         tokio::fs::create_dir_all(&self.config.socket_dir)
             .await
-            .map_err(|e| RuntimeError::Io(e))?;
+            .map_err(RuntimeError::Io)?;
 
         // Permanent: missing VM image. The operator must fix the deployment.
         let base_image = PathBuf::from(&deployment.image);
@@ -418,7 +411,7 @@ impl CloudHypervisorLifecycle {
                 ])
                 .output()
                 .await
-                .map_err(|e| RuntimeError::Io(e))?;
+                .map_err(RuntimeError::Io)?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -692,10 +685,10 @@ impl CloudHypervisorLifecycle {
         // VM is up — hand the mounts over to the lifecycle so they outlive
         // this function. The lock window is tiny and held only across an
         // insert.
-        if !live_mounts.is_empty() {
-            if let Ok(mut map) = self.virtiofs_mounts.lock() {
-                map.insert(instance_id.to_string(), live_mounts);
-            }
+        if !live_mounts.is_empty()
+            && let Ok(mut map) = self.virtiofs_mounts.lock()
+        {
+            map.insert(instance_id.to_string(), live_mounts);
         }
 
         // Spawn one socat per declared port now that the guest IP is reachable
@@ -723,10 +716,10 @@ impl CloudHypervisorLifecycle {
                     }
                 }
             }
-            if !forwarders.is_empty() {
-                if let Ok(mut map) = self.port_forwarders.lock() {
-                    map.insert(instance_id.to_string(), forwarders);
-                }
+            if !forwarders.is_empty()
+                && let Ok(mut map) = self.port_forwarders.lock()
+            {
+                map.insert(instance_id.to_string(), forwarders);
             }
         }
 
@@ -945,13 +938,13 @@ impl CloudHypervisorLifecycle {
                     }
                 }
             }
-        } else if current_count > target_count {
-            if let Some(instance_id) = deployment.instances.first().cloned() {
-                if !self.stop_vm(&instance_id).await {
-                    warn!("Failed to stop VM {} during scale down", instance_id);
-                }
-                deployment.instances.remove(0);
+        } else if current_count > target_count
+            && let Some(instance_id) = deployment.instances.first().cloned()
+        {
+            if !self.stop_vm(&instance_id).await {
+                warn!("Failed to stop VM {} during scale down", instance_id);
             }
+            deployment.instances.remove(0);
         }
 
         deployment
@@ -1146,18 +1139,18 @@ fn parse_resources(deployment: &Deployment) -> (u32, u32) {
     let mut vcpus = 1u32;
     let mut memory_mb = 256u32;
 
-    if let Some(ref resources) = deployment.resources {
-        if let Some(ref limits) = resources.limits {
-            if let Some(ref cpu) = limits.cpu {
-                if let Ok(nano) = crate::models::deployments::parse_cpu_string(cpu) {
-                    vcpus = std::cmp::max(1, (nano / 1_000_000_000) as u32);
-                }
-            }
-            if let Some(ref mem) = limits.memory {
-                if let Ok(bytes) = crate::models::deployments::parse_memory_string(mem) {
-                    memory_mb = std::cmp::max(128, (bytes / (1024 * 1024)) as u32);
-                }
-            }
+    if let Some(ref resources) = deployment.resources
+        && let Some(ref limits) = resources.limits
+    {
+        if let Some(ref cpu) = limits.cpu
+            && let Ok(nano) = crate::models::deployments::parse_cpu_string(cpu)
+        {
+            vcpus = std::cmp::max(1, (nano / 1_000_000_000) as u32);
+        }
+        if let Some(ref mem) = limits.memory
+            && let Ok(bytes) = crate::models::deployments::parse_memory_string(mem)
+        {
+            memory_mb = std::cmp::max(128, (bytes / (1024 * 1024)) as u32);
         }
     }
 

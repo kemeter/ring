@@ -13,7 +13,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Namespace
     sqlx::query_as::<_, Namespace>(
         "SELECT id, created_at, updated_at, name FROM namespace WHERE id = ?",
     )
-    .bind(&id)
+    .bind(id)
     .fetch_optional(pool)
     .await
 }

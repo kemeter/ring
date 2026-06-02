@@ -220,16 +220,16 @@ fn check_virtiofsd() -> Check {
         "/usr/lib/qemu/virtiofsd",
     ];
     for path in &candidates {
-        if let Ok(output) = std::process::Command::new(path).arg("--version").output() {
-            if output.status.success() {
-                let version = String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                return Check::ok("virtiofsd", &format!("{} ({})", version, path));
-            }
+        if let Ok(output) = std::process::Command::new(path).arg("--version").output()
+            && output.status.success()
+        {
+            let version = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            return Check::ok("virtiofsd", &format!("{} ({})", version, path));
         }
     }
     Check::fail("virtiofsd", "not found (apt install virtiofsd)")
@@ -248,11 +248,11 @@ fn check_server() -> Vec<Check> {
 }
 
 pub(crate) fn execute(_args: &ArgMatches, config: Config) {
-    let mut all_checks: Vec<(&str, Vec<Check>)> = Vec::new();
-
-    all_checks.push(("Server", check_server()));
-    all_checks.push(("Docker", check_docker()));
-    all_checks.push(("Cloud Hypervisor", check_cloud_hypervisor(&config)));
+    let all_checks: Vec<(&str, Vec<Check>)> = vec![
+        ("Server", check_server()),
+        ("Docker", check_docker()),
+        ("Cloud Hypervisor", check_cloud_hypervisor(&config)),
+    ];
 
     let mut has_failure = false;
 

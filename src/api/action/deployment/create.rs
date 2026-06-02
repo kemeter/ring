@@ -189,14 +189,14 @@ fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
         // `host_ip` reaches Docker's PortBindings / socat's bind= verbatim.
         // A malformed value would otherwise surface only at runtime as an
         // opaque error event, so reject it here with a field-scoped path.
-        if let Some(host_ip) = &port.host_ip {
-            if host_ip.parse::<std::net::IpAddr>().is_err() {
-                errors.push(Violation::new(
-                    format!("ports[{}].host_ip", idx),
-                    format!("'{}' is not a valid IP address", host_ip),
-                    "deployment.ports.host_ip.invalid",
-                ));
-            }
+        if let Some(host_ip) = &port.host_ip
+            && host_ip.parse::<std::net::IpAddr>().is_err()
+        {
+            errors.push(Violation::new(
+                format!("ports[{}].host_ip", idx),
+                format!("'{}' is not a valid IP address", host_ip),
+                "deployment.ports.host_ip.invalid",
+            ));
         }
 
         if port.published != 0 {
@@ -441,17 +441,17 @@ impl Validate for Volume {
                 // to pick. Reject explicitly so users coming from Kubernetes
                 // (where Secret resources are multi-key dicts) get a clear
                 // error instead of silent omission.
-                if let Some(key) = &self.key {
-                    if !key.is_empty() {
-                        let error = ValidationError {
-                            code: Cow::from("unexpected_field"),
-                            message: Some(Cow::from(
-                                "secret volumes have no key — a secret holds a single opaque value",
-                            )),
-                            params: HashMap::new(),
-                        };
-                        errors.add("key", error);
-                    }
+                if let Some(key) = &self.key
+                    && !key.is_empty()
+                {
+                    let error = ValidationError {
+                        code: Cow::from("unexpected_field"),
+                        message: Some(Cow::from(
+                            "secret volumes have no key — a secret holds a single opaque value",
+                        )),
+                        params: HashMap::new(),
+                    };
+                    errors.add("key", error);
                 }
 
                 if !matches!(self.permission, Permission::Ro) {
@@ -530,10 +530,6 @@ pub(crate) async fn create(
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
-    let mut filters = Vec::new();
-    filters.push(input.namespace.clone());
-    filters.push(input.name.clone());
-
     // Accumulate every validation error in one pass: a manifest that
     // violates several rules surfaces the full list in one response so
     // the user can fix everything in one apply cycle. Order:

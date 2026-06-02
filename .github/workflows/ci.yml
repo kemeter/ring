@@ -21,7 +21,6 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: actions/cache@v5
@@ -35,7 +34,20 @@ jobs:
       - name: Build dashboard
         run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: rustup component add clippy
-      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets -- -D warnings
+
+  dashboard-lint:
+    name: Dashboard Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Install dashboard deps
+        run: cd dashboard && bun install --frozen-lockfile
+      - name: Biome (lint + format)
+        run: cd dashboard && bun run lint
+      - name: svelte-check (types)
+        run: cd dashboard && bun run check
 
   test:
     name: Test

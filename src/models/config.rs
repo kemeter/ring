@@ -17,7 +17,7 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Config>, 
     sqlx::query_as::<_, Config>(
         "SELECT id, created_at, updated_at, namespace, name, data, labels FROM config WHERE id = ?",
     )
-    .bind(&id)
+    .bind(id)
     .fetch_optional(pool)
     .await
 }
@@ -71,7 +71,7 @@ pub(crate) async fn create(pool: &SqlitePool, config: Config) -> Result<(), sqlx
 
 pub(crate) async fn delete(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
     let result = sqlx::query("DELETE FROM config WHERE id = ?")
-        .bind(&id)
+        .bind(id)
         .execute(pool)
         .await?;
 

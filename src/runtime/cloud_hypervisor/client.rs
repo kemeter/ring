@@ -124,6 +124,7 @@ pub(crate) struct ConsoleConfig {
 pub(crate) struct VmInfo {
     pub state: String,
     #[serde(default)]
+    #[allow(dead_code)] // Deserialized from the VMM info response; kept for completeness.
     pub config: Option<serde_json::Value>,
 }
 
@@ -235,6 +236,7 @@ impl CloudHypervisorClient {
     }
 
     /// Ping the VMM to check if it's alive.
+    #[allow(dead_code)] // Health-probe helper for the VMM; kept for diagnostics.
     pub async fn ping(&self) -> Result<(), ClientError> {
         self.request(Method::PUT, "/api/v1/vmm.ping", None).await?;
         Ok(())

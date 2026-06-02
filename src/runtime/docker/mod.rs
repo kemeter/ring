@@ -9,15 +9,6 @@ mod stats;
 use crate::runtime::error::RuntimeError;
 use bollard::Docker;
 
-pub(crate) use container::remove_container_by_id;
-pub(crate) use instances::{list_instances, list_instances_with_names};
-pub(crate) use lifecycle::apply;
-pub(crate) use logs::{logs, logs_stream};
-pub(crate) use stats::{
-    compute_cpu_percent, compute_disk_io_stats, compute_memory_stats, compute_network_stats,
-    compute_pid_stats, fetch_container_stats, fetch_restart_count,
-};
-
 /// How an image was addressed in the manifest. A `tag` is mutable on the
 /// registry side (`my/app:latest` can be re-pushed); a `digest` pins an
 /// immutable content hash. Docker's pull API takes them through different

@@ -12,7 +12,6 @@ use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use crate::models::users::User;
-use crate::runtime::docker;
 use http::StatusCode;
 
 #[derive(Deserialize, Debug, Clone)]

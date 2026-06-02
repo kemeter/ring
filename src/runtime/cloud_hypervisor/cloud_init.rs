@@ -44,6 +44,7 @@ pub(crate) struct GuestNet {
     pub guest_ip: String,
     pub host_ip: String,
     pub prefix_len: u8,
+    #[allow(dead_code)] // Rendered into the NoCloud network config; not read back.
     pub mac: String,
 }
 
@@ -266,7 +267,7 @@ fn shell_quote(v: &str) -> String {
 fn base64_encode(input: &str) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let bytes = input.as_bytes();
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= bytes.len() {
         let b = ((bytes[i] as u32) << 16) | ((bytes[i + 1] as u32) << 8) | (bytes[i + 2] as u32);

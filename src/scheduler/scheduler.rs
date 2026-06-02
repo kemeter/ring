@@ -1073,16 +1073,15 @@ pub(crate) async fn schedule(
             persist_pending_events(&pool, &mut result).await;
 
             // Re-read current status from DB to detect concurrent changes (e.g. API delete)
-            if let Ok(Some(current)) = deployments::find(&pool, &result.id).await {
-                if current.status == DeploymentStatus::Deleted
-                    && result.status != DeploymentStatus::Deleted
-                {
-                    info!(
-                        "Deployment {} was deleted externally during scheduler cycle, skipping update",
-                        result.id
-                    );
-                    continue;
-                }
+            if let Ok(Some(current)) = deployments::find(&pool, &result.id).await
+                && current.status == DeploymentStatus::Deleted
+                && result.status != DeploymentStatus::Deleted
+            {
+                info!(
+                    "Deployment {} was deleted externally during scheduler cycle, skipping update",
+                    result.id
+                );
+                continue;
             }
 
             handle_status_transitions(&pool, &mut result, &mut deleted).await;

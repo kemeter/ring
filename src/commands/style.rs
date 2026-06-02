@@ -39,6 +39,7 @@ pub(crate) fn error(msg: &str) -> String {
 }
 
 /// Yellow — a warning; the command continued.
+#[allow(dead_code)] // Completes the semantic palette (error/warn/success); used as the CLI grows.
 pub(crate) fn warn(msg: &str) -> String {
     paint(colour_enabled(), || msg.yellow().to_string(), msg)
 }
