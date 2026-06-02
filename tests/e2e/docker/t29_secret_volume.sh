@@ -28,6 +28,12 @@ SECRET_NAME="api-bearer-token"
 SECRET_VALUE="s3cr3t-token-via-volume"
 
 # === Create the secret out of band (no inline `secrets:` block) ===
+# Secrets require the namespace to exist first — POST /secrets returns 404
+# otherwise. Deployments auto-create namespaces; secrets don't.
+"$RING_BIN" namespace create ring-e2e 2>&1 \
+  | grep -qiE "created|already exists" \
+  || fail "ring namespace create did not succeed"
+
 "$RING_BIN" secret create "$SECRET_NAME" -n ring-e2e -v "$SECRET_VALUE" 2>&1 \
   | grep -qF "created" \
   || fail "ring secret create did not succeed"
