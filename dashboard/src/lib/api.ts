@@ -215,8 +215,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (res.status === 401) {
     clearToken();
-    if (typeof window !== 'undefined' && !window.location.pathname.endsWith('/')) {
-      window.location.assign('./');
+    if (typeof window !== 'undefined' && !window.location.pathname.endsWith('/login')) {
+      window.location.assign('/login');
     }
     throw new Error('401 Unauthorized');
   }
