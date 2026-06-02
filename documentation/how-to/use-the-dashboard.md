@@ -86,6 +86,7 @@ Local mode is always available — there's nothing to disable, it only runs when
   - Running instances
   - **Live metrics** — per-instance and aggregated CPU, memory, network I/O, disk I/O and PID counts, refreshed every few seconds (sourced from `GET /deployments/{id}/metrics`). The card shows a message instead when the deployment has no live instances.
   - Ports, volumes, environment variables, and configured health checks
+  - **Health check history** — recorded probe results over time (time, type, success/failed/timeout status, message), sourced from `GET /deployments/{id}/health-checks`. Shown only when the deployment has health checks configured.
   - Streamed logs (live tail) and a recent-events timeline
 - Read-only views for namespaces, secrets, and configs
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
