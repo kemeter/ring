@@ -88,5 +88,6 @@ Local mode is always available — there's nothing to disable, it only runs when
   - Ports, volumes, environment variables, and configured health checks
   - Streamed logs (live tail) and a recent-events timeline
 - Read-only views for namespaces, secrets, and configs
+- A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
 The dashboard is read-only: the CLI and manifest remain the source of truth for anything mutating (create, scale, restart, delete).

@@ -283,6 +283,22 @@ export function getDeploymentMetrics(id: string): Promise<DeploymentStats> {
   return request<DeploymentStats>(`/deployments/${encodeURIComponent(id)}/metrics`);
 }
 
+/** Mirrors `NodeRootDto` from `src/api/dto/node.rs`. Memory figures are GiB. */
+export interface NodeInfo {
+  hostname: string;
+  os: string;
+  arch: string;
+  uptime: string;
+  cpu_count: number;
+  memory_total: number;
+  memory_available: number;
+  load_average: number[];
+}
+
+export function getNode(): Promise<NodeInfo> {
+  return request<NodeInfo>('/node/get');
+}
+
 export function listSecrets(): Promise<Secret[]> {
   return request<Secret[]>('/secrets');
 }
