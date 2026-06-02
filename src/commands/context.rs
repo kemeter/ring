@@ -1,4 +1,4 @@
-use crate::commands::style;
+use crate::cli::style;
 use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
 use clap::ArgMatches;
 use clap::{Arg, Command};

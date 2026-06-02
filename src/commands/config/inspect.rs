@@ -1,6 +1,6 @@
 use crate::api::dto::config::ConfigOutput;
-use crate::commands::problem_json::http_error;
-use crate::commands::style;
+use crate::cli::problem_json::http_error;
+use crate::cli::style;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;

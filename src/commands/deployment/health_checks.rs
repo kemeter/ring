@@ -1,5 +1,6 @@
-use crate::commands::problem_json::http_error;
-use crate::commands::style;
+use crate::cli::output::{output_arg, output_format};
+use crate::cli::problem_json::http_error;
+use crate::cli::style;
 use crate::config::config::Config;
 use crate::config::config::load_auth_config;
 use crate::exit_code;
@@ -25,14 +26,7 @@ pub(crate) fn command_config() -> Command {
                 .help("Maximum number of results to return")
                 .value_parser(clap::value_parser!(u32)),
         )
-        .arg(
-            Arg::new("output")
-                .short('o')
-                .long("output")
-                .help("Output format")
-                .value_parser(["table", "json"])
-                .default_value("table"),
-        )
+        .arg(output_arg())
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -105,12 +99,7 @@ pub(crate) async fn execute(
                 }
             };
 
-            let output_format = args
-                .get_one::<String>("output")
-                .map(String::as_str)
-                .unwrap_or("table");
-
-            if output_format == "json" {
+            if output_format(args).is_json() {
                 println!("{}", body);
                 return;
             }

@@ -1,6 +1,6 @@
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::commands::problem_json::http_error_list;
-use crate::commands::style;
+use crate::cli::problem_json::http_error_list;
+use crate::cli::style;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;

@@ -1,4 +1,4 @@
-use crate::commands::problem_json::render_response_error;
+use crate::cli::problem_json::render_response_error;
 use crate::config::config::{Config, load_auth_config};
 use crate::exit_code;
 use clap::Arg;

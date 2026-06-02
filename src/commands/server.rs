@@ -1,5 +1,5 @@
 use crate::api::server as ApiServer;
-use crate::commands::style;
+use crate::cli::style;
 use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;

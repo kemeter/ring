@@ -1,5 +1,5 @@
-use crate::commands::problem_json::transport_error;
-use crate::commands::style;
+use crate::cli::problem_json::transport_error;
+use crate::cli::style;
 use crate::exit_code::{self, ExitCode};
 use clap::{Arg, ArgMatches, Command};
 use cli_table::{Table, WithTitle};

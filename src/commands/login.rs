@@ -1,5 +1,5 @@
-use crate::commands::problem_json::{render_response_error, transport_error};
-use crate::commands::style;
+use crate::cli::problem_json::{render_response_error, transport_error};
+use crate::cli::style;
 use crate::config::config::Config;
 use crate::exit_code;
 use clap::Arg;
