@@ -1,4 +1,5 @@
 use crate::api::server as ApiServer;
+use crate::commands::style;
 use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
@@ -126,6 +127,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         });
     }
 
+    print_startup_banner(&configuration, runtimes.as_ref());
+
     let scheduler_handler = task::spawn(schedule(
         pool,
         configuration,
@@ -143,4 +146,62 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     if let Err(e) = event_listener_handler.await {
         eprintln!("Docker event listener task failed: {}", e);
     }
+}
+
+/// Print a concise, human-readable summary of where the server is reachable
+/// once it has started: API endpoint, embedded dashboard (if enabled), and the
+/// registered runtimes. Goes to stdout (not the logger) so it shows regardless
+/// of `RUST_LOG`, and uses the shared `style` palette so colour is dropped in
+/// pipes / under `NO_COLOR`.
+fn print_startup_banner(
+    configuration: &Config,
+    runtimes: &std::collections::HashMap<String, Arc<dyn RuntimeLifecycle>>,
+) {
+    let version = env!("CARGO_PKG_VERSION");
+    let scheme = &configuration.api.scheme;
+    let port = configuration.api.port;
+    let host = configuration.host.as_str();
+
+    // Vite-style Local / Network lines. When bound to all interfaces we show
+    // both loopback and the machine's LAN IP (the actually-reachable address);
+    // a specific bind host shows only that one, on the matching line.
+    let url = |h: &str| format!("{}://{}:{}", scheme, h, port);
+    let lan_ip = local_ip_address::local_ip().ok().map(|ip| ip.to_string());
+
+    let (local, network): (Option<String>, Option<String>) = match host {
+        "0.0.0.0" => (Some(url("127.0.0.1")), lan_ip.map(|ip| url(&ip))),
+        "127.0.0.1" | "localhost" => (Some(url(host)), None),
+        other => (None, Some(url(other))),
+    };
+
+    let mut names: Vec<&String> = runtimes.keys().collect();
+    names.sort();
+    let runtime_list = names
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let arrow = style::success("➜");
+    println!();
+    println!("  {} {}  ready", style::success("Ring"), version);
+    println!();
+    if let Some(u) = &local {
+        println!("  {}  Local:     {}", arrow, u);
+    }
+    if let Some(u) = &network {
+        println!("  {}  Network:   {}", arrow, u);
+    } else if host == "0.0.0.0" {
+        println!("  {}  Network:   (no LAN address detected)", arrow);
+    }
+    if configuration.dashboard.enabled {
+        println!(
+            "  {}  Dashboard: http://{}",
+            arrow, configuration.dashboard.listen_address
+        );
+    } else {
+        println!("  {}  Dashboard: disabled (enable with --dashboard)", arrow);
+    }
+    println!("  {}  Runtimes:  {}", arrow, runtime_list);
+    println!();
 }

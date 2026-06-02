@@ -115,6 +115,21 @@ On first start, Ring:
 - Runs SQLite migrations to create `ring.db` in the current directory
 - Seeds the default admin user: username `admin`, password `changeme`
 
+It prints a short banner telling you where it's reachable:
+
+```text
+  Ring 0.8.0  ready
+
+  ➜  Local:     http://127.0.0.1:3030
+  ➜  Network:   http://192.168.1.67:3030
+  ➜  Dashboard: disabled (enable with --dashboard)
+  ➜  Runtimes:  cloud-hypervisor, docker
+```
+
+- **Local** is the loopback address; **Network** is your machine's LAN IP, resolved automatically — share it to reach Ring from another host.
+- With `--dashboard`, the `Dashboard` line shows its URL (default `http://127.0.0.1:3031`).
+- When `host` is set to a specific address (not `0.0.0.0`), only the matching line is shown.
+
 Leave this terminal running. You should see log output if you set `RUST_LOG=info` before starting:
 
 ```bash
