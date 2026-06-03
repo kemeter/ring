@@ -1325,6 +1325,20 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                     resp.stderr.trim()
                 )),
             ),
+            // A connect failure almost always means the guest image doesn't
+            // ship `ring-agent` listening on AF_VSOCK port 2375 (or it hasn't
+            // started yet) — the single most common `command` health-check
+            // pitfall on this runtime. Point the operator straight at it
+            // instead of leaving them with a bare io error.
+            Err(crate::runtime::vsock_client::VsockError::Connect { cid, source }) => (
+                HealthCheckStatus::Failed,
+                Some(format!(
+                    "cannot reach ring-agent in the guest (CID {cid}): {source}. \
+                     `command` health checks on cloud-hypervisor require ring-agent \
+                     running in the guest image on AF_VSOCK port 2375 — see the \
+                     cloud-hypervisor runtime docs"
+                )),
+            ),
             Err(e) => (
                 HealthCheckStatus::Failed,
                 Some(format!("vsock probe failed: {}", e)),
