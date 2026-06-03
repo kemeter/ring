@@ -106,6 +106,8 @@ Ring binds to its detected local IP by default (e.g. `192.168.1.x`), not `localh
 
 ## Deployment problems
 
+> For what each deployment status means and how a deployment moves between them, see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle).
+
 ### Stuck in `creating`
 
 Look at the events first:

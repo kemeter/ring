@@ -168,4 +168,5 @@ A few rules of thumb that hold up in practice:
 - [How-to: configure health checks](/documentation/how-to/configure-health-checks) — setup recipes and patterns
 - [How-to: perform a rolling update](/documentation/how-to/perform-rolling-update) — the operator's view
 - [Reconciliation](/documentation/concepts/reconciliation) — the loop that runs the probes
+- [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) — how readiness gates the `running` status
 - [Manifest reference: `health_checks`](/documentation/reference/manifest#health-checks)

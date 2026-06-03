@@ -30,6 +30,8 @@ A long-running service. The reconciler keeps **exactly `replicas` instances aliv
 
 A worker reaches `running` as soon as its container is up — **unless** it declares a `readiness: true` check, in which case it stays `creating` until that check is green (see [Health checks: the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate)). A readiness check that never turns green fails the deployment after `RING_ROLLOUT_DEADLINE` (default 600s).
 
+For the full set of statuses a deployment can hold, what moves it between them, and which are terminal, see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle).
+
 ### Job
 
 A one-shot task. The reconciler boots **one** instance (`replicas` is ignored), waits for it to exit, and records the result:
