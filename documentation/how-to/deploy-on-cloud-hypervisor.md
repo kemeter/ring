@@ -242,12 +242,12 @@ This is the canonical parity table. Other pages link here rather than restate it
 | `command` health checks | **Supported** via in-guest `ring-agent` over AF_VSOCK port 2375. Requires the agent in the guest image. |
 | Custom `command: [...]` field | **Rejected at the API** — the VM boots whatever its image is configured to run |
 | Docker image references | **Rejected at the API** — `image:` must be an absolute path to a raw disk image |
-| `labels:` | Silently ignored — no equivalent of Docker container labels |
+| `labels:` | **Stored and usable.** Not applied to the VM (no container-label equivalent), but persisted as Ring metadata — shown in `inspect` and filterable with `ring deployment list --label key=value`, same as Docker |
 | `resources.limits.cpu` | Honored as **allocation, not cap**: rounded down to whole vCPU, floor 1 (`"500m"` → 1 vCPU) |
 | `resources.limits.memory` | Honored as **allocation, not cap**: VM RAM size, minimum 128 MiB |
-| `resources.requests.*` | Silently ignored |
-| `config.image_pull_policy` / `server` / `username` / `password` | Silently ignored — no image to pull |
-| `config.user` (privileged / id / group) | Silently ignored |
+| `resources.requests.*` | Ignored (VM is sized from `limits`) — a **warning event** is recorded at create so it isn't silent |
+| `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull) — a **warning event** is recorded at create |
+| `config.user` (privileged / id / group) | Ignored — a **warning event** is recorded at create |
 | `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`. CH does not expose the workload's exit code — Ring sees VM state only. |
 | Inter-VM networking | Each VM is isolated — no shared bridge, no DNS between siblings. Cross-VM traffic goes through host-published ports |
 | Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |

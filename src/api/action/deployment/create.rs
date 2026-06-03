@@ -20,8 +20,8 @@ use crate::models::audit_log;
 use crate::models::deployment_event;
 use crate::models::deployments;
 use crate::models::deployments::{
-    DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, NetworkConfig, NetworkMode,
-    Resource,
+    Deployment, DeploymentConfig, DeploymentPort, DeploymentStatus, EnvValue, NetworkConfig,
+    NetworkMode, Resource, default_image_pull_policy,
 };
 use crate::models::namespace;
 use crate::models::users::User;
@@ -305,6 +305,46 @@ fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationL
             ));
         }
     }
+}
+
+/// Fields that are accepted by the API but have no effect on the
+/// cloud-hypervisor runtime, returned by their manifest path so the warning
+/// names exactly what the user wrote. CH sizes the VM from `resources.limits`
+/// only and never pulls from a registry, so `resources.requests` and the
+/// `config.*` registry/user knobs are dropped.
+fn cloud_hypervisor_ignored_fields(deployment: &Deployment) -> Vec<String> {
+    let mut ignored = Vec::new();
+
+    if deployment
+        .resources
+        .as_ref()
+        .is_some_and(|r| r.requests.is_some())
+    {
+        ignored.push("resources.requests".to_string());
+    }
+
+    if let Some(config) = &deployment.config {
+        // `image_pull_policy` has a default, so only flag it when it isn't the
+        // default — a user who explicitly set `Never`/`IfNotPresent` should
+        // know it does nothing here.
+        if config.image_pull_policy != default_image_pull_policy() {
+            ignored.push("config.image_pull_policy".to_string());
+        }
+        if config.server.is_some() {
+            ignored.push("config.server".to_string());
+        }
+        if config.username.is_some() {
+            ignored.push("config.username".to_string());
+        }
+        if config.password.is_some() {
+            ignored.push("config.password".to_string());
+        }
+        if config.user.is_some() {
+            ignored.push("config.user".to_string());
+        }
+    }
+
+    ignored
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -716,6 +756,29 @@ pub(crate) async fn create(
                 Some("deployment_created"),
             )
             .await;
+
+            // Cloud Hypervisor silently ignores some fields that Docker
+            // honours (no registry pull, sizing from `limits` only). Rather
+            // than drop them without a trace, surface a single warning event
+            // naming exactly what won't take effect, so an operator isn't left
+            // wondering why their `requests`/registry creds did nothing.
+            if deployment.runtime == "cloud-hypervisor" {
+                let ignored = cloud_hypervisor_ignored_fields(&deployment);
+                if !ignored.is_empty() {
+                    let _ = deployment_event::log_event(
+                        &pool,
+                        deployment.id.clone(),
+                        "warning",
+                        format!(
+                            "These fields are ignored by the cloud-hypervisor runtime and have no effect: {}",
+                            ignored.join(", ")
+                        ),
+                        "api",
+                        Some("cloud_hypervisor_ignored_fields"),
+                    )
+                    .await;
+                }
+            }
 
             // When a previous active deployment was wiped instead of
             // being kept as a rolling parent, surface the reason as a
