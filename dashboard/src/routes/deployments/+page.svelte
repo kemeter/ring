@@ -4,7 +4,7 @@
   import { page } from '$app/stores';
   import { listDeployments, type Deployment } from '$lib/api';
   import { getToken } from '$lib/auth';
-  import { timeAgo } from '$lib/utils';
+  import { formatDate, timeAgo } from '$lib/utils';
 
   let items = $state<Deployment[]>([]);
   let loading = $state(true);
@@ -139,6 +139,8 @@
   let totalReplicas = $derived(visible.reduce((acc, d) => acc + (d.replicas ?? 0), 0));
 </script>
 
+<svelte:head><title>Ring · Deployments</title></svelte:head>
+
 <header class="page-header">
   <div>
     <h1>Deployments</h1>
@@ -235,6 +237,7 @@
           <th>Status</th>
           <th class="num">Replicas</th>
           <th>Image</th>
+          <th>Created</th>
         </tr>
       </thead>
       <tbody>
@@ -262,6 +265,7 @@
             </td>
             <td class="num mono">{d.replicas}</td>
             <td class="mono">{d.image}</td>
+            <td class="created">{formatDate(d.created_at)}</td>
           </tr>
         {/each}
       </tbody>
@@ -397,6 +401,11 @@
   td.mono {
     font-family: var(--font-mono);
     color: var(--fg-1);
+  }
+  .created {
+    color: var(--fg-2);
+    font-size: 0.8rem;
+    white-space: nowrap;
   }
   .deployment-name {
     font-weight: 500;

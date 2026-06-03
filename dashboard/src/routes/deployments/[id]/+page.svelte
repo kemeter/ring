@@ -18,6 +18,7 @@
     type LogEntry,
     type LogStreamHandle
   } from '$lib/api';
+  import CopyButton from '$lib/CopyButton.svelte';
   import { getToken } from '$lib/auth';
   import { formatBytes, formatDate, timeAgo } from '$lib/utils';
 
@@ -300,6 +301,10 @@
   let groupedEvents = $derived(groupConsecutive(events));
 </script>
 
+<svelte:head>
+  <title>{detail ? `Ring · ${detail.name}` : 'Ring · Deployment'}</title>
+</svelte:head>
+
 {#if loading && !detail}
   <p class="muted">Loading…</p>
 {:else if errorMsg && !detail}
@@ -336,6 +341,7 @@
       </div>
       <p class="subtitle">
         <span class="mono">{detail.id}</span>
+        <CopyButton value={detail.id} label="Copy deployment ID" />
       </p>
     </div>
     <div class="header-actions">

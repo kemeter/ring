@@ -13,6 +13,8 @@ export interface Deployment {
   status: string;
   replicas: number;
   image: string;
+  /** SQL-style timestamp from the API; parse with `formatDate`. */
+  created_at?: string;
 }
 
 export interface CurrentUser {

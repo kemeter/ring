@@ -46,6 +46,8 @@
   );
 </script>
 
+<svelte:head><title>Ring · Node</title></svelte:head>
+
 <header class="page-header">
   <h1>Node</h1>
   <div class="header-actions">

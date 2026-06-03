@@ -413,4 +413,53 @@
     max-width: 1400px;
     width: 100%;
   }
+
+  /* On narrow screens the fixed 220px rail wastes space and tables overflow.
+   * Collapse to a single column: the sidebar becomes a top bar with a
+   * horizontally-scrollable nav, the content takes full width. */
+  @media (max-width: 768px) {
+    .shell {
+      grid-template-columns: 1fr;
+    }
+    .sidebar {
+      position: static;
+      height: auto;
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem 1rem;
+      border-right: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      border-bottom: 0;
+      margin: 0;
+      padding: 0 0.5rem 0 0;
+    }
+    nav {
+      flex-direction: row;
+      flex-wrap: wrap;
+      margin-top: 0;
+      flex: 1 1 100%;
+      overflow-x: auto;
+    }
+    .sidebar-footer {
+      margin-top: 0;
+      border-top: 0;
+      flex-direction: row;
+      align-items: center;
+      flex-wrap: wrap;
+      flex: 1 1 100%;
+      padding: 0.5rem 0.625rem 0;
+    }
+    .sidebar-footer .user {
+      margin-right: auto;
+    }
+    .main {
+      padding: 1.25rem 1rem;
+    }
+    :global(.card) {
+      overflow-x: auto;
+    }
+  }
 </style>

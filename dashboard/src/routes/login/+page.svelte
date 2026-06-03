@@ -31,6 +31,8 @@
   }
 </script>
 
+<svelte:head><title>Ring · Sign in</title></svelte:head>
+
 <div class="login-shell">
   <form class="card" onsubmit={submit}>
     <div class="brand">
