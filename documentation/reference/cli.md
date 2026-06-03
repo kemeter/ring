@@ -138,7 +138,7 @@ ring deployment list [OPTIONS]
 **Options:**
 
 - `-n` / `--namespace <NAMESPACE>` — filter by namespace
-- `-s` / `--status <STATUS>` — filter by status (repeatable)
+- `-s` / `--status <STATUS>` — filter by status (repeatable). Values: `pending`, `creating`, `running`, `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `insufficient_resources`, `error` — see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle)
 - `--type <TYPE>` — filter by deployment kind: `worker` or `job`
 - `-l` / `--label <SELECTOR>` — filter by label, `key=value` or just `key` (repeatable; a deployment must match **all** selectors). Works the same across runtimes (Docker and Cloud Hypervisor) since labels are matched on Ring's stored metadata.
 - `-o` / `--output <FORMAT>` — `table` (default) or `json`

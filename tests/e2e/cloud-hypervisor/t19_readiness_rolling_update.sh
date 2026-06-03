@@ -12,9 +12,14 @@
 #      design question.
 #   B. Without `readiness: true`, the legacy "drain on Running" behaviour
 #      must be preserved on CH too.
-#   C. With `readiness: true` and a probe that cannot succeed (TCP to a
-#      closed port — Cirros has no listening service), the parent VM stays
-#      alive: the gate holds the rollout.
+#   C. Parent v1 WITHOUT readiness reaches `running` normally. Child v2
+#      WITH readiness:true (TCP probe against a closed port) stays in
+#      `creating` forever and therefore never triggers the drain gate on
+#      the parent. This proves `is_ready_to_drain` runs on the CH runtime
+#      and that a non-ready child keeps the parent alive. A guest image
+#      that can expose a listening service is required to test the
+#      "gate opens → parent drained" path (scenario D in the Docker t22);
+#      that is deferred to the Packer/Alpine roadmap item.
 #   D. (Docker only) Flipping the readiness probe to success drains the
 #      parent. Reproducing this on CH needs a guest image that ships a
 #      controllable service — not possible with Cirros. The same code path
@@ -140,12 +145,20 @@ wait_deployment_drained "$B_CHILD" 60
 log "Scenario B: PASS"
 
 ###############################################################################
-# Scenario C — readiness:true + TCP probe failing → parent stays alive.
+# Scenario C — parent without readiness (running), child with readiness:true
+#              and a permanently-failing TCP probe → parent NOT drained.
+#
+# Cirros cannot expose a listening service, so we cannot make the child's
+# readiness probe succeed. Instead the parent is deployed WITHOUT readiness
+# (reaches `running` immediately), then we roll to a child WITH readiness
+# pointing at a closed port. The child stays `creating` forever, which is
+# exactly why `is_ready_to_drain` returns false and the parent stays alive.
 ###############################################################################
-log "-- Scenario C: readiness HC failing → parent NOT drained"
+log "-- Scenario C: child readiness HC failing → parent NOT drained"
 
 FIXTURE_C1="$RING_TEST_DIR/ready-C1.yaml"
-write_fixture "$FIXTURE_C1" "$IMG_V1" yes
+# Parent has NO readiness check → reaches `running` the legacy way.
+write_fixture "$FIXTURE_C1" "$IMG_V1" no
 "$RING_BIN" apply --file "$FIXTURE_C1"
 wait_deployment_status "$NS" "ready-vm" "running" 180
 C_PARENT=$(get_deployment_id "$NS" "ready-vm")
@@ -153,20 +166,23 @@ C_PARENT=$(get_deployment_id "$NS" "ready-vm")
 log "C parent id: $C_PARENT"
 
 FIXTURE_C2="$RING_TEST_DIR/ready-C2.yaml"
+# Child HAS readiness:true with a TCP probe to a closed port. It can never
+# become ready → it stays in `creating` indefinitely.
 write_fixture "$FIXTURE_C2" "$IMG_V2" yes
 "$RING_BIN" apply --file "$FIXTURE_C2"
-wait_deployment_by_image "$NS" "ready-vm" "$IMG_V2" "running" 180
+# Wait until the child deployment row exists in `creating` state.
+wait_deployment_by_image "$NS" "ready-vm" "$IMG_V2" "creating" 180
 C_CHILD=$(get_deployment_id_by_image "$NS" "ready-vm" "$IMG_V2")
 [ -z "$C_CHILD" ] && fail "scenario C: no child deployment id"
 [ "$C_PARENT" = "$C_CHILD" ] && fail "scenario C: parent and child share id"
-log "C child id: $C_CHILD"
+log "C child id: $C_CHILD (in creating — as expected)"
 
 # The child's readiness probe targets a closed port in Cirros, so every
 # probe row is `failed`. `is_ready_to_drain` must therefore keep returning
-# false and the parent must stay in the active set. Watch for 30 s — the
+# false and the parent must stay `running`. Watch for 30 s — the
 # anti-flap window is 10 s, so any false-positive drain would surface in
 # the first ~15 s.
-log "watching for 30s — parent VM must stay active while child is not ready"
+log "watching for 30s — parent VM must stay running while child is not ready"
 for i in $(seq 1 30); do
   parent_status=$("$RING_BIN" deployment list --output json 2>/dev/null \
     | jq -r --arg id "$C_PARENT" '.[] | select(.id==$id) | .status')

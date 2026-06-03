@@ -244,25 +244,48 @@ async fn handle_status_transitions(
             "Deployment {} transition: creating -> running",
             deployment.id
         );
-        if let Err(e) = deployment_event::log_event(
-            pool,
-            deployment.id.clone(),
-            "info",
-            format!(
-                "Status changed from creating to running ({} containers)",
-                deployment.instances.len()
-            ),
-            "scheduler",
-            Some("state_transition"),
-        )
-        .await
-        {
-            warn!(
-                "Failed to log state transition event for deployment {}: {}",
-                deployment.id, e
-            );
-        }
+        // NB: the `state_transition` event is NOT logged here. The readiness
+        // gate (`gate_running_on_readiness`) may revert this `Running` back to
+        // `Creating` later in the same cycle, so emitting the event now would
+        // persist a "creating -> running" event for a status that never gets
+        // persisted. The event is emitted once, after the gate, by
+        // `log_running_transition` — keyed on the status actually written.
         deployment.status = DeploymentStatus::Running;
+    }
+}
+
+/// Emit the `creating -> running` `state_transition` event, but only once the
+/// status that survives the whole cycle (after the readiness gate) is really
+/// `Running`. Called at the end of the cycle, after `gate_running_on_readiness`
+/// — never before — so the event never lies: a deployment the gate holds back
+/// in `Creating` produces no event, matching the lifecycle contract that a
+/// `status_changed` event fires only when a tick lands on a *different* status.
+async fn log_running_transition(
+    pool: &SqlitePool,
+    old_status: &DeploymentStatus,
+    deployment: &Deployment,
+) {
+    if *old_status != DeploymentStatus::Creating || deployment.status != DeploymentStatus::Running {
+        return;
+    }
+
+    if let Err(e) = deployment_event::log_event(
+        pool,
+        deployment.id.clone(),
+        "info",
+        format!(
+            "Status changed from creating to running ({} containers)",
+            deployment.instances.len()
+        ),
+        "scheduler",
+        Some("state_transition"),
+    )
+    .await
+    {
+        warn!(
+            "Failed to log state transition event for deployment {}: {}",
+            deployment.id, e
+        );
     }
 }
 
@@ -272,7 +295,18 @@ async fn run_health_checks(
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
 ) {
-    if deployment.status != DeploymentStatus::Running || deployment.health_checks.is_empty() {
+    // Health checks run in `Running` (full set, drives `on_failure`) and, for
+    // readiness gating, in `Creating` (readiness-only, record-only — see
+    // `HealthChecker::execute_checks`). `execute_checks` enforces the
+    // readiness-only / no-action rules for the creating phase; here we just
+    // let the call through for both statuses. Jobs never gate, so skip them in
+    // `Creating`.
+    let runnable = match deployment.status {
+        DeploymentStatus::Running => true,
+        DeploymentStatus::Creating => deployment.kind != "job",
+        _ => false,
+    };
+    if !runnable || deployment.health_checks.is_empty() {
         return;
     }
 
@@ -391,22 +425,32 @@ fn rollout_deadline_exceeded(child: &Deployment) -> bool {
     (chrono::Utc::now() - created).num_seconds() >= deadline_secs
 }
 
-/// True when the child either has no readiness HC at all (legacy behaviour)
-/// or all of its readiness HCs have been green for the configured anti-flap
-/// window.
-async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
+/// Evaluate the readiness state of a deployment from its recorded health-check
+/// results. The single source of truth for "are this deployment's readiness
+/// checks green?", shared by the rolling-update drain gate
+/// ([`is_ready_to_drain`]) and the status gate ([`gate_running_on_readiness`]).
+///
+/// Returns [`ReadinessDecision::NotConfigured`] when no `readiness: true` check
+/// is declared (callers fall back to legacy behaviour), and holds the rollout
+/// (`PendingNoResult` / `PendingMinHealthyTime` / `Failing`) on any DB error so
+/// a transient read failure never falsely reports "ready".
+async fn readiness_decision(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+) -> crate::models::health_check::ReadinessDecision {
     use crate::models::health_check::{ReadinessDecision, evaluate_readiness};
 
-    let expected = child
+    let expected = deployment
         .health_checks
         .iter()
         .filter(|hc| hc.is_readiness())
         .count();
 
     if expected == 0 {
-        // No readiness HC declared — legacy "drain on Running" semantics.
-        return true;
+        return ReadinessDecision::NotConfigured;
     }
+
+    let child = deployment;
 
     // We need two things per check_type: (1) the latest status, to detect
     // Failing / PendingNoResult; (2) the **ready-since** timestamp, i.e. the
@@ -417,10 +461,10 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
         Ok(rows) => rows,
         Err(e) => {
             warn!(
-                "Failed to load readiness check results for deployment {}: {} — holding rollout",
+                "Failed to load readiness check results for deployment {}: {} — holding",
                 child.id, e
             );
-            return false;
+            return ReadinessDecision::PendingNoResult;
         }
     };
     let ready_since =
@@ -428,10 +472,10 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
             Ok(rows) => rows,
             Err(e) => {
                 warn!(
-                    "Failed to load ready-since timestamps for deployment {}: {} — holding rollout",
+                    "Failed to load ready-since timestamps for deployment {}: {} — holding",
                     child.id, e
                 );
-                return false;
+                return ReadinessDecision::PendingNoResult;
             }
         };
 
@@ -492,11 +536,17 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
     }
 
     let min_healthy_time = min_healthy_time_for(child);
-    let decision = evaluate_readiness(expected, &filtered, chrono::Utc::now(), min_healthy_time);
+    evaluate_readiness(expected, &filtered, chrono::Utc::now(), min_healthy_time)
+}
 
-    match decision {
-        ReadinessDecision::Ready => true,
-        ReadinessDecision::NotConfigured => true, // expected == 0 case, defensive.
+/// True when the child either has no readiness HC at all (legacy behaviour)
+/// or all of its readiness HCs have been green for the configured anti-flap
+/// window. Thin wrapper over [`readiness_decision`].
+async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
+    use crate::models::health_check::ReadinessDecision;
+
+    match readiness_decision(pool, child).await {
+        ReadinessDecision::Ready | ReadinessDecision::NotConfigured => true,
         ReadinessDecision::PendingNoResult => {
             debug!(
                 "Rolling update on hold for {}: still waiting for first readiness check result",
@@ -517,6 +567,83 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
                 child.id
             );
             false
+        }
+    }
+}
+
+/// Gate the `creating → running` transition on readiness.
+///
+/// The runtimes flip a deployment to `Running` as soon as the container exists
+/// (Docker/CH `apply`), and the secondary transition in
+/// `handle_status_transitions` does the same. That only means "the process
+/// started" — not "the app is ready". When a deployment declares any
+/// `readiness: true` check, we hold it in `Creating` until those checks are
+/// green (readiness probes run during `Creating`, record-only — see
+/// `HealthChecker::execute_checks`), so `Running` means *really ready* and the
+/// `deployment.status_changed → running` event is trustworthy.
+///
+/// Called right after `run_health_checks`, before `handle_rolling_update`, so
+/// the revert is what gets persisted this cycle — the runtime re-proposes
+/// `Running` next tick and we re-decide, converging without ever persisting a
+/// premature `running`.
+///
+/// Scope: only acts when the deployment *just* moved `Creating → Running` this
+/// cycle (`old_status == Creating`), never on an already-established `Running`
+/// (that's the liveness checks' job, not the gate's — avoids flapping). Jobs
+/// are exempt: they go straight to `completed`/`failed`.
+///
+/// Deadline guard (reuses `RING_ROLLOUT_DEADLINE`, default 600s, the same knob
+/// as the rolling-update drain — mirrors Kubernetes `progressDeadlineSeconds`):
+/// a *simple* deployment (no `parent_id`) whose readiness never turns green
+/// would otherwise sit in `Creating` forever, so past the deadline we fail it.
+/// A rolling-update *child* is left alone here — its deadline is the forced
+/// drain in `handle_rolling_update`, which keeps the old version serving.
+async fn gate_running_on_readiness(
+    pool: &SqlitePool,
+    old_status: &DeploymentStatus,
+    deployment: &mut Deployment,
+) {
+    use crate::models::health_check::ReadinessDecision;
+
+    // Only gate a fresh creating → running transition. Jobs never gate.
+    if *old_status != DeploymentStatus::Creating
+        || deployment.status != DeploymentStatus::Running
+        || deployment.kind == "job"
+    {
+        return;
+    }
+
+    match readiness_decision(pool, deployment).await {
+        // No readiness HC, or readiness is green for long enough — let Running
+        // stand.
+        ReadinessDecision::NotConfigured | ReadinessDecision::Ready => {}
+        // Readiness not (yet) green: hold in Creating, unless a simple
+        // deployment has blown past the deadline — then fail it.
+        ReadinessDecision::PendingNoResult
+        | ReadinessDecision::PendingMinHealthyTime { .. }
+        | ReadinessDecision::Failing => {
+            if deployment.parent_id.is_none() && rollout_deadline_exceeded(deployment) {
+                warn!(
+                    "Deployment {} never became ready before the deadline — marking failed (check its readiness probe)",
+                    deployment.id
+                );
+                deployment.status = DeploymentStatus::Failed;
+                let _ = deployment_event::log_event(
+                    pool,
+                    deployment.id.clone(),
+                    "error",
+                    "Readiness never turned green before the deadline; marking the deployment failed. Check the readiness health check.".to_string(),
+                    "scheduler",
+                    Some("readiness_deadline_exceeded"),
+                )
+                .await;
+            } else {
+                debug!(
+                    "Deployment {} held in creating: readiness not green yet",
+                    deployment.id
+                );
+                deployment.status = DeploymentStatus::Creating;
+            }
         }
     }
 }
@@ -1040,6 +1167,11 @@ pub(crate) async fn schedule(
                 }
             };
 
+            // Status as it stood entering this cycle, before the runtime gets
+            // a chance to flip it to `Running`. The readiness gate uses it to
+            // tell a fresh `creating → running` transition (which it may hold)
+            // from an already-established `Running` (which it must not touch).
+            let old_status = deployment.status.clone();
             let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(
                 &pool,
@@ -1086,7 +1218,12 @@ pub(crate) async fn schedule(
 
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;
+            gate_running_on_readiness(&pool, &old_status, &mut result).await;
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
+
+            // Log the creating -> running transition only now that the status
+            // for this cycle is settled (the gate above may have reverted it).
+            log_running_transition(&pool, &old_status, &result).await;
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);
@@ -1403,5 +1540,155 @@ mod tests {
         insert_hc_result(&pool, "child-7", "command", "success", 30).await;
         // tcp has no result, but it's not a readiness HC, so gate opens.
         assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    // ---- gate_running_on_readiness ----
+
+    /// A simple (non-child) worker that just transitioned to `Running` this
+    /// cycle — the exact case the gate inspects. `parent_id = None` so the
+    /// deadline path marks it `Failed` rather than deferring to rolling-update.
+    fn simple_running(id: &str, hcs: Vec<HealthCheck>) -> Deployment {
+        let mut d = child_with_health_checks(id, hcs);
+        d.kind = "worker".to_string();
+        d.parent_id = None;
+        d.status = DeploymentStatus::Running;
+        d
+    }
+
+    #[tokio::test]
+    async fn gate_keeps_running_when_no_readiness_hc() {
+        // Liveness-only → legacy "running on container up", gate is a no-op.
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-1", vec![liveness_command()]);
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn gate_reverts_to_creating_when_readiness_no_result_yet() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-2", vec![readiness_command("ready")]);
+        // No recorded result yet — not ready, hold in creating.
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+    }
+
+    #[tokio::test]
+    async fn gate_reverts_to_creating_when_readiness_too_recent() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-3", vec![readiness_command("ready")]);
+        // Green only 5s ago, anti-flap default is 10s → still holding.
+        insert_hc_result(&pool, "gate-3", "command", "success", 5).await;
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+    }
+
+    #[tokio::test]
+    async fn gate_keeps_running_when_readiness_green_long_enough() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-4", vec![readiness_command("ready")]);
+        insert_hc_result(&pool, "gate-4", "command", "success", 30).await;
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn gate_reverts_when_readiness_failing() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-5", vec![readiness_command("ready")]);
+        insert_hc_result(&pool, "gate-5", "command", "success", 60).await;
+        insert_hc_result(&pool, "gate-5", "command", "failed", 5).await;
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+    }
+
+    #[tokio::test]
+    async fn gate_ignores_already_running() {
+        // old_status == Running: an established deployment whose readiness is
+        // now red must NOT be dragged back to creating — that's the liveness
+        // checks' job. The gate only acts on a fresh creating → running.
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-6", vec![readiness_command("ready")]);
+        // No result → would be "not ready", but old_status is Running.
+        gate_running_on_readiness(&pool, &DeploymentStatus::Running, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn gate_does_not_touch_jobs() {
+        // Jobs go straight to completed/failed and never gate on readiness.
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-7", vec![readiness_command("ready")]);
+        d.kind = "job".to_string();
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn gate_fails_simple_deployment_after_deadline() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-8", vec![readiness_command("ready")]);
+        // Created 20 minutes ago, readiness never green → past the deadline.
+        d.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_string();
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn gate_does_not_fail_child_after_deadline() {
+        // A rolling-update child past the deadline is left in creating here —
+        // its deadline is the forced drain in handle_rolling_update, which
+        // keeps the old version serving. Never fail a child from the gate.
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-9", vec![readiness_command("ready")]);
+        d.parent_id = Some("parent-id".to_string());
+        d.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_string();
+        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+    }
+
+    // ---- log_running_transition ----
+
+    /// Count the `state_transition` events recorded for a deployment.
+    async fn count_state_transition_events(pool: &SqlitePool, deployment_id: &str) -> i64 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM deployment_event \
+             WHERE deployment_id = ? AND reason = 'state_transition'",
+        )
+        .bind(deployment_id)
+        .fetch_one(pool)
+        .await
+        .expect("count state_transition events")
+    }
+
+    #[tokio::test]
+    async fn running_transition_logged_when_status_lands_on_running() {
+        // The honest case: entered the cycle in Creating, the runtime flipped to
+        // Running, and the gate left it Running → exactly one event.
+        let pool = new_test_pool().await;
+        let d = simple_running("trans-1", vec![]);
+        log_running_transition(&pool, &DeploymentStatus::Creating, &d).await;
+        assert_eq!(count_state_transition_events(&pool, "trans-1").await, 1);
+    }
+
+    #[tokio::test]
+    async fn running_transition_not_logged_when_gate_reverts_to_creating() {
+        // The bug this fixes: the runtime proposed Running, the gate reverted to
+        // Creating. No event must be persisted — `running` never happened.
+        let pool = new_test_pool().await;
+        let mut d = simple_running("trans-2", vec![readiness_command("ready")]);
+        d.status = DeploymentStatus::Creating; // gate reverted it this cycle
+        log_running_transition(&pool, &DeploymentStatus::Creating, &d).await;
+        assert_eq!(count_state_transition_events(&pool, "trans-2").await, 0);
+    }
+
+    #[tokio::test]
+    async fn running_transition_not_logged_for_already_running() {
+        // Entered the cycle already Running → not a fresh transition, no event
+        // (otherwise every tick of a healthy deployment would re-log it).
+        let pool = new_test_pool().await;
+        let d = simple_running("trans-3", vec![]);
+        log_running_transition(&pool, &DeploymentStatus::Running, &d).await;
+        assert_eq!(count_state_transition_events(&pool, "trans-3").await, 0);
     }
 }
