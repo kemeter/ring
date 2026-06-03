@@ -127,6 +127,16 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         });
     }
 
+    // Outbound event delivery worker: drains the events queue and POSTs to
+    // subscribed webhooks. Independent of the scheduler so delivery never
+    // stalls a reconciliation tick. Polls on the same interval as the
+    // scheduler by default.
+    let event_worker_pool = pool.clone();
+    let event_worker_interval = configuration.scheduler.interval;
+    task::spawn(async move {
+        crate::scheduler::event_worker::run(event_worker_pool, event_worker_interval).await;
+    });
+
     print_startup_banner(&configuration, runtimes.as_ref());
 
     let scheduler_handler = task::spawn(schedule(
