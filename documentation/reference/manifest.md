@@ -198,8 +198,9 @@ ports:
 | `published` | integer | Host port |
 | `target` | integer | Container port |
 | `host_ip` | string | Optional. Host interface to bind `published` on. Defaults to `0.0.0.0` (all interfaces). Set to `127.0.0.1` to expose the port on loopback only — useful for a database that should reach a local reverse proxy but stay off the public network. Must be a valid IP address or `ring apply` rejects it. |
+| `protocol` | string | Optional. `tcp` (default) or `udp`. The same `published` port may be declared once for each protocol. |
 
-Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime); `host_ip` is honored by both runtimes. If `published` is already in use on the host, the start fails — the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time. Note that the same `published` port number on two **different** `host_ip` values is a valid, non-conflicting pair (e.g. `0.0.0.0:8080` and `127.0.0.1:8080` are distinct bindings to the kernel).
+Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime); `host_ip` and `protocol` are honored by both runtimes. If `published` is already in use on the host, the start fails — the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time. Note that the same `published` port number is a valid, non-conflicting pair across two **different** `host_ip` values (e.g. `0.0.0.0:8080` and `127.0.0.1:8080`) or across the two **protocols** (`8080/tcp` and `8080/udp`) — both are distinct bindings to the kernel.
 
 If you do **not** publish a port, the container is reachable only from inside its namespace. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network).
 

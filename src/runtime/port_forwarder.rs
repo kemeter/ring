@@ -21,6 +21,7 @@
 //! negligible. A future iteration may switch to `iptables`/`nftables` DNAT
 //! rules; documented in ROADMAP.
 
+use crate::models::deployments::PortProtocol;
 use crate::runtime::error::RuntimeError;
 use std::net::TcpListener;
 use std::process::Stdio;
@@ -74,6 +75,7 @@ pub(crate) async fn spawn_forwarder(
     published_port: u16,
     target_port: u16,
     host_ip: Option<&str>,
+    protocol: PortProtocol,
 ) -> Result<PortForwarder, RuntimeError> {
     let host_ip = host_ip.unwrap_or(DEFAULT_HOST_IP);
 
@@ -88,20 +90,24 @@ pub(crate) async fn spawn_forwarder(
     // -d -d gives info-level diagnostics to stderr (handy when this fails
     // because the host port is already bound). `reuseaddr` lets us restart
     // a forwarder fast across deployment recreations without TIME_WAIT.
-    // `fork` spawns a child per accepted connection — without it, socat
-    // serves a single client and exits.
-    // socat's TCP4-LISTEN binds 0.0.0.0 by default; `bind=<ip>` scopes it to
-    // a single interface. We only emit `bind=` for a non-default host_ip so
-    // the common case stays byte-for-byte the prior command line.
+    // `fork` spawns a child per accepted connection (UDP: per source peer) —
+    // without it, socat serves a single client and exits.
+    // The LISTEN address binds 0.0.0.0 by default; `bind=<ip>` scopes it to a
+    // single interface. We only emit `bind=` for a non-default host_ip so the
+    // common case stays byte-for-byte the prior command line.
+    let proto = match protocol {
+        PortProtocol::Tcp => "TCP4",
+        PortProtocol::Udp => "UDP4",
+    };
     let listen = if host_ip == DEFAULT_HOST_IP {
-        format!("TCP4-LISTEN:{},reuseaddr,fork", published_port)
+        format!("{}-LISTEN:{},reuseaddr,fork", proto, published_port)
     } else {
         format!(
-            "TCP4-LISTEN:{},reuseaddr,fork,bind={}",
-            published_port, host_ip
+            "{}-LISTEN:{},reuseaddr,fork,bind={}",
+            proto, published_port, host_ip
         )
     };
-    let connect = format!("TCP4:{}:{}", guest_ip, target_port);
+    let connect = format!("{}:{}:{}", proto, guest_ip, target_port);
 
     let child = Command::new("socat")
         .arg("-d")
@@ -165,7 +171,7 @@ mod tests {
         // The "guest" side is unreachable; that's fine — we only check that
         // socat actually binds the listening port and that Drop tears it
         // down. A connection attempt is the cheapest signal of "bound".
-        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, None)
+        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, None, PortProtocol::Tcp)
             .await
             .unwrap();
 
@@ -199,7 +205,7 @@ mod tests {
             return;
         }
         let host_port = pick_free_port();
-        let fw = spawn_forwarder("10.0.0.1", host_port, 5432, None)
+        let fw = spawn_forwarder("10.0.0.1", host_port, 5432, None, PortProtocol::Tcp)
             .await
             .unwrap();
         assert_eq!(fw.published_port, host_port);
@@ -216,7 +222,7 @@ mod tests {
         let _holder = TcpListener::bind(format!("0.0.0.0:{}", host_port))
             .expect("test setup: holder must bind the port");
 
-        let err = spawn_forwarder("10.0.0.1", host_port, 5432, None)
+        let err = spawn_forwarder("10.0.0.1", host_port, 5432, None, PortProtocol::Tcp)
             .await
             .expect_err("spawn_forwarder should refuse a bound port");
 
@@ -236,9 +242,15 @@ mod tests {
         }
 
         let host_port = pick_free_port();
-        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, Some("127.0.0.1"))
-            .await
-            .unwrap();
+        let fw = spawn_forwarder(
+            "127.0.0.99",
+            host_port,
+            9999,
+            Some("127.0.0.1"),
+            PortProtocol::Tcp,
+        )
+        .await
+        .unwrap();
 
         // socat holds 127.0.0.1:<port> — a fresh bind there must fail.
         let busy = TcpListener::bind(format!("127.0.0.1:{}", host_port));

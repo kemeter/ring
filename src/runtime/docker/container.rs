@@ -397,7 +397,7 @@ pub(crate) async fn create_container(
         .ports
         .iter()
         .map(|p| {
-            let key = format!("{}/tcp", p.target);
+            let key = format!("{}/{}", p.target, p.protocol.as_str());
             let binding = PortBinding {
                 host_ip: Some(p.host_ip.clone().unwrap_or_else(|| "0.0.0.0".to_string())),
                 host_port: Some(p.published.to_string()),

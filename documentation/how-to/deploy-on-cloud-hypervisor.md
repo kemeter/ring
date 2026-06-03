@@ -186,13 +186,14 @@ volumes:
 ports:
   - { published: 8080, target: 80 }
   - { published: 5432, target: 5432 }
+  - { published: 5353, target: 53, protocol: udp }
 ```
 
 Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>` → `<guest_ip>:<target>`. The guest IP is a deterministic /30 under `10.42.0.0/16` derived from the instance ID.
 
 If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `PortAllocationFailed` event. After `MAX_RESTART_COUNT` failed attempts, the deployment lands in `crash_loop_back_off`.
 
-TCP only — UDP is not wired up.
+Both `tcp` (default) and `udp` are supported via the port's `protocol` field — `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
 ## Health checks
 
@@ -252,7 +253,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | Inter-VM networking | Each VM is isolated — no shared bridge, no DNS between siblings. Cross-VM traffic goes through host-published ports |
 | Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
-| Port mapping | **Supported** via `socat` userspace forwarders |
+| Port mapping | **Supported** via `socat` userspace forwarders — both `tcp` and `udp` |
 | Deployment logs | **Supported** via serial console with size-based rotation (10 MiB × 3 backups by default, configurable) |
 | Deployment metrics | **Supported.** CPU% and memory from `/proc/<vmm-pid>/{stat,status}`, network from `/sys/class/net/<tap>/statistics/*` (swapped host↔guest), threads from `/proc/<vmm-pid>/status`. Disk I/O reads `/proc/<vmm-pid>/io` when accessible but reports zeros on hardened hosts: CH clears `PR_SET_DUMPABLE` and `kernel.yama.ptrace_scope >= 1` then denies even the parent. PID `limit` reports as 0 (CH has no equivalent of cgroup `pids.max`) |
 | Runtime event stream | None — CH has no live event stream; crash detection is tick-bound |
