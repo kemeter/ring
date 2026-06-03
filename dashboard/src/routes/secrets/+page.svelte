@@ -56,6 +56,8 @@
   let filtered = $derived(nsFilter ? secrets.filter((s) => s.namespace === nsFilter) : secrets);
 </script>
 
+<svelte:head><title>Ring · Secrets</title></svelte:head>
+
 <header class="page-header">
   <div>
     <h1>Secrets</h1>

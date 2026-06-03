@@ -80,6 +80,8 @@
   let filtered = $derived(nsFilter ? configs.filter((c) => c.namespace === nsFilter) : configs);
 </script>
 
+<svelte:head><title>Ring · Configs</title></svelte:head>
+
 <header class="page-header">
   <div>
     <h1>Configs</h1>

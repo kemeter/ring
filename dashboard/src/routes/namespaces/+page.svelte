@@ -59,6 +59,8 @@
   );
 </script>
 
+<svelte:head><title>Ring · Namespaces</title></svelte:head>
+
 <header class="page-header">
   <div>
     <h1>Namespaces</h1>

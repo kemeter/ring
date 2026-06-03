@@ -121,6 +121,8 @@
   });
 </script>
 
+<svelte:head><title>Ring · Overview</title></svelte:head>
+
 <main class="overview">
   <header class="topbar">
     <div>
