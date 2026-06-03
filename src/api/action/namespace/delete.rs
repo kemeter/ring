@@ -4,10 +4,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
 
+use crate::api::auth::Auth;
 use crate::api::server::Db;
 use crate::models::audit_log;
 use crate::models::namespace;
-use crate::models::users::User;
 
 /// `DELETE /namespaces/{name}` — remove an empty namespace and purge its
 /// audit trail (retention is namespace-bound by design).
@@ -20,8 +20,9 @@ use crate::models::users::User;
 pub(crate) async fn delete(
     Path(name): Path<String>,
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
+    // Scope (`namespaces:write`) is enforced centrally by the auth middleware.
     match namespace::find_by_name(&pool, &name).await {
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -63,7 +64,7 @@ pub(crate) async fn delete(
     let _ = audit_log::delete_by_namespace(&pool, &name).await;
     let _ = audit_log::record(
         &pool,
-        Some(&user.id),
+        Some(&auth.user.id),
         "delete",
         "namespace",
         &name,

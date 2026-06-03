@@ -1,10 +1,10 @@
 use crate::api::action::user::validation::{
     PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN, USERNAME_PATTERN,
 };
+use crate::api::auth::Auth;
 use crate::api::server::Db;
 use crate::api::validation::ViolationList;
 use crate::models::users as users_model;
-use crate::models::users::User;
 use axum::extract::State;
 use axum::{Json, extract::Path, response::IntoResponse};
 use http::StatusCode;
@@ -15,13 +15,13 @@ use validator::Validate;
 pub(crate) async fn update(
     State(pool): State<Db>,
     Path(id): Path<String>,
-    current_user: User,
+    auth: Auth,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     // Authorization: a user may only update its own account; an admin may
     // update any. Without this an authenticated user could overwrite any
     // other user's password and take the account over (IDOR).
-    if current_user.id != id && !current_user.is_admin() {
+    if auth.user.id != id && !auth.user.is_admin() {
         return Err((StatusCode::FORBIDDEN, "Forbidden").into_response());
     }
 
@@ -34,6 +34,8 @@ pub(crate) async fn update(
         return Err(violations.into_response());
     }
 
+    // Scope (`users:write`) is enforced centrally by the auth middleware; the
+    // self/admin authorization above is an additional, finer-grained check.
     let mut user = match users_model::find(&pool, &id).await.ok().flatten() {
         Some(user) => user,
         None => return Err((StatusCode::NOT_FOUND, "User not found").into_response()),

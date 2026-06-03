@@ -21,6 +21,7 @@ mod commands {
     pub(crate) mod namespace;
     pub(crate) mod node;
     pub(crate) mod secret;
+    pub(crate) mod token;
     pub(crate) mod user;
 }
 
@@ -66,6 +67,7 @@ mod models {
     pub(crate) mod namespace;
     pub(crate) mod query;
     pub(crate) mod secret;
+    pub(crate) mod token;
     pub(crate) mod users;
     pub(crate) mod volume;
     pub(crate) mod volumes;
@@ -167,6 +169,15 @@ async fn main() {
                 .subcommand(commands::secret::list::command_config())
                 .subcommand(commands::secret::create::command_config())
                 .subcommand(commands::secret::delete::command_config()),
+        )
+        .subcommand(
+            Command::new("token")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(commands::token::list::command_config())
+                .subcommand(commands::token::create::command_config())
+                .subcommand(commands::token::revoke::command_config())
+                .subcommand(commands::token::rotate::command_config()),
         );
 
     let matches = app.get_matches();
@@ -311,6 +322,24 @@ async fn main() {
                 }
                 ("delete", sub_matches) => {
                     commands::secret::delete::execute(sub_matches, config, &client).await;
+                }
+                _ => {}
+            }
+        }
+        Some(("token", sub_matches)) => {
+            let token_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match token_command {
+                ("list", sub_matches) => {
+                    commands::token::list::execute(sub_matches, config, &client).await;
+                }
+                ("create", sub_matches) => {
+                    commands::token::create::execute(sub_matches, config, &client).await;
+                }
+                ("revoke", sub_matches) => {
+                    commands::token::revoke::execute(sub_matches, config, &client).await;
+                }
+                ("rotate", sub_matches) => {
+                    commands::token::rotate::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }

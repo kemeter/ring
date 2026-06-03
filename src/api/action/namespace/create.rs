@@ -1,12 +1,12 @@
 use crate::api::action::namespace::validation::{
     NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
 };
+use crate::api::auth::Auth;
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::namespace;
-use crate::models::users::User;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -36,7 +36,7 @@ pub(crate) struct NamespaceInput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
     Json(input): Json<NamespaceInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
@@ -44,6 +44,7 @@ pub(crate) async fn create(
         return violations.into_response();
     }
 
+    // Scope (`namespaces:write`) is enforced centrally by the auth middleware.
     let utc: DateTime<Utc> = Utc::now();
     let new_namespace = namespace::Namespace {
         id: Uuid::new_v4().to_string(),
@@ -58,7 +59,7 @@ pub(crate) async fn create(
             // shows up in `ring namespace audit <ns>` for that namespace.
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "create",
                 "namespace",
                 &new_namespace.name,

@@ -6,10 +6,11 @@ use http::request::Parts;
 
 use serde::Deserialize;
 
+use crate::api::auth::{Auth, filter_by_namespace};
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
 use crate::models::config as ConfigModel;
-use crate::models::users::User;
+use axum::response::Response;
 use http::StatusCode;
 use url::form_urlencoded::parse;
 
@@ -53,8 +54,12 @@ where
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User,
-) -> impl IntoResponse {
+    auth: Auth,
+) -> Response {
+    // Scope (`configs:read`) is enforced centrally. The result is filtered
+    // through the token's namespace boundary so a namespace-scoped PAT never
+    // sees configs outside its namespaces, regardless of the `?namespace=`
+    // filter it supplies.
     let mut configs: Vec<ConfigOutput> = Vec::new();
 
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
@@ -71,16 +76,18 @@ pub(crate) async fn list(
         Ok(list) => list,
         Err(e) => {
             log::error!("Failed to list configs: {}", e);
-            return Json(configs);
+            return Json(configs).into_response();
         }
     };
+
+    let list_configs = filter_by_namespace(&auth.source, list_configs, |c| c.namespace.as_str());
 
     for config in list_configs.into_iter() {
         let output = ConfigOutput::from_to_model(config.clone());
         configs.push(output);
     }
 
-    Json(configs)
+    Json(configs).into_response()
 }
 
 #[cfg(test)]

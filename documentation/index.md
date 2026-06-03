@@ -116,6 +116,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Expose HTTP traffic](/documentation/how-to/expose-http-traffic)
 - [Use host network mode](/documentation/how-to/use-host-network)
 - [Manage users](/documentation/how-to/manage-users)
+- [Authenticate scripts and CI with API tokens](/documentation/how-to/authenticate-scripts-with-tokens)
 - [Run Ring as a service](/documentation/how-to/run-as-service)
 - [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
 

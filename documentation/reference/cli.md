@@ -297,6 +297,64 @@ ring user delete <ID>
 
 `<ID>` is the user's UUID. Find it with `ring user list`.
 
+## API Tokens
+
+Scoped API tokens (Personal Access Tokens) let scripts, CI and external agents call the API without using a human's login session. A token carries a set of `verb:resource` scopes, an optional namespace boundary and an optional expiry, and can be revoked or rotated individually.
+
+The clear token (`ring_pat_…`) is shown **once**, at creation, and never again — only its prefix is stored in clear for display. Present it as `Authorization: Bearer ring_pat_…`.
+
+**Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (grants everything).
+
+### `ring token create`
+
+```bash
+ring token create <NAME> --scope <SCOPE> [--scope <SCOPE>...] [OPTIONS]
+```
+
+**Required:**
+
+- `<NAME>` — token label (positional)
+- `-s` / `--scope <SCOPE>` — at least one; repeatable
+
+**Options:**
+
+- `-n` / `--namespace <NS>` — restrict to a namespace; repeatable. Omit for all namespaces.
+- `-e` / `--expires <DURATION>` — `30d`, `12h` or `90m`. Omit for no expiry.
+
+The clear token is printed on **stdout** (so it can be captured); the summary and the "won't be shown again" notice go to **stderr**.
+
+```bash
+# Read-only CI token, all namespaces, 90-day expiry
+TOKEN=$(ring token create ci-read --scope deployments:read --expires 90d)
+
+# Write token scoped to a single namespace
+ring token create deployer --scope deployments:write --namespace production
+```
+
+### `ring token list`
+
+```bash
+ring token list
+```
+
+Lists your tokens with prefix, scopes, namespaces, status (`active` / `revoked` / `expired`), last-used and expiry. The secret is never shown.
+
+### `ring token revoke`
+
+```bash
+ring token revoke <ID> [-y|--yes]
+```
+
+Revokes a token immediately. Prompts for confirmation on a terminal; in a pipe/CI it refuses unless `--yes` is passed.
+
+### `ring token rotate`
+
+```bash
+ring token rotate <ID>
+```
+
+Revokes the token and mints a new one with the same name, scopes, namespaces and expiry. The new clear value is printed on stdout (shown once).
+
 ## Secrets
 
 Secrets are AES-256-GCM-encrypted values stored per-namespace. `RING_SECRET_KEY` (a base64-encoded 32-byte key) must be exported before `ring server start` — the server refuses to start otherwise. Run `ring doctor` to confirm the variable is set and decodes correctly.

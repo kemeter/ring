@@ -4,14 +4,10 @@ use axum::{Json, extract::Path, response::IntoResponse};
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::models::namespace;
-use crate::models::users::User;
 use axum::http::StatusCode;
 
-pub(crate) async fn get(
-    Path(id): Path<String>,
-    _user: User,
-    State(pool): State<Db>,
-) -> impl IntoResponse {
+// Scope (`namespaces:read`) is enforced centrally by the auth middleware.
+pub(crate) async fn get(Path(id): Path<String>, State(pool): State<Db>) -> impl IntoResponse {
     match namespace::find(&pool, &id).await {
         Ok(Some(ns)) => {
             let output = NamespaceOutput::from_to_model(ns);

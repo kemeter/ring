@@ -1,19 +1,20 @@
 use axum::extract::State;
+use axum::response::Response;
 use axum::{Json, response::IntoResponse};
 
 use crate::api::dto::namespace::NamespaceOutput;
 use crate::api::server::Db;
 use crate::models::namespace as NamespaceModel;
-use crate::models::users::User;
 
-pub(crate) async fn list(State(pool): State<Db>, _user: User) -> impl IntoResponse {
+// Scope (`namespaces:read`) is enforced centrally by the auth middleware.
+pub(crate) async fn list(State(pool): State<Db>) -> Response {
     let mut namespaces: Vec<NamespaceOutput> = Vec::new();
 
     let list_namespaces = match NamespaceModel::find_all(&pool).await {
         Ok(list) => list,
         Err(e) => {
             log::error!("Failed to list namespaces: {}", e);
-            return Json(namespaces);
+            return Json(namespaces).into_response();
         }
     };
 
@@ -22,7 +23,7 @@ pub(crate) async fn list(State(pool): State<Db>, _user: User) -> impl IntoRespon
         namespaces.push(output);
     }
 
-    Json(namespaces)
+    Json(namespaces).into_response()
 }
 
 #[cfg(test)]

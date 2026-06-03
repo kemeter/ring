@@ -4,11 +4,11 @@ use axum::response::IntoResponse;
 use http::StatusCode;
 use serde::Deserialize;
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::audit_log;
 use crate::models::deployments;
 use crate::models::secret as SecretModel;
-use crate::models::users::User;
 
 #[derive(Deserialize)]
 pub(crate) struct DeleteQuery {
@@ -20,7 +20,7 @@ pub(crate) async fn delete(
     Path(id): Path<String>,
     Query(query): Query<DeleteQuery>,
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     // First, find the secret to get namespace and name
     let secret = match SecretModel::find(&pool, &id).await {
@@ -45,6 +45,12 @@ pub(crate) async fn delete(
                 .into_response();
         }
     };
+
+    // Scope (`secrets:write`) is enforced centrally; the namespace boundary is
+    // checked here, now that the secret's real namespace is known.
+    if let Err(resp) = require_namespace(&auth.source, &secret.namespace) {
+        return resp.into_response();
+    }
 
     // Check for deployments referencing this secret
     let referencing =
@@ -83,7 +89,7 @@ pub(crate) async fn delete(
         Ok(_) => {
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "delete",
                 "secret",
                 &secret.name,

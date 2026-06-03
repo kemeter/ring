@@ -6,8 +6,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
-use crate::models::users::User;
 use crate::models::{deployments, health_check_logs};
 
 #[derive(Deserialize)]
@@ -25,10 +25,16 @@ pub(crate) async fn get_health_checks(
     Path(deployment_id): Path<String>,
     Query(params): Query<HealthCheckQuery>,
     State(pool): State<Db>,
-    _user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
+    // Scope (`deployments:read`) is enforced centrally; the namespace boundary
+    // is checked here against the loaded deployment.
     match deployments::find(&pool, &deployment_id).await {
-        Ok(Some(_)) => {}
+        Ok(Some(deployment)) => {
+            if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
+                return resp;
+            }
+        }
         Ok(None) => {
             let message = Message {
                 message: "Deployment not found".to_string(),

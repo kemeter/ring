@@ -110,6 +110,24 @@ fn colour_status(enabled: bool, s: &str) -> String {
     }
 }
 
+/// Colour intent for [`status_custom`], for callers whose status vocabulary
+/// isn't the deployment status set keyed by [`status`] (e.g. token
+/// active/revoked/expired).
+pub(crate) enum StatusColour {
+    Green,
+    Red,
+}
+
+/// Colour an arbitrary status label by explicit intent, honouring the same
+/// tty/`NO_COLOR` gate as everything else here.
+pub(crate) fn status_custom(label: &str, colour: StatusColour) -> String {
+    let enabled = colour_enabled();
+    match colour {
+        StatusColour::Green => paint(enabled, || label.green().to_string(), label),
+        StatusColour::Red => paint(enabled, || label.red().to_string(), label),
+    }
+}
+
 /// Strip every ANSI escape sequence (CSI `ESC [ ... <final>`) from `s`.
 ///
 /// `cli-table` unconditionally wraps its borders in colour resets

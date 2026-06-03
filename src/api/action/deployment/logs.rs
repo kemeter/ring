@@ -12,6 +12,7 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::LazyLock;
 
+use crate::api::auth::{Auth, AuthSource, require_namespace};
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use crate::runtime::lifecycle_trait::Log;
@@ -68,14 +69,24 @@ fn parse_since(since: &str) -> Option<i32> {
 pub(crate) async fn logs(
     Path(id): Path<String>,
     Query(params): Query<LogsQuery>,
+    auth: Auth,
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
 ) -> impl IntoResponse {
-    // Auth (Bearer or scoped ticket) is enforced upstream by
-    // `api::auth::auth_middleware`, which already validated the ticket against
-    // this exact `deployment:logs:<id>` scope before the request reached here.
+    // Auth is enforced upstream by `api::auth::auth_middleware`: the scope
+    // (`deployments:read`) is checked centrally, and a stream ticket is bound to
+    // this exact `deployment:logs:<id>` before reaching here. A PAT, however,
+    // also carries a namespace boundary that the middleware can't check (the
+    // deployment's namespace isn't known until it's loaded), so we enforce it
+    // here for `Token` identities. A `Ticket` is already pinned to this single
+    // deployment id, and a `Bearer` is full-access, so neither needs the check.
     match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => {
+            if matches!(auth.source, AuthSource::Token { .. })
+                && let Err(resp) = require_namespace(&auth.source, &deployment.namespace)
+            {
+                return resp.into_response();
+            }
             let runtime = match runtimes.get(&deployment.runtime) {
                 Some(rt) => rt,
                 None => return StatusCode::NOT_FOUND.into_response(),

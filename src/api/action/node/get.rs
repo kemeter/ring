@@ -1,11 +1,13 @@
-use crate::models::users::User;
 use axum::Json;
 use axum::response::IntoResponse;
 use serde_json::Value;
 use std::env::consts;
 use sysinfo::{LoadAvg, System};
 
-pub(crate) async fn get(_user: User) -> impl IntoResponse {
+// Scope (`deployments:read`) is enforced centrally by the auth middleware:
+// node info is host-level and has no dedicated scope, so it shares the
+// deployment read scope.
+pub(crate) async fn get() -> impl IntoResponse {
     Json(get_node_info()).into_response()
 }
 

@@ -1,40 +1,45 @@
 use axum::extract::State;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::audit_log;
 use crate::models::deployments::{self, DeploymentStatus};
-use crate::models::users::User;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     let option = deployments::find(&pool, &id).await;
 
     match option {
         Ok(Some(mut deployment)) => {
+            // Scope (`deployments:write`) is enforced centrally; the namespace
+            // boundary is checked here against the loaded deployment.
+            if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
+                return resp.into_response();
+            }
             deployment.status = DeploymentStatus::Deleted;
             match deployments::update(&pool, &deployment).await {
                 Ok(_) => {
                     let _ = audit_log::record(
                         &pool,
-                        Some(&user.id),
+                        Some(&auth.user.id),
                         "delete",
                         "deployment",
                         &deployment.name,
                         Some(&deployment.namespace),
                     )
                     .await;
-                    StatusCode::NO_CONTENT
+                    StatusCode::NO_CONTENT.into_response()
                 }
-                Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             }
         }
-        Ok(None) => StatusCode::NOT_FOUND,
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
 
-        Err(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::NO_CONTENT.into_response(),
     }
 }
 

@@ -1,14 +1,15 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::Json,
+    response::{IntoResponse, Json, Response},
 };
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::deployment_event;
-use crate::models::users::User;
+use crate::models::deployments;
 
 #[derive(Debug, Deserialize)]
 pub struct EventsQuery {
@@ -22,14 +23,42 @@ fn default_limit() -> u32 {
     50
 }
 
+#[cfg(test)]
 type EventsResponse = Vec<deployment_event::DeploymentEvent>;
 
 pub async fn get_deployment_events(
     Path(deployment_id): Path<String>,
     Query(params): Query<EventsQuery>,
-    _user: User,
+    auth: Auth,
     State(pool): State<Db>,
-) -> Result<Json<EventsResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Response {
+    // Scope (`deployments:read`) is enforced centrally. Load the deployment so
+    // the namespace boundary can be checked: a namespace-scoped PAT must not
+    // read events of a deployment outside its namespaces. A missing deployment
+    // is reported as not-found.
+    match deployments::find(&pool, &deployment_id).await {
+        Ok(Some(deployment)) => {
+            if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
+                return resp;
+            }
+        }
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "Deployment not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            error!("Failed to look up deployment {}: {}", deployment_id, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "Failed to look up deployment" })),
+            )
+                .into_response();
+        }
+    }
+
     let events = if let Some(level) = &params.level {
         deployment_event::find_events_by_deployment_and_level(
             &pool,
@@ -43,18 +72,19 @@ pub async fn get_deployment_events(
     };
 
     match events {
-        Ok(events) => Ok(Json(events)),
+        Ok(events) => Json(events).into_response(),
         Err(e) => {
             error!(
                 "Failed to fetch events for deployment {}: {}",
                 deployment_id, e
             );
-            Err((
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "Failed to fetch deployment events"
                 })),
-            ))
+            )
+                .into_response()
         }
     }
 }

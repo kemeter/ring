@@ -1,20 +1,25 @@
 use axum::extract::State;
 use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
 use crate::models::config;
-use crate::models::users::User;
 use axum::http::StatusCode;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
-    _user: User,
+    auth: Auth,
     State(pool): State<Db>,
 ) -> impl IntoResponse {
     match config::find(&pool, &id).await {
-        Ok(Some(deployment)) => {
-            let output = ConfigOutput::from_to_model(deployment);
+        Ok(Some(config)) => {
+            // Scope (`configs:read`) is enforced centrally; the namespace
+            // boundary is checked here against the loaded config.
+            if let Err(resp) = require_namespace(&auth.source, &config.namespace) {
+                return resp;
+            }
+            let output = ConfigOutput::from_to_model(config);
             Json(output).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

@@ -7,12 +7,12 @@ use validator::Validate;
 use crate::api::action::config::validation::{
     CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
 };
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::config as ConfigModel;
-use crate::models::users::User;
 
 #[derive(Deserialize, Debug, Validate)]
 pub(crate) struct UpdateConfigRequest {
@@ -51,7 +51,7 @@ pub(crate) struct UpdateConfigRequest {
 pub(crate) async fn update(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
     Json(request): Json<UpdateConfigRequest>,
 ) -> Response {
     let mut violations: ViolationList = match request.validate() {
@@ -78,6 +78,11 @@ pub(crate) async fn update(
 
     match ConfigModel::find(&pool, &id).await {
         Ok(Some(mut config)) => {
+            // Scope (`configs:write`) is enforced centrally; the namespace
+            // boundary is checked here against the loaded config.
+            if let Err(resp) = require_namespace(&auth.source, &config.namespace) {
+                return resp;
+            }
             config.name = request.name;
             config.data = request.data;
             config.labels = request.labels.unwrap_or_default();
@@ -87,7 +92,7 @@ pub(crate) async fn update(
                 Ok(_) => {
                     let _ = audit_log::record(
                         &pool,
-                        Some(&user.id),
+                        Some(&auth.user.id),
                         "update",
                         "config",
                         &config.name,
