@@ -5,16 +5,15 @@ use crate::api::dto::user::UserOutput;
 use crate::api::server::Db;
 use crate::api::validation::ViolationList;
 use crate::models::users as users_model;
-use crate::models::users::User;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use validator::Validate;
 
+// Scope (`users:write`) is enforced centrally by the auth middleware.
 pub(crate) async fn create(
     State(pool): State<Db>,
-    _user: User,
     Json(input): Json<UserInput>,
 ) -> Result<(StatusCode, Json<UserOutput>), Response> {
     if let Err(errs) = input.validate() {

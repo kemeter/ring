@@ -1,11 +1,11 @@
 use axum::extract::{Path, Query, State};
+use axum::response::Response;
 use axum::{Json, response::IntoResponse};
 use serde::Deserialize;
 
 use crate::api::dto::audit::AuditOutput;
 use crate::api::server::Db;
 use crate::models::audit_log;
-use crate::models::users::User;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct AuditQuery {
@@ -17,17 +17,17 @@ pub(crate) struct AuditQuery {
 /// most recent first. Returns an empty list for an unknown namespace (the
 /// trail is keyed by name, not by a namespace row, so it stays readable even
 /// after the namespace itself is gone within the retention window).
+// Scope (`namespaces:read`) is enforced centrally by the auth middleware.
 pub(crate) async fn audit(
     Path(name): Path<String>,
     Query(params): Query<AuditQuery>,
-    _user: User,
     State(pool): State<Db>,
-) -> impl IntoResponse {
+) -> Response {
     let entries = match audit_log::find_by_namespace(&pool, &name, params.limit).await {
         Ok(entries) => entries,
         Err(e) => {
             log::error!("Failed to read audit log for namespace '{}': {}", name, e);
-            return Json(Vec::<AuditOutput>::new());
+            return Json(Vec::<AuditOutput>::new()).into_response();
         }
     };
 
@@ -37,6 +37,7 @@ pub(crate) async fn audit(
             .map(AuditOutput::from_to_model)
             .collect::<Vec<_>>(),
     )
+    .into_response()
 }
 
 #[cfg(test)]

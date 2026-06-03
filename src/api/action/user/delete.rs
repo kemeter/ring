@@ -1,20 +1,19 @@
 use axum::extract::State;
+use axum::response::Response;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
+use crate::api::auth::Auth;
 use crate::api::server::Db;
 use crate::models::users;
-use crate::models::users::User;
 
-pub(crate) async fn delete(
-    Path(id): Path<String>,
-    current_user: User,
-    State(pool): State<Db>,
-) -> impl IntoResponse {
+// Scope (`users:write`) is enforced centrally by the auth middleware; the
+// admin/self-deletion rules below are an additional, finer-grained check.
+pub(crate) async fn delete(Path(id): Path<String>, auth: Auth, State(pool): State<Db>) -> Response {
     // Self-deletion is never allowed (an operator locking themselves out).
     // Deleting *another* account is an admin-only action; without this any
     // authenticated user could delete every other account (IDOR / DoS).
-    if current_user.id == id || !current_user.is_admin() {
-        return StatusCode::FORBIDDEN;
+    if auth.user.id == id || !auth.user.is_admin() {
+        return StatusCode::FORBIDDEN.into_response();
     }
 
     let option = users::find(&pool, &id).await;
@@ -22,14 +21,14 @@ pub(crate) async fn delete(
     match option {
         Ok(Some(user)) => {
             if users::delete(&pool, &user).await.is_err() {
-                return StatusCode::INTERNAL_SERVER_ERROR;
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
-            StatusCode::NO_CONTENT
+            StatusCode::NO_CONTENT.into_response()
         }
-        Ok(None) => StatusCode::NOT_FOUND,
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
 
-        Err(_) => StatusCode::NO_CONTENT,
+        Err(_) => StatusCode::NO_CONTENT.into_response(),
     }
 }
 

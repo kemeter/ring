@@ -8,10 +8,10 @@ use serde::Deserialize;
 
 use url::form_urlencoded::parse;
 
+use crate::api::auth::{Auth, filter_by_namespace};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
-use crate::models::users::User;
 use http::StatusCode;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -73,8 +73,11 @@ pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
-    _user: User,
-) -> impl IntoResponse {
+    auth: Auth,
+) -> axum::response::Response {
+    // Scope (`deployments:read`) is enforced centrally. The result set is
+    // filtered through the token's namespace boundary below so a
+    // namespace-scoped PAT never sees deployments outside its namespaces.
     let mut deployments: Vec<DeploymentOutput> = Vec::new();
 
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
@@ -95,9 +98,12 @@ pub(crate) async fn list(
         Ok(list) => list,
         Err(e) => {
             log::error!("Failed to list deployments: {}", e);
-            return Json(deployments);
+            return Json(deployments).into_response();
         }
     };
+
+    let list_deployments =
+        filter_by_namespace(&auth.source, list_deployments, |d| d.namespace.as_str());
 
     // Labels live as JSON in the `labels` column, so they can't go through the
     // column-based SQL filter — match them in memory. Each selector is `key` or
@@ -133,7 +139,7 @@ pub(crate) async fn list(
         deployments.push(output);
     }
 
-    Json(deployments)
+    Json(deployments).into_response()
 }
 
 #[cfg(test)]

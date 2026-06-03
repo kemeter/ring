@@ -4,9 +4,9 @@ use axum::response::IntoResponse;
 use http::StatusCode;
 use serde::Serialize;
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::secret as SecretModel;
-use crate::models::users::User;
 
 #[derive(Serialize)]
 struct SecretOutput {
@@ -20,10 +20,15 @@ struct SecretOutput {
 pub(crate) async fn get(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     match SecretModel::find(&pool, &id).await {
         Ok(Some(secret)) => {
+            // Scope (`secrets:read`) is enforced centrally; the namespace
+            // boundary can only be checked now that the secret is loaded.
+            if let Err(resp) = require_namespace(&auth.source, &secret.namespace) {
+                return resp;
+            }
             let output = SecretOutput {
                 id: secret.id,
                 created_at: secret.created_at,

@@ -1,20 +1,25 @@
 use axum::extract::State;
 use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
-use crate::models::users::User;
 use axum::http::StatusCode;
 
 pub(crate) async fn get(
     Path(id): Path<String>,
-    _user: User,
+    auth: Auth,
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
 ) -> impl IntoResponse {
     match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => {
+            // Scope (`deployments:read`) is enforced centrally; the namespace
+            // boundary is checked here against the loaded deployment.
+            if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
+                return resp;
+            }
             let mut output = DeploymentOutput::from_to_model(deployment.clone());
             if let Some(rt) = runtimes.get(&deployment.runtime) {
                 output.instances = rt.list_instances(deployment.id, "running").await;

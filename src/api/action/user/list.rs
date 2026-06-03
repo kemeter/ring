@@ -1,24 +1,26 @@
 use axum::extract::State;
+use axum::response::{IntoResponse, Response};
 use axum::{Json, http::StatusCode};
 use serde_json::json;
 
 use crate::api::dto::user::UserOutput;
 use crate::api::server::Db;
 use crate::models::users as users_model;
-use crate::models::users::User;
 
-pub(crate) async fn list(
-    State(pool): State<Db>,
-    _user: User,
-) -> Result<Json<Vec<UserOutput>>, (StatusCode, Json<serde_json::Value>)> {
+// Scope (`users:read`) is enforced centrally by the auth middleware.
+pub(crate) async fn list(State(pool): State<Db>) -> Response {
     let mut users: Vec<UserOutput> = Vec::new();
 
-    let list_users = users_model::find_all(&pool).await.map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "errors": ["Internal server error"] })),
-        )
-    })?;
+    let list_users = match users_model::find_all(&pool).await {
+        Ok(list) => list,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "errors": ["Internal server error"] })),
+            )
+                .into_response();
+        }
+    };
 
     for user in list_users.into_iter() {
         let output = UserOutput {
@@ -33,7 +35,7 @@ pub(crate) async fn list(
         users.push(output);
     }
 
-    Ok(Json(users))
+    Json(users).into_response()
 }
 
 #[cfg(test)]

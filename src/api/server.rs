@@ -50,6 +50,12 @@ use crate::api::action::secret::delete as secret_delete;
 use crate::api::action::secret::get as secret_get;
 use crate::api::action::secret::list as secret_list;
 
+use crate::api::action::token::create as token_create;
+use crate::api::action::token::get as token_get;
+use crate::api::action::token::list as token_list;
+use crate::api::action::token::revoke as token_revoke;
+use crate::api::action::token::rotate as token_rotate;
+
 use crate::api::action::healthz::healthz;
 
 use crate::api::auth::auth_middleware;
@@ -117,6 +123,9 @@ pub(crate) fn router(state: AppState) -> Router {
         )
         .route("/secrets", get(secret_list).post(secret_create))
         .route("/secrets/{id}", get(secret_get).delete(secret_delete))
+        .route("/tokens", get(token_list).post(token_create))
+        .route("/tokens/{id}", get(token_get).delete(token_revoke))
+        .route("/tokens/{id}/rotate", post(token_rotate))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use validator::{Validate, ValidationError};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList};
@@ -24,7 +25,6 @@ use crate::models::deployments::{
     NetworkMode, Resource, default_image_pull_policy,
 };
 use crate::models::namespace;
-use crate::models::users::User;
 
 fn default_replicas() -> u32 {
     1
@@ -573,7 +573,7 @@ pub(crate) struct CreateQueryParams {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
 ) -> impl IntoResponse {
@@ -597,6 +597,15 @@ pub(crate) async fn create(
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
         return violations.into_response();
+    }
+
+    // Scope (`deployments:write`) is enforced centrally by the auth middleware.
+    // The namespace boundary is this deployment's target namespace: a
+    // namespace-scoped PAT may only deploy into a namespace it is scoped to.
+    // Checked after validation (so the namespace is well-formed) but before any
+    // mutation. A human session passes through unconditionally.
+    if let Err(resp) = require_namespace(&auth.source, &input.namespace) {
+        return resp;
     }
 
     // Auto-create namespace if it doesn't exist
@@ -831,7 +840,7 @@ pub(crate) async fn create(
 
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "create",
                 "deployment",
                 &input.name,

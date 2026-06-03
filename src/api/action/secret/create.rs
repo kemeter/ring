@@ -4,12 +4,12 @@ use crate::api::action::namespace::validation::{
 use crate::api::action::secret::validation::{
     SECRET_NAME_MAX, SECRET_NAME_MIN, SECRET_NAME_PATTERN, SECRET_VALUE_MAX,
 };
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::namespace;
 use crate::models::secret;
-use crate::models::users::User;
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -68,12 +68,19 @@ struct SecretOutput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
     Json(input): Json<SecretInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
         let violations: ViolationList = errs.into();
         return violations.into_response();
+    }
+
+    // Scope (`secrets:write`) is enforced centrally by the auth middleware.
+    // The namespace boundary is the body's target namespace: a namespace-scoped
+    // PAT may only create secrets in a namespace it is scoped to.
+    if let Err(resp) = require_namespace(&auth.source, &input.namespace) {
+        return resp;
     }
 
     match namespace::find_by_name(&pool, &input.namespace).await {
@@ -110,7 +117,7 @@ pub(crate) async fn create(
         Ok(_) => {
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "create",
                 "secret",
                 &new_secret.name,

@@ -2,19 +2,24 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::{Json, extract::Path, response::IntoResponse};
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::stats::*;
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
-use crate::models::users::User;
 
 pub(crate) async fn metrics(
     Path(id): Path<String>,
-    _user: User,
+    auth: Auth,
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
 ) -> impl IntoResponse {
     match deployments::find(&pool, &id).await {
         Ok(Some(deployment)) => {
+            // Scope (`deployments:read`) is enforced centrally; the namespace
+            // boundary is checked here against the loaded deployment.
+            if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
+                return resp;
+            }
             let runtime = match runtimes.get(&deployment.runtime) {
                 Some(rt) => rt,
                 None => return StatusCode::NOT_FOUND.into_response(),

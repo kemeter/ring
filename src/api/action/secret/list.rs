@@ -1,7 +1,8 @@
+use crate::api::auth::{Auth, filter_by_namespace};
 use crate::api::server::Db;
 use crate::models::secret as SecretModel;
-use crate::models::users::User;
 use axum::extract::{FromRequestParts, State};
+use axum::response::Response;
 use axum::{Json, response::IntoResponse};
 use http::StatusCode;
 use http::request::Parts;
@@ -52,8 +53,12 @@ struct SecretOutput {
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User,
-) -> impl IntoResponse {
+    auth: Auth,
+) -> Response {
+    // Scope (`secrets:read`) is enforced centrally. The `?namespace=` filter is
+    // a caller convenience, not a security boundary: a namespace-scoped PAT
+    // must never see other namespaces' secrets even if it omits the filter, so
+    // the result set is filtered through the token's namespace boundary below.
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
 
     if !query_parameters.namespaces.is_empty() {
@@ -64,9 +69,11 @@ pub(crate) async fn list(
         Ok(list) => list,
         Err(e) => {
             log::error!("Failed to list secrets: {}", e);
-            return Json(vec![]);
+            return Json(Vec::<SecretOutput>::new()).into_response();
         }
     };
+
+    let secrets = filter_by_namespace(&auth.source, secrets, |s| s.namespace.as_str());
 
     let output: Vec<SecretOutput> = secrets
         .into_iter()
@@ -79,5 +86,5 @@ pub(crate) async fn list(
         })
         .collect();
 
-    Json(output)
+    Json(output).into_response()
 }
