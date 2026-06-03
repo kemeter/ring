@@ -32,6 +32,13 @@ pub(crate) fn command_config() -> Command {
                 .help("Filter by type (worker or job)")
                 .value_parser(["worker", "job"]),
         )
+        .arg(
+            Arg::new("label")
+                .action(ArgAction::Append)
+                .short('l')
+                .long("label")
+                .help("Filter by label, e.g. -l env=prod (repeatable; all must match)"),
+        )
         .arg(output_arg())
 }
 
@@ -94,6 +101,16 @@ pub(crate) async fn execute(
     if args.contains_id("type") {
         let type_filter = args.get_one::<String>("type").unwrap();
         params.push(format!("kind={}", type_filter));
+    }
+
+    if args.contains_id("label") {
+        let labels = args.get_many::<String>("label").unwrap();
+        for label in labels {
+            // A selector like `env=prod` carries an `=`; percent-encode it so
+            // the server parses one `label[]` value, not `label[]=env` + `prod`.
+            let encoded: String = url::form_urlencoded::byte_serialize(label.as_bytes()).collect();
+            params.push(format!("label[]={}", encoded));
+        }
     }
 
     if !params.is_empty() {

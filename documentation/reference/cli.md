@@ -140,6 +140,7 @@ ring deployment list [OPTIONS]
 - `-n` / `--namespace <NAMESPACE>` — filter by namespace
 - `-s` / `--status <STATUS>` — filter by status (repeatable)
 - `--type <TYPE>` — filter by deployment kind: `worker` or `job`
+- `-l` / `--label <SELECTOR>` — filter by label, `key=value` or just `key` (repeatable; a deployment must match **all** selectors). Works the same across runtimes (Docker and Cloud Hypervisor) since labels are matched on Ring's stored metadata.
 - `-o` / `--output <FORMAT>` — `table` (default) or `json`
 
 **Output (table):**
@@ -159,6 +160,8 @@ ring deployment list --namespace production
 ring deployment list --status running
 ring deployment list --status running --status pending
 ring deployment list --type job
+ring deployment list --label env=prod
+ring deployment list -l env=prod -l tier=web   # both must match
 ring deployment list -o json | jq -r '.[].id'
 ```
 

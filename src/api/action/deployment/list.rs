@@ -22,6 +22,11 @@ pub(crate) struct QueryParameters {
     status: Vec<String>,
     #[serde(default)]
     kind: Vec<String>,
+    /// `key=value` label selectors. A deployment matches only if it carries
+    /// every selector. Stored as JSON in the `labels` column, so this is
+    /// filtered in memory rather than in SQL.
+    #[serde(default)]
+    labels: Vec<String>,
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
@@ -39,6 +44,7 @@ where
         let mut status = Vec::new();
         let mut namespaces = Vec::new();
         let mut kind = Vec::new();
+        let mut labels = Vec::new();
 
         for (key, value) in parsed {
             match key.as_str() {
@@ -48,6 +54,8 @@ where
                 "status" => status.push(value),
                 "kind[]" => kind.push(value),
                 "kind" => kind.push(value),
+                "label[]" => labels.push(value),
+                "label" => labels.push(value),
                 _ => {}
             }
         }
@@ -56,6 +64,7 @@ where
             namespaces,
             status,
             kind,
+            labels,
         })
     }
 }
@@ -90,7 +99,29 @@ pub(crate) async fn list(
         }
     };
 
+    // Labels live as JSON in the `labels` column, so they can't go through the
+    // column-based SQL filter — match them in memory. Each selector is `key` or
+    // `key=value`; a deployment must satisfy every selector to be kept.
+    let label_selectors: Vec<(String, Option<String>)> = query_parameters
+        .labels
+        .iter()
+        .map(|sel| match sel.split_once('=') {
+            Some((k, v)) => (k.to_string(), Some(v.to_string())),
+            None => (sel.clone(), None),
+        })
+        .collect();
+
+    let matches_labels = |deployment: &deployments::Deployment| {
+        label_selectors.iter().all(|(k, want)| match want {
+            Some(v) => deployment.labels.get(k).is_some_and(|got| got == v),
+            None => deployment.labels.contains_key(k),
+        })
+    };
+
     for deployment in list_deployments.into_iter() {
+        if !matches_labels(&deployment) {
+            continue;
+        }
         let id = deployment.id.clone();
         let runtime_name = deployment.runtime.clone();
         let mut output = DeploymentOutput::from_to_model(deployment);
