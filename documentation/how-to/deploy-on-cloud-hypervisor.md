@@ -196,7 +196,7 @@ TCP only — UDP is not wired up.
 
 ## Health checks
 
-`tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375 — install the agent in the guest image.
+`tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375 — install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
 
 The readiness gate (`readiness: true`) works exactly as on Docker — the scheduler-side drain logic is runtime-agnostic. **But there is no CH equivalent of the native Docker `HEALTHCHECK` translation**, so a `readiness: true` check gates the Ring drain but is not exposed to external proxies.
 

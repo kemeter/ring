@@ -76,6 +76,25 @@ if ! echo "$INFO" | grep -q '"vsock"'; then
 fi
 log "vm.info reports a vsock device"
 
+# === probe message points at ring-agent when the guest lacks it ===
+# The test image (cirros) ships no ring-agent, so the command probe's vsock
+# connect fails. The recorded probe message must name ring-agent explicitly —
+# not leave the operator with a bare io error. (Regression for the
+# "cannot reach ring-agent" message.)
+log "waiting for a probe row..."
+PROBE_MSG=""
+for _ in $(seq 1 40); do
+  PROBE_MSG=$("$RING_BIN" deployment health-checks "$DEPLOYMENT_ID" --output json 2>/dev/null \
+    | jq -r '.[0].message // ""')
+  [ -n "$PROBE_MSG" ] && break
+  sleep 2
+done
+log "first probe message: $PROBE_MSG"
+if ! echo "$PROBE_MSG" | grep -qi "ring-agent"; then
+  fail "command probe message should name ring-agent when the guest can't be reached, got: $PROBE_MSG"
+fi
+log "probe message is actionable (mentions ring-agent)"
+
 # === delete teardown ===
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
