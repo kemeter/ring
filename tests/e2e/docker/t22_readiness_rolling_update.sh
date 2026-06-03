@@ -117,7 +117,10 @@ log "-- Scenario A: command readiness HC translates to Docker HEALTHCHECK"
 FIXTURE_A="$RING_TEST_DIR/ready-A.yaml"
 write_fixture "$FIXTURE_A" "nginx:1.25-alpine" yes
 "$RING_BIN" apply --file "$FIXTURE_A"
-wait_deployment_status "$NS" "ready-app" "running" 60
+# With a readiness check and the readiness file missing, the deployment is
+# held in `creating` (its container runs, but it's not "ready") until the file
+# appears — that's the readiness gate on the deployment's own status.
+wait_deployment_status "$NS" "ready-app" "creating" 60
 DEP_A=$(get_deployment_id "$NS" "ready-app")
 [ -z "$DEP_A" ] && fail "no deployment id for scenario A"
 
@@ -139,6 +142,10 @@ wait_docker_health_status "$DEP_A" "unhealthy" 30
 mkdir_cmd='mkdir -p /var/run/kemeter && touch /var/run/kemeter/ready'
 container_exec "$DEP_A" sh -c "$mkdir_cmd"
 wait_docker_health_status "$DEP_A" "healthy" 30
+
+# Once readiness is green for min_healthy_time, the readiness gate opens and
+# the deployment finally reaches `running`.
+wait_deployment_status "$NS" "ready-app" "running" 60
 
 "$RING_BIN" deployment delete "$DEP_A"
 wait_docker_container_gone "$DEP_A" 30
@@ -182,13 +189,16 @@ log "-- Scenario C: readiness HC failing → parent NOT drained"
 FIXTURE_C1="$RING_TEST_DIR/ready-C1.yaml"
 write_fixture "$FIXTURE_C1" "nginx:1.25-alpine" yes
 "$RING_BIN" apply --file "$FIXTURE_C1"
-wait_deployment_status "$NS" "ready-app" "running" 60
+# Held in `creating` until its readiness file exists (gate on own status).
+wait_deployment_status "$NS" "ready-app" "creating" 60
 C_PARENT=$(get_deployment_id "$NS" "ready-app")
 
-# Mark the parent as "ready" so it stays in the active set with a healthy
-# Docker status — this is the realistic state when an upgrade happens.
+# Mark the parent as "ready" so it reaches `running` and stays in the active
+# set with a healthy Docker status — the realistic state when an upgrade
+# happens.
 container_exec "$C_PARENT" sh -c "$mkdir_cmd"
 wait_docker_health_status "$C_PARENT" "healthy" 30
+wait_deployment_status "$NS" "ready-app" "running" 60
 
 # Apply v2 with readiness:true. The new container's readiness file is
 # absent, so /var/run/kemeter/ready does NOT exist — the gate must block
@@ -196,7 +206,9 @@ wait_docker_health_status "$C_PARENT" "healthy" 30
 FIXTURE_C2="$RING_TEST_DIR/ready-C2.yaml"
 write_fixture "$FIXTURE_C2" "nginx:1.26-alpine" yes
 "$RING_BIN" apply --file "$FIXTURE_C2"
-wait_deployment_by_image "$NS" "ready-app" "nginx:1.26-alpine" "running" 90
+# The child's readiness file is absent, so it sits in `creating` (never
+# `running`) — which is also why it can't drain the parent.
+wait_deployment_by_image "$NS" "ready-app" "nginx:1.26-alpine" "creating" 90
 C_CHILD=$(get_deployment_id_by_image "$NS" "ready-app" "nginx:1.26-alpine")
 
 # Sit and watch for 30s. The parent must still have its container at the end.

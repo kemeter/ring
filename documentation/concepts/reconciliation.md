@@ -28,6 +28,8 @@ The reconciler treats `kind: worker` and `kind: job` differently.
 
 A long-running service. The reconciler keeps **exactly `replicas` instances alive**. If a container crashes or you delete it manually, the next tick recreates it. Updating the manifest triggers a rolling update (if health checks are declared) or an immediate replacement.
 
+A worker reaches `running` as soon as its container is up — **unless** it declares a `readiness: true` check, in which case it stays `creating` until that check is green (see [Health checks: the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate)). A readiness check that never turns green fails the deployment after `RING_ROLLOUT_DEADLINE` (default 600s).
+
 ### Job
 
 A one-shot task. The reconciler boots **one** instance (`replicas` is ignored), waits for it to exit, and records the result:

@@ -43,12 +43,34 @@ impl HealthChecker {
             instances_to_remove: Vec::new(),
         };
 
-        if deployment.status != DeploymentStatus::Running {
-            return outcome;
-        }
+        // Checks run in two phases of a deployment's life:
+        //
+        // - `Running`: the full set runs (readiness + liveness) and failures
+        //   drive the `on_failure` actions (restart / stop / alert). This is
+        //   the established behaviour.
+        // - `Creating`: only `readiness: true` checks run, and purely to
+        //   *record results* — they feed the readiness gate that decides when
+        //   the deployment may enter `Running` (see
+        //   `scheduler::gate_running_on_readiness`). A readiness probe that
+        //   isn't green yet during boot is not a failure, so we never touch the
+        //   failure counter or fire `on_failure` here.
+        //
+        // Jobs never run health checks: they go straight to
+        // `completed`/`failed` and never sit in a readiness-gated `Running`.
+        let creating_phase = match deployment.status {
+            DeploymentStatus::Running => false,
+            DeploymentStatus::Creating if deployment.kind != "job" => true,
+            _ => return outcome,
+        };
 
         for instance_id in &deployment.instances {
             for (hc_index, health_check) in deployment.health_checks.iter().enumerate() {
+                // During `Creating` only the readiness checks are relevant; a
+                // liveness probe has no meaning before the app is ready.
+                if creating_phase && !health_check.is_readiness() {
+                    continue;
+                }
+
                 let result = self
                     .execute_single_check_with_runtime(
                         runtime,
@@ -58,26 +80,30 @@ impl HealthChecker {
                     )
                     .await;
 
-                let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
-                if matches!(
-                    result.status,
-                    HealthCheckStatus::Failed | HealthCheckStatus::Timeout
-                ) {
-                    let should_trigger_action = self
-                        .increment_failure_count(&key, health_check.threshold())
-                        .await;
-                    if should_trigger_action {
-                        self.handle_failure(
-                            &mut outcome,
-                            deployment,
-                            health_check,
-                            &result,
-                            instance_id,
-                        );
+                // In the creating phase we only persist the result for the
+                // gate to read; no failure counting, no `on_failure` action.
+                if !creating_phase {
+                    let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
+                    if matches!(
+                        result.status,
+                        HealthCheckStatus::Failed | HealthCheckStatus::Timeout
+                    ) {
+                        let should_trigger_action = self
+                            .increment_failure_count(&key, health_check.threshold())
+                            .await;
+                        if should_trigger_action {
+                            self.handle_failure(
+                                &mut outcome,
+                                deployment,
+                                health_check,
+                                &result,
+                                instance_id,
+                            );
+                            self.reset_failure_count(&key).await;
+                        }
+                    } else {
                         self.reset_failure_count(&key).await;
                     }
-                } else {
-                    self.reset_failure_count(&key).await;
                 }
 
                 outcome.results.push(result);
@@ -592,5 +618,130 @@ mod tests {
         assert_eq!(row.1, "test-persist");
         assert_eq!(row.2, "tcp");
         assert_eq!(row.3, "success");
+    }
+
+    // ---- creating-phase readiness probing ----
+
+    fn readiness_tcp() -> HealthCheck {
+        HealthCheck::Tcp {
+            port: 80,
+            interval: "5s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 1,
+            on_failure: FailureAction::Restart,
+            readiness: true,
+            min_healthy_time: None,
+        }
+    }
+
+    fn liveness_tcp() -> HealthCheck {
+        HealthCheck::Tcp {
+            port: 9999,
+            interval: "5s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 1,
+            on_failure: FailureAction::Restart,
+            readiness: false,
+            min_healthy_time: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_checks_run_during_creating() {
+        // In `Creating`, a readiness check still runs so the gate has data to
+        // read — even though the deployment isn't `Running` yet.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
+
+        let mut deployment = make_deployment(
+            "creating-readiness",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp()],
+        );
+        deployment.status = DeploymentStatus::Creating;
+
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
+
+        assert_eq!(outcome.results.len(), 1);
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Success
+        ));
+    }
+
+    #[tokio::test]
+    async fn liveness_checks_skipped_during_creating() {
+        // In `Creating`, only readiness checks run; the liveness check is
+        // skipped (it has no meaning before the app is ready). With a failing
+        // runtime, the readiness result is recorded but no action fires.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        let mut deployment = make_deployment(
+            "creating-mixed",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp(), liveness_tcp()],
+        );
+        deployment.status = DeploymentStatus::Creating;
+
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
+
+        // Only the readiness check ran (one result), the liveness was skipped.
+        assert_eq!(outcome.results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn creating_failures_do_not_trigger_actions() {
+        // A readiness probe that fails during boot is not a failure to act on:
+        // the result is recorded but no restart/stop is proposed.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        let mut deployment = make_deployment(
+            "creating-fail",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp()],
+        );
+        deployment.status = DeploymentStatus::Creating;
+
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
+
+        assert_eq!(outcome.results.len(), 1);
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Failed
+        ));
+        assert!(
+            outcome.instances_to_remove.is_empty(),
+            "no restart during creating"
+        );
+        assert!(
+            outcome.events.is_empty(),
+            "no on_failure events during creating"
+        );
+        assert!(outcome.proposed_status.is_none());
+    }
+
+    #[tokio::test]
+    async fn jobs_skip_health_checks_during_creating() {
+        // Jobs never gate on readiness; they go straight to completed/failed.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
+
+        let mut deployment = make_deployment(
+            "creating-job",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp()],
+        );
+        deployment.status = DeploymentStatus::Creating;
+        deployment.kind = "job".to_string();
+
+        let outcome = checker.execute_checks(&deployment, &runtime).await;
+
+        assert!(outcome.results.is_empty(), "jobs run no checks in creating");
     }
 }
