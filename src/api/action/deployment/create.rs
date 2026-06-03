@@ -168,7 +168,11 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
 fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
     use std::collections::HashMap;
 
-    let mut published_seen: HashMap<u16, usize> = HashMap::new();
+    // Keyed by (published port, protocol): the same host port may be bound
+    // once for TCP and once for UDP — those are separate namespaces — but not
+    // twice for the same protocol.
+    let mut published_seen: HashMap<(u16, crate::models::deployments::PortProtocol), usize> =
+        HashMap::new();
 
     for (idx, port) in input.ports.iter().enumerate() {
         if port.published == 0 {
@@ -200,17 +204,20 @@ fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
         }
 
         if port.published != 0 {
-            if let Some(prev_idx) = published_seen.get(&port.published) {
+            let key = (port.published, port.protocol);
+            if let Some(prev_idx) = published_seen.get(&key) {
                 errors.push(Violation::new(
                     format!("ports[{}].published", idx),
                     format!(
-                        "duplicates ports[{}].published = {}; each host port can only be bound once",
-                        prev_idx, port.published
+                        "duplicates ports[{}].published = {}/{}; each host port can only be bound once per protocol",
+                        prev_idx,
+                        port.published,
+                        port.protocol.as_str()
                     ),
                     "deployment.ports.published.duplicate",
                 ));
             } else {
-                published_seen.insert(port.published, idx);
+                published_seen.insert(key, idx);
             }
         }
     }

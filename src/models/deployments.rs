@@ -142,6 +142,25 @@ pub(crate) struct DeploymentConfig {
     pub(crate) user: Option<UserConfig>,
 }
 
+/// Transport protocol for a published port. TCP is the default, preserving the
+/// shape of manifests written before UDP forwarding existed.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum PortProtocol {
+    #[default]
+    Tcp,
+    Udp,
+}
+
+impl PortProtocol {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            PortProtocol::Tcp => "tcp",
+            PortProtocol::Udp => "udp",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct DeploymentPort {
     pub(crate) published: u16,
@@ -151,6 +170,9 @@ pub(crate) struct DeploymentPort {
     /// `127.0.0.1` to expose the port on loopback only.
     #[serde(default)]
     pub(crate) host_ip: Option<String>,
+    /// Transport protocol (`tcp` by default, or `udp`).
+    #[serde(default)]
+    pub(crate) protocol: PortProtocol,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]

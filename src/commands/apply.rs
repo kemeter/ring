@@ -107,6 +107,10 @@ struct Port {
     /// server's `#[serde(default)]` fills in the default unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     host_ip: Option<String>,
+    /// Transport protocol, `tcp` (default) or `udp`. Omitted from the payload
+    /// when unset so the wire shape is unchanged for TCP-only manifests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    protocol: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

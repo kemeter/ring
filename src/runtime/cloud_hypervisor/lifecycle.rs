@@ -706,6 +706,7 @@ impl CloudHypervisorLifecycle {
                     p.published,
                     p.target,
                     p.host_ip.as_deref(),
+                    p.protocol,
                 )
                 .await
                 {
