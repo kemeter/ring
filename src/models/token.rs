@@ -31,6 +31,8 @@ pub(crate) const KNOWN_SCOPES: &[&str] = &[
     "namespaces:write",
     "users:read",
     "users:write",
+    "webhooks:read",
+    "webhooks:write",
     "admin",
 ];
 

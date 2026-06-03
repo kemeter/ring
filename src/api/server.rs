@@ -56,6 +56,10 @@ use crate::api::action::token::list as token_list;
 use crate::api::action::token::revoke as token_revoke;
 use crate::api::action::token::rotate as token_rotate;
 
+use crate::api::action::webhook::create as webhook_create;
+use crate::api::action::webhook::delete as webhook_delete;
+use crate::api::action::webhook::list as webhook_list;
+
 use crate::api::action::healthz::healthz;
 
 use crate::api::auth::auth_middleware;
@@ -126,6 +130,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/tokens", get(token_list).post(token_create))
         .route("/tokens/{id}", get(token_get).delete(token_revoke))
         .route("/tokens/{id}/rotate", post(token_rotate))
+        .route("/webhooks", get(webhook_list).post(webhook_create))
+        .route("/webhooks/{id}", delete(webhook_delete))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))
