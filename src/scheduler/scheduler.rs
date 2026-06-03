@@ -289,6 +289,25 @@ async fn log_running_transition(
     }
 }
 
+/// Publish a `deployment.status_changed` event when a reconciliation cycle
+/// moved the deployment to a different status. Called after the row is
+/// persisted (and after the readiness gate has had its say on the final
+/// status) so a subscriber that immediately queries Ring sees the same state.
+/// Best-effort: enqueue failures are swallowed inside `events::publish`.
+async fn publish_status_change(
+    pool: &SqlitePool,
+    old_status: &DeploymentStatus,
+    deployment: &Deployment,
+) {
+    if &deployment.status != old_status {
+        crate::events::publish(
+            pool,
+            crate::events::Event::deployment_status_changed(deployment, old_status),
+        )
+        .await;
+    }
+}
+
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
@@ -1103,11 +1122,14 @@ pub(crate) async fn schedule(
                     None => continue,
                 };
 
+                let old_status = deployment.status.clone();
                 persist_pending_events(&pool, &mut result).await;
                 handle_status_transitions(&pool, &mut result, &mut deleted).await;
 
                 if let Err(e) = deployments::update(&pool, &result).await {
                     error!("Failed to update deployment {}: {}", result.id, e);
+                } else {
+                    publish_status_change(&pool, &old_status, &result).await;
                 }
                 continue;
             }
@@ -1216,6 +1238,7 @@ pub(crate) async fn schedule(
                 continue;
             }
 
+            let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;
             gate_running_on_readiness(&pool, &old_status, &mut result).await;
@@ -1227,6 +1250,8 @@ pub(crate) async fn schedule(
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);
+            } else {
+                publish_status_change(&pool, &old_status, &result).await;
             }
         }
 
