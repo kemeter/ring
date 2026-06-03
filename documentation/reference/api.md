@@ -614,7 +614,7 @@ Update a user. Both fields are optional — sending an empty body is a no-op tha
 
 Scoped API tokens (Personal Access Tokens). A token authenticates like a session — `Authorization: Bearer ring_pat_…` — but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
 
-**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (all of the above).
+**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
 
 Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`) — otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
 
@@ -692,6 +692,64 @@ Revokes a token. **Response:** `204 No Content`. A revoked token is rejected wit
 ### `POST /tokens/{id}/rotate`
 
 Revokes the token and mints a new one carrying the same name, scopes, namespaces and expiry. **Response:** `201 Created` with the new clear `token` (shown once), same shape as `POST /tokens`.
+
+## Webhooks
+
+Webhook subscribers receive Ring events by HTTP POST. Ring publishes events to a durable queue; a worker delivers each to every webhook subscribed to its kind, with exponential backoff and dead-lettering after repeated failures. Deliveries are **at-least-once** — receivers must be idempotent.
+
+Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`).
+
+### Event kinds
+
+| Kind                         | When                                   |
+|------------------------------|----------------------------------------|
+| `deployment.status_changed`  | A deployment transitions to a new status |
+
+### Delivery format
+
+Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and — when the webhook has a secret — `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body). Body for `deployment.status_changed`:
+
+```json
+{
+  "schema_version": 1,
+  "deployment_id": "f3a8b2c4-...",
+  "namespace": "production",
+  "name": "web",
+  "kind": "worker",
+  "old_status": "creating",
+  "new_status": "running",
+  "restart_count": 0
+}
+```
+
+### `POST /webhooks`
+
+```json
+{
+  "url": "https://hooks.example.com/ring",
+  "events": ["deployment.status_changed"],
+  "secret": "optional-shared-secret"
+}
+```
+
+`events` may be omitted or `[]` to subscribe to all kinds. `secret` is optional — when omitted, Ring generates one. **Response:** `201 Created` — the only response carrying the `secret` (shown once).
+
+**Validation** (see [Validation errors](#validation-errors)):
+
+| Field    | Rule                              | Code                     |
+|----------|-----------------------------------|--------------------------|
+| `url`    | must be an http/https URL that does not target loopback (`localhost`, `127.0.0.1`, `::1`) or link-local (`169.254.0.0/16`, incl. `169.254.169.254`) | `webhook.url.format`     |
+| `events` | every entry is a known event kind | `webhook.events.unknown` |
+
+The URL restriction is an SSRF guard: Ring POSTs to the URL server-side, so a subscriber cannot point it at the host's own admin services or the cloud metadata endpoint. Private/internal cluster addresses (RFC-1918, e.g. `10.x`, `192.168.x`, `172.16–31.x`) **are** allowed — they're the normal target for an internal subscriber. Redirects are not followed during delivery, so a subscriber can't bounce the request to a blocked target either.
+
+### `GET /webhooks`
+
+Lists all webhooks (without secrets): `id`, `url`, `events`, `created_at`, `revoked_at`.
+
+### `DELETE /webhooks/{id}`
+
+Revokes a webhook (soft delete). **Response:** `204 No Content`. A revoked webhook receives no further deliveries.
 
 ## Configs
 
