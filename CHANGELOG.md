@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-03
+
 ### Changed (breaking)
 - **`POST /deployments` now uses RFC 7807** with the same shape as `POST /users` (`application/problem+json`, `violations[]` with `property_path`, `message`, `code`). Existing 400/422 responses with `{"message": "..."}` body are replaced. Codes for the rules already in place:
   - `deployment.runtime.unsupported` — runtime must be one of: docker, cloud-hypervisor
@@ -101,6 +103,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Failed Docker image pulls now surface an actionable reason instead of a raw daemon dump.** A `ImagePullBackOff` event previously read `Failed to pull image '…': <bollard string>`. Ring now classifies the failure and rewrites it: authentication refused → `registry authentication failed … — check config.server, config.username and config.password`; registry unreachable (connection refused, host not found, timeout) → `cannot reach the registry … — is it up and the registry host correct?`; missing tag/digest stays as `not found`. The original daemon string is preserved verbatim in `(original error: …)`. The deployment status (`image_pull_back_off`) and event reason are unchanged.
+
+### Dashboard (new)
+- **Web dashboard** (SvelteKit, served embedded by `ring server start --dashboard` or locally via `ring dashboard`). Login, **Overview** home page with summary cards (deployments by status, namespaces/secrets/configs counts, node health, failing deployments), and a deployments list with namespace filters and a created-at column.
+- **Deployment detail page** — overview, configured resources, running instances, **live metrics** (per-instance and aggregated CPU / memory / network I/O / disk I/O / PIDs), ports, volumes, environment, configured health checks, **health-check probe history**, **streamed logs** (live tail over SSE), and a recent-events timeline.
+- **Node page** — host info (hostname, OS, arch, uptime, CPU cores, memory, load average).
+- Read-only views for namespaces (with per-namespace audit trail), secrets, and configs.
+- **Dark/light theme toggle** (persisted, follows `prefers-color-scheme`) and the Ring version shown in the sidebar.
+- Per-page browser titles, copy-to-clipboard on IDs, and a responsive layout for small screens.
+
+### Added
+- **`ring init`** — interactive setup that prompts for runtime + port and generates `RING_SECRET_KEY`, plus **`--runtime` / `--port` flags** to script it non-interactively (CI, Ansible) without a TTY.
+- **`ring node get`** — host information for the server's machine.
+- **Startup banner** — `ring server start` prints a Vite-style banner with the API's Local/Network URLs, the dashboard URL (when enabled), and the registered runtimes.
+- **Semantic CLI colours and aligned tables** — errors red, success green, status column colour-coded; ANSI is dropped automatically in pipes / under `NO_COLOR` / with `--output json`.
+
+### Changed
+- **CLI commands exit non-zero on failure.** A command that can't reach the API or gets a non-2xx response now returns a categorised exit code (1 general, 2 auth, 3 connection, 4 not-found, 5 conflict) instead of silently exiting 0 — so `set -e`, CI gates and `&&` chains detect the error. Network failures render a single human line instead of the raw reqwest chain.
+
+### Fixed
+- **Scheduler no longer gets stuck cleaning up a deleted deployment** whose referenced secret/config/volume was removed — it reconciles straight to teardown instead of failing resolution every tick.
+- **`CreateContainerError` converges to `CrashLoopBackOff`** instead of looping forever; orphan Docker containers are cleaned up on create/connect-network failures; `kind: job` create errors converge to `Failed`.
+- **Deployment status enum unified to snake_case** end to end (DB, JSON, events), fixing rows silently dropped from string-matched filters.
+
+### Security
+- **IDOR fix** on `PUT`/`DELETE /users/{id}` (a user could modify/delete another); minimal-role authorization check.
+- **Unique random salt per password hash** (previously deterministic — identical passwords produced identical hashes).
+- **Single auth middleware** at the router with a fail-closed `User` extractor; **namespace-scoped audit log** for create/update/delete.
+- Dependency bumps closing OpenSSL CVEs.
+
+### Internal
+- CI: **clippy is now blocking** (`-D warnings`) and a **dashboard lint** job (biome + svelte-check) was added.
+- Refactor: presentation helpers (`style`, `output`, `problem_json`) moved to a `cli` module; shared `OutputFormat` ValueEnum for `--output`.
 
 ## [0.8.0] - 2026-05-12
 
