@@ -18,6 +18,8 @@ All requests except `POST /login` and `GET /healthz` require a Bearer token.
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3030/deployments
 ```
 
+The Bearer token is either a **login session token** (from `POST /login`, full access) or a **scoped API token** (`ring_pat_…`, limited to its scopes and namespaces — see [Tokens](#tokens)). Both travel in the same `Authorization: Bearer` header.
+
 ### Get a token
 
 ```
@@ -588,6 +590,89 @@ Update a user. Both fields are optional — sending an empty body is a no-op tha
 ### `DELETE /users/{id}`
 
 **Response:** `204 No Content`
+
+## Tokens
+
+Scoped API tokens (Personal Access Tokens). A token authenticates like a session — `Authorization: Bearer ring_pat_…` — but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
+
+**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (all of the above).
+
+Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`) — otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
+
+All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) and `POST /auth/stream-ticket` require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation — a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
+
+### `POST /tokens`
+
+Creates a token. Requires a full-access session or an `admin`-scoped token.
+
+```json
+{
+  "name": "ci-read",
+  "scopes": ["deployments:read"],
+  "namespaces": ["production"],
+  "expire_at": "2026-09-01T00:00:00Z"
+}
+```
+
+`namespaces` may be omitted or `[]` (all namespaces). `expire_at` is an optional RFC 3339 timestamp (omit for no expiry).
+
+**Response:** `201 Created` — the only response that includes the clear `token`:
+
+```json
+{
+  "id": "9f1c…",
+  "name": "ci-read",
+  "token": "ring_pat_3a7f…",
+  "token_prefix": "ring_pat_3a7f9b",
+  "scopes": ["deployments:read"],
+  "namespaces": ["production"],
+  "created_at": "2026-06-03T10:00:00Z",
+  "expire_at": "2026-09-01T00:00:00Z",
+  "message": "Copy this token now — it will not be shown again."
+}
+```
+
+**Validation** (see [Validation errors](#validation-errors)):
+
+| Field        | Rule                                              | Code                    |
+|--------------|---------------------------------------------------|-------------------------|
+| `name`       | 2-63 characters                                   | `token.name.length`     |
+| `name`       | letters/digits/`_`/`.`/`-`, alphanumeric ends     | `token.name.format`     |
+| `scopes`     | non-empty                                         | `token.scopes.empty`    |
+| `scopes`     | every entry is a known scope                      | `token.scopes.unknown`  |
+| `expire_at`  | RFC 3339 timestamp                                | `token.expire_at.format`|
+
+### `GET /tokens`
+
+Lists the caller's own tokens (never the secret).
+
+```json
+[
+  {
+    "id": "9f1c…",
+    "name": "ci-read",
+    "token_prefix": "ring_pat_3a7f9b",
+    "scopes": ["deployments:read"],
+    "namespaces": ["production"],
+    "created_at": "2026-06-03T10:00:00Z",
+    "expire_at": "2026-09-01T00:00:00Z",
+    "last_used_at": "2026-06-03T11:22:00Z",
+    "revoked_at": null
+  }
+]
+```
+
+### `GET /tokens/{id}`
+
+Returns a single token you own (without the secret). A token you don't own returns `404 Not Found` — the endpoint never confirms another user's token exists.
+
+### `DELETE /tokens/{id}`
+
+Revokes a token. **Response:** `204 No Content`. A revoked token is rejected with `401` on its next use and shows a non-null `revoked_at` in listings.
+
+### `POST /tokens/{id}/rotate`
+
+Revokes the token and mints a new one carrying the same name, scopes, namespaces and expiry. **Response:** `201 Created` with the new clear `token` (shown once), same shape as `POST /tokens`.
 
 ## Configs
 
