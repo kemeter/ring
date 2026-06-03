@@ -188,7 +188,7 @@ pub(crate) struct NetworkConfig {
     pub(crate) mode: NetworkMode,
 }
 
-fn default_image_pull_policy() -> String {
+pub(crate) fn default_image_pull_policy() -> String {
     "Always".to_string()
 }
 
