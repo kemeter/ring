@@ -43,7 +43,7 @@ pub(crate) async fn run(pool: SqlitePool, interval_secs: u64) {
 }
 
 async fn process_due(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let due = event_queue::claim_due(pool, BATCH).await?;
+    let due = event_queue::fetch_due(pool, BATCH).await?;
     for event in due {
         deliver_event(pool, &event).await;
     }
@@ -202,7 +202,7 @@ mod tests {
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1, "one delivery");
         assert_eq!(mock.signed.load(Ordering::SeqCst), 1, "carried signature");
-        let due = event_queue::claim_due(&pool, 10).await.unwrap();
+        let due = event_queue::fetch_due(&pool, 10).await.unwrap();
         assert!(due.is_empty(), "event should be delivered, not pending");
     }
 
@@ -221,7 +221,7 @@ mod tests {
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 0, "filter excludes it");
         // No subscriber matched → event is marked delivered (nothing to do).
-        assert!(event_queue::claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(event_queue::fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -238,7 +238,7 @@ mod tests {
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
         // Rescheduled with a future next_attempt_at, so not currently due, but
         // still pending (not dead) after a single failure.
-        let due_now = event_queue::claim_due(&pool, 10).await.unwrap();
+        let due_now = event_queue::fetch_due(&pool, 10).await.unwrap();
         assert!(due_now.is_empty(), "backed off, not due yet");
     }
 
@@ -254,7 +254,7 @@ mod tests {
         event_queue::enqueue(&pool, "deployment.status_changed", "{}")
             .await
             .unwrap();
-        let id = event_queue::claim_due(&pool, 10).await.unwrap()[0]
+        let id = event_queue::fetch_due(&pool, 10).await.unwrap()[0]
             .id
             .clone();
 
@@ -279,7 +279,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(status, "dead", "crossed MAX_ATTEMPTS → dead-lettered");
-        assert!(event_queue::claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(event_queue::fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -309,6 +309,6 @@ mod tests {
         // Exactly one delivery: the subscribed kind. The other kind matched no
         // subscriber and was marked delivered without a POST.
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1, "only subscribed kind");
-        assert!(event_queue::claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(event_queue::fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 }

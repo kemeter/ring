@@ -54,7 +54,16 @@ pub(crate) async fn enqueue(
 }
 
 /// Pending events whose `next_attempt_at` is due, oldest first, up to `limit`.
-pub(crate) async fn claim_due(
+///
+/// This is a plain read, not an atomic claim: it does not mark the rows as
+/// in-flight, so two readers would both see the same due event. That is safe
+/// because Ring runs a single event worker against a single-writer SQLite
+/// database — the worker is the only reader and never overlaps with itself
+/// (`process_due` awaits each tick before the next). If Ring ever runs multiple
+/// server processes against one database, this must become a transactional
+/// claim (e.g. `UPDATE ... SET status = 'claimed' ... RETURNING`) to avoid
+/// duplicate deliveries.
+pub(crate) async fn fetch_due(
     pool: &SqlitePool,
     limit: i64,
 ) -> Result<Vec<QueuedEvent>, sqlx::Error> {
@@ -144,31 +153,31 @@ mod tests {
     async fn enqueue_then_claim_then_deliver() {
         let pool = test_pool().await;
         enqueue(&pool, "k", "{}").await.unwrap();
-        let due = claim_due(&pool, 10).await.unwrap();
+        let due = fetch_due(&pool, 10).await.unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].attempts, 0);
         mark_delivered(&pool, &due[0].id).await.unwrap();
-        assert!(claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn dead_lettered_event_is_never_claimed_again() {
         let pool = test_pool().await;
         enqueue(&pool, "k", "{}").await.unwrap();
-        let id = claim_due(&pool, 10).await.unwrap()[0].id.clone();
+        let id = fetch_due(&pool, 10).await.unwrap()[0].id.clone();
         mark_dead(&pool, &id, MAX_ATTEMPTS, "boom").await.unwrap();
         // A dead event is terminal: it must not come back as due, ever.
-        assert!(claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn reschedule_pushes_out_of_the_due_window() {
         let pool = test_pool().await;
         enqueue(&pool, "k", "{}").await.unwrap();
-        let id = claim_due(&pool, 10).await.unwrap()[0].id.clone();
+        let id = fetch_due(&pool, 10).await.unwrap()[0].id.clone();
         reschedule(&pool, &id, 1, "transient").await.unwrap();
         // Backed off by >= 1 minute, so not due right now, but still pending.
-        assert!(claim_due(&pool, 10).await.unwrap().is_empty());
+        assert!(fetch_due(&pool, 10).await.unwrap().is_empty());
     }
 
     #[test]
