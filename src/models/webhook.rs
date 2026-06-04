@@ -118,11 +118,35 @@ impl From<WebhookRow> for Webhook {
 }
 
 impl Webhook {
-    /// True when this webhook should receive `kind`: an empty filter means all
-    /// kinds, otherwise the kind must be listed.
+    /// True when this webhook should receive `kind`. An empty filter means all
+    /// kinds. Otherwise an entry matches the kind when it is:
+    /// - `*` — every kind,
+    /// - `<family>.*` — every kind in that family (e.g. `deployment.*` matches
+    ///   `deployment.scaled`),
+    /// - an exact kind string.
     pub(crate) fn subscribes_to(&self, kind: &str) -> bool {
-        self.events.is_empty() || self.events.iter().any(|e| e == kind)
+        self.events.is_empty()
+            || self
+                .events
+                .iter()
+                .any(|filter| filter_matches(filter, kind))
     }
+}
+
+/// Whether a single subscription `filter` entry matches an event `kind`.
+/// See [`Webhook::subscribes_to`] for the accepted forms.
+fn filter_matches(filter: &str, kind: &str) -> bool {
+    if filter == "*" {
+        return true;
+    }
+    if let Some(prefix) = filter.strip_suffix(".*") {
+        // `deployment.*` matches `deployment.<anything>`. The `.` is kept in
+        // the compared prefix so `deployment.*` does not match `deploymentx`.
+        return kind
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.'));
+    }
+    filter == kind
 }
 
 /// Generate a fresh HMAC secret (`whsec_<hex>`). Uses `OsRng` for fork safety,
@@ -238,6 +262,25 @@ mod tests {
         let w = wh(&["deployment.status_changed"]);
         assert!(w.subscribes_to("deployment.status_changed"));
         assert!(!w.subscribes_to("other.kind"));
+    }
+
+    #[test]
+    fn star_filter_matches_every_kind() {
+        let w = wh(&["*"]);
+        assert!(w.subscribes_to("deployment.scaled"));
+        assert!(w.subscribes_to("node.online"));
+    }
+
+    #[test]
+    fn family_wildcard_matches_only_that_family() {
+        let w = wh(&["deployment.*"]);
+        assert!(w.subscribes_to("deployment.scaled"));
+        assert!(w.subscribes_to("deployment.error"));
+        assert!(!w.subscribes_to("node.online"));
+        // The dot is required: `deployment.*` must not match `deploymentx`.
+        assert!(!w.subscribes_to("deploymentx.scaled"));
+        // The family alone is not an event kind.
+        assert!(!w.subscribes_to("deployment"));
     }
 
     #[test]

@@ -20,7 +20,11 @@ pub(crate) fn command_config() -> Command {
                 .short('e')
                 .long("event")
                 .action(ArgAction::Append)
-                .help("Event kind to subscribe to, repeatable. Omit for all events"),
+                .help(
+                    "Event kind to subscribe to, repeatable. Accepts an exact kind \
+                     (deployment.scaled), a family wildcard (deployment.*) or '*'. \
+                     Omit for all events",
+                ),
         )
         .arg(
             Arg::new("secret")

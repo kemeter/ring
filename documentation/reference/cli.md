@@ -375,13 +375,17 @@ ring webhook create <URL> [--event <KIND>...] [--secret <SECRET>]
 
 **Options:**
 
-- `-e` / `--event <KIND>` — subscribe to a specific event kind; repeatable. Omit to receive **all** kinds.
+- `-e` / `--event <KIND>` — subscribe to an event kind; repeatable. Accepts an exact kind (`deployment.scaled`), a family wildcard (`deployment.*`), or `*` for everything. Omit to receive **all** kinds. A malformed value (e.g. `deployment*` without the dot) is rejected at creation.
 - `-s` / `--secret <SECRET>` — HMAC secret. If omitted, Ring generates one and prints it once.
 
 The webhook id is printed on stdout; the generated secret (if any) is printed on stderr and shown only once.
 
 ```bash
+# Exact kinds
 ring webhook create https://hooks.example.com/ring --event deployment.status_changed
+
+# Every deployment event
+ring webhook create https://hooks.example.com/ring --event 'deployment.*'
 ```
 
 ### `ring webhook list`

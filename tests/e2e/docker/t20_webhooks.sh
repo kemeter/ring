@@ -69,6 +69,20 @@ RC=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$RING_URL/webhooks" \
 [ "$RC" = "403" ] || fail "1: PAT without webhooks:write must be 403 (got $RC)"
 log "1: webhook creation refused without webhooks:write (403)"
 
+# --- Invariant 1b: a malformed event filter is rejected (422), not persisted ---
+# `deployment*` (missing dot) is the classic typo — the server must refuse it.
+RC=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$RING_URL/webhooks" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"url\":\"$MOCK_URL\",\"events\":[\"deployment*\"]}")
+[ "$RC" = "422" ] || fail "1b: malformed wildcard 'deployment*' must be 422 (got $RC)"
+log "1b: malformed event filter 'deployment*' rejected (422)"
+
+# A valid family wildcard, on the other hand, is accepted.
+WH_WILD=$("$RING_BIN" webhook create "$MOCK_URL" --event 'deployment.*' 2>/dev/null)
+[ -n "$WH_WILD" ] || fail "1b: 'deployment.*' wildcard should be accepted"
+"$RING_BIN" webhook delete "$WH_WILD" >/dev/null 2>&1 || true
+log "1b: family wildcard 'deployment.*' accepted"
+
 # --- Register the webhook (session token, full access). No --event filter, so
 # it receives every kind — also exercising the "subscribe to all" path. ---
 WH_ID=$("$RING_BIN" webhook create "$MOCK_URL" --secret testsecret 2>/dev/null)
@@ -141,6 +155,40 @@ for _ in $(seq 1 30); do
 done
 [ "$SCALED" = "1" ] || { cat "$MOCK_LOG" >&2; fail "4b: no deployment.scaled delivered to the subscriber"; }
 log "4b: subscriber received a deployment.scaled (direction=up)"
+
+# --- Invariant 4c: a rolling update emits deployment.rolling_update ---
+# Re-apply with a different image AND a health check. A rolling update only
+# triggers when the new deployment declares health checks and exactly one
+# active deployment exists (see deployment::create). With no readiness HC, the
+# child drains the parent as soon as it is running (legacy behaviour), so the
+# rollout converges to a `complete` phase the worker delivers as a webhook.
+cat > "$FIXTURE" <<EOF
+deployments:
+  nginx-wh:
+    name: nginx-wh
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:1.27-alpine
+    replicas: 2
+    health_checks:
+      - { type: http, url: "http://localhost/", interval: "2s", timeout: "1s", on_failure: restart }
+EOF
+"$RING_BIN" apply --file "$FIXTURE"
+# The event kind travels in the X-Ring-Event header (not the body), and the
+# body's `kind` field is the deployment kind. The rolling_update payload is the
+# only one carrying both `phase` and `parent_id`, so match on those.
+ROLLED=0
+for _ in $(seq 1 60); do
+  if grep -q '"phase":"\(step\|complete\)"' "$MOCK_LOG" 2>/dev/null; then
+    ROLLED=1; break
+  fi
+  sleep 1
+done
+[ "$ROLLED" = "1" ] || { cat "$MOCK_LOG" >&2; fail "4c: no deployment.rolling_update delivered to the subscriber"; }
+log "4c: subscriber received a deployment.rolling_update"
+# The deployment id changes across the rollout (child replaces parent); track
+# the surviving one by image for cleanup.
+DEPLOYMENT_ID=$(get_deployment_id_by_image "ring-e2e" "nginx-wh" "nginx:1.27-alpine")
 
 # --- Invariant 5: CRUD via CLI — list shows it, delete removes it ---
 "$RING_BIN" webhook list 2>/dev/null | grep -q "$MOCK_URL" || fail "5: webhook not listed"

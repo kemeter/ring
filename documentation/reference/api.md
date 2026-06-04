@@ -800,7 +800,11 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`events` may be omitted or `[]` to subscribe to all kinds. `secret` is optional — when omitted, Ring generates one. **Response:** `201 Created` — the only response carrying the `secret` (shown once).
+`events` may be omitted or `[]` to subscribe to all kinds. Each entry is an exact kind (`deployment.scaled`), a family wildcard (`deployment.*` — every kind in that family), or `*` (every kind). `secret` is optional — when omitted, Ring generates one. **Response:** `201 Created` — the only response carrying the `secret` (shown once).
+
+A malformed filter is rejected at creation rather than silently never matching: `deployment*` (missing dot), `deployement.*` (unknown family), or an unknown exact kind all return a `422` with a message pointing at the correct form.
+
+The secret keys the HMAC signature your receiver verifies, so its strength is your security boundary: **use a long, high-entropy value** (a random 32+ character string). Ring does not impose a minimum — a weak secret is forgeable — so unless you need to match an existing secret on the receiver, omit `secret` and let Ring generate a strong one for you.
 
 **Validation** (see [Validation errors](#validation-errors)):
 
@@ -1038,7 +1042,3 @@ curl -N -H "Authorization: Bearer $TOKEN" \
 ```
 
 `-N` disables curl's output buffering so SSE lines are flushed immediately.
-
-## Webhooks
-
-Ring does not support outbound webhooks. To observe state changes, poll the relevant endpoint, or open an SSE stream against `GET /deployments/{id}/logs?follow=true` and subscribe to events with `GET /deployments/{id}/events` plus periodic refresh.

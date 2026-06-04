@@ -1,7 +1,7 @@
 use crate::api::auth::Auth;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList, problem_response};
-use crate::events::KNOWN_EVENT_KINDS;
+use crate::events::validate_event_filter;
 use crate::models::audit_log;
 use crate::models::webhook;
 use axum::Json;
@@ -50,20 +50,18 @@ pub(crate) async fn create(
         violations.push(Violation::new("url", reason, "webhook.url.format"));
     }
 
-    // A subscriber can't subscribe to a kind Ring never emits.
-    for kind in &input.events {
-        if !KNOWN_EVENT_KINDS.contains(&kind.as_str()) {
-            violations.push(Violation::new(
-                "events",
-                format!(
-                    "unknown event kind '{}' (known: {})",
-                    kind,
-                    KNOWN_EVENT_KINDS.join(", ")
-                ),
-                "webhook.events.unknown",
-            ));
+    // Each filter entry must be a known kind, a known `family.*`, or `*`. A
+    // malformed entry (typo, missing dot) is rejected loudly rather than
+    // silently never matching.
+    for entry in &input.events {
+        if let Err(reason) = validate_event_filter(entry) {
+            violations.push(Violation::new("events", reason, "webhook.events.unknown"));
         }
     }
+
+    // A caller-supplied secret is intentionally unconstrained: it's the
+    // subscriber's own shared secret, not a Ring credential, so its strength is
+    // the caller's call. When omitted, Ring generates a strong one.
 
     if !violations.is_empty() {
         return violations.into_response();
@@ -242,6 +240,72 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "no webhook persisted on validation failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_wildcard_filters() {
+        // `*` and `<family>.*` are valid subscription filters.
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = pat(&pool, &["webhooks:write"]).await;
+        let server = TestServer::new(app).unwrap();
+
+        for filter in ["*", "deployment.*"] {
+            let res = server
+                .post("/webhooks")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({ "url": "https://hooks.example.com/ring", "events": [filter] }))
+                .await;
+            assert_eq!(
+                res.status_code(),
+                StatusCode::CREATED,
+                "filter {filter:?} should be accepted"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_malformed_wildcard_with_helpful_message() {
+        // `deployment*` (missing dot) is the classic typo — it must 422 with a
+        // message that tells the caller the right form, not silently never match.
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = pat(&pool, &["webhooks:write"]).await;
+        let server = TestServer::new(app).unwrap();
+
+        let res = server
+            .post("/webhooks")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "url": "https://hooks.example.com/ring", "events": ["deployment*"] }))
+            .await;
+
+        assert_eq!(res.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(res.text().contains("invalid wildcard"), "{}", res.text());
+        assert!(
+            crate::models::webhook::find_all(&pool)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_any_caller_secret() {
+        // A caller-supplied secret is unconstrained — its strength is the
+        // caller's call, so even a short one is accepted and persisted.
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = pat(&pool, &["webhooks:write"]).await;
+        let server = TestServer::new(app).unwrap();
+
+        let res = server
+            .post("/webhooks")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "url": "https://hooks.example.com/ring", "secret": "short" }))
+            .await;
+
+        assert_eq!(res.status_code(), StatusCode::CREATED);
+        assert_eq!(
+            crate::models::webhook::find_all(&pool).await.unwrap().len(),
+            1
         );
     }
 

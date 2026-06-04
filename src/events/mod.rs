@@ -53,6 +53,65 @@ pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[
     KIND_DEPLOYMENT_ERROR,
 ];
 
+/// Validate one entry of a webhook's `events` subscription filter, returning
+/// `Err(reason)` with an actionable message when it is malformed.
+///
+/// Accepted forms (mirrors `Webhook::subscribes_to`):
+/// - `*` — every kind,
+/// - `<family>.*` — every kind in a family that actually exists (e.g.
+///   `deployment.*`); a family with no known kind is rejected,
+/// - an exact known kind.
+///
+/// Everything else is rejected loudly so a typo like `deployment*` (missing
+/// dot) or `deployement.*` (misspelled family) fails at creation instead of
+/// silently never matching.
+pub(crate) fn validate_event_filter(entry: &str) -> Result<(), String> {
+    if entry == "*" {
+        return Ok(());
+    }
+
+    if let Some(prefix) = entry.strip_suffix(".*") {
+        let known_families: Vec<&str> = KNOWN_EVENT_KINDS
+            .iter()
+            .filter_map(|k| k.split_once('.').map(|(family, _)| family))
+            .collect();
+        if known_families.contains(&prefix) {
+            return Ok(());
+        }
+        return Err(format!(
+            "unknown event family '{prefix}.*' (known families: {})",
+            dedup_join(&known_families)
+        ));
+    }
+
+    if KNOWN_EVENT_KINDS.contains(&entry) {
+        return Ok(());
+    }
+
+    // Catch the common near-miss: a wildcard without the separating dot.
+    if entry.ends_with('*') {
+        return Err(format!(
+            "invalid wildcard '{entry}' — use '*' for all kinds or '<family>.*' (e.g. 'deployment.*')"
+        ));
+    }
+
+    Err(format!(
+        "unknown event kind '{entry}' (known: {})",
+        KNOWN_EVENT_KINDS.join(", ")
+    ))
+}
+
+/// Join unique families in declaration order for an error message.
+fn dedup_join(families: &[&str]) -> String {
+    let mut seen: Vec<&str> = Vec::new();
+    for f in families {
+        if !seen.contains(f) {
+            seen.push(f);
+        }
+    }
+    seen.join(", ")
+}
+
 /// Classify a runtime error `reason` into a coarse `category` for triage, or
 /// `None` if the reason is not a runtime error (so callers can tell which
 /// internal events should surface as a `deployment.error` webhook).
@@ -243,5 +302,34 @@ mod tests {
         assert_eq!(error_category("health_check_alert"), None);
         assert_eq!(error_category("scale_up"), None);
         assert_eq!(error_category("state_transition"), None);
+    }
+
+    #[test]
+    fn validate_event_filter_accepts_wildcards_and_known_kinds() {
+        assert!(validate_event_filter("*").is_ok());
+        assert!(validate_event_filter("deployment.*").is_ok());
+        assert!(validate_event_filter("deployment.scaled").is_ok());
+    }
+
+    #[test]
+    fn validate_event_filter_rejects_unknown_family() {
+        // A misspelled family must fail loudly, not silently never match.
+        let err = validate_event_filter("deployement.*").unwrap_err();
+        assert!(err.contains("unknown event family"), "{err}");
+        assert!(err.contains("deployement.*"), "{err}");
+    }
+
+    #[test]
+    fn validate_event_filter_rejects_wildcard_without_dot() {
+        // The classic typo: `deployment*` instead of `deployment.*`.
+        let err = validate_event_filter("deployment*").unwrap_err();
+        assert!(err.contains("invalid wildcard"), "{err}");
+        assert!(err.contains("<family>.*"), "{err}");
+    }
+
+    #[test]
+    fn validate_event_filter_rejects_unknown_exact_kind() {
+        let err = validate_event_filter("bogus.kind").unwrap_err();
+        assert!(err.contains("unknown event kind"), "{err}");
     }
 }
