@@ -265,8 +265,7 @@ impl CloudHypervisorLifecycle {
         for (idx, m) in resolved.iter().enumerate() {
             let socket_path = self.virtiofs_socket_path(instance_id, idx);
 
-            // `durable` mirrors the Docker `o=sync` durability contract: only
-            // a writable persistent (Named) volume holds data the operator
+            // Only a writable persistent (Named) volume holds data the operator
             // expects to survive a crash, so only it gets the synchronous
             // `--cache never` policy. Binds and rendered configs keep the
             // faster default cache.

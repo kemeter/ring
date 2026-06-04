@@ -85,10 +85,9 @@ impl Drop for VirtiofsMount {
 /// `durable` selects the cache policy. virtiofsd's default (`auto`) caches data
 /// with timeouts, so a guest write can linger in the daemon's page cache and be
 /// lost on an unclean host shutdown. For persistent writable volumes we pass
-/// `--cache never`, the virtio-fs analogue of Docker's `o=sync`: every guest
-/// write goes through to the host filesystem. Non-durable shares (read-only
-/// binds, rendered config files) keep the faster default — they hold no data
-/// the operator expects to survive a crash.
+/// `--cache never` so every guest write goes through to the host filesystem.
+/// Non-durable shares (read-only binds, rendered config files) keep the faster
+/// default — they hold no data the operator expects to survive a crash.
 pub(crate) async fn spawn_virtiofsd(
     binary_path: &Path,
     shared_dir: &Path,

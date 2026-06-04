@@ -290,17 +290,24 @@ async fn pull_image(
 
 /// Provision named volumes explicitly before they are mounted, instead of
 /// letting Docker auto-create them on first mount. Auto-created volumes carry
-/// no labels (untraceable, unprunable) and no durability options. Here we:
-///   - tag the volume with Ring labels so it can be attributed and pruned,
-///   - request `o=sync` on the `local` driver so writes hit disk on each fsync
-///     boundary rather than lingering in the page cache (durability on unclean
-///     shutdown — the property a stateful workload like a database needs).
+/// no labels, so they are untraceable (which deployment owns them?) and
+/// unprunable. Here we tag the volume with Ring labels so it can be attributed
+/// and reaped deliberately.
+///
+/// We deliberately set no `driver_opts`. The obvious idea — `o=sync` on the
+/// `local` driver for crash durability — does not work: the `local` driver
+/// treats `o` as `mount(8)` options, which require a `type` and `device` too,
+/// so `o=sync` alone is rejected with `400 missing required option: "device"`.
+/// Honouring it would mean turning the named volume into a host bind-mount,
+/// changing its semantics entirely. Durability for a plain named volume is a
+/// property of the host filesystem under `/var/lib/docker/volumes` and the
+/// workload's own fsync discipline, not a per-volume driver opt — so we leave
+/// it to the operator's driver configuration.
 ///
 /// `create_volume` is idempotent in the Docker Engine: creating a volume whose
 /// name already exists returns the existing volume rather than erroring, so this
 /// is safe to call on every (re)deploy. Existing volumes keep their original
-/// options — Docker does not retro-apply driver opts — which is the intended
-/// "preserve data across deploys" behaviour.
+/// options, which is the intended "preserve data across deploys" behaviour.
 async fn ensure_named_volume(
     docker: &Docker,
     name: &str,
@@ -315,21 +322,9 @@ async fn ensure_named_volume(
     labels.insert("ring.namespace".to_string(), namespace.to_string());
     labels.insert("ring.deployment".to_string(), deployment_name.to_string());
 
-    // Durability opts only make sense for the built-in local driver; other
-    // drivers (nfs, etc.) interpret DriverOpts differently and would reject
-    // `o=sync` — leave them to the operator's driver configuration.
-    let driver_opts = if driver == "local" {
-        let mut opts = HashMap::new();
-        opts.insert("o".to_string(), "sync".to_string());
-        Some(opts)
-    } else {
-        None
-    };
-
     let request = bollard::models::VolumeCreateRequest {
         name: Some(name.to_string()),
         driver: Some(driver.to_string()),
-        driver_opts,
         labels: Some(labels),
         ..Default::default()
     };
