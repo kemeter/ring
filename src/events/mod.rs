@@ -32,6 +32,10 @@ pub(crate) const KIND_DEPLOYMENT_HEALTH_CHECK_FAILED: &str = "deployment.health_
 /// never became healthy (`failed`).
 pub(crate) const KIND_DEPLOYMENT_ROLLING_UPDATE: &str = "deployment.rolling_update";
 
+/// Emitted when the reconciler adds or removes one instance to converge on the
+/// deployment's `replicas`.
+pub(crate) const KIND_DEPLOYMENT_SCALED: &str = "deployment.scaled";
+
 /// Every event kind Ring can emit. Used to validate a webhook's subscription
 /// filter at creation: a subscriber can't subscribe to a kind that will never
 /// fire.
@@ -39,6 +43,7 @@ pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[
     KIND_DEPLOYMENT_STATUS_CHANGED,
     KIND_DEPLOYMENT_HEALTH_CHECK_FAILED,
     KIND_DEPLOYMENT_ROLLING_UPDATE,
+    KIND_DEPLOYMENT_SCALED,
 ];
 
 /// A typed event ready to publish. `payload` is the JSON body delivered
@@ -117,6 +122,29 @@ impl Event {
                 "parent_id": parent_id,
                 "phase": phase,
                 "drained_instance_id": drained_instance_id,
+            }),
+        }
+    }
+
+    /// Build a `deployment.scaled` event. `direction` is `up` or `down`;
+    /// `instance_count` is the live instance count after the change, `replicas`
+    /// the desired target the reconciler is converging on.
+    pub(crate) fn deployment_scaled(
+        deployment: &Deployment,
+        direction: &str,
+        instance_count: usize,
+    ) -> Self {
+        Event {
+            kind: KIND_DEPLOYMENT_SCALED.to_string(),
+            payload: json!({
+                "schema_version": SCHEMA_VERSION,
+                "deployment_id": deployment.id,
+                "namespace": deployment.namespace,
+                "name": deployment.name,
+                "kind": deployment.kind,
+                "direction": direction,
+                "instance_count": instance_count,
+                "replicas": deployment.replicas,
             }),
         }
     }

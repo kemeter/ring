@@ -211,6 +211,21 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
                 deployment.id, e
             );
         }
+
+        // Mirror scale changes to subscribers. The runtime can't publish (it
+        // has no pool), so we do it here as the events are persisted.
+        let direction = match event.reason.as_deref() {
+            Some("scale_up") => Some("up"),
+            Some("scale_down") => Some("down"),
+            _ => None,
+        };
+        if let Some(direction) = direction {
+            events::publish(
+                pool,
+                Event::deployment_scaled(deployment, direction, deployment.instances.len()),
+            )
+            .await;
+        }
     }
     deployment.pending_events.clear();
 }
