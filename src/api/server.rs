@@ -58,6 +58,7 @@ use crate::api::action::token::rotate as token_rotate;
 
 use crate::api::action::webhook::create as webhook_create;
 use crate::api::action::webhook::delete as webhook_delete;
+use crate::api::action::webhook::events as webhook_events;
 use crate::api::action::webhook::list as webhook_list;
 
 use crate::api::action::healthz::healthz;
@@ -132,6 +133,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/tokens/{id}/rotate", post(token_rotate))
         .route("/webhooks", get(webhook_list).post(webhook_create))
         .route("/webhooks/{id}", delete(webhook_delete))
+        .route("/webhooks/{id}/events", get(webhook_events))
         .route("/users", get(user_list).post(user_create))
         .route("/users/{id}", put(user_update))
         .route("/users/{id}", delete(user_delete))

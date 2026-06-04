@@ -193,7 +193,8 @@ async fn main() {
                 .flatten_help(true)
                 .subcommand(commands::webhook::list::command_config())
                 .subcommand(commands::webhook::create::command_config())
-                .subcommand(commands::webhook::delete::command_config()),
+                .subcommand(commands::webhook::delete::command_config())
+                .subcommand(commands::webhook::inspect::command_config()),
         );
 
     let matches = app.get_matches();
@@ -371,6 +372,9 @@ async fn main() {
                 }
                 ("delete", sub_matches) => {
                     commands::webhook::delete::execute(sub_matches, config, &client).await;
+                }
+                ("inspect", sub_matches) => {
+                    commands::webhook::inspect::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }

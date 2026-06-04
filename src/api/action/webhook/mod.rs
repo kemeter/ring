@@ -1,9 +1,11 @@
 pub(crate) mod create;
 pub(crate) mod delete;
+pub(crate) mod events;
 pub(crate) mod list;
 
 pub(crate) use create::create;
 pub(crate) use delete::delete;
+pub(crate) use events::events;
 pub(crate) use list::list;
 
 use crate::models::webhook::Webhook;

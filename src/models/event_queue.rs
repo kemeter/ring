@@ -134,6 +134,45 @@ pub(crate) async fn mark_dead(
     Ok(())
 }
 
+/// Recent events whose kind matches the webhook's subscription filter, newest
+/// first. Used by `webhook inspect` to surface what a subscriber has been (or
+/// will be) offered. Filtering is done in Rust to reuse `Webhook::subscribes_to`
+/// (which handles `*`, `family.*` and exact matches identically to the worker),
+/// so the inspect view can never disagree with what is actually delivered.
+///
+/// Returns up to `limit` rows after filtering. The pre-filter SQL window is
+/// `limit * 4` to keep the read bounded even when the webhook subscribes to a
+/// narrow filter on a noisy queue; that is best-effort, not exhaustive — a
+/// webhook subscribed to a very rare kind on a very busy queue may not see its
+/// oldest matches. Inspect is a debugging aid, not an audit log.
+pub(crate) async fn find_for_webhook(
+    pool: &SqlitePool,
+    webhook_id: &str,
+    limit: i64,
+) -> Result<Vec<QueuedEvent>, sqlx::Error> {
+    let hook = match crate::models::webhook::find(pool, webhook_id).await? {
+        Some(h) => h,
+        None => return Ok(Vec::new()),
+    };
+
+    let scan = limit.max(1).saturating_mul(4);
+    let rows = sqlx::query_as::<_, QueuedEvent>(
+        "SELECT id, kind, payload, status, attempts, next_attempt_at, last_error, created_at, updated_at
+         FROM events
+         ORDER BY created_at DESC
+         LIMIT ?",
+    )
+    .bind(scan)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter(|e| hook.subscribes_to(&e.kind))
+        .take(limit as usize)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +217,74 @@ mod tests {
         reschedule(&pool, &id, 1, "transient").await.unwrap();
         // Backed off by >= 1 minute, so not due right now, but still pending.
         assert!(fetch_due(&pool, 10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_for_webhook_returns_only_subscribed_kinds_newest_first() {
+        let pool = test_pool().await;
+        let hook = crate::models::webhook::create(
+            &pool,
+            "https://hooks.example.com/ring",
+            None,
+            &["deployment.*".to_string()],
+        )
+        .await
+        .unwrap();
+        // Mix of matching and non-matching kinds; enqueue order matters for
+        // newest-first assertion below.
+        enqueue(&pool, "node.online", "{}").await.unwrap();
+        enqueue(&pool, "deployment.status_changed", "{\"n\":1}")
+            .await
+            .unwrap();
+        enqueue(&pool, "other.kind", "{}").await.unwrap();
+        enqueue(&pool, "deployment.scaled", "{\"n\":2}")
+            .await
+            .unwrap();
+
+        let events = find_for_webhook(&pool, &hook.id, 10).await.unwrap();
+
+        // Only the two deployment.* kinds, newest first.
+        let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["deployment.scaled", "deployment.status_changed"]
+        );
+    }
+
+    #[tokio::test]
+    async fn find_for_webhook_unknown_id_returns_empty() {
+        // Unknown id is a regular not-found case, not an error: the endpoint
+        // returns 404 separately. The model just hands back an empty list.
+        let pool = test_pool().await;
+        let events = find_for_webhook(&pool, "does-not-exist", 10).await.unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_for_webhook_includes_delivered_and_dead() {
+        // Inspect shows the lifecycle of an event, not just pending — that is
+        // the whole point of "can I see what Ring emitted?". A delivered or
+        // dead-lettered event must still appear.
+        let pool = test_pool().await;
+        let hook = crate::models::webhook::create(&pool, "https://x", None, &[])
+            .await
+            .unwrap();
+        enqueue(&pool, "deployment.status_changed", "{}")
+            .await
+            .unwrap();
+        enqueue(&pool, "deployment.scaled", "{}").await.unwrap();
+        let due = fetch_due(&pool, 10).await.unwrap();
+        mark_delivered(&pool, &due[0].id).await.unwrap();
+        mark_dead(&pool, &due[1].id, MAX_ATTEMPTS, "boom")
+            .await
+            .unwrap();
+
+        let events = find_for_webhook(&pool, &hook.id, 10).await.unwrap();
+
+        assert_eq!(events.len(), 2);
+        let statuses: Vec<&str> = events.iter().map(|e| e.status.as_str()).collect();
+        assert!(statuses.contains(&"delivered"));
+        assert!(statuses.contains(&"dead"));
     }
 
     #[test]
