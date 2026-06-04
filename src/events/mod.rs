@@ -27,12 +27,18 @@ pub(crate) const KIND_DEPLOYMENT_STATUS_CHANGED: &str = "deployment.status_chang
 /// it cascades into a status change.
 pub(crate) const KIND_DEPLOYMENT_HEALTH_CHECK_FAILED: &str = "deployment.health_check_failed";
 
+/// Emitted as a rolling update progresses: a parent instance drained (`step`),
+/// the rollout finished (`complete`), or it was abandoned because the child
+/// never became healthy (`failed`).
+pub(crate) const KIND_DEPLOYMENT_ROLLING_UPDATE: &str = "deployment.rolling_update";
+
 /// Every event kind Ring can emit. Used to validate a webhook's subscription
 /// filter at creation: a subscriber can't subscribe to a kind that will never
 /// fire.
 pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[
     KIND_DEPLOYMENT_STATUS_CHANGED,
     KIND_DEPLOYMENT_HEALTH_CHECK_FAILED,
+    KIND_DEPLOYMENT_ROLLING_UPDATE,
 ];
 
 /// A typed event ready to publish. `payload` is the JSON body delivered
@@ -86,6 +92,31 @@ impl Event {
                 "instance_id": instance_id,
                 "action": action,
                 "message": message,
+            }),
+        }
+    }
+
+    /// Build a `deployment.rolling_update` event for the *child* deployment
+    /// being rolled out. `phase` is `step` (a parent instance was drained),
+    /// `complete` (parent fully replaced), or `failed` (child never became
+    /// healthy; parent left running). `drained_instance_id` is set on `step`.
+    pub(crate) fn deployment_rolling_update(
+        child: &Deployment,
+        parent_id: &str,
+        phase: &str,
+        drained_instance_id: Option<&str>,
+    ) -> Self {
+        Event {
+            kind: KIND_DEPLOYMENT_ROLLING_UPDATE.to_string(),
+            payload: json!({
+                "schema_version": SCHEMA_VERSION,
+                "deployment_id": child.id,
+                "namespace": child.namespace,
+                "name": child.name,
+                "kind": child.kind,
+                "parent_id": parent_id,
+                "phase": phase,
+                "drained_instance_id": drained_instance_id,
             }),
         }
     }

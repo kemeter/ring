@@ -1,3 +1,4 @@
+use crate::events::{self, Event};
 use crate::models::config;
 use crate::models::config::Config;
 use crate::models::deployment_event;
@@ -300,9 +301,9 @@ async fn publish_status_change(
     deployment: &Deployment,
 ) {
     if &deployment.status != old_status {
-        crate::events::publish(
+        events::publish(
             pool,
-            crate::events::Event::deployment_status_changed(deployment, old_status),
+            Event::deployment_status_changed(deployment, old_status),
         )
         .await;
     }
@@ -350,9 +351,9 @@ async fn run_health_checks(
     // `deployment.health_check_failed` webhook (structured: instance + action
     // + detail), alongside the human-readable internal events persisted above.
     for failure in &outcome.health_check_failures {
-        crate::events::publish(
+        events::publish(
             pool,
-            crate::events::Event::deployment_health_check_failed(
+            Event::deployment_health_check_failed(
                 deployment,
                 &failure.instance_id,
                 failure.action,
@@ -718,6 +719,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update failure event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "failed", None),
+        )
+        .await;
         return;
     }
 
@@ -816,6 +822,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update step event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "step", Some(&instance_id)),
+        )
+        .await;
     }
 
     // Finalize in the same cycle the last instance was drained: otherwise
@@ -850,6 +861,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update complete event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "complete", None),
+        )
+        .await;
     }
 }
 
