@@ -1,1 +1,0 @@
-ALTER TABLE deployment ADD COLUMN restart_count INT DEFAULT 0;
