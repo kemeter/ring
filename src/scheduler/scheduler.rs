@@ -346,6 +346,22 @@ async fn run_health_checks(
         }
     }
 
+    // Mirror each on_failure action to subscribers as a
+    // `deployment.health_check_failed` webhook (structured: instance + action
+    // + detail), alongside the human-readable internal events persisted above.
+    for failure in &outcome.health_check_failures {
+        crate::events::publish(
+            pool,
+            crate::events::Event::deployment_health_check_failed(
+                deployment,
+                &failure.instance_id,
+                failure.action,
+                &failure.message,
+            ),
+        )
+        .await;
+    }
+
     if let Some(new_status) = outcome.proposed_status {
         deployment.status = new_status;
     }
@@ -1189,11 +1205,6 @@ pub(crate) async fn schedule(
                 }
             };
 
-            // Status as it stood entering this cycle, before the runtime gets
-            // a chance to flip it to `Running`. The readiness gate uses it to
-            // tell a fresh `creating → running` transition (which it may hold)
-            // from an already-established `Running` (which it must not touch).
-            let old_status = deployment.status.clone();
             let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(
                 &pool,
@@ -1238,6 +1249,11 @@ pub(crate) async fn schedule(
                 continue;
             }
 
+            // Status as it stood entering this cycle, before the runtime
+            // flipped `result` to `Running`. The readiness gate uses it to tell
+            // a fresh `creating → running` transition (which it may hold) from
+            // an already-established `Running` (which it must not touch), and
+            // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;

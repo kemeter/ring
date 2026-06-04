@@ -22,10 +22,18 @@ pub(crate) const SCHEMA_VERSION: u32 = 1;
 /// Emitted on every deployment status transition.
 pub(crate) const KIND_DEPLOYMENT_STATUS_CHANGED: &str = "deployment.status_changed";
 
+/// Emitted when a health check fails enough to trigger its `on_failure` action
+/// (restart / stop / alert) — an early warning a service is unhealthy, before
+/// it cascades into a status change.
+pub(crate) const KIND_DEPLOYMENT_HEALTH_CHECK_FAILED: &str = "deployment.health_check_failed";
+
 /// Every event kind Ring can emit. Used to validate a webhook's subscription
 /// filter at creation: a subscriber can't subscribe to a kind that will never
 /// fire.
-pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[KIND_DEPLOYMENT_STATUS_CHANGED];
+pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[
+    KIND_DEPLOYMENT_STATUS_CHANGED,
+    KIND_DEPLOYMENT_HEALTH_CHECK_FAILED,
+];
 
 /// A typed event ready to publish. `payload` is the JSON body delivered
 /// verbatim to subscribers, wrapped by the worker in the signed envelope.
@@ -53,6 +61,31 @@ impl Event {
                 "old_status": old_status.to_string(),
                 "new_status": deployment.status.to_string(),
                 "restart_count": deployment.restart_count,
+            }),
+        }
+    }
+
+    /// Build a `deployment.health_check_failed` event. `action` is the
+    /// `on_failure` action that fired (`restart` / `stop` / `alert`),
+    /// `instance_id` the instance that failed its probe, and `message` the
+    /// probe's failure detail.
+    pub(crate) fn deployment_health_check_failed(
+        deployment: &Deployment,
+        instance_id: &str,
+        action: &str,
+        message: &str,
+    ) -> Self {
+        Event {
+            kind: KIND_DEPLOYMENT_HEALTH_CHECK_FAILED.to_string(),
+            payload: json!({
+                "schema_version": SCHEMA_VERSION,
+                "deployment_id": deployment.id,
+                "namespace": deployment.namespace,
+                "name": deployment.name,
+                "kind": deployment.kind,
+                "instance_id": instance_id,
+                "action": action,
+                "message": message,
             }),
         }
     }

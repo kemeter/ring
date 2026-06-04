@@ -16,6 +16,18 @@ pub(crate) struct HealthCheckOutcome {
     pub(crate) events: Vec<DeploymentEvent>,
     pub(crate) proposed_status: Option<DeploymentStatus>,
     pub(crate) instances_to_remove: Vec<String>,
+    /// Structured record of each `on_failure` action that fired this cycle, so
+    /// the scheduler can emit a `deployment.health_check_failed` webhook
+    /// without re-parsing the human-readable event message.
+    pub(crate) health_check_failures: Vec<HealthCheckFailure>,
+}
+
+/// One `on_failure` action that fired, captured for the outbound webhook.
+pub(crate) struct HealthCheckFailure {
+    pub(crate) instance_id: String,
+    /// The action that fired: `"restart"`, `"stop"`, or `"alert"`.
+    pub(crate) action: &'static str,
+    pub(crate) message: String,
 }
 
 pub(crate) struct HealthChecker {
@@ -41,6 +53,7 @@ impl HealthChecker {
             events: Vec::new(),
             proposed_status: None,
             instances_to_remove: Vec::new(),
+            health_check_failures: Vec::new(),
         };
 
         // Checks run in two phases of a deployment's life:
@@ -241,17 +254,23 @@ impl HealthChecker {
                     instance_id, deployment.id
                 );
 
+                let message = format!(
+                    "Health check failed for instance {} ({}), triggering instance restart",
+                    instance_id,
+                    result.message.as_deref().unwrap_or("unknown error")
+                );
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
-                    format!(
-                        "Health check failed for instance {} ({}), triggering instance restart",
-                        instance_id,
-                        result.message.as_deref().unwrap_or("unknown error")
-                    ),
+                    message.clone(),
                     "health_checker",
                     Some("health_check_instance_restart"),
                 ));
+                outcome.health_check_failures.push(HealthCheckFailure {
+                    instance_id: instance_id.to_string(),
+                    action: "restart",
+                    message,
+                });
 
                 outcome.instances_to_remove.push(instance_id.to_string());
             }
@@ -262,17 +281,23 @@ impl HealthChecker {
                 );
 
                 outcome.proposed_status = Some(DeploymentStatus::Deleted);
+                let message = format!(
+                    "Health check failed for instance {} ({}), triggering deployment stop",
+                    instance_id,
+                    result.message.as_deref().unwrap_or("unknown error")
+                );
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "warning",
-                    format!(
-                        "Health check failed for instance {} ({}), triggering deployment stop",
-                        instance_id,
-                        result.message.as_deref().unwrap_or("unknown error")
-                    ),
+                    message.clone(),
                     "health_checker",
                     Some("health_check_stop"),
                 ));
+                outcome.health_check_failures.push(HealthCheckFailure {
+                    instance_id: instance_id.to_string(),
+                    action: "stop",
+                    message,
+                });
 
                 info!(
                     "Deployment {} status changed to deleted by health checker due to instance {} failure",
@@ -285,17 +310,23 @@ impl HealthChecker {
                     instance_id, deployment.id
                 );
 
+                let message = format!(
+                    "Health check failed for instance {}: {}",
+                    instance_id,
+                    result.message.as_deref().unwrap_or("unknown error")
+                );
                 outcome.events.push(DeploymentEvent::new(
                     deployment.id.clone(),
                     "error",
-                    format!(
-                        "Health check failed for instance {}: {}",
-                        instance_id,
-                        result.message.as_deref().unwrap_or("unknown error")
-                    ),
+                    message.clone(),
                     "health_checker",
                     Some("health_check_alert"),
                 ));
+                outcome.health_check_failures.push(HealthCheckFailure {
+                    instance_id: instance_id.to_string(),
+                    action: "alert",
+                    message,
+                });
             }
         }
     }
@@ -420,6 +451,12 @@ mod tests {
                 .iter()
                 .any(|e| e.reason.as_deref() == Some("health_check_instance_restart"))
         );
+
+        // The structured failure record feeding the
+        // `deployment.health_check_failed` webhook.
+        assert_eq!(outcome.health_check_failures.len(), 1);
+        assert_eq!(outcome.health_check_failures[0].action, "restart");
+        assert_eq!(outcome.health_check_failures[0].instance_id, "instance-1");
     }
 
     #[tokio::test]
