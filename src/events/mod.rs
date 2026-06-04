@@ -36,6 +36,12 @@ pub(crate) const KIND_DEPLOYMENT_ROLLING_UPDATE: &str = "deployment.rolling_upda
 /// deployment's `replicas`.
 pub(crate) const KIND_DEPLOYMENT_SCALED: &str = "deployment.scaled";
 
+/// Emitted when the runtime fails to bring a deployment up (image pull,
+/// container creation, network, config, resources, …). Carries the specific
+/// `reason` and a `category` so a subscriber can triage user vs host vs
+/// transient failures without parsing free text.
+pub(crate) const KIND_DEPLOYMENT_ERROR: &str = "deployment.error";
+
 /// Every event kind Ring can emit. Used to validate a webhook's subscription
 /// filter at creation: a subscriber can't subscribe to a kind that will never
 /// fire.
@@ -44,7 +50,32 @@ pub(crate) const KNOWN_EVENT_KINDS: &[&str] = &[
     KIND_DEPLOYMENT_HEALTH_CHECK_FAILED,
     KIND_DEPLOYMENT_ROLLING_UPDATE,
     KIND_DEPLOYMENT_SCALED,
+    KIND_DEPLOYMENT_ERROR,
 ];
+
+/// Classify a runtime error `reason` into a coarse `category` for triage, or
+/// `None` if the reason is not a runtime error (so callers can tell which
+/// internal events should surface as a `deployment.error` webhook).
+///
+/// - `user`: the operator's manifest is wrong — pulling the image, the config,
+///   or the request can't succeed as written.
+/// - `host`: the node can't satisfy the request right now (out of memory).
+/// - `transient`: an infrastructure hiccup a retry may clear.
+pub(crate) fn error_category(reason: &str) -> Option<&'static str> {
+    match reason {
+        "image_pull_back_off" | "config_error" => Some("user"),
+        "insufficient_resources" => Some("host"),
+        "instance_creation_failed"
+        | "network_creation_failed"
+        | "file_system_error"
+        | "port_allocation_failed"
+        | "vm_start_failed"
+        | "firmware_not_found"
+        | "stats_fetch_failed"
+        | "runtime_error" => Some("transient"),
+        _ => None,
+    }
+}
 
 /// A typed event ready to publish. `payload` is the JSON body delivered
 /// verbatim to subscribers, wrapped by the worker in the signed envelope.
@@ -148,6 +179,30 @@ impl Event {
             }),
         }
     }
+
+    /// Build a `deployment.error` event. `reason` is the runtime error
+    /// discriminant (e.g. `image_pull_back_off`), `category` its triage class
+    /// (see [`error_category`]), and `message` the operator-facing detail.
+    pub(crate) fn deployment_error(
+        deployment: &Deployment,
+        reason: &str,
+        category: &str,
+        message: &str,
+    ) -> Self {
+        Event {
+            kind: KIND_DEPLOYMENT_ERROR.to_string(),
+            payload: json!({
+                "schema_version": SCHEMA_VERSION,
+                "deployment_id": deployment.id,
+                "namespace": deployment.namespace,
+                "name": deployment.name,
+                "kind": deployment.kind,
+                "reason": reason,
+                "category": category,
+                "message": message,
+            }),
+        }
+    }
 }
 
 /// Publish an event: durably enqueue it for delivery. The single entry point
@@ -163,5 +218,30 @@ pub(crate) async fn publish(pool: &SqlitePool, event: Event) {
     };
     if let Err(e) = event_queue::enqueue(pool, &event.kind, &payload).await {
         log::warn!("Failed to enqueue event {}: {}", event.kind, e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_category_classifies_runtime_reasons() {
+        assert_eq!(error_category("image_pull_back_off"), Some("user"));
+        assert_eq!(error_category("config_error"), Some("user"));
+        assert_eq!(error_category("insufficient_resources"), Some("host"));
+        assert_eq!(
+            error_category("instance_creation_failed"),
+            Some("transient")
+        );
+        assert_eq!(error_category("network_creation_failed"), Some("transient"));
+    }
+
+    #[test]
+    fn error_category_ignores_non_runtime_reasons() {
+        // Health-check alerts are error-level but not a deployment.error.
+        assert_eq!(error_category("health_check_alert"), None);
+        assert_eq!(error_category("scale_up"), None);
+        assert_eq!(error_category("state_transition"), None);
     }
 }

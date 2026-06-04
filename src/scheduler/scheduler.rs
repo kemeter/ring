@@ -212,19 +212,37 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
             );
         }
 
-        // Mirror scale changes to subscribers. The runtime can't publish (it
+        // Mirror runtime events to subscribers. The runtime can't publish (it
         // has no pool), so we do it here as the events are persisted.
-        let direction = match event.reason.as_deref() {
-            Some("scale_up") => Some("up"),
-            Some("scale_down") => Some("down"),
-            _ => None,
-        };
-        if let Some(direction) = direction {
-            events::publish(
-                pool,
-                Event::deployment_scaled(deployment, direction, deployment.instances.len()),
-            )
-            .await;
+        match event.reason.as_deref() {
+            // Scale changes.
+            Some("scale_up") => {
+                events::publish(
+                    pool,
+                    Event::deployment_scaled(deployment, "up", deployment.instances.len()),
+                )
+                .await;
+            }
+            Some("scale_down") => {
+                events::publish(
+                    pool,
+                    Event::deployment_scaled(deployment, "down", deployment.instances.len()),
+                )
+                .await;
+            }
+            // Runtime failures: only those that classify as a runtime error
+            // (image pull, container creation, resources, …). Other error-level
+            // events — e.g. health_check_alert — are not deployment.error.
+            Some(reason) => {
+                if let Some(category) = events::error_category(reason) {
+                    events::publish(
+                        pool,
+                        Event::deployment_error(deployment, reason, category, &event.message),
+                    )
+                    .await;
+                }
+            }
+            None => {}
         }
     }
     deployment.pending_events.clear();
