@@ -140,6 +140,11 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         "/users" => Some("users:write"),
         "/users/{id}" => Some("users:write"),
         "/users/me" => Some("users:read"),
+        // Webhooks.
+        "/webhooks" if is_read => Some("webhooks:read"),
+        "/webhooks" => Some("webhooks:write"),
+        "/webhooks/{id}" => Some("webhooks:write"),
+        "/webhooks/{id}/events" => Some("webhooks:read"),
         // Token lifecycle and stream-ticket minting are full-access actions:
         // a PAT may only reach them when it carries `admin`. This closes the
         // privilege-escalation path where a `users:write` PAT could rotate an

@@ -355,6 +355,55 @@ ring token rotate <ID>
 
 Revokes the token and mints a new one with the same name, scopes, namespaces and expiry. The new clear value is printed on stdout (shown once).
 
+## Webhooks
+
+Webhooks let an external endpoint receive Ring events by HTTP POST instead of polling the API. Each webhook subscribes to a set of event kinds (or all of them) and is delivered through a durable queue with retry and dead-lettering, so a transient outage on the receiver doesn't drop events.
+
+Today the only event kind is `deployment.status_changed`, emitted on every deployment status transition (creating→running, →failed, →completed, scaling, …). The payload carries `old_status`, `new_status`, the deployment id/name/namespace/kind and `restart_count`. When the webhook has a secret, deliveries are signed with `X-Ring-Signature: sha256=<hmac>`.
+
+Managing webhooks requires the `webhooks:write` scope (or `webhooks:read` to list).
+
+### `ring webhook create`
+
+```bash
+ring webhook create <URL> [--event <KIND>...] [--secret <SECRET>]
+```
+
+**Required:**
+
+- `<URL>` — target URL receiving the signed POSTs (positional)
+
+**Options:**
+
+- `-e` / `--event <KIND>` — subscribe to an event kind; repeatable. Accepts an exact kind (`deployment.scaled`), a family wildcard (`deployment.*`), or `*` for everything. Omit to receive **all** kinds. A malformed value (e.g. `deployment*` without the dot) is rejected at creation.
+- `-s` / `--secret <SECRET>` — HMAC secret. If omitted, Ring generates one and prints it once.
+
+The webhook id is printed on stdout; the generated secret (if any) is printed on stderr and shown only once.
+
+```bash
+# Exact kinds
+ring webhook create https://hooks.example.com/ring --event deployment.status_changed
+
+# Every deployment event
+ring webhook create https://hooks.example.com/ring --event 'deployment.*'
+```
+
+### `ring webhook list`
+
+```bash
+ring webhook list
+```
+
+Lists webhooks with their URL, subscribed events, status (`active`/`revoked`) and creation time. Secrets are never shown.
+
+### `ring webhook delete`
+
+```bash
+ring webhook delete <ID>
+```
+
+`<ID>` comes from `ring webhook list`.
+
 ## Secrets
 
 Secrets are AES-256-GCM-encrypted values stored per-namespace. `RING_SECRET_KEY` (a base64-encoded 32-byte key) must be exported before `ring server start` — the server refuses to start otherwise. Run `ring doctor` to confirm the variable is set and decodes correctly.

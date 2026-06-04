@@ -365,8 +365,9 @@ When `RING_TOKEN` is set, the CLI ignores `auth.json` and uses the token directl
 - Per-deployment: `ring deployment metrics <id>` (CPU/memory/network/disk per instance)
 - Per-deployment events: `ring deployment events <id>` or stream via `--follow`
 - Per-deployment health checks: `ring deployment health-checks <id>`
+- Push notifications: subscribe to [outbound webhooks](../how-to/subscribe-to-events-with-webhooks.md) to receive deployment events (status changes, scaling, rollouts, errors) as signed HTTP POSTs
 
-Ring does not yet expose Prometheus-format metrics or outbound webhooks.
+Ring does not yet expose Prometheus-format metrics.
 
 ## Support and community
 

@@ -1,3 +1,4 @@
+use crate::events::{self, Event};
 use crate::models::config;
 use crate::models::config::Config;
 use crate::models::deployment_event;
@@ -210,6 +211,39 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
                 deployment.id, e
             );
         }
+
+        // Mirror runtime events to subscribers. The runtime can't publish (it
+        // has no pool), so we do it here as the events are persisted.
+        match event.reason.as_deref() {
+            // Scale changes.
+            Some("scale_up") => {
+                events::publish(
+                    pool,
+                    Event::deployment_scaled(deployment, "up", deployment.instances.len()),
+                )
+                .await;
+            }
+            Some("scale_down") => {
+                events::publish(
+                    pool,
+                    Event::deployment_scaled(deployment, "down", deployment.instances.len()),
+                )
+                .await;
+            }
+            // Runtime failures: only those that classify as a runtime error
+            // (image pull, container creation, resources, …). Other error-level
+            // events — e.g. health_check_alert — are not deployment.error.
+            Some(reason) => {
+                if let Some(category) = events::error_category(reason) {
+                    events::publish(
+                        pool,
+                        Event::deployment_error(deployment, reason, category, &event.message),
+                    )
+                    .await;
+                }
+            }
+            None => {}
+        }
     }
     deployment.pending_events.clear();
 }
@@ -289,6 +323,25 @@ async fn log_running_transition(
     }
 }
 
+/// Publish a `deployment.status_changed` event when a reconciliation cycle
+/// moved the deployment to a different status. Called after the row is
+/// persisted (and after the readiness gate has had its say on the final
+/// status) so a subscriber that immediately queries Ring sees the same state.
+/// Best-effort: enqueue failures are swallowed inside `events::publish`.
+async fn publish_status_change(
+    pool: &SqlitePool,
+    old_status: &DeploymentStatus,
+    deployment: &Deployment,
+) {
+    if &deployment.status != old_status {
+        events::publish(
+            pool,
+            Event::deployment_status_changed(deployment, old_status),
+        )
+        .await;
+    }
+}
+
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
@@ -325,6 +378,22 @@ async fn run_health_checks(
                 deployment.id, e
             );
         }
+    }
+
+    // Mirror each on_failure action to subscribers as a
+    // `deployment.health_check_failed` webhook (structured: instance + action
+    // + detail), alongside the human-readable internal events persisted above.
+    for failure in &outcome.health_check_failures {
+        events::publish(
+            pool,
+            Event::deployment_health_check_failed(
+                deployment,
+                &failure.instance_id,
+                failure.action,
+                &failure.message,
+            ),
+        )
+        .await;
     }
 
     if let Some(new_status) = outcome.proposed_status {
@@ -683,6 +752,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update failure event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "failed", None),
+        )
+        .await;
         return;
     }
 
@@ -781,6 +855,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update step event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "step", Some(&instance_id)),
+        )
+        .await;
     }
 
     // Finalize in the same cycle the last instance was drained: otherwise
@@ -815,6 +894,11 @@ async fn handle_rolling_update(
         {
             warn!("Failed to log rolling update complete event: {}", e);
         }
+        events::publish(
+            pool,
+            Event::deployment_rolling_update(child, &parent_id, "complete", None),
+        )
+        .await;
     }
 }
 
@@ -1103,11 +1187,14 @@ pub(crate) async fn schedule(
                     None => continue,
                 };
 
+                let old_status = deployment.status.clone();
                 persist_pending_events(&pool, &mut result).await;
                 handle_status_transitions(&pool, &mut result, &mut deleted).await;
 
                 if let Err(e) = deployments::update(&pool, &result).await {
                     error!("Failed to update deployment {}: {}", result.id, e);
+                } else {
+                    publish_status_change(&pool, &old_status, &result).await;
                 }
                 continue;
             }
@@ -1167,11 +1254,6 @@ pub(crate) async fn schedule(
                 }
             };
 
-            // Status as it stood entering this cycle, before the runtime gets
-            // a chance to flip it to `Running`. The readiness gate uses it to
-            // tell a fresh `creating → running` transition (which it may hold)
-            // from an already-established `Running` (which it must not touch).
-            let old_status = deployment.status.clone();
             let restart_count_before = deployment.restart_count;
             let mut result = match apply_runtime(
                 &pool,
@@ -1216,6 +1298,12 @@ pub(crate) async fn schedule(
                 continue;
             }
 
+            // Status as it stood entering this cycle, before the runtime
+            // flipped `result` to `Running`. The readiness gate uses it to tell
+            // a fresh `creating → running` transition (which it may hold) from
+            // an already-established `Running` (which it must not touch), and
+            // `publish_status_change` uses it to detect a real status change.
+            let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
             run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;
             gate_running_on_readiness(&pool, &old_status, &mut result).await;
@@ -1227,6 +1315,8 @@ pub(crate) async fn schedule(
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);
+            } else {
+                publish_status_change(&pool, &old_status, &result).await;
             }
         }
 

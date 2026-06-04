@@ -23,6 +23,7 @@ mod commands {
     pub(crate) mod secret;
     pub(crate) mod token;
     pub(crate) mod user;
+    pub(crate) mod webhook;
 }
 
 /// Cross-cutting CLI presentation helpers, shared by the commands above:
@@ -36,6 +37,7 @@ mod cli {
 mod scheduler {
     pub(crate) mod backoff;
     pub(crate) mod docker_events;
+    pub(crate) mod event_worker;
     pub(crate) mod health_checker;
     pub(crate) mod intentional_shutdowns;
     pub(crate) mod scheduler;
@@ -62,6 +64,7 @@ mod models {
     pub(crate) mod config;
     pub(crate) mod deployment_event;
     pub(crate) mod deployments;
+    pub(crate) mod event_queue;
     pub(crate) mod health_check;
     pub(crate) mod health_check_logs;
     pub(crate) mod namespace;
@@ -71,9 +74,14 @@ mod models {
     pub(crate) mod users;
     pub(crate) mod volume;
     pub(crate) mod volumes;
+    pub(crate) mod webhook;
 }
 
 mod api;
+
+mod events;
+
+mod webhook;
 
 mod config {
     pub(crate) mod api;
@@ -178,6 +186,15 @@ async fn main() {
                 .subcommand(commands::token::create::command_config())
                 .subcommand(commands::token::revoke::command_config())
                 .subcommand(commands::token::rotate::command_config()),
+        )
+        .subcommand(
+            Command::new("webhook")
+                .args_conflicts_with_subcommands(true)
+                .flatten_help(true)
+                .subcommand(commands::webhook::list::command_config())
+                .subcommand(commands::webhook::create::command_config())
+                .subcommand(commands::webhook::delete::command_config())
+                .subcommand(commands::webhook::inspect::command_config()),
         );
 
     let matches = app.get_matches();
@@ -340,6 +357,24 @@ async fn main() {
                 }
                 ("rotate", sub_matches) => {
                     commands::token::rotate::execute(sub_matches, config, &client).await;
+                }
+                _ => {}
+            }
+        }
+        Some(("webhook", sub_matches)) => {
+            let webhook_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
+            match webhook_command {
+                ("list", sub_matches) => {
+                    commands::webhook::list::execute(sub_matches, config, &client).await;
+                }
+                ("create", sub_matches) => {
+                    commands::webhook::create::execute(sub_matches, config, &client).await;
+                }
+                ("delete", sub_matches) => {
+                    commands::webhook::delete::execute(sub_matches, config, &client).await;
+                }
+                ("inspect", sub_matches) => {
+                    commands::webhook::inspect::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }
