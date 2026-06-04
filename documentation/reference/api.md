@@ -701,13 +701,21 @@ Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`)
 
 ### Event kinds
 
-| Kind                         | When                                   |
-|------------------------------|----------------------------------------|
-| `deployment.status_changed`  | A deployment transitions to a new status |
+| Kind                            | When                                                                 |
+|---------------------------------|----------------------------------------------------------------------|
+| `deployment.status_changed`     | A deployment transitions to a new status                             |
+| `deployment.health_check_failed`| A health check fails enough to trigger its `on_failure` action       |
+| `deployment.rolling_update`     | A rolling update progresses (instance drained / complete / failed)   |
+| `deployment.scaled`             | The reconciler added or removed an instance to reach `replicas`      |
+| `deployment.error`              | The runtime failed to bring a deployment up (image, network, …)      |
+
+Every payload shares a common envelope — `schema_version`, `deployment_id`, `namespace`, `name`, `kind` — plus the per-kind fields below.
 
 ### Delivery format
 
-Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and — when the webhook has a secret — `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body). Body for `deployment.status_changed`:
+Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and — when the webhook has a secret — `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body).
+
+`deployment.status_changed`:
 
 ```json
 {
@@ -719,6 +727,66 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
   "old_status": "creating",
   "new_status": "running",
   "restart_count": 0
+}
+```
+
+`deployment.health_check_failed` — `action` is the `on_failure` that fired (`restart` / `stop` / `alert`):
+
+```json
+{
+  "schema_version": 1,
+  "deployment_id": "f3a8b2c4-...",
+  "namespace": "production",
+  "name": "web",
+  "kind": "worker",
+  "instance_id": "abc123...",
+  "action": "restart",
+  "message": "Health check failed for instance abc123... (connection refused), triggering instance restart"
+}
+```
+
+`deployment.rolling_update` — `phase` is `step` / `complete` / `failed`; `drained_instance_id` is set on `step`:
+
+```json
+{
+  "schema_version": 1,
+  "deployment_id": "f3a8b2c4-...",
+  "namespace": "production",
+  "name": "web",
+  "kind": "worker",
+  "parent_id": "0b1c2d3e-...",
+  "phase": "step",
+  "drained_instance_id": "old456..."
+}
+```
+
+`deployment.scaled` — `direction` is `up` / `down`; `instance_count` is the live count after the change:
+
+```json
+{
+  "schema_version": 1,
+  "deployment_id": "f3a8b2c4-...",
+  "namespace": "production",
+  "name": "web",
+  "kind": "worker",
+  "direction": "up",
+  "instance_count": 3,
+  "replicas": 3
+}
+```
+
+`deployment.error` — `reason` is the runtime discriminant, `category` its triage class (`user` / `host` / `transient`):
+
+```json
+{
+  "schema_version": 1,
+  "deployment_id": "f3a8b2c4-...",
+  "namespace": "production",
+  "name": "web",
+  "kind": "worker",
+  "reason": "image_pull_back_off",
+  "category": "user",
+  "message": "Image 'web:bad-tag' not found: manifest unknown"
 }
 ```
 

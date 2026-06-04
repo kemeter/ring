@@ -55,6 +55,17 @@ The body for `deployment.status_changed`:
 
 Respond with any `2xx` to acknowledge. A non-2xx (or a timeout) makes Ring retry with exponential backoff; after repeated failures the event is dead-lettered and stops being retried.
 
+### Other event kinds
+
+`deployment.status_changed` is the headline event, but Ring emits more — subscribe to all of them by omitting `--event`, or pick specific ones (`--event` is repeatable):
+
+- `deployment.health_check_failed` — a probe failed and its `on_failure` action (restart / stop / alert) fired
+- `deployment.rolling_update` — a rollout drained an instance, completed, or failed
+- `deployment.scaled` — the reconciler added or removed an instance
+- `deployment.error` — the runtime couldn't bring a deployment up, with a `reason` and a `category` (`user` / `host` / `transient`)
+
+See [API reference → Webhooks](/documentation/reference/api#webhooks) for each payload, and [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) for how these relate to a deployment's status.
+
 ## Idempotency
 
 Delivery is **at-least-once**: on a retry, an event your endpoint already processed may arrive again. Key your handling on `deployment_id` + `new_status` (or carry your own dedup) so reprocessing is a no-op.

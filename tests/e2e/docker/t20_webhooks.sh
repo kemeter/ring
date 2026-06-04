@@ -69,10 +69,11 @@ RC=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$RING_URL/webhooks" \
 [ "$RC" = "403" ] || fail "1: PAT without webhooks:write must be 403 (got $RC)"
 log "1: webhook creation refused without webhooks:write (403)"
 
-# --- Register the webhook (session token, full access) ---
-WH_ID=$("$RING_BIN" webhook create "$MOCK_URL" --event deployment.status_changed --secret testsecret 2>/dev/null)
+# --- Register the webhook (session token, full access). No --event filter, so
+# it receives every kind — also exercising the "subscribe to all" path. ---
+WH_ID=$("$RING_BIN" webhook create "$MOCK_URL" --secret testsecret 2>/dev/null)
 [ -n "$WH_ID" ] || fail "webhook create returned no id"
-log "registered webhook $WH_ID -> $MOCK_URL"
+log "registered webhook $WH_ID -> $MOCK_URL (all kinds)"
 
 # --- Invariant 2: a real deployment transition delivers a signed POST ---
 FIXTURE="$RING_TEST_DIR/nginx-wh.yaml"
@@ -119,6 +120,27 @@ log "3: at least one delivery carries a valid HMAC signature"
 grep -q "\"deployment_id\":\"$DEPLOYMENT_ID\"" "$MOCK_LOG" \
   || { cat "$MOCK_LOG" >&2; fail "4: payload missing the deployment id"; }
 log "4: payload carries the correct deployment_id"
+
+# --- Invariant 4b: a second event kind (deployment.scaled) also lands ---
+# Scale to 2 replicas; the reconciler adds an instance and emits scale_up,
+# which the worker delivers as a deployment.scaled webhook.
+cat > "$FIXTURE" <<EOF
+deployments:
+  nginx-wh:
+    name: nginx-wh
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:alpine
+    replicas: 2
+EOF
+"$RING_BIN" apply --file "$FIXTURE"
+SCALED=0
+for _ in $(seq 1 30); do
+  if grep -q '"direction":"up"' "$MOCK_LOG" 2>/dev/null; then SCALED=1; break; fi
+  sleep 1
+done
+[ "$SCALED" = "1" ] || { cat "$MOCK_LOG" >&2; fail "4b: no deployment.scaled delivered to the subscriber"; }
+log "4b: subscriber received a deployment.scaled (direction=up)"
 
 # --- Invariant 5: CRUD via CLI — list shows it, delete removes it ---
 "$RING_BIN" webhook list 2>/dev/null | grep -q "$MOCK_URL" || fail "5: webhook not listed"
