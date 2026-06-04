@@ -182,6 +182,10 @@ For `secret` volumes specifically:
 
 > **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 
+> **A writable named volume cannot be shared across replicas.** A `type: volume` mount with `permission: rw` and `replicas > 1` is rejected at validation (`deployment.volumes.shared_rw_replicas`): every replica would mount the same volume read-write with no cross-writer coordination, which silently corrupts data (e.g. a database). Either drop `replicas` to `1`, or mount the volume `ro` — read-only sharing is allowed.
+
+Named volumes a deployment mounts are auto-registered as first-class [volumes](/documentation/reference/api#volumes), so they are traceable and can be managed via the `/volumes` API. Anonymous volumes (from an image's `VOLUME` directive) are removed with their container; named volumes are never deleted by a deployment's deletion.
+
 ## `ports`
 
 Host-port publishings. Each entry maps a host port to a container port:
