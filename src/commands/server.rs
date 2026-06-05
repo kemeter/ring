@@ -110,6 +110,34 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         None
     };
 
+    // Podman: enabled in config → verify the daemon answers a `ping()` over its
+    // Docker-compatible API. Podman speaks the same wire protocol, so we reuse
+    // `DockerLifecycle` (no PodmanLifecycle) and register it under the "podman"
+    // key. Same fail-fast contract as Docker. No event listener yet: Podman's
+    // event stream only flows while `podman system service` is up (see
+    // runtime::podman docs) — the orphan reaper stays Docker-only for now.
+    if configuration.server.runtime.podman.enabled {
+        let host = configuration.server.runtime.podman.host.clone();
+        match docker::connect_and_verify(&host).await {
+            Ok(podman) => {
+                info!("Connected to Podman at {}", host);
+                runtimes_map.insert(
+                    "podman".to_string(),
+                    Arc::new(DockerLifecycle::new(podman, intentional_shutdowns.clone())),
+                );
+            }
+            Err(e) => {
+                error!(
+                    "Refusing to start: Podman runtime is enabled in config but unreachable: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        info!("Podman runtime disabled in config, skipping");
+    }
+
     // Cloud Hypervisor: enabled in config → its binary must resolve, else fail
     // fast. The config/log-rotator are only built when we'll use it.
     let mut _ch_log_rotator = None;
