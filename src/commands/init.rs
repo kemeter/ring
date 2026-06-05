@@ -36,7 +36,7 @@ pub(crate) fn command_config() -> Command {
                 .long("runtime")
                 .value_name("RUNTIME")
                 .help(
-                    "Runtime to configure, skipping the prompt: docker, cloud-hypervisor, or both",
+                    "Runtime to configure, skipping the prompt: docker, podman, cloud-hypervisor, or both",
                 )
                 .value_parser(clap::value_parser!(RuntimeChoice)),
         )
@@ -62,6 +62,7 @@ pub(crate) struct InitSettings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum RuntimeChoice {
     Docker,
+    Podman,
     CloudHypervisor,
     Both,
 }
@@ -70,6 +71,7 @@ impl RuntimeChoice {
     fn label(self) -> &'static str {
         match self {
             RuntimeChoice::Docker => "Docker",
+            RuntimeChoice::Podman => "Podman",
             RuntimeChoice::CloudHypervisor => "Cloud Hypervisor",
             RuntimeChoice::Both => "Both",
         }
@@ -172,6 +174,7 @@ fn collect_settings(args: &ArgMatches) -> InitSettings {
             "Which runtime do you want to use?",
             vec![
                 RuntimeChoice::Docker,
+                RuntimeChoice::Podman,
                 RuntimeChoice::CloudHypervisor,
                 RuntimeChoice::Both,
             ],
@@ -233,6 +236,7 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         settings.runtime,
         RuntimeChoice::Docker | RuntimeChoice::Both
     );
+    let podman = matches!(settings.runtime, RuntimeChoice::Podman);
     let cloud_hypervisor = matches!(
         settings.runtime,
         RuntimeChoice::CloudHypervisor | RuntimeChoice::Both
@@ -243,6 +247,14 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         out.push_str("[server.runtime.docker]\n");
         out.push_str("enabled = true\n");
         out.push_str("# host = \"unix:///var/run/docker.sock\"  # or tcp://host:2375\n");
+    }
+
+    if podman {
+        out.push('\n');
+        out.push_str("[server.runtime.podman]\n");
+        out.push_str("enabled = true\n");
+        // Default is rootless-first; uncomment to pin a specific socket.
+        out.push_str("# host = \"unix:///run/user/1000/podman/podman.sock\"  # rootless\n");
     }
 
     if cloud_hypervisor {
@@ -348,10 +360,19 @@ mod tests {
         );
         assert_eq!(*m.get_one::<u16>("port").unwrap(), 4030u16);
 
+        // podman is a valid runtime choice.
+        let m = command_config()
+            .try_get_matches_from(["init", "--runtime", "podman"])
+            .expect("podman must parse");
+        assert_eq!(
+            *m.get_one::<RuntimeChoice>("runtime").unwrap(),
+            RuntimeChoice::Podman
+        );
+
         // Unknown runtime is rejected by ValueEnum.
         assert!(
             command_config()
-                .try_get_matches_from(["init", "--runtime", "podman"])
+                .try_get_matches_from(["init", "--runtime", "lxc"])
                 .is_err()
         );
         // Port 0 is out of the 1.. range.
@@ -375,6 +396,20 @@ mod tests {
         assert!(out.contains("[server.runtime.docker]"));
         assert!(out.contains("enabled = true"));
         // No CH block when Docker only.
+        assert!(!out.contains("runtime.cloud_hypervisor"));
+    }
+
+    #[test]
+    fn build_config_podman_only_emits_podman_section() {
+        let s = InitSettings {
+            runtime: RuntimeChoice::Podman,
+            port: 3030,
+        };
+        let out = build_config_toml(&s);
+        assert!(out.contains("[server.runtime.podman]"));
+        assert!(out.contains("enabled = true"));
+        // Podman is exclusive — no Docker or CH block.
+        assert!(!out.contains("[server.runtime.docker]"));
         assert!(!out.contains("runtime.cloud_hypervisor"));
     }
 
