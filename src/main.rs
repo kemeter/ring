@@ -52,6 +52,7 @@ mod runtime {
     pub(crate) mod lifecycle_trait;
     #[cfg(test)]
     pub(crate) mod mock;
+    pub(crate) mod podman;
     pub(crate) mod port_forwarder;
     pub(crate) mod resources;
     pub(crate) mod types;
