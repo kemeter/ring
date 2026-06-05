@@ -46,6 +46,8 @@ pub(crate) struct RuntimesConfig {
     #[serde(default)]
     pub(crate) docker: DockerConfig,
     #[serde(default)]
+    pub(crate) podman: PodmanConfig,
+    #[serde(default)]
     pub(crate) cloud_hypervisor: CloudHypervisorConfig,
 }
 
@@ -73,6 +75,34 @@ impl Default for DockerConfig {
         DockerConfig {
             enabled: false,
             host: default_docker_host(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct PodmanConfig {
+    /// Whether to register the Podman runtime. Off by default (runtimes are
+    /// opt-in). Podman exposes a Docker-compatible API via `podman system
+    /// service`, so Ring drives it with the same `bollard` client. When `true`
+    /// and the socket doesn't answer at startup, Ring fails fast.
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// Podman API socket. Defaults to the rootless-first resolution
+    /// (`RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock`
+    /// → `unix:///run/podman/podman.sock`). Override here to pin a specific socket.
+    #[serde(default = "default_podman_host")]
+    pub(crate) host: String,
+}
+
+fn default_podman_host() -> String {
+    crate::runtime::podman::resolve_socket_host()
+}
+
+impl Default for PodmanConfig {
+    fn default() -> Self {
+        PodmanConfig {
+            enabled: false,
+            host: default_podman_host(),
         }
     }
 }

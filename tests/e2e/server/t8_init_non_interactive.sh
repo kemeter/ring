@@ -8,9 +8,11 @@
 #      and a [server.runtime.cloud_hypervisor] block, with no prompt.
 #   2. `init --port 9090` (no --runtime, no TTY) → custom port, Docker default
 #      (a [server.runtime.docker] block, no cloud_hypervisor block).
-#   3. an invalid `--runtime` value is rejected (non-zero exit, lists the
-#      accepted values).
+#   3. an invalid `--runtime` value (e.g. lxc) is rejected (non-zero exit, lists
+#      the accepted values).
 #   4. re-running without --force refuses to overwrite (non-zero exit).
+#   5. `init --runtime podman --port 4040` writes a [server.runtime.podman]
+#      block (exclusive: no docker block).
 
 set -euo pipefail
 
@@ -48,14 +50,25 @@ log "2 (--port only → Docker default): correct"
 # --- Invariant 3: invalid runtime rejected ---
 D3=$(mktemp -d -t ring-e2e-init-XXXXXX)
 set +e
-OUT=$(RING_CONFIG_DIR="$D3" "$RING_BIN" init --runtime podman 2>&1)
+OUT=$(RING_CONFIG_DIR="$D3" "$RING_BIN" init --runtime lxc 2>&1)
 RC=$?
 set -e
 [ "$RC" -ne 0 ] || fail "3: invalid --runtime must exit non-zero"
-echo "$OUT" | grep -qiE "docker, cloud-hypervisor, both" \
+echo "$OUT" | grep -qiE "docker, podman, cloud-hypervisor, both" \
   || { echo "$OUT" >&2; fail "3: expected accepted runtime values in the error"; }
 [ -f "$D3/config.toml" ] && fail "3: no config.toml should be written on rejection"
 log "3 (invalid runtime rejected): exit $RC, no config written"
+
+# --- Invariant 5: scripted Podman init ---
+D5=$(mktemp -d -t ring-e2e-init-XXXXXX)
+RING_CONFIG_DIR="$D5" "$RING_BIN" init --runtime podman --port 4040 >/dev/null 2>&1 \
+  || fail "5: init --runtime podman exited non-zero"
+grep -qF "[server.runtime.podman]" "$D5/config.toml" \
+  || { cat "$D5/config.toml" >&2; fail "5: podman block missing"; }
+if grep -qF "[server.runtime.docker]" "$D5/config.toml"; then
+  fail "5: podman is exclusive, no docker block expected"
+fi
+log "5 (scripted Podman init): config.toml correct"
 
 # --- Invariant 4: refuse to overwrite without --force ---
 set +e
@@ -66,5 +79,5 @@ set -e
 echo "$OUT" | grep -qiF "already exists" || { echo "$OUT" >&2; fail "4: expected 'already exists'"; }
 log "4 (no clobber without --force): refused"
 
-rm -rf "$D1" "$D2" "$D3"
+rm -rf "$D1" "$D2" "$D3" "$D5"
 log "== T8-server: all invariants passed =="

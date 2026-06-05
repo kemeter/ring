@@ -82,6 +82,15 @@ The daemon's own configuration, shared by every context in the file. All subsect
 | `enabled` | bool | no | `false` | Register the Docker runtime. Must be `true` for Ring to use Docker. When `true` and the daemon is unreachable at startup, Ring fails fast |
 | `host` | string | no | `"unix:///var/run/docker.sock"` | Docker daemon URL. Use `tcp://host:2375` for a remote daemon, `tcp://host:2376` for TLS |
 
+### `[server.runtime.podman]`
+
+Podman speaks the Docker-compatible API (`podman system service`), so Ring drives it with the same client.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring fails fast |
+| `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
+
 ### `[server.runtime.cloud_hypervisor]`
 
 | Field | Type | Default | Purpose |

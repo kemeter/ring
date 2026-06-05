@@ -1,6 +1,6 @@
 # Runtimes
 
-Ring is a state engine; the runtime is the thing that actually starts your workload. Two implementations sit behind the same trait: **Docker** (production-ready) and **Cloud Hypervisor** (alpha). A deployment picks one with `runtime: docker` or `runtime: cloud-hypervisor`.
+Ring is a state engine; the runtime is the thing that actually starts your workload. Three implementations sit behind the same trait: **Docker** (production-ready), **Podman** (Docker-compatible, rootless-friendly), and **Cloud Hypervisor** (alpha). A deployment picks one with `runtime: docker`, `runtime: podman`, or `runtime: cloud-hypervisor`.
 
 This page covers the trade-offs and the mental model for each. For step-by-step setup, see the how-to guides; for exact manifest semantics, see the [manifest reference](/documentation/reference/manifest).
 
@@ -13,23 +13,24 @@ Runtimes are **opt-in**: none is enabled by default. You turn one on in `config.
 enabled = true
 ```
 
-Enable just the runtimes a host actually runs — Docker-only, Cloud-Hypervisor-only, or both. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
+Enable just the runtimes a host actually runs — Docker-only, Podman-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
 
 ## Quick comparison
 
-| Aspect | Docker | Cloud Hypervisor |
-|---|---|---|
-| Status | Production | Alpha |
-| Isolation | Linux namespaces + cgroups | Full kernel, KVM-backed VM |
-| Boot time | ~1 s | ~3–5 s (cloud-init, kernel boot) |
-| Memory overhead per workload | ~10 MB | ~80–150 MB (kernel + guest userland) |
-| Image format | Docker image (`nginx:1.25`) | Raw disk image on the host filesystem |
-| Networking | Per-namespace bridge, DNS aliases | Per-VM /30 subnet, host-port forwarding via `socat` |
-| Live event stream | Yes (sub-second crash detection) | No (tick-bound) |
-| `command` health checks | `docker exec` | In-guest `ring-agent` over AF_VSOCK |
-| `kind: job` | Exit code visible | Clean shutdown = success (no exit code from host) |
-| Labels (`labels:`) | Forwarded to container | Silently ignored |
-| Private registry creds | Supported | N/A (no image pull) |
+| Aspect | Docker | Podman | Cloud Hypervisor |
+|---|---|---|---|
+| Status | Production | Beta | Alpha |
+| Isolation | Linux namespaces + cgroups | Linux namespaces + cgroups (rootless by default) | Full kernel, KVM-backed VM |
+| Boot time | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) |
+| Memory overhead per workload | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) |
+| Image format | Docker image (`nginx:1.25`) | Docker/OCI image | Raw disk image on the host filesystem |
+| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | Per-VM /30 subnet, host-port forwarding via `socat` |
+| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) |
+| `command` health checks | `docker exec` | `podman exec` (same API) | In-guest `ring-agent` over AF_VSOCK |
+| `kind: job` | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) |
+| Labels (`labels:`) | Forwarded to container | Forwarded to container | Silently ignored |
+| Host networking | Supported | Not supported by Ring yet | N/A |
+| Private registry creds | Supported | Supported | N/A (no image pull) |
 
 ## Docker runtime
 
@@ -44,6 +45,30 @@ The common choice. Containers, one per replica, attached to a per-namespace brid
 **Caveats:**
 - Isolation boundary is the Linux kernel — a kernel exploit in one container can affect the host and other containers
 - The Docker socket gives Ring full control; treat the Ring host as privileged
+
+## Podman runtime (beta)
+
+Podman exposes a **Docker-compatible REST API** (`podman system service`), so Ring drives it with the same client it uses for Docker — same containers, images, exec-based health checks, labels, registry auth. The headline difference is **rootless by default**: containers run under your user namespace, no root daemon required.
+
+Enable it and point Ring at the socket (rootless-first resolution is the default):
+
+```toml
+[server.runtime.podman]
+enabled = true
+# host = "unix:///run/user/1000/podman/podman.sock"   # rootless default
+```
+
+The socket must be running — start it once with `systemctl --user start podman.socket` (rootless) or `systemctl start podman.socket` (root). Ring pings it at startup and fails fast if it's unreachable.
+
+**Good fit when:**
+- You want rootless containers (no privileged daemon on the host)
+- You're on a Podman-first distro (RHEL/Fedora) and don't run Docker
+- You want Docker semantics without the Docker daemon
+
+**Caveats:**
+- **Event stream**: Podman only emits events while `podman system service` is up. Ring does not yet consume Podman events (the orphan-volume reaper stays Docker-only), so crash detection is tick-bound for now.
+- **Host networking** (`network.mode: host`) is not yet allowed on Podman — Docker only.
+- Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root — mind file permissions on mounts.
 
 ## Cloud Hypervisor runtime (alpha)
 
