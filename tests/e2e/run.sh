@@ -4,6 +4,7 @@
 # Usage:
 #   tests/e2e/run.sh                    # run every suite
 #   tests/e2e/run.sh docker             # run only Docker tests
+#   tests/e2e/run.sh podman             # run only Podman tests
 #   tests/e2e/run.sh cloud-hypervisor   # run only Cloud Hypervisor tests
 #
 # The script doesn't `set -e` on the loop so a single failing test does not
@@ -15,7 +16,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITES=("server" "docker" "cloud-hypervisor")
+SUITES=("server" "docker" "podman" "cloud-hypervisor")
 
 # Restrict to the suite the user named, if any.
 if [ "$#" -gt 0 ]; then
