@@ -1,6 +1,6 @@
 # Runtimes
 
-Ring is a state engine; the runtime is the thing that actually starts your workload. Three implementations sit behind the same trait: **Docker** (production-ready), **Podman** (Docker-compatible, rootless-friendly), and **Cloud Hypervisor** (alpha). A deployment picks one with `runtime: docker`, `runtime: podman`, or `runtime: cloud-hypervisor`.
+Ring is a state engine; the runtime is the thing that actually starts your workload. Four implementations sit behind the same trait: **Docker** (production-ready), **Podman** (Docker-compatible, rootless-friendly), **Cloud Hypervisor** (alpha), and **Firecracker** (experimental). A deployment picks one with `runtime: docker`, `runtime: podman`, `runtime: cloud-hypervisor`, or `runtime: firecracker`.
 
 This page covers the trade-offs and the mental model for each. For step-by-step setup, see the how-to guides; for exact manifest semantics, see the [manifest reference](/documentation/reference/manifest).
 
@@ -17,20 +17,20 @@ Enable just the runtimes a host actually runs — Docker-only, Podman-only, Clou
 
 ## Quick comparison
 
-| Aspect | Docker | Podman | Cloud Hypervisor |
-|---|---|---|---|
-| Status | Production | Beta | Alpha |
-| Isolation | Linux namespaces + cgroups | Linux namespaces + cgroups (rootless by default) | Full kernel, KVM-backed VM |
-| Boot time | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) |
-| Memory overhead per workload | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) |
-| Image format | Docker image (`nginx:1.25`) | Docker/OCI image | Raw disk image on the host filesystem |
-| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | Per-VM /30 subnet, host-port forwarding via `socat` |
-| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) |
-| `command` health checks | `docker exec` | `podman exec` (same API) | In-guest `ring-agent` over AF_VSOCK |
-| `kind: job` | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) |
-| Labels (`labels:`) | Forwarded to container | Forwarded to container | Silently ignored |
-| Host networking | Supported | Not supported by Ring yet | N/A |
-| Private registry creds | Supported | Supported | N/A (no image pull) |
+| Aspect | Docker | Podman | Cloud Hypervisor | Firecracker |
+|---|---|---|---|---|
+| Status | Production | Beta | Alpha | Experimental |
+| Isolation | Linux namespaces + cgroups | Linux namespaces + cgroups (rootless by default) | Full kernel, KVM-backed VM | Full kernel, KVM-backed microVM |
+| Boot time | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) | ~1 s (minimal microVM) |
+| Memory overhead per workload | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) | ~5–50 MB (minimal device model) |
+| Image format | Docker image (`nginx:1.25`) | Docker/OCI image | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
+| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | Per-VM /30 subnet, host-port forwarding via `socat` | Not yet (boot-only) |
+| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) | No (tick-bound) |
+| `command` health checks | `docker exec` | `podman exec` (same API) | In-guest `ring-agent` over AF_VSOCK | Not yet |
+| `kind: job` | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Not yet (runs as worker) |
+| Labels (`labels:`) | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
+| Host networking | Supported | Not supported by Ring yet | N/A | N/A |
+| Private registry creds | Supported | Supported | N/A (no image pull) | N/A (no image pull) |
 
 ## Docker runtime
 
@@ -87,6 +87,44 @@ The trade-off: the VM model has no native primitive for several things Docker gi
 - No inter-VM networking — each VM is on its own /30, cross-VM traffic goes through host-published ports
 - Crash detection is tick-bound (no event stream from CH)
 - Some manifest fields are silently ignored — see [Cloud Hypervisor limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations)
+
+## Firecracker runtime (experimental)
+
+Like Cloud Hypervisor, each deployment runs as a dedicated KVM-backed microVM with its own kernel — same isolation story, but a different VMM. Firecracker is the minimalist VMM behind AWS Lambda and Fargate: a tiny device model, a fast boot path, and a low memory footprint, at the cost of a smaller feature set than Cloud Hypervisor.
+
+The headline difference from Cloud Hypervisor is the image model. Firecracker boots an **uncompressed kernel** (`vmlinux`) directly — there is no firmware step — and mounts a **rootfs ext4 image** as the root device. Both live on the host filesystem:
+
+```toml
+[server.runtime.firecracker]
+enabled = true
+kernel_path = "/var/lib/ring/firecracker/vmlinux"   # uncompressed kernel
+# socket_dir = "/var/lib/ring/firecracker/sockets"  # per-VM API sockets + rootfs copies
+```
+
+A deployment's `image` is the **host path to the rootfs** (not an OCI reference — there is no image pull):
+
+```yaml
+deployments:
+  api:
+    runtime: firecracker
+    image: "/var/lib/ring/firecracker/ubuntu-22.04.ext4"
+    replicas: 2
+```
+
+Ring copies the rootfs per instance (so replicas and reboots don't share guest state), spawns one `firecracker` process per VM bound to a private API socket, then drives Firecracker's REST API — `boot-source`, `drives`, `machine-config`, `actions` — to configure and boot the microVM.
+
+**Good fit when:**
+- You want VM-grade isolation with a smaller footprint and faster boot than Cloud Hypervisor
+- You can ship a kernel + rootfs pair (the Firecracker CI artifacts are a good starting point)
+- You're building short-lived or high-density workloads where microVM overhead matters
+
+**Current limitations (experimental — boot-only):**
+- **No networking yet** — VMs boot without a TAP interface; `ports`, host networking, and inter-VM traffic are not wired (the shared `host_net`/`socat` plumbing used by Cloud Hypervisor lands in a later cut)
+- **No volumes** — `volumes:` are not mounted yet (virtio-fs reuse is planned)
+- **No `command` health checks** — needs an in-guest agent over vsock, like Cloud Hypervisor
+- **No metrics** and **no `kind: job`** — a `job` deployment is treated as a worker
+- **No resource limits applied** — every microVM boots with 1 vCPU / 128 MiB regardless of `resources`
+- Crash detection is tick-bound (no event stream), and `labels` are silently ignored
 
 ## Choosing
 
