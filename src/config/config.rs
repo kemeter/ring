@@ -1,4 +1,5 @@
 use crate::config;
+use crate::config::server::ServerConfig;
 use local_ip_address::local_ip;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -9,105 +10,18 @@ use toml::de::Error as TomlError;
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Contexts {
     pub(crate) contexts: HashMap<String, Config>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub(crate) struct Scheduler {
-    #[serde(default = "default_scheduler_interval")]
-    pub(crate) interval: u64,
-}
-
-fn default_scheduler_interval() -> u64 {
-    10
-}
-
-impl Default for Scheduler {
-    fn default() -> Self {
-        Scheduler { interval: 10 }
-    }
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub(crate) struct DockerConfig {
-    /// Docker host URL. Examples:
-    /// - "unix:///var/run/docker.sock" (default)
-    /// - "tcp://192.168.1.100:2375"
-    /// - "tcp://192.168.1.100:2376" (with TLS)
-    #[serde(default = "default_docker_host")]
-    #[allow(dead_code)] // Parsed from config.toml; consumed by the Docker client setup path.
-    pub(crate) host: String,
-}
-
-fn default_docker_host() -> String {
-    "unix:///var/run/docker.sock".to_string()
-}
-
-impl Default for DockerConfig {
-    fn default() -> Self {
-        DockerConfig {
-            host: default_docker_host(),
-        }
-    }
-}
-
-/// User-facing configuration for the Cloud Hypervisor runtime. Parsed from the
-/// `[contexts.<name>.runtime.cloud_hypervisor]` section of `config.toml`.
-///
-/// All fields are optional; when unset, `CloudHypervisorRuntimeConfig::default`
-/// falls back to `$RING_CONFIG_DIR/cloud-hypervisor/...` for backward
-/// compatibility.
-#[derive(Deserialize, Debug, Clone, Default)]
-pub(crate) struct CloudHypervisorConfig {
-    pub(crate) binary_path: Option<String>,
-    pub(crate) firmware_path: Option<String>,
-    pub(crate) socket_dir: Option<String>,
-    /// Forwarded to `cloud-hypervisor --seccomp <value>`. Accepts `true`
-    /// (default), `false` or `log`. Set to `false` on hosts where the kernel
-    /// uses syscalls not whitelisted by CH (otherwise VMs die with SIGSYS).
-    pub(crate) seccomp: Option<String>,
-    /// Maximum size (bytes) for a per-VM console log before rotation kicks
-    /// in. Defaults to 10 MiB. Set to 0 to disable rotation entirely.
-    pub(crate) max_console_log_bytes: Option<u64>,
-    /// How many rotated console log backups to keep alongside the live file
-    /// (`.console.log.1`, `.console.log.2`, ...). Defaults to 3.
-    pub(crate) max_console_log_backups: Option<u32>,
-}
-
-/// User-facing configuration for the embedded web dashboard. Off by default
-/// to keep the server surface minimal until an operator opts in.
-#[derive(Deserialize, Debug, Clone)]
-pub(crate) struct DashboardConfig {
-    /// When true, `ring server start` spawns the dashboard on
-    /// `listen_address`. When false (the default), the dashboard is not
-    /// served by this Ring instance — operators can still run
-    /// `ring dashboard` locally against any API.
+    /// The single, top-level `[server]` table. It is shared by the whole file
+    /// (a host runs one daemon, whatever client contexts point at it), so it is
+    /// parsed here and attached by `pick_context` to whichever context it
+    /// returns, rather than living inside each `[contexts.<name>]`.
     #[serde(default)]
-    pub(crate) enabled: bool,
-    /// `host:port` for the dashboard to bind to. Distinct from the API
-    /// port to keep concerns separated.
-    #[serde(default = "default_dashboard_listen_address")]
-    pub(crate) listen_address: String,
+    pub(crate) server: ServerConfig,
 }
 
-fn default_dashboard_listen_address() -> String {
-    "127.0.0.1:3031".to_string()
-}
-
-impl Default for DashboardConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen_address: default_dashboard_listen_address(),
-        }
-    }
-}
-
-#[derive(Deserialize, Debug, Clone, Default)]
-pub(crate) struct RuntimesConfig {
-    #[serde(default)]
-    pub(crate) cloud_hypervisor: CloudHypervisorConfig,
-}
-
+/// Per-context CLIENT configuration: how a CLI reaches one server. The daemon's
+/// own settings (runtimes, scheduler, dashboard) live in [`ServerConfig`] under
+/// the top-level `[server]` table, not here. `server` is populated by
+/// `pick_context` from the shared `[server]` table.
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Config {
     pub(crate) current: bool,
@@ -115,15 +29,8 @@ pub(crate) struct Config {
     pub(crate) name: String,
     pub(crate) host: String,
     pub(crate) api: config::api::Api,
-    #[serde(default)]
-    pub(crate) scheduler: Scheduler,
-    #[serde(default)]
-    #[allow(dead_code)] // Parsed from config.toml; reserved for Docker host configuration.
-    pub(crate) docker: DockerConfig,
-    #[serde(default)]
-    pub(crate) runtime: RuntimesConfig,
-    #[serde(default)]
-    pub(crate) dashboard: DashboardConfig,
+    #[serde(skip_deserializing)]
+    pub(crate) server: ServerConfig,
 }
 
 impl Config {
@@ -148,10 +55,7 @@ impl Default for Config {
                 port: 3030,
                 cors_origins: Vec::new(),
             },
-            scheduler: Scheduler::default(),
-            docker: DockerConfig::default(),
-            runtime: RuntimesConfig::default(),
-            dashboard: DashboardConfig::default(),
+            server: ServerConfig::default(),
         }
     }
 }
@@ -215,9 +119,14 @@ pub(crate) fn load_config(context_current: &str) -> Config {
 /// explicit match the loader used to silently fall through to
 /// `Config::default()`, dropping any user-set runtime config.
 fn pick_context(contexts: Contexts, context_current: &str) -> Option<Config> {
+    // The `[server]` table is shared across all contexts in the file; attach it
+    // to whichever context we return so `configuration.server.*` is populated
+    // regardless of which client context was picked.
+    let server = contexts.server;
     let mut current_fallback: Option<Config> = None;
     for (context_name, mut config) in contexts.contexts {
         config.name = context_name.clone();
+        config.server = server.clone();
 
         if context_name == context_current {
             debug!("Switch to context from {}", context_name);
@@ -248,14 +157,14 @@ mod tests {
     }
 
     const SAMPLE: &str = r#"
+[server.runtime.cloud_hypervisor]
+seccomp = "false"
+
 [contexts.dev]
 host = "0.0.0.0"
 current = true
 api.scheme = "http"
 api.port = 3030
-
-[contexts.dev.runtime.cloud_hypervisor]
-seccomp = "false"
 
 [contexts.prod]
 host = "10.0.0.1"
@@ -277,15 +186,57 @@ api.port = 3030
         // This is the regression: the caller passes "default" but no context
         // is literally named "default". Before the fix, this returned None
         // (and load_config fell through to Config::default(), silently
-        // dropping runtime.cloud_hypervisor.seccomp).
+        // dropping the shared [server] config).
         let contexts = make_contexts(SAMPLE);
         let picked = pick_context(contexts, "default").expect("should fall back to current = true");
         assert_eq!(picked.name, "dev");
         assert_eq!(
-            picked.runtime.cloud_hypervisor.seccomp.as_deref(),
+            picked.server.runtime.cloud_hypervisor.seccomp.as_deref(),
             Some("false"),
-            "user-set runtime config must survive the fallback"
+            "shared [server] config must survive the fallback"
         );
+    }
+
+    #[test]
+    fn server_table_is_shared_across_contexts() {
+        // The top-level [server] table attaches to whichever context wins.
+        let contexts = make_contexts(SAMPLE);
+        let picked = pick_context(contexts, "prod").expect("prod should match");
+        assert_eq!(
+            picked.server.runtime.cloud_hypervisor.seccomp.as_deref(),
+            Some("false"),
+            "the shared [server] table applies to every context"
+        );
+    }
+
+    #[test]
+    fn runtimes_disabled_by_default() {
+        // Opt-in: a config that doesn't mention runtimes leaves them all off.
+        let contexts = make_contexts(SAMPLE);
+        let picked = pick_context(contexts, "dev").expect("dev should match");
+        assert!(!picked.server.runtime.docker.enabled);
+        assert!(!picked.server.runtime.cloud_hypervisor.enabled);
+    }
+
+    #[test]
+    fn runtimes_enabled_when_explicitly_set() {
+        let toml_str = r#"
+[server.runtime.docker]
+enabled = true
+
+[server.runtime.cloud_hypervisor]
+enabled = true
+
+[contexts.dev]
+host = "0.0.0.0"
+current = true
+api.scheme = "http"
+api.port = 3030
+"#;
+        let contexts = make_contexts(toml_str);
+        let picked = pick_context(contexts, "dev").expect("dev should match");
+        assert!(picked.server.runtime.docker.enabled);
+        assert!(picked.server.runtime.cloud_hypervisor.enabled);
     }
 
     #[test]
