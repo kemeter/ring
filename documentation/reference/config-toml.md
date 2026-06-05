@@ -1,24 +1,39 @@
 # config.toml reference
 
-Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. It holds CLI and server settings for one or more **contexts**. A context is a named bundle of connection settings — the typical layout has just one (`default`) on a single-host install, with extra contexts for talking to remote Ring servers from a workstation.
+Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. It is split in two:
 
-`ring init` does **not** create this file. Ring falls back to a sensible `default` context if no file exists. Create the file only when you need to override something or define a second context.
+- **`[contexts.<name>]`** — *client* config: how a CLI reaches a server (host, API, auth). There can be several (e.g. `local`, `staging`, `prod`), like kubectl contexts.
+- **`[server]`** — *daemon* config: what the Ring **server** does (which runtimes it enables, scheduler interval, dashboard). One shared table, outside `[contexts.*]`.
+
+A context describes one client→server connection; it has no business deciding which runtimes that server enables — that's why daemon settings live under their own top-level `[server]` table.
+
+`ring init` writes this file with the runtimes you select enabled. Ring falls back to a sensible `default` context if no file exists.
 
 ## Top-level shape
 
 ```toml
-[contexts.<name>]
+[server]                                  # daemon config (shared)
+[server.scheduler]                        # optional
+[server.dashboard]                        # optional
+[server.runtime.docker]                   # opt-in: enabled = true
+[server.runtime.cloud_hypervisor]         # opt-in: enabled = true
+
+[contexts.<name>]                         # client config (one or more)
 current = true
 host    = "..."
 api     = { ... }
-user    = { ... }
-scheduler = { ... }                    # optional
-docker    = { ... }                    # optional
-[contexts.<name>.runtime.cloud_hypervisor]   # optional
-...
 ```
 
-You can declare multiple `[contexts.<name>]` tables in the same file. The one with `current = true` is the default; switch with the `--context` flag on most CLI commands.
+You can declare multiple `[contexts.<name>]` tables in the same file. The one with `current = true` is the default; switch with the `--context` flag on most CLI commands. The single `[server]` table applies whichever context is active.
+
+## Runtimes are opt-in
+
+No container runtime is enabled by default. Ring registers a runtime **only** when you turn it on with `enabled = true` under `[server.runtime.<runtime>]`. A runtime you don't enable is never touched, even if its socket or binary is present. This is what lets the same Ring build run Docker-only, Cloud-Hypervisor-only, or any mix.
+
+Two rules follow:
+
+- **At least one runtime must be enabled.** With none, Ring refuses to start (it could not deploy anything).
+- **An enabled-but-unreachable runtime is a hard error.** Enable Docker but the daemon doesn't answer, or enable Cloud Hypervisor but its binary can't be found, and Ring fails fast at startup with a clear message — rather than starting and returning a 500 on the first deployment.
 
 ## Fields
 
@@ -30,9 +45,8 @@ You can declare multiple `[contexts.<name>]` tables in the same file. The one wi
 | `host` | string | yes | — | The IP or hostname the server binds to. Set `"127.0.0.1"` for loopback-only; `"0.0.0.0"` to listen on every interface. The CLI uses the same value to reach the server |
 | `api` | inline table | yes | — | See [`api`](#contextsnameapi) |
 | `user` | inline table | yes | — | See [`user`](#contextsnameuser) |
-| `scheduler` | inline table | no | `{ interval = 10 }` | See [`scheduler`](#contextsnamescheduler) |
-| `docker` | inline table | no | `{ host = "unix:///var/run/docker.sock" }` | See [`docker`](#contextsnamedocker) |
-| `runtime` | sub-table | no | empty | See [`runtime.cloud_hypervisor`](#contextsnameruntimecloud_hypervisor) |
+
+> Daemon settings (runtimes, scheduler, dashboard) are **not** under the context — see [`[server]`](#server) below.
 
 ### `[contexts.<name>.api]`
 
@@ -44,24 +58,35 @@ You can declare multiple `[contexts.<name>]` tables in the same file. The one wi
 
 > **No password salt to configure.** Earlier versions required a `[contexts.<name>.user]` table with a global `salt`. Ring now generates a unique random salt for every password hash, so there is nothing to set or keep secret. A leftover `user.salt` line in an existing config is ignored.
 
-### `[contexts.<name>.scheduler]`
+### `[server]`
+
+The daemon's own configuration, shared by every context in the file. All subsections optional.
+
+### `[server.scheduler]`
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
 | `interval` | int (seconds) | no | `10` | Reconciliation tick interval. Overridden by `RING_SCHEDULER_INTERVAL` if set |
 
-### `[contexts.<name>.docker]`
+### `[server.dashboard]`
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
+| `enabled` | bool | no | `false` | Spawn the embedded dashboard. Also flippable via `--dashboard` / `RING_DASHBOARD` |
+| `listen_address` | string | no | `"127.0.0.1:3031"` | `host:port` the dashboard binds to. Override with `RING_DASHBOARD_LISTEN` |
+
+### `[server.runtime.docker]`
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Register the Docker runtime. Must be `true` for Ring to use Docker. When `true` and the daemon is unreachable at startup, Ring fails fast |
 | `host` | string | no | `"unix:///var/run/docker.sock"` | Docker daemon URL. Use `tcp://host:2375` for a remote daemon, `tcp://host:2376` for TLS |
 
-### `[contexts.<name>.runtime.cloud_hypervisor]`
-
-All fields optional. Omitted fields fall back to the defaults in the table below.
+### `[server.runtime.cloud_hypervisor]`
 
 | Field | Type | Default | Purpose |
 |---|---|---|---|
+| `enabled` | bool | `false` | Register the Cloud Hypervisor runtime. Must be `true` for Ring to use it. When `true` and `binary_path` can't be resolved at startup, Ring fails fast |
 | `binary_path` | string | `cloud-hypervisor` (from `$PATH`) | Absolute path to the `cloud-hypervisor` binary |
 | `firmware_path` | string | `$RING_CONFIG_DIR/cloud-hypervisor/vmlinux` | Path to `hypervisor-fw` (the EFI firmware) |
 | `socket_dir` | string | `$RING_CONFIG_DIR/cloud-hypervisor/sockets` | Where Ring puts per-VM Unix sockets, console logs, volume shares |
@@ -69,7 +94,7 @@ All fields optional. Omitted fields fall back to the defaults in the table below
 
 ## Examples
 
-### Minimal single-host
+### Minimal single-host (Docker)
 
 ```toml
 [contexts.default]
@@ -78,9 +103,14 @@ host = "127.0.0.1"
 
 api.scheme = "http"
 api.port = 3030
+
+[server.runtime.docker]
+enabled = true
 ```
 
-### Production with Cloud Hypervisor and TLS-fronted API
+> Without an enabled runtime Ring refuses to start, so the `[server.runtime.docker]` block is the minimum to get a working server on a Docker host.
+
+### Production with Docker + Cloud Hypervisor and TLS-fronted API
 
 ```toml
 [contexts.default]
@@ -91,13 +121,15 @@ api.scheme = "https"                       # because nginx in front terminates T
 api.port = 3030
 api.cors_origins = ["https://dashboard.example.com"]
 
-[contexts.default.scheduler]
+[server.scheduler]
 interval = 5
 
-[contexts.default.docker]
+[server.runtime.docker]
+enabled = true
 host = "unix:///var/run/docker.sock"
 
-[contexts.default.runtime.cloud_hypervisor]
+[server.runtime.cloud_hypervisor]
+enabled = true
 binary_path = "/usr/local/bin/cloud-hypervisor"
 firmware_path = "/var/lib/ring/hypervisor-fw"
 socket_dir = "/var/lib/ring/cloud-hypervisor/sockets"

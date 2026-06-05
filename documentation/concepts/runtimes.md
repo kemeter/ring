@@ -4,6 +4,17 @@ Ring is a state engine; the runtime is the thing that actually starts your workl
 
 This page covers the trade-offs and the mental model for each. For step-by-step setup, see the how-to guides; for exact manifest semantics, see the [manifest reference](/documentation/reference/manifest).
 
+## Enabling a runtime
+
+Runtimes are **opt-in**: none is enabled by default. You turn one on in `config.toml`, and a deployment can only target a runtime that's been enabled on the server:
+
+```toml
+[server.runtime.docker]
+enabled = true
+```
+
+Enable just the runtimes a host actually runs — Docker-only, Cloud-Hypervisor-only, or both. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
+
 ## Quick comparison
 
 | Aspect | Docker | Cloud Hypervisor |
@@ -22,7 +33,7 @@ This page covers the trade-offs and the mental model for each. For step-by-step 
 
 ## Docker runtime
 
-The default. Containers, one per replica, attached to a per-namespace bridge network (`ring_<namespace>`). Same primitives as Docker Compose, just driven by Ring's state engine instead of a YAML file you re-apply by hand.
+The common choice. Containers, one per replica, attached to a per-namespace bridge network (`ring_<namespace>`). Same primitives as Docker Compose, just driven by Ring's state engine instead of a YAML file you re-apply by hand.
 
 **Good fit when:**
 - You already run Docker on the host

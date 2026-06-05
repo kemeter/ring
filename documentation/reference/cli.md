@@ -598,7 +598,7 @@ The default context (the one with `current = true`) is used when no `--context` 
 - `RING_DB_POOL_SIZE` — max SQLite connections (default: `5`)
 - `RING_CONFIG_DIR` — config directory (default: `~/.config/kemeter/ring`)
 - `RING_SECRET_KEY` — base64-encoded 32-byte key for secret encryption. **Required**: the server refuses to start without it (validated up front; see `ring doctor`).
-- `RING_SCHEDULER_INTERVAL` — scheduler tick in seconds (overrides `scheduler.interval` in `config.toml`)
+- `RING_SCHEDULER_INTERVAL` — scheduler tick in seconds (overrides `server.scheduler.interval` in `config.toml`)
 - `RING_APPLY_TIMEOUT` — single-deployment apply timeout in seconds (default: `300`)
 - `RUST_LOG` — log level (e.g. `info`, `debug`, `ring=debug`)
 
