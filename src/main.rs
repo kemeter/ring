@@ -45,6 +45,7 @@ mod scheduler {
 
 mod runtime {
     pub(crate) mod cloud_hypervisor;
+    pub(crate) mod cloud_init;
     pub(crate) mod docker;
     pub(crate) mod error;
     pub(crate) mod firecracker;

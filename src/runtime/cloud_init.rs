@@ -1,10 +1,10 @@
 //! cloud-init NoCloud datasource generation for VM runtimes.
 //!
-//! Currently only used by Cloud Hypervisor, but the format (NoCloud) and the
-//! ISO output are standard — Firecracker and any future VM runtime can attach
-//! the same ISO as a second drive. When that day comes, lift this file to
-//! `src/runtime/cloud_init.rs` and update the `use` paths in CH (and the new
-//! runtime). The implementation has zero CH-specific code.
+//! Shared by every KVM-backed runtime (Cloud Hypervisor and Firecracker): the
+//! format (NoCloud) and the ISO output are standard, so each VM runtime attaches
+//! the same `cidata.iso` as an extra drive. The implementation has zero
+//! runtime-specific code — callers pass a `Deployment`, the virtio-fs mounts to
+//! perform in-guest, and an optional static network config.
 //!
 //! Builds a small ISO image (`cidata.iso`) that the guest mounts at boot via
 //! cloud-init's NoCloud datasource. The ISO contains:
