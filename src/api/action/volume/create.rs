@@ -144,7 +144,10 @@ pub(crate) async fn create(
             };
             (StatusCode::CREATED, Json(output)).into_response()
         }
-        Err(e) if e.to_string().contains("UNIQUE constraint failed") => problem_response(
+        // Use sqlx's typed constraint classification rather than matching on the
+        // error message string, which varies across SQLite builds — same approach
+        // as `volumes::register_if_absent`.
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => problem_response(
             StatusCode::CONFLICT,
             "Conflict",
             format!(
