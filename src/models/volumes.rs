@@ -6,6 +6,7 @@
 //! the `volumes` table; `labels` is stored as a JSON string for parity with
 //! `config`/`secret` (decode via [`Volume::labels_map`]).
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -41,7 +42,7 @@ impl Volume {
             backend_type,
             host_path,
             labels: serde_json::to_string(&labels).unwrap_or_else(|_| "{}".to_string()),
-            created_at: chrono::Utc::now().to_rfc3339(),
+            created_at: Utc::now().to_rfc3339(),
             updated_at: None,
         }
     }

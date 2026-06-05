@@ -1,4 +1,4 @@
-use crate::config;
+use crate::config::api::Api;
 use crate::config::server::ServerConfig;
 use local_ip_address::local_ip;
 use serde::Deserialize;
@@ -28,7 +28,7 @@ pub(crate) struct Config {
     #[serde(skip_deserializing)]
     pub(crate) name: String,
     pub(crate) host: String,
-    pub(crate) api: config::api::Api,
+    pub(crate) api: Api,
     #[serde(skip_deserializing)]
     pub(crate) server: ServerConfig,
 }
@@ -50,7 +50,7 @@ impl Default for Config {
                     "127.0.0.1".parse().unwrap()
                 })
                 .to_string(),
-            api: config::api::Api {
+            api: Api {
                 scheme: "http".to_string(),
                 port: 3030,
                 cors_origins: Vec::new(),

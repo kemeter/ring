@@ -2,6 +2,7 @@ use super::{DockerImage, ImagePullPolicy, ImageReference, parse_image_reference,
 use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
+use crate::models::health_check::HealthCheck;
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
 use bollard::{
@@ -83,16 +84,14 @@ fn extract_digest(repo_digests: &Option<Vec<String>>, repo: &str) -> Option<Stri
 /// honoured by Ring's own scheduler-side gating, but the proxy won't see it.
 /// This is documented as a limitation; users who need proxy-aware TCP/HTTP
 /// readiness can wrap the probe in a shell command (`curl -fsS …`).
-fn build_health_config(
-    health_checks: &[crate::models::health_check::HealthCheck],
-) -> Option<HealthConfig> {
+fn build_health_config(health_checks: &[HealthCheck]) -> Option<HealthConfig> {
     let hc = health_checks
         .iter()
         .filter(|hc| hc.is_readiness())
-        .find(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }))?;
+        .find(|hc| matches!(hc, HealthCheck::Command { .. }))?;
 
     let command = match hc {
-        crate::models::health_check::HealthCheck::Command { command, .. } => command.clone(),
+        HealthCheck::Command { command, .. } => command.clone(),
         _ => return None,
     };
 
@@ -100,7 +99,7 @@ fn build_health_config(
     // duration string is malformed — the Ring scheduler-side gate will still
     // run with the same values, so a misconfiguration doesn't go unnoticed.
     let to_nanos = |s: &str| -> i64 {
-        crate::models::health_check::HealthCheck::parse_duration(s)
+        HealthCheck::parse_duration(s)
             .ok()
             .and_then(|d| i64::try_from(d.as_nanos()).ok())
             .unwrap_or(0)
@@ -951,7 +950,7 @@ mod tests {
         assert_eq!(extract_digest(&Some(vec![]), "nginx"), None);
     }
 
-    use crate::models::health_check::{FailureAction, HealthCheck};
+    use crate::models::health_check::FailureAction;
 
     #[test]
     fn build_health_config_returns_none_when_no_readiness_hc() {

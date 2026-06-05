@@ -7,7 +7,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, to_string_pretty};
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
@@ -599,7 +599,7 @@ async fn apply_internal(
             println!("Configuration:");
             println!(
                 "{}",
-                serde_json::to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string())
+                to_string_pretty(&json).unwrap_or_else(|_| "Invalid JSON".to_string())
             );
         }
 

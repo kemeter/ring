@@ -6,9 +6,10 @@ use crate::config::config::get_config_dir;
 use crate::config::server::CloudHypervisorConfig;
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
+use crate::runtime::docker::tiny_id;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::host_net::InstanceNet;
-use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::runtime::host_net::{InstanceNet, cid_for_instance};
+use crate::runtime::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::runtime::port_forwarder::{self, PortForwarder};
 use crate::runtime::virtiofs::{self, VirtiofsMount};
 use async_trait::async_trait;
@@ -591,7 +592,7 @@ impl CloudHypervisorLifecycle {
             .iter()
             .any(|hc| matches!(hc, crate::models::health_check::HealthCheck::Command { .. }));
         let vsock_cid = if needs_vsock {
-            Some(crate::runtime::host_net::cid_for_instance(instance_id))
+            Some(cid_for_instance(instance_id))
         } else {
             None
         };
@@ -929,7 +930,7 @@ impl CloudHypervisorLifecycle {
             let instance_id = format!(
                 "ch-{}-{}",
                 &deployment.id[..8.min(deployment.id.len())],
-                crate::runtime::docker::tiny_id()
+                tiny_id()
             );
 
             match self
@@ -1103,7 +1104,7 @@ impl CloudHypervisorLifecycle {
             let instance_id = format!(
                 "ch-{}-{}",
                 &deployment.id[..8.min(deployment.id.len())],
-                crate::runtime::docker::tiny_id()
+                tiny_id()
             );
 
             match self
@@ -1229,7 +1230,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         tail: Option<&str>,
         since: Option<i32>,
         instance_filter: Option<&str>,
-    ) -> Vec<crate::runtime::lifecycle_trait::Log> {
+    ) -> Vec<Log> {
         // Read every state CH knows about: a crashed VM still has a console
         // log file the operator wants to see, even after the VM is gone.
         let instances = self.scan_instances(deployment_id, &[]).await;
@@ -1244,10 +1245,10 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             let path = self.console_log_path(&instance_id);
             let lines = super::console_logs::read_lines(&path, tail, since).await;
             for message in lines {
-                logs.push(crate::runtime::lifecycle_trait::Log {
+                logs.push(Log {
                     instance: instance_id.clone(),
-                    level: crate::runtime::lifecycle_trait::classify_log(&message),
-                    timestamp: crate::runtime::lifecycle_trait::extract_date(&message),
+                    level: classify_log(&message),
+                    timestamp: extract_date(&message),
                     message,
                 });
             }
@@ -1299,10 +1300,10 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 super::console_logs::stream_lines(path, tail.map(|s| s.to_string()), since).await;
 
             let mapped = raw.map(move |line| {
-                let log = crate::runtime::lifecycle_trait::Log {
+                let log = Log {
                     instance: owned_id.clone(),
-                    level: crate::runtime::lifecycle_trait::classify_log(&line),
-                    timestamp: crate::runtime::lifecycle_trait::extract_date(&line),
+                    level: classify_log(&line),
+                    timestamp: extract_date(&line),
                     message: line,
                 };
                 let json = serde_json::to_string(&log).unwrap_or_default();
@@ -1338,7 +1339,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
     ) {
         use crate::models::health_check::HealthCheckStatus;
 
-        let cid = crate::runtime::host_net::cid_for_instance(instance_id);
+        let cid = cid_for_instance(instance_id);
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.to_string()];
         let timeout = std::time::Duration::from_secs(30);
 

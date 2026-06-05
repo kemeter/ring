@@ -183,7 +183,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         runtimes_map.keys().collect::<Vec<_>>()
     );
 
-    let runtimes = std::sync::Arc::new(runtimes_map);
+    let runtimes = Arc::new(runtimes_map);
 
     let (event_tx, event_rx) = mpsc::channel::<DockerEvent>(1024);
     // The Docker event listener only runs when Docker is present. Without it the
@@ -252,7 +252,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
 /// pipes / under `NO_COLOR`.
 fn print_startup_banner(
     configuration: &Config,
-    runtimes: &std::collections::HashMap<String, Arc<dyn RuntimeLifecycle>>,
+    runtimes: &HashMap<String, Arc<dyn RuntimeLifecycle>>,
 ) {
     let version = env!("CARGO_PKG_VERSION");
     let scheme = &configuration.api.scheme;
