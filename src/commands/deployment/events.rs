@@ -5,7 +5,8 @@ use clap::{Arg, ArgMatches, Command};
 use cli_table::{Table, WithTitle};
 use serde::Deserialize;
 
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 
 #[derive(Deserialize, Debug, Clone)]
 struct EventItem {

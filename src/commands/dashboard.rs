@@ -10,7 +10,8 @@
 //! Lets one operator monitor *any* Ring cluster from their laptop without
 //! exposing the dashboard from the server side.
 
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 use crate::dashboard::{Mode, UpstreamApi};
 use clap::{Arg, ArgMatches, Command};
 

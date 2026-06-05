@@ -2,6 +2,8 @@ use super::client::{
     CloudHypervisorClient, ConsoleConfig, CpuConfig, DiskConfig, FsConfig, MemoryConfig, NetConfig,
     PayloadConfig, VmConfig,
 };
+use crate::config::config::CloudHypervisorConfig;
+use crate::config::config::get_config_dir;
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
@@ -39,7 +41,7 @@ pub(crate) struct CloudHypervisorRuntimeConfig {
 
 impl Default for CloudHypervisorRuntimeConfig {
     fn default() -> Self {
-        let base_dir = crate::config::config::get_config_dir();
+        let base_dir = get_config_dir();
         Self {
             binary_path: "cloud-hypervisor".to_string(),
             firmware_path: format!("{}/cloud-hypervisor/vmlinux", base_dir),
@@ -54,7 +56,7 @@ impl Default for CloudHypervisorRuntimeConfig {
 impl CloudHypervisorRuntimeConfig {
     /// Merge a user-facing config section with the defaults. Any field left
     /// unset in `user` falls back to `CloudHypervisorRuntimeConfig::default`.
-    pub(crate) fn from_user_config(user: &crate::config::config::CloudHypervisorConfig) -> Self {
+    pub(crate) fn from_user_config(user: &CloudHypervisorConfig) -> Self {
         let defaults = Self::default();
         Self {
             binary_path: user.binary_path.clone().unwrap_or(defaults.binary_path),

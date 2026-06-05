@@ -1,7 +1,8 @@
 use crate::api::action::token::TokenView;
 use crate::cli::problem_json::http_error_global_list;
 use crate::cli::style;
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 use crate::exit_code;
 use chrono::Utc;
 use clap::ArgMatches;

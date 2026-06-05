@@ -83,10 +83,7 @@ mod events;
 
 mod webhook;
 
-mod config {
-    pub(crate) mod api;
-    pub(crate) mod config;
-}
+mod config;
 
 mod dashboard;
 mod database;

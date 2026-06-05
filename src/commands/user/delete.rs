@@ -1,7 +1,7 @@
 use crate::cli::problem_json::http_error;
 use crate::cli::style;
+use crate::config::auth::load_auth_config;
 use crate::config::config::Config;
-use crate::config::config::load_auth_config;
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;
