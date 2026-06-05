@@ -56,8 +56,21 @@ api.port = ${RING_PORT}
 
 user.salt = "e2e-test-salt"
 
-scheduler.interval = 1
+[server.scheduler]
+interval = 1
 EOF
+
+  # Runtimes are opt-in. Docker is enabled by default (the docker/ suite needs
+  # it); a runtime-specific suite (e.g. cloud-hypervisor) sets
+  # RING_E2E_ENABLE_DOCKER=false and enables its own runtime via
+  # RING_EXTRA_CONFIG. Ring refuses to start with zero runtimes enabled.
+  if [ "${RING_E2E_ENABLE_DOCKER:-true}" = "true" ]; then
+    cat >> "$RING_TEST_DIR/config.toml" <<EOF
+
+[server.runtime.docker]
+enabled = true
+EOF
+  fi
 
   # Optional per-test config snippet injected via RING_EXTRA_CONFIG (multi-line
   # TOML). Useful to enable runtime-specific settings like the Cloud Hypervisor
