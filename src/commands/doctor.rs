@@ -139,6 +139,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
 
     let binary = config
+        .server
         .runtime
         .cloud_hypervisor
         .binary_path
@@ -153,6 +154,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
 
     let default_firmware = format!("{}/cloud-hypervisor/vmlinux", get_config_dir());
     let firmware = config
+        .server
         .runtime
         .cloud_hypervisor
         .firmware_path

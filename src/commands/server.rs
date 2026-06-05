@@ -34,21 +34,21 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // The env var lets operators flip the dashboard on without rewriting
     // the on-disk config — same spirit as `RING_TOKEN` / `RING_SECRET_KEY`.
     if args.get_flag("dashboard") {
-        configuration.dashboard.enabled = true;
+        configuration.server.dashboard.enabled = true;
     } else if let Ok(val) = std::env::var("RING_DASHBOARD")
         && matches!(
             val.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         )
     {
-        configuration.dashboard.enabled = true;
+        configuration.server.dashboard.enabled = true;
     }
     // Optional override of the bind address; useful in containers where
     // the default `127.0.0.1:3031` is unreachable from the host.
     if let Ok(addr) = std::env::var("RING_DASHBOARD_LISTEN")
         && !addr.trim().is_empty()
     {
-        configuration.dashboard.listen_address = addr;
+        configuration.server.dashboard.listen_address = addr;
     }
 
     // Validate the encryption key up front. Anything that touches a
@@ -70,31 +70,86 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         .await
         .expect("Could not execute database migrations.");
 
-    let docker = docker::connect().expect("Failed to connect to Docker");
-    info!("Connected to Docker");
-
     let intentional_shutdowns = IntentionalShutdowns::new();
 
+    // Runtimes are opt-in and explicit: each is registered ONLY when enabled in
+    // config.toml (`[server.runtime.<name>] enabled = true`). A runtime that
+    // isn't enabled is never touched, even if its socket/binary happens to
+    // exist. This is what lets Ring run Docker-only, CH-only, or any mix.
+    //
+    // Fail-fast: a runtime the operator explicitly enabled but that's
+    // unreachable at startup is a configuration error, not a silent skip — we
+    // refuse to start so the misconfiguration surfaces immediately rather than
+    // as a 500 on the first deployment.
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
-    runtimes_map.insert(
-        "docker".to_string(),
-        Arc::new(DockerLifecycle::new(docker, intentional_shutdowns.clone())),
-    );
 
-    let ch_runtime_config =
-        crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
-            &configuration.runtime.cloud_hypervisor,
+    // Docker: enabled in config → verify the daemon answers a `ping()` (client
+    // construction alone is lazy and always succeeds, so it can't gate this).
+    // Keep a second client for the event listener, only when Docker is on.
+    let docker_for_events = if configuration.server.runtime.docker.enabled {
+        let host = configuration.server.runtime.docker.host.clone();
+        match docker::connect_and_verify(&host).await {
+            Ok(docker) => {
+                info!("Connected to Docker at {}", host);
+                runtimes_map.insert(
+                    "docker".to_string(),
+                    Arc::new(DockerLifecycle::new(docker, intentional_shutdowns.clone())),
+                );
+                docker::connect_with_host(&host).ok()
+            }
+            Err(e) => {
+                error!(
+                    "Refusing to start: Docker runtime is enabled in config but unreachable: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        info!("Docker runtime disabled in config, skipping");
+        None
+    };
+
+    // Cloud Hypervisor: enabled in config → its binary must resolve, else fail
+    // fast. The config/log-rotator are only built when we'll use it.
+    let mut _ch_log_rotator = None;
+    if configuration.server.runtime.cloud_hypervisor.enabled {
+        let ch_runtime_config =
+            crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
+                &configuration.server.runtime.cloud_hypervisor,
+            );
+        if !ch_runtime_config.is_available() {
+            error!(
+                "Refusing to start: Cloud Hypervisor runtime is enabled in config but its binary \
+                 '{}' could not be found",
+                ch_runtime_config.binary_path
+            );
+            std::process::exit(1);
+        }
+        info!(
+            "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
+            ch_runtime_config.binary_path,
+            ch_runtime_config.firmware_path,
+            ch_runtime_config.socket_dir,
+            ch_runtime_config.seccomp,
         );
-    info!(
-        "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
-        ch_runtime_config.binary_path,
-        ch_runtime_config.firmware_path,
-        ch_runtime_config.socket_dir,
-        ch_runtime_config.seccomp,
-    );
-    let ch_lifecycle = CloudHypervisorLifecycle::new(ch_runtime_config);
-    let _ch_log_rotator = ch_lifecycle.spawn_console_log_rotator();
-    runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
+        let ch_lifecycle = CloudHypervisorLifecycle::new(ch_runtime_config);
+        _ch_log_rotator = Some(ch_lifecycle.spawn_console_log_rotator());
+        runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
+    } else {
+        info!("Cloud Hypervisor runtime disabled in config, skipping");
+    }
+
+    // Hard floor: no runtime enabled means Ring can't deploy anything — fail
+    // loudly with an actionable message instead of starting a useless server.
+    if runtimes_map.is_empty() {
+        error!(
+            "Refusing to start: no container runtime is enabled. Enable at least one in \
+             config.toml, e.g. `[server.runtime.docker]` with `enabled = true`."
+        );
+        std::process::exit(1);
+    }
+
     info!(
         "Registered runtimes: {:?}",
         runtimes_map.keys().collect::<Vec<_>>()
@@ -103,9 +158,11 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let runtimes = std::sync::Arc::new(runtimes_map);
 
     let (event_tx, event_rx) = mpsc::channel::<DockerEvent>(1024);
-    let docker_for_events =
-        docker::connect().expect("Failed to connect to Docker for event listener");
-    let event_listener_handler = task::spawn(start_event_listener(event_tx, docker_for_events));
+    // The Docker event listener only runs when Docker is present. Without it the
+    // scheduler still drains `event_rx` (it just never receives Docker events) —
+    // other runtimes don't depend on this stream.
+    let event_listener_handler =
+        docker_for_events.map(|docker| task::spawn(start_event_listener(event_tx, docker)));
 
     let api_server_handler = task::spawn(ApiServer::start(
         pool.clone(),
@@ -116,8 +173,8 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // Embedded dashboard — only spawned when explicitly enabled in config,
     // so the default surface stays unchanged for existing users. Proxies
     // to its own API over loopback so the browser sees a single origin.
-    if configuration.dashboard.enabled {
-        let listen = configuration.dashboard.listen_address.clone();
+    if configuration.server.dashboard.enabled {
+        let listen = configuration.server.dashboard.listen_address.clone();
         let api_port = configuration.api.port;
         task::spawn(async move {
             let mode = crate::dashboard::Mode::Embedded { api_port };
@@ -132,7 +189,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // stalls a reconciliation tick. Polls on the same interval as the
     // scheduler by default.
     let event_worker_pool = pool.clone();
-    let event_worker_interval = configuration.scheduler.interval;
+    let event_worker_interval = configuration.server.scheduler.interval;
     task::spawn(async move {
         crate::scheduler::event_worker::run(event_worker_pool, event_worker_interval).await;
     });
@@ -153,7 +210,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     if let Err(e) = scheduler_handler.await {
         eprintln!("Scheduler task failed: {}", e);
     }
-    if let Err(e) = event_listener_handler.await {
+    if let Some(handler) = event_listener_handler
+        && let Err(e) = handler.await
+    {
         eprintln!("Docker event listener task failed: {}", e);
     }
 }
@@ -204,10 +263,10 @@ fn print_startup_banner(
     } else if host == "0.0.0.0" {
         println!("  {}  Network:   (no LAN address detected)", arrow);
     }
-    if configuration.dashboard.enabled {
+    if configuration.server.dashboard.enabled {
         println!(
             "  {}  Dashboard: http://{}",
-            arrow, configuration.dashboard.listen_address
+            arrow, configuration.server.dashboard.listen_address
         );
     } else {
         println!("  {}  Dashboard: disabled (enable with --dashboard)", arrow);
