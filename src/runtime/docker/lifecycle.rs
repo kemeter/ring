@@ -169,6 +169,11 @@ async fn remove_all_instances(
     // deployment must never destroy data that other deployments (or future
     // redeployments under the same name) may rely on. Volume removal is an
     // explicit operation, not a side effect of deployment cleanup.
+    //
+    // Anonymous volumes (auto-created from an image's `VOLUME` directive) are a
+    // different story: they carry no name and no data the operator asked to
+    // keep, so they are reaped per-container via the `v(true)` flag in
+    // `remove_container` to avoid orphan accumulation.
 }
 
 async fn handle_job_deployment(

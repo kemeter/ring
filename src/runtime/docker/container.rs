@@ -288,6 +288,59 @@ async fn pull_image(
     }
 }
 
+/// Provision named volumes explicitly before they are mounted, instead of
+/// letting Docker auto-create them on first mount. Auto-created volumes carry
+/// no labels, so they are untraceable (which deployment owns them?) and
+/// unprunable. Here we tag the volume with Ring labels so it can be attributed
+/// and reaped deliberately.
+///
+/// We deliberately set no `driver_opts`. The obvious idea — `o=sync` on the
+/// `local` driver for crash durability — does not work: the `local` driver
+/// treats `o` as `mount(8)` options, which require a `type` and `device` too,
+/// so `o=sync` alone is rejected with `400 missing required option: "device"`.
+/// Honouring it would mean turning the named volume into a host bind-mount,
+/// changing its semantics entirely. Durability for a plain named volume is a
+/// property of the host filesystem under `/var/lib/docker/volumes` and the
+/// workload's own fsync discipline, not a per-volume driver opt — so we leave
+/// it to the operator's driver configuration.
+///
+/// `create_volume` is idempotent in the Docker Engine: creating a volume whose
+/// name already exists returns the existing volume rather than erroring, so this
+/// is safe to call on every (re)deploy. Existing volumes keep their original
+/// options, which is the intended "preserve data across deploys" behaviour.
+async fn ensure_named_volume(
+    docker: &Docker,
+    name: &str,
+    driver: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<(), RuntimeError> {
+    let driver = if driver.is_empty() { "local" } else { driver };
+
+    let mut labels = HashMap::new();
+    labels.insert("ring.managed".to_string(), "true".to_string());
+    labels.insert("ring.namespace".to_string(), namespace.to_string());
+    labels.insert("ring.deployment".to_string(), deployment_name.to_string());
+
+    let request = bollard::models::VolumeCreateRequest {
+        name: Some(name.to_string()),
+        driver: Some(driver.to_string()),
+        labels: Some(labels),
+        ..Default::default()
+    };
+
+    match docker.create_volume(request).await {
+        Ok(_) => {
+            debug!("Ensured named volume '{}' (driver={})", name, driver);
+            Ok(())
+        }
+        Err(e) => Err(RuntimeError::InstanceCreationFailed(format!(
+            "failed to provision named volume '{}': {}",
+            name, e
+        ))),
+    }
+}
+
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
@@ -387,6 +440,18 @@ pub(crate) async fn create_container(
 
     let mut mounts: Vec<Mount> = vec![];
     for resolved in resolved_mounts {
+        // Provision named volumes explicitly (labels + durability) before the
+        // mount, rather than relying on Docker's implicit on-first-mount create.
+        if let ResolvedMount::Named { name, driver, .. } = resolved {
+            ensure_named_volume(
+                docker,
+                name,
+                driver,
+                &deployment.namespace,
+                &deployment.name,
+            )
+            .await?;
+        }
         mounts.push(create_mount_from_resolved(resolved, &deployment.id).await?);
     }
 
@@ -625,7 +690,13 @@ pub(crate) async fn remove_container(docker: Docker, container_id: String) {
         Err(e) => debug!("Error stopping container {}: {:?}", container_id, e),
     }
 
-    let remove_options = RemoveContainerOptionsBuilder::new().build();
+    // `v(true)` removes the *anonymous* volumes attached to this container —
+    // the ones Docker auto-creates from an image's `VOLUME` directive and which
+    // would otherwise pile up as untracked orphans across redeploys. Docker
+    // never deletes *named* volumes via this flag, so Ring-managed and
+    // operator-named data is preserved. This is a per-container, zero-blast-
+    // radius cleanup, not a daemon-wide volume prune.
+    let remove_options = RemoveContainerOptionsBuilder::new().v(true).build();
     match docker
         .remove_container(&container_id, Some(remove_options))
         .await
@@ -641,7 +712,9 @@ pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String
         .stop_container(&container_id, Some(stop_options))
         .await;
 
-    let remove_options = RemoveContainerOptionsBuilder::new().build();
+    // See `remove_container`: `v(true)` reaps anonymous volumes only; named
+    // (Ring-managed / operator) volumes are untouched.
+    let remove_options = RemoveContainerOptionsBuilder::new().v(true).build();
     match docker
         .remove_container(&container_id, Some(remove_options))
         .await

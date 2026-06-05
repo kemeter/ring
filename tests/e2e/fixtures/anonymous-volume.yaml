@@ -1,0 +1,7 @@
+deployments:
+  anon-volume:
+    name: anon-volume
+    namespace: ring-e2e
+    runtime: docker
+    image: ring-e2e-anon-vol:latest
+    replicas: 1

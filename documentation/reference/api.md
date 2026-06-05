@@ -543,6 +543,98 @@ Returns the same shape as a list entry. Values are never returned.
 }
 ```
 
+## Volumes
+
+Volumes are first-class, per-namespace storage entities. A deployment that mounts a named volume auto-registers it, so every volume is traceable to the namespace and deployment that own it. Volumes are provisioned with Ring labels (`ring.managed`, `ring.namespace`, `ring.deployment`) on the underlying driver.
+
+Durability of a named volume is a property of the host filesystem (for the Docker `local` driver, `/var/lib/docker/volumes`) and the workload's own fsync discipline — Ring sets no per-volume sync option. On Cloud Hypervisor, a writable named volume is served by virtiofsd with `--cache never` so guest writes are not held in the daemon cache.
+
+### `POST /volumes`
+
+```json
+{
+  "namespace": "production",
+  "name": "db-data",
+  "backend_type": "local",
+  "size": null,
+  "labels": {}
+}
+```
+
+`backend_type` defaults to `local` (the Docker named-volume driver); `directory` selects the Cloud Hypervisor virtiofs directory backend. `size` is an optional byte hint and is not enforced as a quota today.
+
+**Response:** `201 Created`
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "created_at": "2026-04-15T10:30:00Z",
+  "namespace": "production",
+  "name": "db-data",
+  "backend_type": "local"
+}
+```
+
+**Validation** (see [Validation errors](#validation-errors) for the response shape):
+
+| Field | Rule | Code |
+| --- | --- | --- |
+| `namespace` | 2-63 lowercase DNS-label characters | `volume.namespace.length`, `volume.namespace.format` |
+| `name` | 2-253 characters: lowercase letters, digits, `_`, `.`, `-`; must start and end with an alphanumeric character | `volume.name.length`, `volume.name.format` |
+| `backend_type` | one of `local`, `directory` | (`422` with a plain problem+json message) |
+
+**Errors** (`application/problem+json`):
+
+- `404 Not Found` — the namespace doesn't exist yet (POST /volumes does not auto-create it).
+- `409 Conflict` — a volume with this name already exists in this namespace.
+
+### `GET /volumes`
+
+**Query parameters:**
+
+- `namespace` or `namespace[]`
+
+**Response:**
+
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "created_at": "2026-04-15T10:30:00Z",
+    "updated_at": null,
+    "namespace": "production",
+    "name": "db-data",
+    "backend_type": "local",
+    "size": null
+  }
+]
+```
+
+### `GET /volumes/{id}`
+
+Returns the same shape as a list entry.
+
+### `DELETE /volumes/{id}`
+
+**Query parameters:**
+
+- `force=true` — delete even if referenced by active deployments
+
+**Response:** `204 No Content`
+
+**Errors:**
+
+- `404 Not Found` — volume does not exist
+- `409 Conflict` — volume is referenced by active deployments. Body lists them:
+
+```json
+{
+  "error": "Volume is referenced by deployments",
+  "deployments": ["production/web-app"],
+  "hint": "Use ?force=true to delete anyway"
+}
+```
+
 ## Users
 
 ### `GET /users`

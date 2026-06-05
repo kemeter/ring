@@ -1,3 +1,4 @@
+use crate::api::dto::deployment::DeploymentVolume;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -622,6 +623,56 @@ pub(crate) async fn find_referencing_secret(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
+/// True when `volumes_json` (a deployment's `volumes` column) contains a mount
+/// of `type == "volume"` whose `source` is `volume_name`. Distinguishes a real
+/// named-volume reference from a bind/config/secret that merely shares the name,
+/// which a bare SQL `LIKE` on `source` cannot. A column that fails to parse is
+/// treated as "no reference" — it can't be a structured volume mount.
+fn deployment_mounts_named_volume(volumes_json: &str, volume_name: &str) -> bool {
+    serde_json::from_str::<Vec<DeploymentVolume>>(volumes_json)
+        .map(|mounts| {
+            mounts.iter().any(|mount| {
+                mount.r#type == "volume" && mount.source.as_deref() == Some(volume_name)
+            })
+        })
+        .unwrap_or(false)
+}
+
+pub(crate) async fn find_referencing_volume(
+    pool: &SqlitePool,
+    namespace: &str,
+    volume_name: &str,
+) -> Result<Vec<Deployment>, sqlx::Error> {
+    // A named volume appears in a deployment's `volumes JSON` as
+    // {"type":"volume","source":"<name>",...}. The SQL `LIKE` is only a cheap
+    // pre-filter: `source` is shared by every mount type (bind/config/secret),
+    // so a `LIKE '%"source":"<name>"%'` match could be a bind or a secret with
+    // the same name, not the named volume we're guarding. We confirm each
+    // candidate by deserializing its `volumes` column and checking for a mount
+    // that is actually `type == "volume"` with this source. Scoped to live
+    // deployments — deleting a volume a stopped/failed deployment once used is
+    // fine.
+    let pattern = format!("%\"source\":\"{}\"%", volume_name);
+    let sql = format!(
+        "SELECT {} FROM deployment WHERE namespace = ? AND volumes LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
+        SELECT_COLUMNS
+    );
+
+    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(namespace)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+
+    let referencing = rows
+        .into_iter()
+        .map(Deployment::from)
+        .filter(|deployment| deployment_mounts_named_volume(&deployment.volumes, volume_name))
+        .collect();
+
+    Ok(referencing)
+}
+
 pub(crate) async fn delete_batch(
     pool: &SqlitePool,
     deleted: Vec<String>,
@@ -639,6 +690,30 @@ pub(crate) async fn delete_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mounts_named_volume_matches_volume_type() {
+        let json = r#"[{"type":"volume","source":"db-data","destination":"/data","driver":"local","permission":"rw"}]"#;
+        assert!(deployment_mounts_named_volume(json, "db-data"));
+    }
+
+    #[test]
+    fn mounts_named_volume_ignores_same_name_other_types() {
+        // A bind, config or secret sharing the name must NOT count as a named
+        // volume reference — a bare SQL LIKE on `source` would falsely match.
+        let bind = r#"[{"type":"bind","source":"db-data","destination":"/data","driver":"local","permission":"rw"}]"#;
+        let secret = r#"[{"type":"secret","source":"db-data","destination":"/run/secrets/db-data","driver":"local","permission":"ro"}]"#;
+        assert!(!deployment_mounts_named_volume(bind, "db-data"));
+        assert!(!deployment_mounts_named_volume(secret, "db-data"));
+    }
+
+    #[test]
+    fn mounts_named_volume_handles_mixed_and_unparseable() {
+        let mixed = r#"[{"type":"bind","source":"db-data","destination":"/x","driver":"local","permission":"rw"},{"type":"volume","source":"db-data","destination":"/data","driver":"local","permission":"rw"}]"#;
+        assert!(deployment_mounts_named_volume(mixed, "db-data"));
+        // Unparseable column can't be a structured volume mount → no reference.
+        assert!(!deployment_mounts_named_volume("not json", "db-data"));
+    }
 
     #[test]
     fn test_parse_memory_string_binary_suffixes() {
