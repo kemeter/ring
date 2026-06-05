@@ -9,7 +9,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 
-use crate::config::config::AuthToken;
+use crate::config::auth::AuthToken;
 use crate::config::config::get_config_dir;
 use std::string::String;
 

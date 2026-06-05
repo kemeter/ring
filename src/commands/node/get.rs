@@ -1,7 +1,8 @@
 use crate::api::dto::node::NodeRootDto;
 use crate::cli::problem_json::transport_error;
 use crate::cli::style;
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 use crate::exit_code;
 use clap::{ArgMatches, Command};
 

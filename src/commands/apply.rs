@@ -1,5 +1,6 @@
 use crate::cli::problem_json::render_response_error;
-use crate::config::config::{Config, get_config_dir, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::{Config, get_config_dir};
 use crate::exit_code;
 use crate::models::deployments::EnvValue;
 use clap::{Arg, ArgAction, ArgMatches, Command};

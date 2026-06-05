@@ -1,4 +1,5 @@
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgMatches;

@@ -1,5 +1,6 @@
 use crate::cli::style;
-use crate::config::config::{Config, Contexts, get_config_dir, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::{Config, Contexts, get_config_dir};
 use clap::ArgMatches;
 use clap::{Arg, Command};
 use cli_table::{Table, WithTitle, format::Justify};

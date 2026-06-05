@@ -1,5 +1,6 @@
 use crate::cli::problem_json::render_response_error;
-use crate::config::config::{Config, load_auth_config};
+use crate::config::auth::load_auth_config;
+use crate::config::config::Config;
 use crate::exit_code;
 use clap::Arg;
 use clap::ArgAction;

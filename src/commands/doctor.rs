@@ -1,4 +1,4 @@
-use crate::config::config::Config;
+use crate::config::config::{Config, get_config_dir};
 use clap::{ArgMatches, Command};
 use std::process::Command as ShellCommand;
 
@@ -151,10 +151,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     checks.push(check_xorriso());
     checks.push(check_socat());
 
-    let default_firmware = format!(
-        "{}/cloud-hypervisor/vmlinux",
-        crate::config::config::get_config_dir()
-    );
+    let default_firmware = format!("{}/cloud-hypervisor/vmlinux", get_config_dir());
     let firmware = config
         .runtime
         .cloud_hypervisor
