@@ -5,9 +5,9 @@
 #
 # Invariants:
 #   1. `init --runtime cloud-hypervisor --port 4030` writes api.port = 4030
-#      and a [contexts.default.runtime.cloud_hypervisor] block, with no prompt.
+#      and a [server.runtime.cloud_hypervisor] block, with no prompt.
 #   2. `init --port 9090` (no --runtime, no TTY) → custom port, Docker default
-#      (no cloud_hypervisor block).
+#      (a [server.runtime.docker] block, no cloud_hypervisor block).
 #   3. an invalid `--runtime` value is rejected (non-zero exit, lists the
 #      accepted values).
 #   4. re-running without --force refuses to overwrite (non-zero exit).
@@ -29,7 +29,7 @@ D1=$(mktemp -d -t ring-e2e-init-XXXXXX)
 RING_CONFIG_DIR="$D1" "$RING_BIN" init --runtime cloud-hypervisor --port 4030 >/dev/null 2>&1 \
   || fail "1: init with flags exited non-zero"
 grep -qF "api.port = 4030" "$D1/config.toml" || { cat "$D1/config.toml" >&2; fail "1: api.port = 4030 missing"; }
-grep -qF "[contexts.default.runtime.cloud_hypervisor]" "$D1/config.toml" \
+grep -qF "[server.runtime.cloud_hypervisor]" "$D1/config.toml" \
   || { cat "$D1/config.toml" >&2; fail "1: cloud_hypervisor block missing"; }
 log "1 (scripted CH init): config.toml correct"
 
@@ -38,6 +38,8 @@ D2=$(mktemp -d -t ring-e2e-init-XXXXXX)
 RING_CONFIG_DIR="$D2" "$RING_BIN" init --port 9090 </dev/null >/dev/null 2>&1 \
   || fail "2: init --port exited non-zero"
 grep -qF "api.port = 9090" "$D2/config.toml" || fail "2: api.port = 9090 missing"
+grep -qF "[server.runtime.docker]" "$D2/config.toml" \
+  || { cat "$D2/config.toml" >&2; fail "2: expected [server.runtime.docker] block for Docker default"; }
 if grep -qF "cloud_hypervisor" "$D2/config.toml"; then
   fail "2: expected Docker default (no cloud_hypervisor block) when --runtime omitted"
 fi
