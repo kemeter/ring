@@ -2,8 +2,8 @@ use super::client::{
     CloudHypervisorClient, ConsoleConfig, CpuConfig, DiskConfig, FsConfig, MemoryConfig, NetConfig,
     PayloadConfig, VmConfig,
 };
-use crate::config::config::CloudHypervisorConfig;
 use crate::config::config::get_config_dir;
+use crate::config::server::CloudHypervisorConfig;
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::error::RuntimeError;
@@ -54,6 +54,22 @@ impl Default for CloudHypervisorRuntimeConfig {
 }
 
 impl CloudHypervisorRuntimeConfig {
+    /// Whether the cloud-hypervisor binary is actually present, so the runtime
+    /// can be registered only when it can run. Mirrors the Docker `ping()` gate:
+    /// no point advertising a runtime that fails on the first deployment.
+    ///
+    /// An absolute/relative path must exist on disk; a bare name (the default,
+    /// `cloud-hypervisor`) is looked up across `PATH`.
+    pub(crate) fn is_available(&self) -> bool {
+        let binary = &self.binary_path;
+        if binary.contains('/') {
+            return std::path::Path::new(binary).exists();
+        }
+        std::env::var_os("PATH")
+            .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(binary).exists()))
+            .unwrap_or(false)
+    }
+
     /// Merge a user-facing config section with the defaults. Any field left
     /// unset in `user` falls back to `CloudHypervisorRuntimeConfig::default`.
     pub(crate) fn from_user_config(user: &CloudHypervisorConfig) -> Self {
@@ -1431,6 +1447,29 @@ impl CloudHypervisorLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cfg_with_binary(binary_path: &str) -> CloudHypervisorRuntimeConfig {
+        CloudHypervisorRuntimeConfig {
+            binary_path: binary_path.to_string(),
+            ..CloudHypervisorRuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn is_available_true_for_existing_absolute_path() {
+        assert!(cfg_with_binary("/bin/sh").is_available());
+    }
+
+    #[test]
+    fn is_available_false_for_missing_absolute_path() {
+        assert!(!cfg_with_binary("/nonexistent/cloud-hypervisor-xyz").is_available());
+    }
+
+    #[test]
+    fn is_available_resolves_bare_name_via_path() {
+        assert!(cfg_with_binary("sh").is_available());
+        assert!(!cfg_with_binary("definitely-not-a-real-binary-xyz").is_available());
+    }
 
     #[test]
     fn parse_resources_defaults() {

@@ -1073,7 +1073,7 @@ pub(crate) async fn schedule(
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(config.scheduler.interval);
+        .unwrap_or(config.server.scheduler.interval);
 
     let apply_timeout_secs = env::var("RING_APPLY_TIMEOUT")
         .ok()

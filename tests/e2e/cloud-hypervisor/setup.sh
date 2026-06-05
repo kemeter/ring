@@ -97,13 +97,16 @@ setup_ch() {
   # kernels (VMs die with SIGSYS otherwise). E2E only — production should leave
   # this unset to keep CH's default kill-on-violation policy.
   RING_EXTRA_CONFIG=$(cat <<EOF
-[contexts.default.runtime.cloud_hypervisor]
+[server.runtime.cloud_hypervisor]
+enabled = true
 firmware_path = "$RING_E2E_CH_FIRMWARE"
 socket_dir = "$RING_E2E_CH_SOCKET_DIR"
 seccomp = "false"
 EOF
 )
   export RING_EXTRA_CONFIG
+  # CH-only suite: don't require Docker to be present.
+  export RING_E2E_ENABLE_DOCKER=false
 
   # Chain cleanup_ch onto the existing cleanup_ring trap from lib.sh. We
   # cannot simply add a new trap because bash traps are not stacked.

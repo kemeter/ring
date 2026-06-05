@@ -226,12 +226,29 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
     out.push('\n');
     out.push_str(&format!("user.salt = \"{}\"\n", salt));
 
-    if matches!(
+    // Runtimes are opt-in and live under the top-level `[server]` table (daemon
+    // config), separate from the client `[contexts.*]` above. Enable exactly
+    // the runtimes the operator selected; Ring refuses to start with none.
+    let docker = matches!(
+        settings.runtime,
+        RuntimeChoice::Docker | RuntimeChoice::Both
+    );
+    let cloud_hypervisor = matches!(
         settings.runtime,
         RuntimeChoice::CloudHypervisor | RuntimeChoice::Both
-    ) {
+    );
+
+    if docker {
         out.push('\n');
-        out.push_str("[contexts.default.runtime.cloud_hypervisor]\n");
+        out.push_str("[server.runtime.docker]\n");
+        out.push_str("enabled = true\n");
+        out.push_str("# host = \"unix:///var/run/docker.sock\"  # or tcp://host:2375\n");
+    }
+
+    if cloud_hypervisor {
+        out.push('\n');
+        out.push_str("[server.runtime.cloud_hypervisor]\n");
+        out.push_str("enabled = true\n");
         out.push_str("# Uncomment and adjust if cloud-hypervisor isn't on $PATH:\n");
         out.push_str("# binary_path = \"/usr/local/bin/cloud-hypervisor\"\n");
         out.push_str("# firmware_path = \"/var/lib/ring/cloud-hypervisor/vmlinux\"\n");
@@ -354,6 +371,9 @@ mod tests {
         let out = build_config_toml(&s);
         assert!(out.contains("[contexts.default]"));
         assert!(out.contains("api.port = 3030"));
+        // Docker runtime enabled under the [server] table.
+        assert!(out.contains("[server.runtime.docker]"));
+        assert!(out.contains("enabled = true"));
         // No CH block when Docker only.
         assert!(!out.contains("runtime.cloud_hypervisor"));
     }
@@ -365,19 +385,23 @@ mod tests {
             port: 3030,
         };
         let out = build_config_toml(&s);
-        assert!(out.contains("[contexts.default.runtime.cloud_hypervisor]"));
+        assert!(out.contains("[server.runtime.cloud_hypervisor]"));
+        assert!(out.contains("enabled = true"));
         assert!(out.contains("seccomp"));
+        // No Docker block when CH only.
+        assert!(!out.contains("[server.runtime.docker]"));
     }
 
     #[test]
-    fn build_config_both_emits_ch_section() {
+    fn build_config_both_emits_both_sections() {
         let s = InitSettings {
             runtime: RuntimeChoice::Both,
             port: 8080,
         };
         let out = build_config_toml(&s);
         assert!(out.contains("api.port = 8080"));
-        assert!(out.contains("[contexts.default.runtime.cloud_hypervisor]"));
+        assert!(out.contains("[server.runtime.docker]"));
+        assert!(out.contains("[server.runtime.cloud_hypervisor]"));
     }
 
     #[test]

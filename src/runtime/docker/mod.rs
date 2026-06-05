@@ -122,11 +122,24 @@ impl From<bollard::errors::Error> for RuntimeError {
     }
 }
 
-pub(crate) fn connect() -> Result<Docker, RuntimeError> {
-    let host =
-        std::env::var("DOCKER_HOST").unwrap_or_else(|_| "unix:///var/run/docker.sock".to_string());
-
-    connect_with_host(&host)
+/// Connect to Docker at `host` *and confirm the daemon actually answers*,
+/// returning the client only if it does.
+///
+/// `connect`/`connect_with_host` merely build a bollard client — they succeed
+/// even when no daemon is listening, because the socket connection is lazy.
+/// That makes them unsuitable for a best-effort "is Docker available?" gate at
+/// startup: we'd register a runtime that 500s on the first deployment. A
+/// `ping()` round-trip is the cheapest call that proves the daemon is up and
+/// speaking the API, so it gates registering the runtime.
+pub(crate) async fn connect_and_verify(host: &str) -> Result<Docker, RuntimeError> {
+    let docker = connect_with_host(host)?;
+    docker.ping().await.map_err(|e| {
+        RuntimeError::Other(format!(
+            "Docker daemon at {} did not respond to ping: {}",
+            host, e
+        ))
+    })?;
+    Ok(docker)
 }
 
 pub(crate) fn connect_with_host(host: &str) -> Result<Docker, RuntimeError> {

@@ -30,13 +30,15 @@ ensure_ch_image
 RING_E2E_CH_SOCKET_DIR="${RING_E2E_CH_SOCKET_DIR:-$(mktemp -d -t ring-e2e-ch-sockets-XXXXXX)}"
 export RING_E2E_CH_SOCKET_DIR
 RING_EXTRA_CONFIG=$(cat <<EOF
-[contexts.default.runtime.cloud_hypervisor]
+[server.runtime.cloud_hypervisor]
+enabled = true
 firmware_path = "$BOGUS_FW"
 socket_dir = "$RING_E2E_CH_SOCKET_DIR"
 seccomp = "false"
 EOF
 )
 export RING_EXTRA_CONFIG
+export RING_E2E_ENABLE_DOCKER=false
 trap 'cleanup_ch; cleanup_ring' EXIT
 
 start_ring

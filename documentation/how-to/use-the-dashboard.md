@@ -7,7 +7,7 @@ There are **two ways to run it**, both serving the same bundled UI:
 | Mode | Command | Where the dashboard runs | Where the API runs |
 |---|---|---|---|
 | Local (proxy) | `ring dashboard` | On your laptop | Anywhere reachable via your `config.toml` context |
-| Embedded | `ring server start` with `[dashboard] enabled = true` | On the server itself | Same server |
+| Embedded | `ring server start` with `[server.dashboard] enabled = true` | On the server itself | Same server |
 
 Pick local when you want to monitor a remote cluster from your workstation. Pick embedded when you want a persistent dashboard URL for the whole team.
 
@@ -62,7 +62,7 @@ Accepted truthy values: `true`, `1`, `yes`, `on`.
 **3. `config.toml`** — persistent setup:
 
 ```toml
-[contexts.default.dashboard]
+[server.dashboard]
 enabled = true
 listen_address = "0.0.0.0:3031"
 ```

@@ -58,7 +58,7 @@ Run `ring doctor` to verify everything is in place — it checks each item and p
 
 ## Configure Ring
 
-Add a `runtime.cloud_hypervisor` section to `~/.config/kemeter/ring/config.toml`:
+Enable the Cloud Hypervisor runtime under the `[server]` table in `~/.config/kemeter/ring/config.toml` (runtimes are opt-in — `enabled = true` is required):
 
 ```toml
 [contexts.default]
@@ -67,14 +67,15 @@ host = "127.0.0.1"
 api.scheme = "http"
 api.port = 3030
 
-[contexts.default.runtime.cloud_hypervisor]
+[server.runtime.cloud_hypervisor]
+enabled = true
 firmware_path = "/path/to/hypervisor-fw"      # optional, defaults to ~/.config/kemeter/ring/cloud-hypervisor/vmlinux
 binary_path = "/usr/local/bin/cloud-hypervisor" # optional, defaults to $PATH lookup
 socket_dir = "/var/lib/ring/cloud-hypervisor/sockets"
 # seccomp = "false"                            # only if VMs die with SIGSYS on boot
 ```
 
-All fields under `runtime.cloud_hypervisor` are optional; the table shows the defaults Ring uses when omitted.
+Apart from `enabled`, all fields under `server.runtime.cloud_hypervisor` are optional; the table shows the defaults Ring uses when omitted. If `enabled = true` but the `cloud-hypervisor` binary can't be found, Ring fails fast at startup.
 
 ### Seccomp escape hatch
 

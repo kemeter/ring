@@ -72,7 +72,8 @@ stderr: ==== Possible seccomp violation ====
 Workaround:
 
 ```toml
-[contexts.default.runtime.cloud_hypervisor]
+[server.runtime.cloud_hypervisor]
+enabled = true
 seccomp = "false"      # disable filter
 # or
 seccomp = "log"        # keep filter, only log violations
