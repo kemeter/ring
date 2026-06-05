@@ -3,8 +3,10 @@ use crate::models::config;
 use crate::models::config::Config;
 use crate::models::deployment_event;
 use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
+use crate::models::health_check::HealthCheckStatus;
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
+use crate::models::volume::ResolvedMount;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
@@ -174,7 +176,7 @@ async fn apply_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
     resolved: Deployment,
-    resolved_mounts: Vec<crate::models::volume::ResolvedMount>,
+    resolved_mounts: Vec<ResolvedMount>,
     apply_timeout: Duration,
     apply_timeout_secs: u64,
     runtime: &dyn RuntimeLifecycle,
@@ -571,26 +573,20 @@ async fn readiness_decision(
     // separate http probes) — the storage layer aggregates results by
     // check_type, so distinguishing two http checks would need a richer
     // identifier. Document the limitation; revisit if a real use case lands.
-    let mut filtered: Vec<(
-        crate::models::health_check::HealthCheckStatus,
-        chrono::DateTime<chrono::Utc>,
-    )> = Vec::new();
+    let mut filtered: Vec<(HealthCheckStatus, chrono::DateTime<chrono::Utc>)> = Vec::new();
     for record in &latest {
         if !readiness_types.contains(record.check_type.as_str()) {
             continue;
         }
         let status = match record.status.as_str() {
-            "success" => crate::models::health_check::HealthCheckStatus::Success,
-            "timeout" => crate::models::health_check::HealthCheckStatus::Timeout,
-            _ => crate::models::health_check::HealthCheckStatus::Failed,
+            "success" => HealthCheckStatus::Success,
+            "timeout" => HealthCheckStatus::Timeout,
+            _ => HealthCheckStatus::Failed,
         };
         // For success, anchor the timestamp to ready_since (stable). For
         // non-success, the timestamp is irrelevant — evaluate_readiness will
         // short-circuit to Failing.
-        let anchor = if matches!(
-            status,
-            crate::models::health_check::HealthCheckStatus::Success
-        ) {
+        let anchor = if matches!(status, HealthCheckStatus::Success) {
             match ready_since_by_type.get(record.check_type.as_str()) {
                 Some(t) => *t,
                 None => continue,

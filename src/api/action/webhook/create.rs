@@ -109,6 +109,7 @@ pub(crate) async fn create(
 mod tests {
     use crate::api::server::tests::{login, new_test_app_with_pool};
     use crate::models::token;
+    use crate::models::webhook;
     use axum_test::TestServer;
     use http::StatusCode;
     use serde_json::json;
@@ -235,10 +236,7 @@ mod tests {
 
         assert_eq!(res.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
-            crate::models::webhook::find_all(&pool)
-                .await
-                .unwrap()
-                .is_empty(),
+            webhook::find_all(&pool).await.unwrap().is_empty(),
             "no webhook persisted on validation failure"
         );
     }
@@ -280,12 +278,7 @@ mod tests {
 
         assert_eq!(res.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(res.text().contains("invalid wildcard"), "{}", res.text());
-        assert!(
-            crate::models::webhook::find_all(&pool)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(webhook::find_all(&pool).await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -303,10 +296,7 @@ mod tests {
             .await;
 
         assert_eq!(res.status_code(), StatusCode::CREATED);
-        assert_eq!(
-            crate::models::webhook::find_all(&pool).await.unwrap().len(),
-            1
-        );
+        assert_eq!(webhook::find_all(&pool).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -323,11 +313,6 @@ mod tests {
             .await;
 
         assert_eq!(res.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(
-            crate::models::webhook::find_all(&pool)
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(webhook::find_all(&pool).await.unwrap().is_empty());
     }
 }

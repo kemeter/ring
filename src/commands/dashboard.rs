@@ -14,6 +14,7 @@ use crate::config::auth::load_auth_config;
 use crate::config::config::Config;
 use crate::dashboard::{Mode, UpstreamApi};
 use clap::{Arg, ArgMatches, Command};
+use std::process::exit;
 
 pub(crate) fn command_config() -> Command {
     Command::new("dashboard")
@@ -43,7 +44,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut config: Config, context: Stri
     let auth = load_auth_config(context);
     if auth.token.is_empty() {
         eprintln!("No auth token available. Run `ring login` first, or set RING_TOKEN.");
-        std::process::exit(1);
+        exit(1);
     }
 
     let upstream = UpstreamApi {
@@ -69,7 +70,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut config: Config, context: Stri
 
     if let Err(e) = crate::dashboard::server::serve(mode, &listen).await {
         eprintln!("Dashboard failed: {}", e);
-        std::process::exit(1);
+        exit(1);
     }
 }
 

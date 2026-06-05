@@ -909,6 +909,7 @@ pub(crate) async fn create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::dto::namespace::NamespaceOutput;
     use crate::api::server::tests::{login, new_test_app, new_test_app_with_pool};
     use axum_test::{TestResponse, TestServer};
     use serde_json::json;
@@ -2228,7 +2229,7 @@ mod tests {
             .get("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
-        let namespaces: Vec<crate::api::dto::namespace::NamespaceOutput> = response.json();
+        let namespaces: Vec<NamespaceOutput> = response.json();
         assert!(namespaces.is_empty());
 
         // Create a deployment in a new namespace
@@ -2249,7 +2250,7 @@ mod tests {
             .get("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
-        let namespaces: Vec<crate::api::dto::namespace::NamespaceOutput> = response.json();
+        let namespaces: Vec<NamespaceOutput> = response.json();
         assert_eq!(namespaces.len(), 1);
         assert_eq!(namespaces[0].name, "auto-created-ns");
     }

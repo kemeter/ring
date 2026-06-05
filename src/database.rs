@@ -1,6 +1,7 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::env;
 use std::str::FromStr;
+use std::time::Duration;
 
 pub(crate) async fn get_database_pool() -> SqlitePool {
     let database_path = env::var("RING_DATABASE_PATH").unwrap_or_else(|_| "ring.db".to_string());
@@ -15,7 +16,7 @@ pub(crate) async fn get_database_pool() -> SqlitePool {
         // "database is locked". WAL allows concurrent readers but still
         // serializes writers, and the scheduler + API can write at the same
         // time. 5s lets SQLite retry internally instead of bubbling the error.
-        .busy_timeout(std::time::Duration::from_secs(5));
+        .busy_timeout(Duration::from_secs(5));
 
     let max_connections = env::var("RING_DB_POOL_SIZE")
         .ok()
@@ -24,7 +25,7 @@ pub(crate) async fn get_database_pool() -> SqlitePool {
 
     SqlitePoolOptions::new()
         .max_connections(max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(30))
+        .acquire_timeout(Duration::from_secs(30))
         .connect_with(connect_options)
         .await
         .expect("Could not create database pool")

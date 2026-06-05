@@ -7,6 +7,7 @@ use crate::runtime::types::InstanceStatus;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
+use std::cmp::Ordering;
 use std::convert::TryInto;
 
 pub(crate) async fn apply(
@@ -278,7 +279,7 @@ async fn handle_worker_deployment(
         );
 
         match current_count.cmp(&target_count) {
-            std::cmp::Ordering::Less => {
+            Ordering::Less => {
                 debug!(
                     "Scaling up: {} -> {} (creating 1 container)",
                     current_count, target_count
@@ -308,7 +309,7 @@ async fn handle_worker_deployment(
                     }
                 }
             }
-            std::cmp::Ordering::Greater => {
+            Ordering::Greater => {
                 if target_count == 0 {
                     info!(
                         "Scaling deployment {} down to 0: removing container ({} remaining)",
@@ -344,7 +345,7 @@ async fn handle_worker_deployment(
                     );
                 }
             }
-            std::cmp::Ordering::Equal => {
+            Ordering::Equal => {
                 debug!("Replicas count matches target: {} instances", current_count);
             }
         }

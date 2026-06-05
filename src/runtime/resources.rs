@@ -81,6 +81,7 @@ pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<(), RuntimeEr
 mod tests {
     use super::*;
     use crate::models::deployments::{Resource, ResourceSpec};
+    use std::collections::HashMap;
 
     fn bare_deployment() -> Deployment {
         Deployment {
@@ -98,8 +99,8 @@ mod tests {
             replicas: 1,
             command: vec![],
             instances: vec![],
-            labels: std::collections::HashMap::new(),
-            environment: std::collections::HashMap::new(),
+            labels: HashMap::new(),
+            environment: HashMap::new(),
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,

@@ -346,6 +346,7 @@ fn print_next_steps() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::read_to_string;
 
     #[test]
     fn init_command_parses_runtime_and_port_flags() {
@@ -494,7 +495,7 @@ mod tests {
         let path = unique_tmp_path("persist");
         let key = "dGVzdC1rZXktdGVzdC1rZXktdGVzdC1rZXktdGVzdA==";
         write_secret_key_file(&path, key).expect("write");
-        let content = std::fs::read_to_string(&path).expect("read");
+        let content = read_to_string(&path).expect("read");
         // Trailing newline makes the file `cat`-friendly and matches how
         // tools like `pass` store secrets — losing it would be a silent UX
         // regression if someone reads the file with `xargs` or similar.
@@ -524,7 +525,7 @@ mod tests {
         let path = unique_tmp_path("trunc");
         write_secret_key_file(&path, "AAAAAAAAAAAAAAAAAAAAAAAA").expect("write1");
         write_secret_key_file(&path, "B").expect("write2");
-        let content = std::fs::read_to_string(&path).expect("read");
+        let content = read_to_string(&path).expect("read");
         assert_eq!(content, "B\n");
         let _ = std::fs::remove_file(&path);
     }

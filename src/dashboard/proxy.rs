@@ -5,6 +5,7 @@
 
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::header::{AUTHORIZATION, HOST};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use http_body_util::BodyExt;
@@ -69,19 +70,19 @@ async fn forward(state: ProxyState, req: Request) -> anyhow::Result<Response> {
             continue;
         }
         // `Host` belongs to the upstream, not us.
-        if name == axum::http::header::HOST {
+        if name == HOST {
             continue;
         }
         // Drop any inbound Authorization when we have a token to inject,
         // to avoid double-auth scenarios.
-        if name == axum::http::header::AUTHORIZATION && state.upstream.bearer_token.is_some() {
+        if name == AUTHORIZATION && state.upstream.bearer_token.is_some() {
             continue;
         }
         filtered.insert(name.clone(), value.clone());
     }
     if let Some(token) = &state.upstream.bearer_token {
         filtered.insert(
-            axum::http::header::AUTHORIZATION,
+            AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", token))?,
         );
     }

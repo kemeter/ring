@@ -1,6 +1,6 @@
 use aes_gcm::aead::OsRng;
 use aes_gcm::aead::rand_core::RngCore;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -117,7 +117,7 @@ impl Token {
     pub(crate) fn is_expired(&self) -> bool {
         match &self.expire_at {
             None => false,
-            Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
+            Some(ts) => match DateTime::parse_from_rfc3339(ts) {
                 Ok(exp) => exp <= Utc::now(),
                 // An unparyable expiry is treated as expired: fail closed, a
                 // token we can't reason about must not grant access.
@@ -282,7 +282,7 @@ pub(crate) async fn rotate(
 /// swallowed by the caller — a missed `last_used_at` must never fail auth.
 pub(crate) async fn touch_last_used(pool: &SqlitePool, token: &Token) -> Result<(), sqlx::Error> {
     if let Some(prev) = &token.last_used_at
-        && let Ok(prev_ts) = chrono::DateTime::parse_from_rfc3339(prev)
+        && let Ok(prev_ts) = DateTime::parse_from_rfc3339(prev)
         && (Utc::now() - prev_ts.with_timezone(&Utc)).num_seconds() < 60
     {
         return Ok(());
