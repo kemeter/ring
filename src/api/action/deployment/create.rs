@@ -696,8 +696,21 @@ pub(crate) async fn create(
                     .map(|hc| !hc.is_empty())
                     .unwrap_or(false);
 
+                // A published host port can be bound by only one container at a
+                // time. Rolling update creates the new container *before*
+                // draining the old one, so the new bind collides with the old
+                // ("port is already allocated") and the deployment loops in
+                // instance_creation_failed. For these deployments we must
+                // recreate (drop old, then create new) instead — a brief
+                // downtime, but deterministic and loop-free.
+                let publishes_host_port = input.ports.iter().any(|p| p.published > 0);
+
                 // Rolling update: keep old deployment running if conditions are met
-                if !params.force && has_health_checks && deployments_list.len() == 1 {
+                if !params.force
+                    && has_health_checks
+                    && deployments_list.len() == 1
+                    && !publishes_host_port
+                {
                     let existing = &deployments_list[0];
                     info!(
                         "Rolling update: keeping deployment {} running as parent",
@@ -707,13 +720,16 @@ pub(crate) async fn create(
                 } else {
                     // Immediate replace. Pick the most specific reason so
                     // operators can fix the root cause: `force=true` is a
-                    // deliberate caller choice, the others are config gaps.
+                    // deliberate caller choice, the others are config gaps,
+                    // and `host_port_published` is the rolling-incompatible case.
                     replace_reason = Some(if params.force {
                         "force"
                     } else if !has_health_checks {
                         "no_health_checks"
-                    } else {
+                    } else if deployments_list.len() > 1 {
                         "multiple_active_deployments"
+                    } else {
+                        "host_port_published"
                     });
                     for mut deployment in deployments_list {
                         info!("Marking deployment {} as deleted", deployment.id);
@@ -846,6 +862,10 @@ pub(crate) async fn create(
                     "multiple_active_deployments" => format!(
                         "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
                         replaced, deployment.namespace, deployment.name
+                    ),
+                    "host_port_published" => format!(
+                        "Replaced {} immediately because it publishes a host port — rolling update would collide on the port (it creates the new container before stopping the old), so Ring recreated it instead (brief downtime)",
+                        replaced
                     ),
                     other => format!("Replaced {} immediately ({})", replaced, other),
                 };
@@ -2360,6 +2380,139 @@ mod tests {
         .expect("ForceReplace event must be logged");
         assert_eq!(event.0, "warning");
         assert!(event.1.contains("force=true"), "got message: {}", event.1);
+    }
+
+    #[tokio::test]
+    async fn host_port_forces_recreate_instead_of_rolling() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Initial deployment: health checks AND a published host port. Rolling
+        // would normally apply (HC present, single active), but the host port
+        // makes it rolling-incompatible.
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "edge-app",
+                "namespace": "edge-ns",
+                "image": "nginx:1.0",
+                "ports": [{"published": 18080, "target": 80}],
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Re-apply (same name, new image, same host port). Must recreate, not roll.
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "edge-app",
+                "namespace": "edge-ns",
+                "image": "nginx:2.0",
+                "ports": [{"published": 18080, "target": 80}],
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Parent must be wiped (recreate), not kept running as a rolling parent.
+        let parent: serde_json::Value = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await
+            .json();
+        assert_eq!(
+            parent["status"], "deleted",
+            "host-port deployment must recreate, not roll"
+        );
+
+        // The new deployment carries the host_port_published reason.
+        let deployments: Vec<serde_json::Value> = server
+            .get("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await
+            .json();
+        let new_id = deployments
+            .iter()
+            .find(|d| d["name"] == "edge-app" && d["id"].as_str() != Some(&first_id))
+            .expect("new deployment must exist")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let event: (String, String) = sqlx::query_as(
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'force_replace'",
+        )
+        .bind(&new_id)
+        .fetch_one(&pool)
+        .await
+        .expect("recreate event must be logged");
+        assert_eq!(event.0, "warning");
+        assert!(event.1.contains("host port"), "got message: {}", event.1);
+    }
+
+    #[tokio::test]
+    async fn rolling_update_without_host_port_still_rolls() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Non-regression: HC present, single active, NO host port → still rolling.
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "noport-app",
+                "namespace": "noport-ns",
+                "image": "nginx:1.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first_id = response.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "noport-app",
+                "namespace": "noport-ns",
+                "image": "nginx:2.0",
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+
+        // Parent kept running → rolling, not recreate.
+        let parent: serde_json::Value = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await
+            .json();
+        assert_eq!(parent["status"], "running");
     }
 
     #[tokio::test]

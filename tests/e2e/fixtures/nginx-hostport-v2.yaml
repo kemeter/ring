@@ -1,0 +1,18 @@
+deployments:
+  nginx-hostport:
+    name: nginx-hostport
+    namespace: ring-e2e
+    runtime: docker
+    image: nginx:1.26-alpine
+    replicas: 1
+    ports:
+      - published: 18080
+        target: 80
+        host_ip: 127.0.0.1
+    health_checks:
+      - type: tcp
+        port: 80
+        interval: 2s
+        timeout: 1s
+        threshold: 2
+        on_failure: restart
