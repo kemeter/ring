@@ -57,6 +57,10 @@ shell-words = "1.1"
 inquire = "0.7"
 
 sysinfo = "0.35.1"
+# Used by the Firecracker runtime to create/configure the host TAP device via
+# syscalls (ioctl TUNSETIFF + socket ioctls). Direct ioctls are required
+# because shelling out to `ip` loses CAP_NET_ADMIN across the fork-exec.
+libc = "0.2"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }

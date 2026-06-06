@@ -57,6 +57,7 @@ mod runtime {
     pub(crate) mod podman;
     pub(crate) mod port_forwarder;
     pub(crate) mod resources;
+    pub(crate) mod tap;
     pub(crate) mod types;
     pub(crate) mod virtiofs;
     pub(crate) mod vsock_client;
