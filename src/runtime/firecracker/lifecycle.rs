@@ -15,13 +15,20 @@
 use crate::config::server::FirecrackerConfig;
 use crate::models::deployments::{Deployment, DeploymentStatus};
 use crate::models::volume::ResolvedMount;
+use crate::runtime::cloud_init::GuestNet;
 use crate::runtime::docker::tiny_id;
 use crate::runtime::error::RuntimeError;
-use crate::runtime::firecracker::client::{BootSource, Drive, FirecrackerClient, MachineConfig};
+use crate::runtime::firecracker::client::{
+    BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
+};
+use crate::runtime::host_net::InstanceNet;
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::runtime::port_forwarder::{self, PortForwarder};
+use crate::runtime::tap::TapDevice;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::path::Path;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tracing::{error, info, warn};
 
@@ -83,6 +90,13 @@ pub struct FirecrackerLifecycle {
     /// process. Absence means the VM is gone (or was never tracked by this
     /// process — e.g. inherited across a ring-server restart).
     pids: Mutex<HashMap<String, u32>>,
+    /// Live host tap devices, keyed by instance id. Unlike Cloud Hypervisor,
+    /// Firecracker doesn't create the tap itself — Ring owns its whole
+    /// lifecycle. Dropping the entry deletes the interface from the host.
+    taps: Mutex<HashMap<String, TapDevice>>,
+    /// Live socat port-forwarders, keyed by instance id. Dropping the entry
+    /// kills the socat process.
+    port_forwarders: Mutex<HashMap<String, Vec<PortForwarder>>>,
 }
 
 impl FirecrackerLifecycle {
@@ -90,6 +104,8 @@ impl FirecrackerLifecycle {
         Self {
             config,
             pids: Mutex::new(HashMap::new()),
+            taps: Mutex::new(HashMap::new()),
+            port_forwarders: Mutex::new(HashMap::new()),
         }
     }
 
@@ -159,38 +175,114 @@ impl FirecrackerLifecycle {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
         if !ready {
-            let _ = self.kill_pid(pid);
+            self.kill_pid(pid).await;
             let _ = std::fs::remove_file(&rootfs_rw);
             return Err(RuntimeError::VmStartFailed(
                 "firecracker API socket never appeared".to_string(),
             ));
         }
 
-        // Configure + boot via the REST API (the spike's PUT sequence).
+        // If the deployment publishes any port, allocate a deterministic /30
+        // and create the host tap. Unlike Cloud Hypervisor, Firecracker does
+        // not create the tap — Ring creates it here (held in `tap` so an early
+        // return on any later error deletes it via Drop) and hands its name to
+        // Firecracker, while cloud-init configures the matching guest IP.
+        let net_alloc = if deployment.ports.is_empty() {
+            None
+        } else {
+            Some(InstanceNet::for_instance(&instance_id))
+        };
+        let tap = match &net_alloc {
+            Some(n) => match TapDevice::create(&n.tap_name, &n.host_ip, n.prefix_len) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    self.kill_pid(pid).await;
+                    let _ = std::fs::remove_file(&socket_path);
+                    let _ = std::fs::remove_file(&rootfs_rw);
+                    return Err(e);
+                }
+            },
+            None => None,
+        };
+
+        // Configure + boot via the REST API (the spike's PUT sequence, plus a
+        // network interface and a cidata drive when applicable).
         let client = FirecrackerClient::new(&socket_path);
         let boot = self
-            .configure_and_boot(&client, &rootfs_rw, deployment)
+            .configure_and_boot(
+                &client,
+                &instance_id,
+                &rootfs_rw,
+                deployment,
+                net_alloc.as_ref(),
+            )
             .await;
         if let Err(e) = boot {
-            let _ = self.kill_pid(pid);
+            // `tap` drops here, deleting the interface.
+            self.kill_pid(pid).await;
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&rootfs_rw);
+            let _ = std::fs::remove_file(self.cidata_path(&instance_id));
             return Err(RuntimeError::VmStartFailed(format!(
                 "configure/boot failed for {}: {}",
                 instance_id, e
             )));
         }
 
+        // Spawn one socat per declared port now the guest is up. A bind race
+        // (port taken between the pre-check and now) tears the VM down rather
+        // than leaving a black-hole port. `forwarders` is owned locally; its
+        // Drop kills any socat already spawned on early return.
+        if let Some(n) = &net_alloc {
+            let mut forwarders = Vec::with_capacity(deployment.ports.len());
+            for p in &deployment.ports {
+                match port_forwarder::spawn_forwarder(
+                    &n.guest_ip,
+                    p.published,
+                    p.target,
+                    p.host_ip.as_deref(),
+                    p.protocol,
+                )
+                .await
+                {
+                    Ok(fw) => forwarders.push(fw),
+                    Err(e) => {
+                        let _ = client.send_ctrl_alt_del().await;
+                        self.kill_pid(pid).await;
+                        let _ = std::fs::remove_file(&socket_path);
+                        let _ = std::fs::remove_file(&rootfs_rw);
+                        let _ = std::fs::remove_file(self.cidata_path(&instance_id));
+                        return Err(e);
+                    }
+                }
+            }
+            if !forwarders.is_empty() {
+                self.port_forwarders
+                    .lock()
+                    .unwrap()
+                    .insert(instance_id.clone(), forwarders);
+            }
+        }
+
         self.pids.lock().unwrap().insert(instance_id.clone(), pid);
+        if let Some(t) = tap {
+            self.taps.lock().unwrap().insert(instance_id.clone(), t);
+        }
         info!("Firecracker microVM {} booted (pid {})", instance_id, pid);
         Ok(instance_id)
+    }
+
+    fn cidata_path(&self, instance_id: &str) -> String {
+        format!("{}/{}.cidata.iso", self.config.socket_dir, instance_id)
     }
 
     async fn configure_and_boot(
         &self,
         client: &FirecrackerClient,
+        instance_id: &str,
         rootfs_rw: &str,
         deployment: &Deployment,
+        net_alloc: Option<&InstanceNet>,
     ) -> Result<(), String> {
         client
             .put_boot_source(&BootSource {
@@ -211,6 +303,48 @@ impl FirecrackerLifecycle {
             .await
             .map_err(|e| e.to_string())?;
 
+        // A cidata ISO is attached whenever cloud-init has something to do:
+        // env vars or a static network config. Mounts are not wired yet.
+        let guest_net = net_alloc.map(|n| GuestNet {
+            guest_ip: n.guest_ip.clone(),
+            host_ip: n.host_ip.clone(),
+            prefix_len: n.prefix_len,
+            mac: n.mac.clone(),
+        });
+        if !deployment.environment.is_empty() || guest_net.is_some() {
+            let socket_dir = PathBuf::from(&self.config.socket_dir);
+            let iso_path = crate::runtime::cloud_init::build_cidata_iso(
+                instance_id,
+                deployment,
+                &[],
+                guest_net.as_ref(),
+                &socket_dir,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            client
+                .put_drive(&Drive {
+                    drive_id: "cidata".to_string(),
+                    path_on_host: iso_path.to_string_lossy().to_string(),
+                    is_root_device: false,
+                    is_read_only: true,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
+        // Attach the network interface (the tap already exists on the host).
+        if let Some(n) = net_alloc {
+            client
+                .put_network_interface(&NetworkInterface {
+                    iface_id: "eth0".to_string(),
+                    host_dev_name: n.tap_name.clone(),
+                    guest_mac: Some(n.mac.clone()),
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
         let (vcpus, mem_mib) = parse_resources(deployment);
         client
             .put_machine_config(&MachineConfig {
@@ -224,10 +358,14 @@ impl FirecrackerLifecycle {
         Ok(())
     }
 
-    /// Tear down one instance: graceful shutdown, kill the process, unlink the
-    /// socket + rootfs copy. Returns true if the instance is gone afterwards.
+    /// Tear down one instance: kill the socat forwarders, gracefully shut the
+    /// guest, kill the process, delete the host tap, and unlink the socket,
+    /// rootfs copy and cidata ISO. Returns true if the instance is gone after.
     async fn stop_vm(&self, instance_id: &str) -> bool {
         let socket_path = self.socket_path(instance_id);
+
+        // Drop the port-forwarders first so nothing still routes to the guest.
+        self.port_forwarders.lock().unwrap().remove(instance_id);
 
         // Best-effort graceful shutdown if the socket is still live.
         if Path::new(&socket_path).exists() {
@@ -238,20 +376,38 @@ impl FirecrackerLifecycle {
 
         let pid = self.pids.lock().unwrap().remove(instance_id);
         if let Some(pid) = pid {
-            let _ = self.kill_pid(pid);
+            self.kill_pid(pid).await;
         }
+
+        // Delete the host tap. Dropping the entry runs TapDevice::delete, which
+        // clears persistence so the kernel removes the interface. The VM process
+        // is already dead (kill_pid waited), so the tap's backend is free.
+        self.taps.lock().unwrap().remove(instance_id);
+
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
+        let _ = std::fs::remove_file(self.cidata_path(instance_id));
         !Path::new(&socket_path).exists()
     }
 
-    fn kill_pid(&self, pid: u32) -> std::io::Result<()> {
-        // SIGTERM the firecracker process; it exits when the guest is down or
-        // when its VMM thread is signalled.
-        std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .status()
-            .map(|_| ())
+    /// SIGTERM the firecracker process, then SIGKILL if it doesn't exit
+    /// promptly, and wait until it's actually gone. Waiting matters for the
+    /// tap: Firecracker holds the tap's backend fd while alive, so the tap
+    /// can only be removed once the process has fully exited.
+    async fn kill_pid(&self, pid: u32) {
+        let pid_i = pid as i32;
+        unsafe { libc::kill(pid_i, libc::SIGTERM) };
+        for i in 0..20 {
+            // kill(pid, 0) returns -1/ESRCH once the process is gone.
+            if unsafe { libc::kill(pid_i, 0) } != 0 {
+                return;
+            }
+            if i == 5 {
+                // Still alive after ~300ms — escalate.
+                unsafe { libc::kill(pid_i, libc::SIGKILL) };
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
     }
 
     /// Instance ids currently tracked for a deployment whose socket still
@@ -339,6 +495,18 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
 
     async fn remove_instance(&self, instance_id: String) -> bool {
         self.stop_vm(&instance_id).await
+    }
+
+    /// The guest IP is a pure function of the instance id (same allocation as
+    /// at boot), so TCP/HTTP health probes can reach the workload without any
+    /// persistent state. Returns `None` for instances without a network (no
+    /// published ports) — there's no reachable address to probe.
+    async fn instance_address(&self, instance_id: &str) -> Option<IpAddr> {
+        // Only instances that allocated a tap have a reachable guest IP.
+        if !self.taps.lock().unwrap().contains_key(instance_id) {
+            return None;
+        }
+        InstanceNet::for_instance(instance_id).guest_ip.parse().ok()
     }
 }
 
