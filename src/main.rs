@@ -50,6 +50,12 @@ async fn main() {
                 .long("context")
                 .short('c'),
         )
+        .arg(
+            Arg::new("config")
+                .required(false)
+                .help("Path to a config.toml to load (overrides RING_CONFIG_FILE and the default)")
+                .long("config"),
+        )
         .subcommand(commands::context::command_config())
         .subcommand(commands::init::command_config())
         .subcommand(
@@ -141,8 +147,10 @@ async fn main() {
         .map(|s| s.as_str())
         .unwrap_or("default");
 
+    let config_file = matches.get_one::<String>("config").map(|s| s.as_str());
+
     let subcommand_name = matches.subcommand();
-    let config = config::config::load_config(context);
+    let config = config::config::load_config(context, config_file);
     let client = reqwest::Client::builder()
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();

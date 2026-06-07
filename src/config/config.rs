@@ -5,7 +5,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use toml::de::Error as TomlError;
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Contexts {
@@ -76,32 +75,63 @@ pub(crate) fn get_config_dir() -> String {
     }
 }
 
-pub(crate) fn load_config(context_current: &str) -> Config {
-    let home_dir = get_config_dir();
+/// Resolve which `config.toml` to load. An explicit override wins: the
+/// `--config` flag (`explicit`) takes precedence over the `RING_CONFIG_FILE`
+/// env var, which in turn beats the conventional `{config_dir}/config.toml`.
+pub(crate) fn resolve_config_path(explicit: Option<&str>) -> String {
+    if let Some(path) = explicit {
+        return path.to_string();
+    }
 
-    let file = format!("{}/config.toml", home_dir);
+    if let Some(value) = env::var_os("RING_CONFIG_FILE") {
+        match value.into_string() {
+            Ok(path) => return path,
+            Err(_) => error!("RING_CONFIG_FILE contains invalid Unicode — ignoring it"),
+        }
+    }
+
+    format!("{}/config.toml", get_config_dir())
+}
+
+pub(crate) fn load_config(context_current: &str, config_file: Option<&str>) -> Config {
+    // An explicitly requested file (flag or env) must exist: silently falling
+    // back to the default would hide a typo in the path the user just gave us.
+    let explicit = config_file.is_some() || env::var_os("RING_CONFIG_FILE").is_some();
+    let file = resolve_config_path(config_file);
 
     debug!("load config file {}", file);
 
-    if fs::metadata(file.clone()).is_ok() {
-        let contents = match fs::read_to_string(file) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to read config file: {}", e);
-                return Config::default();
-            }
-        };
-        let contexts: Result<Contexts, TomlError> = toml::from_str(&contents);
+    if fs::metadata(&file).is_err() {
+        if explicit {
+            error!(
+                "Config file '{}' does not exist (set via --config or RING_CONFIG_FILE)",
+                file
+            );
+        } else {
+            debug!(
+                "No config file at {}, switching to default configuration",
+                file
+            );
+        }
+        return Config::default();
+    }
 
-        match contexts {
-            Ok(contexts) => {
-                if let Some(config) = pick_context(contexts, context_current) {
-                    return config;
-                }
+    let contents = match fs::read_to_string(&file) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to read config file '{}': {}", file, e);
+            return Config::default();
+        }
+    };
+
+    match toml::from_str::<Contexts>(&contents) {
+        Ok(contexts) => {
+            if let Some(config) = pick_context(contexts, context_current) {
+                return config;
             }
-            Err(err) => {
-                error!("Error while deserializing the TOML file : {}", err);
-            }
+        }
+        Err(err) => {
+            error!("Error while deserializing the TOML file : {}", err);
         }
     }
 
@@ -265,5 +295,52 @@ api.port = 3030
         // dev has current=true, prod is the named target. Named must win.
         let picked = pick_context(contexts, "prod").expect("prod should match");
         assert_eq!(picked.name, "prod");
+    }
+
+    // `resolve_config_path` reads RING_CONFIG_FILE, a process-global env var, so
+    // these tests must not run concurrently. A shared mutex serialises them.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_config_file_env<F: FnOnce()>(value: Option<&str>, f: F) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved = std::env::var("RING_CONFIG_FILE").ok();
+        match value {
+            Some(v) => unsafe { std::env::set_var("RING_CONFIG_FILE", v) },
+            None => unsafe { std::env::remove_var("RING_CONFIG_FILE") },
+        }
+        f();
+        match saved {
+            Some(v) => unsafe { std::env::set_var("RING_CONFIG_FILE", v) },
+            None => unsafe { std::env::remove_var("RING_CONFIG_FILE") },
+        }
+    }
+
+    #[test]
+    fn resolve_config_path_explicit_flag_wins_over_env() {
+        with_config_file_env(Some("/from/env.toml"), || {
+            let path = resolve_config_path(Some("/from/flag.toml"));
+            assert_eq!(path, "/from/flag.toml");
+        });
+    }
+
+    #[test]
+    fn resolve_config_path_uses_env_when_no_flag() {
+        with_config_file_env(Some("/from/env.toml"), || {
+            let path = resolve_config_path(None);
+            assert_eq!(path, "/from/env.toml");
+        });
+    }
+
+    #[test]
+    fn resolve_config_path_falls_back_to_default_when_no_override() {
+        with_config_file_env(None, || {
+            let path = resolve_config_path(None);
+            assert!(
+                path.ends_with("/config.toml"),
+                "default must point at config.toml inside the config dir, got {}",
+                path
+            );
+        });
     }
 }

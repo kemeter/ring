@@ -8,6 +8,7 @@ Variables Ring reads from the process environment. Set them in your shell, a sys
 | `RING_DATABASE_PATH` | No | `./ring.db` | Path to the SQLite database file. The path is created on first start; parent directory must exist and be writable |
 | `RING_DB_POOL_SIZE` | No | `5` | Maximum SQLite connections in the pool |
 | `RING_CONFIG_DIR` | No | `~/.config/kemeter/ring` | Where Ring reads `config.toml` and `auth.json`. Also the default location for Cloud Hypervisor firmware/sockets |
+| `RING_CONFIG_FILE` | No | `$RING_CONFIG_DIR/config.toml` | Path to a specific `config.toml` to load. Overrides **only** the config file, not `RING_CONFIG_DIR` (`auth.json`, firmware, etc. still come from the directory). The `--config` flag takes precedence over this. If set but the file is missing, Ring logs an error instead of silently using the default |
 | `RING_APPLY_TIMEOUT` | No | `300` | Timeout in seconds for a single deployment's `runtime.apply()` call inside one scheduler tick. **Does not** bound the whole scheduler cycle or the client-side `ring apply` command |
 | `RING_SCHEDULER_INTERVAL` | No | `10` | Scheduler tick interval in seconds. Overrides `[scheduler] interval` in `config.toml` |
 | `RING_VIRTIOFSD` | No | autodiscover | Path to the `virtiofsd` binary on the host. Ring tries `/usr/libexec/virtiofsd` then `/usr/lib/qemu/virtiofsd` if unset |
