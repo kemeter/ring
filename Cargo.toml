@@ -6,6 +6,7 @@ name = "ring-server"
 version = "0.10.0-dev"
 authors = ["Mlanawo Mbechezi mlanawo@mbechezi.kemeter.io"]
 edition = "2024"
+license = "MIT"
 
 [[bin]]
 name = "ring"

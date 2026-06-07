@@ -31,14 +31,15 @@ ring login --username admin --password changeme
 ring apply -f examples/nginx.yaml
 ```
 
-See [Installation](documentation/getting-started/installation.md) for prerequisites and [Your first deployment](documentation/getting-started/first-deployment.md) for a full walkthrough.
+See [Install and run](documentation/tutorials/install-and-run.md) for prerequisites and [Your first deployment](documentation/tutorials/first-deployment.md) for a full walkthrough.
 
 ## Documentation
 
-- [Getting started](documentation/getting-started/overview.md) — install, first deployment, managing deployments
-- [Guides](documentation/guides/) — health checks, rolling updates, secrets, networking, jobs
-- [Reference](documentation/reference/) — manifest schema, CLI commands, HTTP API
-- [Runtimes](documentation/runtimes/) — Docker, Cloud Hypervisor
+- [Documentation index](documentation/index.md) — start here
+- [Tutorials](documentation/tutorials/install-and-run.md) — install and run, first deployment
+- [How-to guides](documentation/how-to/configure-health-checks.md) — health checks, rolling updates, secrets, networking, jobs
+- [Concepts](documentation/concepts/architecture.md) — architecture, reconciliation, runtimes
+- [Reference](documentation/reference/manifest.md) — manifest schema, CLI commands, HTTP API, config
 
 ## License
 
