@@ -41,6 +41,12 @@ setup_fc() {
   RING_E2E_FC_SOCKET_DIR="${RING_E2E_FC_SOCKET_DIR:-$(mktemp -d -t ring-e2e-fc-sockets-XXXXXX)}"
   export RING_E2E_FC_KERNEL RING_E2E_FC_ROOTFS RING_E2E_FC_SOCKET_DIR
 
+  # Snapshot pre-existing ring-* taps so cleanup only reaps taps THIS run leaked
+  # (e.g. t4 SIGKILLs ring-server mid-run, leaving a tap with no graceful
+  # teardown) — never orphans from unrelated runs on a shared host.
+  RING_E2E_FC_TAPS_BEFORE=$(ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u)
+  export RING_E2E_FC_TAPS_BEFORE
+
   RING_EXTRA_CONFIG=$(cat <<EOF
 [server.runtime.firecracker]
 enabled = true
@@ -64,5 +70,20 @@ cleanup_fc() {
       pkill -f "$sock" 2>/dev/null || true
     done
     rm -rf "$RING_E2E_FC_SOCKET_DIR"
+  fi
+
+  # Reap any ring-* tap that appeared during this run but wasn't torn down
+  # (e.g. t4 kills ring-server mid-run). Only taps NOT present at setup, so a
+  # shared host's unrelated orphans are left alone. Best-effort: needs
+  # CAP_NET_ADMIN/root; `ip link delete` direct, then `sudo -n` for CI.
+  if [ -n "${RING_E2E_FC_TAPS_BEFORE+x}" ]; then
+    local now leaked
+    now=$(ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u)
+    leaked=$(comm -13 <(printf '%s\n' "$RING_E2E_FC_TAPS_BEFORE") <(printf '%s\n' "$now"))
+    for tap in $leaked; do
+      ip link delete "$tap" 2>/dev/null \
+        || sudo -n ip link delete "$tap" 2>/dev/null \
+        || true
+    done
   fi
 }

@@ -65,6 +65,12 @@ deployments:
       - { published: $PORT_B, target: 8080 }
 EOF
 
+# Record any pre-existing ring-* taps (orphans from earlier runs on a shared
+# host) so we can attribute the NEW tap to this deployment rather than picking
+# an unrelated one with `head -1`.
+taps_now() { ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u; }
+TAPS_BEFORE=$(taps_now)
+
 "$RING_BIN" apply --file "$FIXTURE"
 wait_deployment_status "ring-e2e" "ports-vm" "running" 60
 
@@ -73,15 +79,16 @@ DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "ports-vm")
 log "deployment id: $DEPLOYMENT_ID"
 
 # === tap interface created by Ring ===
-# The tap name is `ring-<hex>`, derived from the instance id. Assert at least
-# one ring-* tap exists and carries a 10.42.x.y/30 host IP.
+# The tap name is `ring-<hex>`, derived from the instance id. Take the tap that
+# APPEARED since the apply (set difference), so a pre-existing orphan can't be
+# mistaken for ours.
 TAP=""
 for _ in $(seq 1 20); do
-  TAP=$(ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | head -1 || true)
+  TAP=$(comm -13 <(printf '%s\n' "$TAPS_BEFORE") <(taps_now) | head -1 || true)
   [ -n "$TAP" ] && break
   sleep 0.5
 done
-[ -n "$TAP" ] || { ip -o link show | grep ring- >&2 || true; fail "no ring-* tap interface created"; }
+[ -n "$TAP" ] || { ip -o link show | grep ring- >&2 || true; fail "no new ring-* tap interface created"; }
 log "tap interface: $TAP"
 
 have_ip=false
@@ -110,7 +117,7 @@ log "$SOCAT_COUNT socat forwarders alive"
   "$RING_BIN" delete --namespace ring-e2e ports-vm >/dev/null 2>&1 || true
 
 for _ in $(seq 1 20); do
-  still_tap=$(ip -o link show 2>/dev/null | grep -c "$TAP" || true)
+  still_tap=$(taps_now | grep -cxF "$TAP" || true)
   still_socat=$( (pgrep -f "socat.*TCP4-LISTEN:($PORT_A|$PORT_B)" || true) | wc -l | tr -d ' ')
   [ "$still_tap" -eq 0 ] && [ "$still_socat" -eq 0 ] && break
   sleep 0.5
