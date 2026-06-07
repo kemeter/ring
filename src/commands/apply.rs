@@ -4,7 +4,6 @@ use crate::config::config::{Config, get_config_dir};
 use crate::exit_code;
 use crate::models::deployments::EnvValue;
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use log::{debug, info};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string_pretty};

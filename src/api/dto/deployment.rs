@@ -70,10 +70,9 @@ impl DeploymentOutput {
 
         let volumes: Vec<DeploymentVolume> = serde_json::from_str(&deployment.volumes)
             .unwrap_or_else(|e| {
-                log::warn!(
+                warn!(
                     "Failed to parse volumes for deployment {}: {}",
-                    deployment.name,
-                    e
+                    deployment.name, e
                 );
                 Vec::new()
             });

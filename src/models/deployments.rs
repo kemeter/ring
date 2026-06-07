@@ -385,10 +385,9 @@ fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, Env
             .map(|(k, v)| (k, EnvValue::Plain(v)))
             .collect(),
         Err(e) => {
-            log::warn!(
+            warn!(
                 "Failed to deserialize environment for deployment {}: {}",
-                deployment_id,
-                e
+                deployment_id, e
             );
             HashMap::new()
         }
@@ -412,12 +411,12 @@ impl From<DeploymentRow> for Deployment {
             kind: row.kind,
             replicas: row.replicas as u32,
             command: serde_json::from_str(&row.command).unwrap_or_else(|e| {
-                log::warn!("Failed to deserialize command for deployment {}: {}", id, e);
+                warn!("Failed to deserialize command for deployment {}: {}", id, e);
                 Vec::new()
             }),
             instances: vec![],
             labels: serde_json::from_str(&row.labels).unwrap_or_else(|e| {
-                log::warn!("Failed to deserialize labels for deployment {}: {}", id, e);
+                warn!("Failed to deserialize labels for deployment {}: {}", id, e);
                 HashMap::new()
             }),
             environment: parse_environment(&row.environment, &id),
@@ -427,10 +426,9 @@ impl From<DeploymentRow> for Deployment {
                 .filter(|s| !s.is_empty())
                 .map(|s| {
                     serde_json::from_str(&s).unwrap_or_else(|e| {
-                        log::warn!(
+                        warn!(
                             "Failed to deserialize health_checks for deployment {}: {}",
-                            id,
-                            e
+                            id, e
                         );
                         Vec::new()
                     })
@@ -446,7 +444,7 @@ impl From<DeploymentRow> for Deployment {
                 .filter(|s| !s.is_empty())
                 .map(|s| {
                     serde_json::from_str(&s).unwrap_or_else(|e| {
-                        log::warn!("Failed to deserialize ports for deployment {}: {}", id, e);
+                        warn!("Failed to deserialize ports for deployment {}: {}", id, e);
                         Vec::new()
                     })
                 })
@@ -458,11 +456,9 @@ impl From<DeploymentRow> for Deployment {
                 NetworkMode::from_str(s)
                     .map(|mode| NetworkConfig { mode })
                     .map_err(|e| {
-                        log::warn!(
+                        warn!(
                             "Failed to parse network_mode '{}' for deployment {}: {}",
-                            s,
-                            id,
-                            e
+                            s, id, e
                         );
                         e
                     })

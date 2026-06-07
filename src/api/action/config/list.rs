@@ -75,7 +75,7 @@ pub(crate) async fn list(
     let list_configs = match ConfigModel::find_all(&pool, filters).await {
         Ok(list) => list,
         Err(e) => {
-            log::error!("Failed to list configs: {}", e);
+            error!("Failed to list configs: {}", e);
             return Json(configs).into_response();
         }
     };

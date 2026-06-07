@@ -26,7 +26,7 @@ pub(crate) async fn audit(
     let entries = match audit_log::find_by_namespace(&pool, &name, params.limit).await {
         Ok(entries) => entries,
         Err(e) => {
-            log::error!("Failed to read audit log for namespace '{}': {}", name, e);
+            error!("Failed to read audit log for namespace '{}': {}", name, e);
             return Json(Vec::<AuditOutput>::new()).into_response();
         }
     };

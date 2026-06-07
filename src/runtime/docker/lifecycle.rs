@@ -1,9 +1,9 @@
 use super::container::{create_container, remove_container};
 use super::instances::list_instances;
-use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
-use crate::models::volume::ResolvedMount;
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::types::InstanceStatus;
+use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
+use crate::models::volume::ResolvedMount;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;

@@ -16,7 +16,7 @@ pub(crate) async fn list(State(pool): State<Db>, _auth: Auth) -> Response {
             (StatusCode::OK, Json(views)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to list webhooks: {}", e);
+            error!("Failed to list webhooks: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

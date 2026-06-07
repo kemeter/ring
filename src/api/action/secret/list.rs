@@ -68,7 +68,7 @@ pub(crate) async fn list(
     let secrets = match SecretModel::find_all(&pool, filters).await {
         Ok(list) => list,
         Err(e) => {
-            log::error!("Failed to list secrets: {}", e);
+            error!("Failed to list secrets: {}", e);
             return Json(Vec::<SecretOutput>::new()).into_response();
         }
     };

@@ -47,7 +47,7 @@ pub(crate) async fn get(
         )
             .into_response(),
         Err(e) => {
-            log::error!("Failed to get volume: {}", e);
+            error!("Failed to get volume: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Failed to get volume" })),

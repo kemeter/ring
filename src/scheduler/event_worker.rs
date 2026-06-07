@@ -32,8 +32,8 @@ pub(crate) async fn run(pool: SqlitePool, interval_secs: u64) {
     loop {
         match timeout(TICK_BUDGET, process_due(&pool)).await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => log::warn!("Event worker tick failed: {}", e),
-            Err(_) => log::warn!(
+            Ok(Err(e)) => warn!("Event worker tick failed: {}", e),
+            Err(_) => warn!(
                 "Event worker tick exceeded {}s budget; resuming next tick",
                 TICK_BUDGET.as_secs()
             ),
@@ -59,7 +59,7 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
     let subscribers = match webhook::subscribers_for(pool, &event.kind).await {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("Failed to load subscribers for {}: {}", event.kind, e);
+            warn!("Failed to load subscribers for {}: {}", event.kind, e);
             return; // leave pending; retried next tick without bumping attempts
         }
     };
@@ -86,11 +86,9 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
     let mut first_error: Option<String> = None;
     for (hook, result) in subscribers.iter().zip(results) {
         if let Err(e) = result {
-            log::warn!(
+            warn!(
                 "Webhook {} delivery to {} failed: {}",
-                event.kind,
-                hook.url,
-                e
+                event.kind, hook.url, e
             );
             first_error.get_or_insert(e);
         }
@@ -104,12 +102,9 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
             let attempts = event.attempts + 1;
             if attempts >= MAX_ATTEMPTS {
                 let _ = event_queue::mark_dead(pool, &event.id, attempts, &err).await;
-                log::warn!(
+                warn!(
                     "Event {} ({}) dead-lettered after {} attempts: {}",
-                    event.id,
-                    event.kind,
-                    attempts,
-                    err
+                    event.id, event.kind, attempts, err
                 );
             } else {
                 let _ = event_queue::reschedule(pool, &event.id, attempts, &err).await;

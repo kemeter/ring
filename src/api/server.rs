@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use axum_macros::FromRef;
-use log::{error, info, warn};
 use sqlx::SqlitePool;
 use std::time::Duration;
 

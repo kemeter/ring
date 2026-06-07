@@ -15,7 +15,7 @@ pub(crate) async fn delete(Path(id): Path<String>, State(pool): State<Db>, auth:
             return problem_response(StatusCode::NOT_FOUND, "Not Found", "webhook not found");
         }
         Err(e) => {
-            log::error!("Failed to look up webhook: {}", e);
+            error!("Failed to look up webhook: {}", e);
             return problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",
@@ -38,7 +38,7 @@ pub(crate) async fn delete(Path(id): Path<String>, State(pool): State<Db>, auth:
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            log::error!("Failed to delete webhook: {}", e);
+            error!("Failed to delete webhook: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

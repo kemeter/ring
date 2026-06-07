@@ -1,10 +1,10 @@
 use super::{DockerImage, ImagePullPolicy, ImageReference, parse_image_reference, tiny_id};
+use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
 use crate::models::health_check::HealthCheck;
 use crate::models::volume::ResolvedMount;
-use crate::hypervisor::error::RuntimeError;
 use bollard::{
     Docker,
     auth::DockerCredentials,

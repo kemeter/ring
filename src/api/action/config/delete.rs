@@ -14,7 +14,7 @@ pub(crate) async fn delete(Path(id): Path<String>, State(pool): State<Db>, auth:
         Ok(Some(c)) => c,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(err) => {
-            log::error!("Failed to look up configuration {}: {}", id, err);
+            error!("Failed to look up configuration {}: {}", id, err);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
@@ -27,7 +27,7 @@ pub(crate) async fn delete(Path(id): Path<String>, State(pool): State<Db>, auth:
 
     let result = ConfigModel::delete(&pool, &id).await;
     if let Err(ref err) = result {
-        log::error!("Failed to delete configuration with ID {}: {}", id, err);
+        error!("Failed to delete configuration with ID {}: {}", id, err);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 

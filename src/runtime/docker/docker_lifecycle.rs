@@ -1,8 +1,8 @@
 use crate::api::dto::stats::InstanceStatsOutput;
+use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
 use crate::models::volume::ResolvedMount;
-use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use async_trait::async_trait;
 use axum::response::sse::Event;
@@ -172,7 +172,7 @@ impl RuntimeLifecycle for DockerLifecycle {
                     });
                 }
                 Err(e) => {
-                    log::warn!("Failed to get stats for instance {}: {}", id, e);
+                    warn!("Failed to get stats for instance {}: {}", id, e);
                 }
             }
         }

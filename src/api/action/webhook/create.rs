@@ -95,7 +95,7 @@ pub(crate) async fn create(
             (StatusCode::CREATED, Json(output)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to create webhook: {}", e);
+            error!("Failed to create webhook: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

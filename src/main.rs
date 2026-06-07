@@ -5,8 +5,7 @@ use std::env;
 use std::process::Command as BaseCommand;
 
 #[macro_use]
-extern crate log;
-extern crate env_logger;
+extern crate tracing;
 mod commands {
     pub(crate) mod apply;
     pub(crate) mod context;
@@ -107,7 +106,12 @@ mod fixtures;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let app = Command::new("ring")
         .version(env!("CARGO_PKG_VERSION"))

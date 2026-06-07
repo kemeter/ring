@@ -13,18 +13,18 @@
 //! presence on disk (its `.sock`) is the source of truth for "is it running".
 
 use crate::config::server::FirecrackerConfig;
-use crate::models::deployments::{Deployment, DeploymentStatus};
-use crate::models::volume::ResolvedMount;
 use crate::hypervisor::cloud_init::GuestNet;
-use crate::runtime::docker::tiny_id;
 use crate::hypervisor::error::RuntimeError;
-use crate::runtime::firecracker::client::{
-    BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
-};
 use crate::hypervisor::host_net::InstanceNet;
 use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::tap::TapDevice;
+use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::volume::ResolvedMount;
+use crate::runtime::docker::tiny_id;
+use crate::runtime::firecracker::client::{
+    BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::IpAddr;

@@ -36,7 +36,7 @@ pub(crate) async fn find_owned(pool: &Db, id: &str, user_id: &str) -> Result<Tok
             "token not found",
         )),
         Err(e) => {
-            log::error!("Failed to look up token: {}", e);
+            error!("Failed to look up token: {}", e);
             Err(problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

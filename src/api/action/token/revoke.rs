@@ -30,7 +30,7 @@ pub(crate) async fn revoke(Path(id): Path<String>, State(pool): State<Db>, auth:
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            log::error!("Failed to revoke token: {}", e);
+            error!("Failed to revoke token: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

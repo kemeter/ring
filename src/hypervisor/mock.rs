@@ -1,8 +1,8 @@
 use crate::api::dto::stats::InstanceStatsOutput;
+use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::ResolvedMount;
-use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle};
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use std::convert::Infallible;
