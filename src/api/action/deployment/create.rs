@@ -32,10 +32,10 @@ fn default_replicas() -> u32 {
 
 fn validate_runtime(runtime: &str) -> Result<(), ValidationError> {
     match runtime {
-        "docker" | "podman" | "cloud-hypervisor" | "firecracker" => Ok(()),
+        "docker" | "podman" | "containerd" | "cloud-hypervisor" | "firecracker" => Ok(()),
         _ => Err(
             ValidationError::new("deployment.runtime.unsupported").with_message(Cow::Borrowed(
-                "runtime must be one of: docker, podman, cloud-hypervisor, firecracker",
+                "runtime must be one of: docker, podman, containerd, cloud-hypervisor, firecracker",
             )),
         ),
     }

@@ -2,6 +2,7 @@ use crate::api::server as ApiServer;
 use crate::cli::style;
 use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
+use crate::runtime::containerd::{ContainerdLifecycle, ContainerdRuntimeConfig};
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
 use crate::runtime::firecracker::{FirecrackerLifecycle, FirecrackerRuntimeConfig};
@@ -137,6 +138,29 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         }
     } else {
         info!("Podman runtime disabled in config, skipping");
+    }
+
+    // containerd: enabled in config → verify the gRPC socket answers a Version
+    // round-trip, else fail fast. Unlike Podman, containerd speaks its own native
+    // API (no Docker daemon in between), so it has its own ContainerdLifecycle
+    // registered under the "containerd" key.
+    if configuration.server.runtime.containerd.enabled {
+        let containerd_config =
+            ContainerdRuntimeConfig::from_user_config(&configuration.server.runtime.containerd);
+        match ContainerdLifecycle::connect_and_verify(containerd_config).await {
+            Ok(containerd) => {
+                runtimes_map.insert("containerd".to_string(), Arc::new(containerd));
+            }
+            Err(e) => {
+                error!(
+                    "Refusing to start: containerd runtime is enabled in config but unreachable: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        info!("containerd runtime disabled in config, skipping");
     }
 
     // Cloud Hypervisor: enabled in config → its binary must resolve, else fail
