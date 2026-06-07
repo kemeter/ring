@@ -91,6 +91,16 @@ export interface DeploymentResources {
 /** Either a literal string or a `{ secretRef: "name" }` reference. */
 export type EnvValue = string | { secretRef: string };
 
+/**
+ * One running instance of a deployment. Mirrors `DeploymentInstance` from
+ * `src/api/dto/deployment.rs`: `address` is the routable guest IP, omitted
+ * when the instance has no reachable address (e.g. no published ports).
+ */
+export interface DeploymentInstance {
+  id: string;
+  address?: string;
+}
+
 export interface DeploymentDetail extends Deployment {
   created_at: string;
   updated_at: string;
@@ -99,7 +109,7 @@ export interface DeploymentDetail extends Deployment {
   command: string[];
   ports: DeploymentPort[];
   labels: Record<string, string>;
-  instances: string[];
+  instances: DeploymentInstance[];
   environment: Record<string, EnvValue>;
   volumes: DeploymentVolume[];
   health_checks: HealthCheck[];

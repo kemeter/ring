@@ -110,7 +110,10 @@ pub(crate) async fn execute(
                 println!("INSTANCES");
                 println!("---------");
                 for instance in deployment.instances {
-                    println!("  {}", instance);
+                    match &instance.address {
+                        Some(addr) => println!("  {} ({})", instance.id, addr),
+                        None => println!("  {}", instance.id),
+                    }
                 }
                 println!();
             }

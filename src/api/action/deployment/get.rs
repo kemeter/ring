@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::{Json, extract::Path, response::IntoResponse};
 
 use crate::api::auth::{Auth, require_namespace};
-use crate::api::dto::deployment::DeploymentOutput;
+use crate::api::dto::deployment::{DeploymentInstance, DeploymentOutput};
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use axum::http::StatusCode;
@@ -22,7 +22,19 @@ pub(crate) async fn get(
             }
             let mut output = DeploymentOutput::from_to_model(deployment.clone());
             if let Some(rt) = runtimes.get(&deployment.runtime) {
-                output.instances = rt.list_instances(deployment.id, "running").await;
+                let ids = rt.list_instances(deployment.id, "running").await;
+                let mut instances = Vec::with_capacity(ids.len());
+                for instance_id in ids {
+                    let address = rt
+                        .instance_address(&instance_id)
+                        .await
+                        .map(|ip| ip.to_string());
+                    instances.push(DeploymentInstance {
+                        id: instance_id,
+                        address,
+                    });
+                }
+                output.instances = instances;
             }
             Json(output).into_response()
         }

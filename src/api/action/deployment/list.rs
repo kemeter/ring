@@ -9,7 +9,7 @@ use serde::Deserialize;
 use url::form_urlencoded::parse;
 
 use crate::api::auth::{Auth, filter_by_namespace};
-use crate::api::dto::deployment::DeploymentOutput;
+use crate::api::dto::deployment::{DeploymentInstance, DeploymentOutput};
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
 use http::StatusCode;
@@ -133,7 +133,19 @@ pub(crate) async fn list(
         let mut output = DeploymentOutput::from_to_model(deployment);
 
         if let Some(rt) = runtimes.get(&runtime_name) {
-            output.instances = rt.list_instances(id, "running").await;
+            let ids = rt.list_instances(id, "running").await;
+            let mut instances = Vec::with_capacity(ids.len());
+            for instance_id in ids {
+                let address = rt
+                    .instance_address(&instance_id)
+                    .await
+                    .map(|ip| ip.to_string());
+                instances.push(DeploymentInstance {
+                    id: instance_id,
+                    address,
+                });
+            }
+            output.instances = instances;
         }
 
         deployments.push(output);
