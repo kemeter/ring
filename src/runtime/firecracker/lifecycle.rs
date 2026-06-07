@@ -117,6 +117,13 @@ impl FirecrackerLifecycle {
         format!("{}/{}.ext4", self.config.socket_dir, instance_id)
     }
 
+    /// Per-instance serial console log. Firecracker writes the guest's ttyS0
+    /// (kernel + init + service output) to the process stdout; we persist it so
+    /// boot/runtime issues are diagnosable and log shippers can tail it.
+    fn console_log_path(&self, instance_id: &str) -> String {
+        format!("{}/{}.console.log", self.config.socket_dir, instance_id)
+    }
+
     /// Boot one worker microVM. Returns the new instance id on success.
     async fn start_vm(&self, deployment: &Deployment) -> Result<String, RuntimeError> {
         // Pre-flight: kernel + base rootfs must exist before we spawn anything.
@@ -153,12 +160,29 @@ impl FirecrackerLifecycle {
             ))
         })?;
 
+        // Persist the guest serial console (stdout) to a per-instance file so
+        // boot/runtime issues are diagnosable and log shippers can tail it.
+        // Falls back to null if the file can't be opened — never block boot on
+        // logging. stderr (firecracker's own diagnostics) shares the same file.
+        let console_log = self.console_log_path(&instance_id);
+        let (out, err): (std::process::Stdio, std::process::Stdio) =
+            match std::fs::File::create(&console_log) {
+                Ok(f) => match f.try_clone() {
+                    Ok(f2) => (f.into(), f2.into()),
+                    Err(_) => (f.into(), std::process::Stdio::null()),
+                },
+                Err(e) => {
+                    warn!("could not open console log {}: {}", console_log, e);
+                    (std::process::Stdio::null(), std::process::Stdio::null())
+                }
+            };
+
         // Spawn the firecracker process bound to its API socket.
         let child = std::process::Command::new(&self.config.binary_path)
             .arg("--api-sock")
             .arg(&socket_path)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(out)
+            .stderr(err)
             .spawn()
             .map_err(|e| {
                 RuntimeError::VmStartFailed(format!("could not spawn firecracker: {}", e))
@@ -374,19 +398,38 @@ impl FirecrackerLifecycle {
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
         }
 
-        let pid = self.pids.lock().unwrap().remove(instance_id);
+        // Kill the firecracker process. The PID lives in `pids` for instances
+        // this process booted; after a ring-server restart the map is empty, so
+        // fall back to finding the process by its `--api-sock` argument in
+        // /proc. Firecracker has no remote "delete VM" — killing the process is
+        // the only way to stop it — so this fallback is what makes teardown
+        // survive a restart.
+        let pid = self
+            .pids
+            .lock()
+            .unwrap()
+            .remove(instance_id)
+            .or_else(|| find_pid_by_socket(&socket_path));
         if let Some(pid) = pid {
             self.kill_pid(pid).await;
         }
 
-        // Delete the host tap. Dropping the entry runs TapDevice::delete, which
-        // clears persistence so the kernel removes the interface. The VM process
-        // is already dead (kill_pid waited), so the tap's backend is free.
-        self.taps.lock().unwrap().remove(instance_id);
+        // Delete the host tap. For instances we booted it's in `taps` and its
+        // Drop runs TapDevice::delete. After a restart the map is empty, so
+        // re-derive the tap from the instance id (the name is a pure function of
+        // it) and delete it directly — otherwise the interface leaks on the
+        // host. The VM process is already dead (kill_pid waited), so the tap's
+        // backend is free. Harmless if the instance never had a tap: delete just
+        // fails to re-attach and no-ops.
+        if self.taps.lock().unwrap().remove(instance_id).is_none() {
+            let name = InstanceNet::for_instance(instance_id).tap_name;
+            TapDevice::adopt(&name).delete();
+        }
 
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
         let _ = std::fs::remove_file(self.cidata_path(instance_id));
+        let _ = std::fs::remove_file(self.console_log_path(instance_id));
         !Path::new(&socket_path).exists()
     }
 
@@ -410,18 +453,27 @@ impl FirecrackerLifecycle {
         }
     }
 
-    /// Instance ids currently tracked for a deployment whose socket still
-    /// exists. The socket file is the on-disk source of truth for "running".
+    /// Instance ids of a deployment whose API socket still exists on disk.
+    /// The `.sock` file is the source of truth for "running", scanned from
+    /// `socket_dir` rather than the in-memory `pids` map — so instances survive
+    /// a `ring-server` restart (after which the maps are empty but the VMs, and
+    /// their sockets, are still there). Mirrors Cloud Hypervisor's disk scan.
     fn scan_instances(&self, deployment_id: &str) -> Vec<String> {
         let prefix = format!("{}-", deployment_id);
-        self.pids
-            .lock()
-            .unwrap()
-            .keys()
-            .filter(|id| id.starts_with(&prefix))
-            .filter(|id| Path::new(&self.socket_path(id)).exists())
-            .cloned()
-            .collect()
+        let mut instances = Vec::new();
+        let entries = match std::fs::read_dir(&self.config.socket_dir) {
+            Ok(e) => e,
+            Err(_) => return instances,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(id) = name.strip_suffix(".sock")
+                && id.starts_with(&prefix)
+            {
+                instances.push(id.to_string());
+            }
+        }
+        instances
     }
 
     async fn handle_worker_deployment(&self, mut deployment: Deployment) -> Deployment {
@@ -455,12 +507,74 @@ impl FirecrackerLifecycle {
     }
 }
 
-/// Parse vCPU count + memory (MiB) from the deployment's resource limits.
-/// Defaults to 1 vCPU / 128 MiB — the same minimal microVM the spike booted.
-fn parse_resources(_deployment: &Deployment) -> (u32, u32) {
-    // TODO(firecracker): wire deployment.resources.limits.{cpu,memory} like CH
-    // does via runtime::resources once the boot path is validated end-to-end.
-    (1, 128)
+/// Find the PID of the `firecracker` process bound to `socket_path`, by scanning
+/// `/proc/<pid>/cmdline` for one whose `--api-sock` argument matches. Used as a
+/// teardown fallback after a `ring-server` restart, when the PID is no longer in
+/// the in-memory map but the VM (and its socket) is still alive. Returns `None`
+/// if no live process references that socket (already gone, or never existed).
+fn find_pid_by_socket(socket_path: &str) -> Option<u32> {
+    for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+        // Only numeric entries are processes.
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{}/cmdline", pid)) else {
+            continue;
+        };
+        if cmdline_matches_socket(&cmdline, socket_path) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Does this `/proc/<pid>/cmdline` (NUL-separated argv) belong to a
+/// `firecracker` process bound to `socket_path`? True iff argv[0] ends with
+/// `firecracker` and some later argument equals the socket path exactly — the
+/// exact match stops `/x/a.sock` from matching `/x/a.sock.bak`.
+fn cmdline_matches_socket(cmdline: &[u8], socket_path: &str) -> bool {
+    let mut args = cmdline.split(|&b| b == 0);
+    if args.next().map(|a0| a0.ends_with(b"firecracker")) != Some(true) {
+        return false;
+    }
+    args.any(|arg| arg == socket_path.as_bytes())
+}
+
+/// Parse vCPU count + memory (MiB) from the deployment's resource limits
+/// (falling back to requests). vCPUs round up from a fractional CPU quantity to
+/// at least 1; memory falls back to a sane floor so a microVM has room to run a
+/// real service rather than OOMing at boot.
+fn parse_resources(deployment: &Deployment) -> (u32, u32) {
+    use crate::models::deployments::{parse_cpu_string, parse_memory_string};
+
+    // Minimum that boots systemd + a typical service without OOM. 128 MiB is
+    // enough for the kernel + init but starves php-fpm/most runtimes.
+    const DEFAULT_MEM_MIB: u32 = 512;
+    const DEFAULT_VCPUS: u32 = 1;
+
+    let spec = deployment
+        .resources
+        .as_ref()
+        .and_then(|r| r.limits.as_ref().or(r.requests.as_ref()));
+
+    let mem_mib = spec
+        .and_then(|s| s.memory.as_ref())
+        .and_then(|m| parse_memory_string(m).ok())
+        .map(|bytes| (bytes / (1024 * 1024)).max(1) as u32)
+        .filter(|&m| m >= 64)
+        .unwrap_or(DEFAULT_MEM_MIB);
+
+    // parse_cpu_string returns nano-CPUs (1_000_000_000 = 1 vCPU); round up to
+    // whole vCPUs since Firecracker can't allocate fractional cores.
+    const NANO_PER_VCPU: i64 = 1_000_000_000;
+    let vcpus = spec
+        .and_then(|s| s.cpu.as_ref())
+        .and_then(|c| parse_cpu_string(c).ok())
+        .map(|nanocpu| ((nanocpu + NANO_PER_VCPU - 1) / NANO_PER_VCPU).max(1) as u32)
+        .unwrap_or(DEFAULT_VCPUS);
+
+    (vcpus, mem_mib)
 }
 
 #[async_trait]
@@ -502,17 +616,91 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
     /// persistent state. Returns `None` for instances without a network (no
     /// published ports) — there's no reachable address to probe.
     async fn instance_address(&self, instance_id: &str) -> Option<IpAddr> {
-        // Only instances that allocated a tap have a reachable guest IP.
-        if !self.taps.lock().unwrap().contains_key(instance_id) {
+        // An instance has a reachable IP iff it allocated a tap. That's tracked
+        // in `taps` for instances we booted; after a ring-server restart the map
+        // is empty, so fall back to checking the host for the tap interface
+        // (its name is a pure function of the instance id). Either source means
+        // "has a network" → return the deterministic guest IP.
+        let net = InstanceNet::for_instance(instance_id);
+        let has_tap =
+            self.taps.lock().unwrap().contains_key(instance_id) || TapDevice::exists(&net.tap_name);
+        if !has_tap {
             return None;
         }
-        InstanceNet::for_instance(instance_id).guest_ip.parse().ok()
+        net.guest_ip.parse().ok()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scan_instances_reads_disk_not_memory() {
+        // Post-restart simulation: sockets exist on disk, `pids` is empty.
+        // scan_instances must still find the instances (it scans socket_dir),
+        // otherwise a restarted ring-server would lose track of running VMs.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ring-fc-scan-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = FirecrackerRuntimeConfig {
+            socket_dir: dir.to_string_lossy().to_string(),
+            ..FirecrackerRuntimeConfig::default()
+        };
+        let lc = FirecrackerLifecycle::new(cfg);
+
+        // Two sockets for our deployment, one for another, plus noise.
+        for f in [
+            "dep-1-aaa.sock",
+            "dep-1-bbb.sock",
+            "dep-2-ccc.sock",
+            "dep-1-aaa.ext4", // not a socket
+            "dep-1.txt",
+        ] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+
+        // pids is empty (as after a restart).
+        assert!(lc.pids.lock().unwrap().is_empty());
+
+        let mut found = lc.scan_instances("dep-1");
+        found.sort();
+        assert_eq!(
+            found,
+            vec!["dep-1-aaa".to_string(), "dep-1-bbb".to_string()]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cmdline_matches_socket_exact_arg() {
+        let sock = "/run/fc/dep-1-aaa.sock";
+        // argv[0]=firecracker, then --api-sock <sock>
+        let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert!(cmdline_matches_socket(cmd, sock));
+    }
+
+    #[test]
+    fn cmdline_matches_socket_rejects_prefix_collision() {
+        // A different VM whose socket merely starts with ours must not match.
+        let sock = "/run/fc/dep-1-aaa.sock";
+        let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock.bak\0";
+        assert!(!cmdline_matches_socket(cmd, sock));
+    }
+
+    #[test]
+    fn cmdline_matches_socket_rejects_non_firecracker() {
+        // Right socket arg, wrong process — must not match.
+        let sock = "/run/fc/dep-1-aaa.sock";
+        let cmd = b"/usr/bin/socat\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert!(!cmdline_matches_socket(cmd, sock));
+    }
 
     #[test]
     fn default_config_uses_config_dir_paths() {
