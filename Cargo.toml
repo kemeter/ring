@@ -68,6 +68,22 @@ mime_guess = "2"
 anyhow = "1"
 caps = "0.5.6"
 nix = { version = "0.31.3", features = ["signal"] }
+# containerd runtime: native gRPC over containerd's Unix socket. We drive the
+# raw containerd API (images, content, snapshots, containers, tasks) rather
+# than going through Docker — there is no daemon in between. `containerd-client`
+# carries the official prost/tonic bindings for that API generated from
+# containerd's own .proto, and its `connect` helper dials the Unix socket.
+# tonic/prost/prost-types are pinned to the same versions it uses so the
+# generated types and our hand-written code agree on one set of crates.
+containerd-client = "0.9"
+# Kept on the same tonic/prost majors that containerd-client 0.9 uses, so the
+# generated containerd types and our hand-written gRPC code share one copy of
+# each crate (a second copy would stop the Request/message types unifying and
+# every round-trip would fail to typecheck).
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tokio-stream = "0.1"
 
 [dev-dependencies]
 axum-test = "17.3.0"
