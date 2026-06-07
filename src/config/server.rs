@@ -48,6 +48,8 @@ pub(crate) struct RuntimesConfig {
     #[serde(default)]
     pub(crate) podman: PodmanConfig,
     #[serde(default)]
+    pub(crate) containerd: ContainerdConfig,
+    #[serde(default)]
     pub(crate) cloud_hypervisor: CloudHypervisorConfig,
     #[serde(default)]
     pub(crate) firecracker: FirecrackerConfig,
@@ -105,6 +107,45 @@ impl Default for PodmanConfig {
         PodmanConfig {
             enabled: false,
             host: default_podman_host(),
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct ContainerdConfig {
+    /// Whether to register the containerd runtime. Off by default (runtimes
+    /// are opt-in). Unlike Podman, containerd speaks its own native gRPC API,
+    /// so Ring drives it directly with no Docker daemon in between. When `true`
+    /// and the socket doesn't answer at startup, Ring fails fast.
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// Path to the containerd gRPC Unix socket. Defaults to the stock location
+    /// used by `containerd`, k3s and RKE2.
+    #[serde(default = "default_containerd_socket")]
+    pub(crate) socket: String,
+    /// containerd metadata namespace under which Ring creates its images,
+    /// snapshots, containers and tasks. This is containerd's own partition
+    /// concept (akin to `k8s.io`, `moby`, `default`) and is unrelated to a Ring
+    /// deployment namespace — keeping Ring's objects under their own namespace
+    /// avoids colliding with Kubernetes or Docker on a shared host.
+    #[serde(default = "default_containerd_namespace")]
+    pub(crate) namespace: String,
+}
+
+fn default_containerd_socket() -> String {
+    "/run/containerd/containerd.sock".to_string()
+}
+
+fn default_containerd_namespace() -> String {
+    "ring".to_string()
+}
+
+impl Default for ContainerdConfig {
+    fn default() -> Self {
+        ContainerdConfig {
+            enabled: false,
+            socket: default_containerd_socket(),
+            namespace: default_containerd_namespace(),
         }
     }
 }
