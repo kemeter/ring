@@ -4,7 +4,7 @@ use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
 use crate::runtime::firecracker::{FirecrackerLifecycle, FirecrackerRuntimeConfig};
-use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use clap::ArgMatches;
 use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;

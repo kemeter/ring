@@ -257,7 +257,7 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
                         )),
                     );
                 };
-                crate::runtime::health_probes::tcp_probe(ip, *port, timeout).await
+                crate::hypervisor::health_probes::tcp_probe(ip, *port, timeout).await
             }
             HealthCheck::Http { url, .. } => {
                 let Some(ip) = self.instance_address(instance_id).await else {
@@ -269,7 +269,7 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
                         )),
                     );
                 };
-                crate::runtime::health_probes::http_probe(ip, url, timeout).await
+                crate::hypervisor::health_probes::http_probe(ip, url, timeout).await
             }
             HealthCheck::Command { command, .. } => {
                 self.execute_command_probe(instance_id, command).await

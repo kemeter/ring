@@ -22,7 +22,7 @@
 //! rules; documented in ROADMAP.
 
 use crate::models::deployments::PortProtocol;
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use std::net::TcpListener;
 use std::process::Stdio;
 use tokio::process::{Child, Command};

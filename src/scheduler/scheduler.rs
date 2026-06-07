@@ -7,7 +7,7 @@ use crate::models::health_check::HealthCheckStatus;
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::models::volume::ResolvedMount;
-use crate::runtime::lifecycle_trait::RuntimeLifecycle;
+use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;

@@ -45,16 +45,23 @@ mod scheduler {
 
 mod runtime {
     pub(crate) mod cloud_hypervisor;
-    pub(crate) mod cloud_init;
     pub(crate) mod docker;
-    pub(crate) mod error;
     pub(crate) mod firecracker;
+    pub(crate) mod podman;
+}
+
+/// Host-side plumbing shared across the VM runtimes (Cloud Hypervisor,
+/// Firecracker) plus the common runtime contract (lifecycle trait, error
+/// types, health probes, resource checks). Kept out of `runtime` so that
+/// `runtime` holds only the concrete runtime implementations.
+mod hypervisor {
+    pub(crate) mod cloud_init;
+    pub(crate) mod error;
     pub(crate) mod health_probes;
     pub(crate) mod host_net;
     pub(crate) mod lifecycle_trait;
     #[cfg(test)]
     pub(crate) mod mock;
-    pub(crate) mod podman;
     pub(crate) mod port_forwarder;
     pub(crate) mod resources;
     pub(crate) mod tap;

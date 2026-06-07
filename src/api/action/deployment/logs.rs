@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 use crate::api::auth::{Auth, AuthSource, require_namespace};
 use crate::api::server::{Db, RuntimeMap};
 use crate::models::deployments;
-use crate::runtime::lifecycle_trait::Log;
+use crate::hypervisor::lifecycle_trait::Log;
 
 /// Scope string used to bind a stream ticket to a specific deployment's log
 /// endpoint. Keep this in sync with the client that mints the ticket.

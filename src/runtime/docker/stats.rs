@@ -4,7 +4,7 @@ use bollard::query_parameters::StatsOptionsBuilder;
 use futures::StreamExt;
 
 use crate::api::dto::stats::*;
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 
 pub(crate) async fn fetch_container_stats(
     docker: &Docker,

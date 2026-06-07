@@ -79,7 +79,7 @@ pub(crate) type Db = SqlitePool;
 pub(crate) type RuntimeMap = std::sync::Arc<
     std::collections::HashMap<
         String,
-        std::sync::Arc<dyn crate::runtime::lifecycle_trait::RuntimeLifecycle>,
+        std::sync::Arc<dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle>,
     >,
 >;
 

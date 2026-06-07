@@ -16,7 +16,7 @@
 //! time-slices), whereas memory overcommit is what actually crashes workloads.
 
 use crate::models::deployments::{Deployment, parse_memory_string};
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use sysinfo::System;
 
 /// The memory figure we admit against, in bytes. `requests.memory` is the

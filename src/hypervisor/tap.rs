@@ -19,10 +19,10 @@
 //! to grant it.
 //!
 //! The parameters (tap name, host IP, prefix) come from
-//! [`crate::runtime::host_net::InstanceNet`], so allocation stays a pure
+//! [`crate::hypervisor::host_net::InstanceNet`], so allocation stays a pure
 //! function of the instance id and two replicas never collide.
 
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use std::fs::OpenOptions;
 use std::io;
 use std::mem;

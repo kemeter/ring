@@ -4,7 +4,7 @@ use crate::models::deployments::{
 };
 use crate::models::health_check::HealthCheck;
 use crate::models::volume::ResolvedMount;
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use bollard::{
     Docker,
     auth::DockerCredentials,
@@ -351,7 +351,7 @@ pub(crate) async fn create_container(
     // if the host can't hold the requested memory, the container would only get
     // OOM-killed at runtime (or, with no limit, take the host down with it).
     // Fail here with an actionable message instead.
-    crate::runtime::resources::check_host_memory(deployment)?;
+    crate::hypervisor::resources::check_host_memory(deployment)?;
 
     let (name, reference) = parse_image_reference(&deployment.image);
 
