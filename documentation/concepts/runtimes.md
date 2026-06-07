@@ -1,6 +1,6 @@
 # Runtimes
 
-Ring is a state engine; the runtime is the thing that actually starts your workload. Four implementations sit behind the same trait: **Docker** (production-ready), **Podman** (Docker-compatible, rootless-friendly), **Cloud Hypervisor** (alpha), and **Firecracker** (experimental). A deployment picks one with `runtime: docker`, `runtime: podman`, `runtime: cloud-hypervisor`, or `runtime: firecracker`.
+Ring is a state engine; the runtime is the thing that actually starts your workload. Five implementations sit behind the same trait: **Docker** (production-ready), **Podman** (Docker-compatible, rootless-friendly), **containerd** (the OCI runtime under Docker/Kubernetes, driven directly over gRPC), **Cloud Hypervisor** (alpha), and **Firecracker** (experimental). A deployment picks one with `runtime: docker`, `runtime: podman`, `runtime: containerd`, `runtime: cloud-hypervisor`, or `runtime: firecracker`.
 
 This page covers the trade-offs and the mental model for each. For step-by-step setup, see the how-to guides; for exact manifest semantics, see the [manifest reference](/documentation/reference/manifest).
 
@@ -13,24 +13,24 @@ Runtimes are **opt-in**: none is enabled by default. You turn one on in `config.
 enabled = true
 ```
 
-Enable just the runtimes a host actually runs — Docker-only, Podman-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
+Enable just the runtimes a host actually runs — Docker-only, Podman-only, containerd-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
 
 ## Quick comparison
 
-| Aspect | Docker | Podman | Cloud Hypervisor | Firecracker |
-|---|---|---|---|---|
-| Status | Production | Beta | Alpha | Experimental |
-| Isolation | Linux namespaces + cgroups | Linux namespaces + cgroups (rootless by default) | Full kernel, KVM-backed VM | Full kernel, KVM-backed microVM |
-| Boot time | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) | ~1 s (minimal microVM) |
-| Memory overhead per workload | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) | ~5–50 MB (minimal device model) |
-| Image format | Docker image (`nginx:1.25`) | Docker/OCI image | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
-| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | Per-VM /30 subnet, host-port forwarding via `socat` | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP) |
-| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) | No (tick-bound) |
-| `command` health checks | `docker exec` | `podman exec` (same API) | In-guest `ring-agent` over AF_VSOCK | Not yet |
-| `kind: job` | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Not yet (runs as worker) |
-| Labels (`labels:`) | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
-| Host networking | Supported | Not supported by Ring yet | N/A | N/A |
-| Private registry creds | Supported | Supported | N/A (no image pull) | N/A (no image pull) |
+| Aspect | Docker | Podman | containerd | Cloud Hypervisor | Firecracker |
+|---|---|---|---|---|---|
+| Status | Production | Beta | Beta | Alpha | Experimental |
+| Isolation | Linux namespaces + cgroups | Linux namespaces + cgroups (rootless by default) | Linux namespaces + cgroups | Full kernel, KVM-backed VM | Full kernel, KVM-backed microVM |
+| Boot time | ~1 s | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) | ~1 s (minimal microVM) |
+| Memory overhead per workload | ~10 MB | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) | ~5–50 MB (minimal device model) |
+| Image format | Docker image (`nginx:1.25`) | Docker/OCI image | OCI image (`nginx:1.25`) | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
+| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | CNI (bridge + host-local IPAM) | Per-VM /30 subnet, host-port forwarding via `socat` | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP) |
+| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) | No (tick-bound) | No (tick-bound) |
+| `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | Not yet |
+| `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Not yet (runs as worker) |
+| Labels (`labels:`) | Forwarded to container | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
+| Host networking | Supported | Not supported by Ring yet | Not supported by Ring yet | N/A | N/A |
+| Private registry creds | Supported | Supported | Supported (basic auth) | N/A (no image pull) | N/A (no image pull) |
 
 ## Docker runtime
 
@@ -69,6 +69,34 @@ The socket must be running — start it once with `systemctl --user start podman
 - **Event stream**: Podman only emits events while `podman system service` is up. Ring does not yet consume Podman events (the orphan-volume reaper stays Docker-only), so crash detection is tick-bound for now.
 - **Host networking** (`network.mode: host`) is not yet allowed on Podman — Docker only.
 - Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root — mind file permissions on mounts.
+
+## containerd runtime (beta)
+
+containerd is the OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is reached through a Docker-compatible API, containerd speaks its own native **gRPC** protocol on `/run/containerd/containerd.sock` — so Ring drives it directly, with no Docker daemon in the picture. This is the right choice on hosts that already run containerd for Kubernetes (k3s, RKE2, stock `containerd`) and don't want a second container engine.
+
+Enable it and (optionally) point Ring at a non-default socket or namespace:
+
+```toml
+[server.runtime.containerd]
+enabled = true
+# socket = "/run/containerd/containerd.sock"
+# namespace = "ring"
+```
+
+Ring keeps all the objects it creates under its own containerd **namespace** (`ring` by default) so they don't collide with `k8s.io`, `moby` or `default`. This is containerd's metadata-partition concept and is unrelated to a Ring deployment namespace — deployments are still scoped the usual way, via the `ring_deployment` label.
+
+Because containerd is lower-level than Docker, Ring assembles by hand what bollard would otherwise hide: images are pulled through the **transfer** service (resolve → fetch layers → unpack), the rootfs is a writable **snapshot** prepared from the image's layer chain, the container runs as a **task** under the `runc` shim, and networking is wired with **CNI** (a `bridge` + `host-local` IPAM chain, auto-written to `/etc/cni/net.d` if absent) so every container gets a routable IP — the same model Kubernetes and `nerdctl` use.
+
+**Good fit when:**
+- The host already runs containerd (Kubernetes nodes, k3s/RKE2) and you don't want Docker too
+- You want the standard OCI/CNI stack without a higher-level daemon
+- You need exec-based health checks, labels and registry auth (all supported, like Docker)
+
+**Caveats:**
+- **CNI plugins must be installed** (`/opt/cni/bin`: `bridge`, `host-local`, `loopback`). They ship with most Kubernetes distros; on a bare host install the `containernetworking-plugins` package. Ring writes a default conflist but cannot supply the plugin binaries — without them a container boots with no CNI address.
+- **Stats**: memory and pids come from cgroup v2; CPU% and per-interface network/disk I/O aren't derivable from a single cgroup sample, so they read as zero.
+- **Event stream**: containerd has one, but Ring does not consume it yet — crash detection is tick-bound, like Cloud Hypervisor.
+- **Host networking** (`network.mode: host`) is not yet allowed on containerd — Docker only.
 
 ## Cloud Hypervisor runtime (alpha)
 
