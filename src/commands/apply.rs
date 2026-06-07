@@ -251,9 +251,10 @@ impl Deployment {
         if self.runtime != "docker"
             && self.runtime != "podman"
             && self.runtime != "cloud-hypervisor"
+            && self.runtime != "firecracker"
         {
             return Err(ApplyError::Validation(format!(
-                "Runtime '{}' not supported. Supported runtimes: docker, podman, cloud-hypervisor.",
+                "Runtime '{}' not supported. Supported runtimes: docker, podman, cloud-hypervisor, firecracker.",
                 self.runtime
             )));
         }

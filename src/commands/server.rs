@@ -3,6 +3,7 @@ use crate::cli::style;
 use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
+use crate::runtime::firecracker::{FirecrackerLifecycle, FirecrackerRuntimeConfig};
 use crate::runtime::lifecycle_trait::RuntimeLifecycle;
 use clap::ArgMatches;
 use clap::{Arg, ArgAction, Command};
@@ -166,6 +167,33 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
         runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
     } else {
         info!("Cloud Hypervisor runtime disabled in config, skipping");
+    }
+
+    // Firecracker: same opt-in + fail-fast contract. Its binary must resolve
+    // when enabled, else Ring refuses to start.
+    if configuration.server.runtime.firecracker.enabled {
+        let fc_runtime_config =
+            FirecrackerRuntimeConfig::from_user_config(&configuration.server.runtime.firecracker);
+        if !fc_runtime_config.is_available() {
+            error!(
+                "Refusing to start: Firecracker runtime is enabled in config but its binary \
+                 '{}' could not be found",
+                fc_runtime_config.binary_path
+            );
+            std::process::exit(1);
+        }
+        info!(
+            "Firecracker runtime: binary={}, kernel={}, socket_dir={}",
+            fc_runtime_config.binary_path,
+            fc_runtime_config.kernel_path,
+            fc_runtime_config.socket_dir,
+        );
+        runtimes_map.insert(
+            "firecracker".to_string(),
+            Arc::new(FirecrackerLifecycle::new(fc_runtime_config)),
+        );
+    } else {
+        info!("Firecracker runtime disabled in config, skipping");
     }
 
     // Hard floor: no runtime enabled means Ring can't deploy anything — fail

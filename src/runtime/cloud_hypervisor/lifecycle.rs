@@ -555,9 +555,9 @@ impl CloudHypervisorLifecycle {
                 RuntimeError::VmStartFailed(format!("Failed to set up virtio-fs: {}", e))
             })?;
 
-        let guest_mounts: Vec<super::cloud_init::GuestMount> = live_mounts
+        let guest_mounts: Vec<crate::runtime::cloud_init::GuestMount> = live_mounts
             .iter()
-            .map(|m| super::cloud_init::GuestMount {
+            .map(|m| crate::runtime::cloud_init::GuestMount {
                 tag: m.tag.clone(),
                 destination: m.destination.clone(),
                 read_only: m.read_only,
@@ -598,12 +598,14 @@ impl CloudHypervisorLifecycle {
         };
         let vsock_socket_path = vsock_cid
             .map(|_| PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id)));
-        let guest_net = net_alloc.as_ref().map(|n| super::cloud_init::GuestNet {
-            guest_ip: n.guest_ip.clone(),
-            host_ip: n.host_ip.clone(),
-            prefix_len: n.prefix_len,
-            mac: n.mac.clone(),
-        });
+        let guest_net = net_alloc
+            .as_ref()
+            .map(|n| crate::runtime::cloud_init::GuestNet {
+                guest_ip: n.guest_ip.clone(),
+                host_ip: n.host_ip.clone(),
+                prefix_len: n.prefix_len,
+                mac: n.mac.clone(),
+            });
 
         // Build the disk list. The main rootfs is always there. A cidata ISO
         // is attached whenever there's something for cloud-init to do —
@@ -615,7 +617,7 @@ impl CloudHypervisorLifecycle {
         }];
         if !deployment.environment.is_empty() || !guest_mounts.is_empty() || guest_net.is_some() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
-            let iso_path = super::cloud_init::build_cidata_iso(
+            let iso_path = crate::runtime::cloud_init::build_cidata_iso(
                 instance_id,
                 deployment,
                 &guest_mounts,

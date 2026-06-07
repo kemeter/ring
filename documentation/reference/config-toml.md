@@ -101,6 +101,16 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 | `socket_dir` | string | `$RING_CONFIG_DIR/cloud-hypervisor/sockets` | Where Ring puts per-VM Unix sockets, console logs, volume shares |
 | `seccomp` | string | unset (CH default: kill on violation) | Forwarded to `cloud-hypervisor --seccomp`. Accepts `"true"`, `"false"`, `"log"`. Set to `"false"` only on hosts where the kernel uses syscalls not whitelisted by CH (otherwise VMs die with `SIGSYS`) |
 
+### `[server.runtime.firecracker]`
+
+| Field | Type | Default | Purpose |
+|---|---|---|---|
+| `enabled` | bool | `false` | Register the Firecracker runtime. Must be `true` for Ring to use it. When `true` and `binary_path` can't be resolved at startup, Ring fails fast |
+| `binary_path` | string | `firecracker` (from `$PATH`) | Absolute path to the `firecracker` binary |
+| `kernel_path` | string | `$RING_CONFIG_DIR/firecracker/vmlinux` | Path to the uncompressed kernel image. Firecracker boots a kernel directly — there is no firmware step |
+| `socket_dir` | string | `$RING_CONFIG_DIR/firecracker/sockets` | Where Ring puts per-VM API sockets and per-instance rootfs copies |
+| `boot_args` | string | `console=ttyS0 reboot=k panic=1 pci=off` | Kernel command line passed to every microVM |
+
 ## Examples
 
 ### Minimal single-host (Docker)

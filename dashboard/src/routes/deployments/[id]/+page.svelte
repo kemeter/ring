@@ -427,8 +427,10 @@
       <p class="muted pad">No running instances.</p>
     {:else}
       <ul class="instance-list">
-        {#each detail.instances as inst (inst)}
-          <li class="mono">{inst}</li>
+        {#each detail.instances as inst (inst.id)}
+          <li class="mono">
+            {inst.id}{#if inst.address}<span class="muted"> ({inst.address})</span>{/if}
+          </li>
         {/each}
       </ul>
     {/if}

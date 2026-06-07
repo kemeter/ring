@@ -45,8 +45,10 @@ mod scheduler {
 
 mod runtime {
     pub(crate) mod cloud_hypervisor;
+    pub(crate) mod cloud_init;
     pub(crate) mod docker;
     pub(crate) mod error;
+    pub(crate) mod firecracker;
     pub(crate) mod health_probes;
     pub(crate) mod host_net;
     pub(crate) mod lifecycle_trait;
@@ -55,6 +57,7 @@ mod runtime {
     pub(crate) mod podman;
     pub(crate) mod port_forwarder;
     pub(crate) mod resources;
+    pub(crate) mod tap;
     pub(crate) mod types;
     pub(crate) mod virtiofs;
     pub(crate) mod vsock_client;

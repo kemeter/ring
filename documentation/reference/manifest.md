@@ -279,6 +279,8 @@ Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are a
 
 > **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot only; Ring does not use Cloud Hypervisor's `vm.resize` API to live-resize a running VM, so changing `resources` requires a redeploy.
 
+> **Firecracker sizing.** Reads `limits` (falling back to `requests`): the memory becomes the microVM's RAM and the CPU becomes its vCPU count, **rounded up** to whole vCPUs (Firecracker can't allocate fractional cores) with a floor of 1. When neither is set, a microVM defaults to **1 vCPU and 512 MiB** — enough headroom to boot systemd plus a real service rather than OOMing at boot. Sizing is at-boot only; changing `resources` requires a redeploy.
+
 ### CPU values
 
 - Millicores: `"500m"` (= 0.5 cores), `"1500m"` (= 1.5 cores)

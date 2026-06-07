@@ -1,13 +1,13 @@
 //! cloud-init NoCloud datasource generation for VM runtimes.
 //!
-//! Currently only used by Cloud Hypervisor, but the format (NoCloud) and the
-//! ISO output are standard — Firecracker and any future VM runtime can attach
-//! the same ISO as a second drive. When that day comes, lift this file to
-//! `src/runtime/cloud_init.rs` and update the `use` paths in CH (and the new
-//! runtime). The implementation has zero CH-specific code.
+//! Shared by every KVM-backed runtime (Cloud Hypervisor and Firecracker): the
+//! format (NoCloud) and the ISO output are standard, so each VM runtime attaches
+//! the same `cidata.iso` as an extra drive. The implementation has zero
+//! runtime-specific code — callers pass a `Deployment`, the virtio-fs mounts to
+//! perform in-guest, and an optional static network config.
 //!
-//! Builds a small ISO image (`cidata.iso`) that the guest mounts at boot via
-//! cloud-init's NoCloud datasource. The ISO contains:
+//! Builds a small disk image (kept as `cidata.iso` for callers) that the guest
+//! mounts at boot via cloud-init's NoCloud datasource. It contains:
 //!
 //! - `meta-data`  — minimal, just the instance-id (required by the spec)
 //! - `user-data`  — cloud-config YAML that writes `/etc/ring/env` and a
@@ -17,14 +17,14 @@
 //! guest must have cloud-init installed (true for every standard cloud image:
 //! Ubuntu Cloud, Fedora Cloud, Debian Cloud, Cirros, ...).
 //!
-//! The ISO is built with `xorriso` because it's the most universally available
-//! tool that can produce ISO9660 with a custom volume label (NoCloud requires
-//! `CIDATA`). `cloud-localds` from the `cloud-utils` package is the more
-//! ergonomic alternative but is not always installed.
+//! The image is an ext4 filesystem labelled `CIDATA`, built with `mke2fs -d`
+//! (e2fsprogs, userspace — no mount, no root). NoCloud accepts any labelled
+//! filesystem; ext4 is chosen because minimal guest kernels (e.g. the
+//! Firecracker CI vmlinux) ship neither iso9660 nor vfat — only ext4, which is
+//! what the root disk uses — so an ISO/FAT datasource would be unmountable.
 
 use crate::models::deployments::{Deployment, EnvValue};
 use crate::runtime::error::RuntimeError;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -68,7 +68,7 @@ pub(crate) async fn build_cidata_iso(
             EnvValue::Plain(v) => envs.push((key.clone(), v.clone())),
             EnvValue::SecretRef { .. } => {
                 return Err(RuntimeError::Other(format!(
-                    "unresolved secretRef for '{}' reached the cloud-hypervisor runtime",
+                    "unresolved secretRef for '{}' reached the VM runtime",
                     key
                 )));
             }
@@ -94,52 +94,90 @@ pub(crate) async fn build_cidata_iso(
         .await
         .map_err(RuntimeError::Io)?;
 
-    let iso_path = output_dir.join(format!("{}.cidata.iso", instance_id));
-    if iso_path.exists() {
-        let _ = tokio::fs::remove_file(&iso_path).await;
+    // Build the NoCloud datasource as an ext4 image rather than ISO9660.
+    // NoCloud accepts any labelled filesystem, but minimal guest kernels (e.g.
+    // the Firecracker CI vmlinux) ship neither iso9660 nor vfat — only ext4 (it's
+    // what the root disk uses), so an ISO/FAT cidata fails to mount and the guest
+    // never gets its network config. The file keeps the `.cidata.iso` name for
+    // callers that reference it, but its content is ext4 labelled CIDATA.
+    let img_path = output_dir.join(format!("{}.cidata.iso", instance_id));
+    if img_path.exists() {
+        let _ = tokio::fs::remove_file(&img_path).await;
     }
+    let img_str = img_path
+        .to_str()
+        .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 cidata path: {:?}", img_path)))?;
 
+    let result = build_ext4_cidata(img_str, &staging).await;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    result?;
+
+    Ok(img_path)
+}
+
+/// Create an ext4 image labelled `CIDATA` containing the staged user-data and
+/// meta-data, using `mke2fs -d` — no mounting, no root.
+///
+/// ext4 is chosen over ISO9660/vfat because it's the one filesystem every Linux
+/// guest kernel can mount (it's what the root disk uses). Minimal microVM
+/// kernels (e.g. the Firecracker CI vmlinux) frequently ship neither iso9660
+/// nor vfat, leaving the NoCloud datasource unreadable; ext4 always works.
+/// NoCloud locates the datasource by the `CIDATA` label regardless of fs type.
+async fn build_ext4_cidata(img_str: &str, staging: &Path) -> Result<(), RuntimeError> {
     let staging_str = staging
         .to_str()
         .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 staging path: {:?}", staging)))?;
-    let iso_str = iso_path
-        .to_str()
-        .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 iso path: {:?}", iso_path)))?;
 
-    // xorriso flags: -as mkisofs gives us the classic mkisofs CLI surface.
-    // -volid CIDATA is mandatory for the NoCloud datasource.
-    let output = Command::new("xorriso")
+    // Ship a pinned mke2fs.conf next to the staging dir. Some hosts carry an
+    // /etc/mke2fs.conf newer than their mke2fs binary, defining ext4 features
+    // (orphan_file, metadata_csum_seed) the binary rejects with a misleading
+    // "Invalid filesystem option set". Pointing MKE2FS_CONFIG at our own file
+    // makes the build reproducible and avoids that mismatch.
+    let conf_path = staging.with_extension("mke2fs.conf");
+    let conf = "[defaults]\n\
+        \tbase_features = sparse_super,large_file,filetype,resize_inode,dir_index,ext_attr\n\
+        \tdefault_mntopts = acl,user_xattr\n\
+        \tblocksize = 1024\n\
+        \tinode_size = 256\n\
+        [fs_types]\n\
+        \text4 = {\n\
+        \t\tfeatures = has_journal,extent,huge_file,flex_bg,metadata_csum,64bit,dir_nlink,extra_isize\n\
+        \t}\n";
+    tokio::fs::write(&conf_path, conf)
+        .await
+        .map_err(RuntimeError::Io)?;
+
+    // -d seeds the fs from the staging dir at creation (userspace, no mount).
+    // 1 MiB holds the two small text files comfortably. -L sets the CIDATA label
+    // NoCloud probes for. -F since the target is a regular file, -q for quiet.
+    let mkfs = Command::new("mke2fs")
+        .env("MKE2FS_CONFIG", &conf_path)
         .args([
-            "-as",
-            "mkisofs",
-            "-output",
-            iso_str,
-            "-volid",
+            "-q",
+            "-F",
+            "-t",
+            "ext4",
+            "-L",
             "CIDATA",
-            "-joliet",
-            "-rock",
+            "-d",
             staging_str,
+            img_str,
+            "1M",
         ])
         .output()
         .await
         .map_err(|e| {
-            RuntimeError::Other(format!(
-                "xorriso not available: {} (install xorriso package)",
-                e
-            ))
+            RuntimeError::Other(format!("mke2fs not available: {} (install e2fsprogs)", e))
         })?;
-
-    // The staging dir is no longer needed once the ISO is built.
-    let _ = tokio::fs::remove_dir_all(&staging).await;
-
-    if !output.status.success() {
+    let _ = tokio::fs::remove_file(&conf_path).await;
+    if !mkfs.status.success() {
         return Err(RuntimeError::Other(format!(
-            "xorriso failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "mke2fs cidata failed: {}",
+            String::from_utf8_lossy(&mkfs.stderr).trim()
         )));
     }
 
-    Ok(iso_path)
+    Ok(())
 }
 
 fn render_meta_data(instance_id: &str) -> String {
@@ -294,12 +332,6 @@ fn base64_encode(input: &str) -> String {
     out
 }
 
-/// Suppress unused-import warning until the loader uses HashMap directly.
-#[allow(dead_code)]
-fn _suppress_unused() {
-    let _ = HashMap::<String, String>::new();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,14 +431,19 @@ mod tests {
         assert!(md.contains("local-hostname: ch-deadbeef"));
     }
 
-    fn xorriso_or_skip(test: &str) -> bool {
-        if std::process::Command::new("xorriso")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            eprintln!("skipping {}: xorriso not installed", test);
-            return true;
+    fn ext4_tools_or_skip(test: &str) -> bool {
+        for tool in ["mke2fs"] {
+            if std::process::Command::new(tool)
+                .arg("--help")
+                .output()
+                .is_err()
+            {
+                eprintln!(
+                    "skipping {}: {} not installed (dosfstools/mtools)",
+                    test, tool
+                );
+                return true;
+            }
         }
         false
     }
@@ -442,7 +479,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_cidata_iso_with_mounts_writes_real_iso() {
-        if xorriso_or_skip("build_cidata_iso_with_mounts_writes_real_iso") {
+        if ext4_tools_or_skip("build_cidata_iso_with_mounts_writes_real_iso") {
             return;
         }
 
@@ -463,18 +500,29 @@ mod tests {
 
         let iso = build_cidata_iso("ch-cidata-test", &dep, &mounts, None, &dir)
             .await
-            .expect("xorriso should produce an ISO");
+            .expect("e2fsprogs should produce a cidata image");
 
         let meta = tokio::fs::metadata(&iso).await.unwrap();
-        assert!(meta.is_file(), "iso should be a file");
-        assert!(meta.len() > 0, "iso should not be empty");
-        // ISO9660 magic "CD001" lives at offset 0x8001 in the volume descriptor.
+        assert!(meta.is_file(), "cidata should be a file");
+        assert!(meta.len() > 0, "cidata should not be empty");
+        // The datasource is an ext4 image (not ISO9660): minimal guest kernels
+        // ship neither iso9660 nor vfat, only ext4. The ext4 superblock starts
+        // at byte 1024; its magic 0xEF53 (little-endian) sits at offset 0x38
+        // within it (file offset 0x438), and the 16-byte volume label
+        // (s_volume_name) at offset 0x78 (file offset 0x478).
         let bytes = tokio::fs::read(&iso).await.unwrap();
-        assert!(bytes.len() > 0x8006);
-        assert_eq!(&bytes[0x8001..0x8006], b"CD001", "missing ISO9660 magic");
-        // The volume label is at offset 0x8028, padded to 32 bytes — we want
-        // CIDATA so cloud-init's NoCloud datasource picks it up.
-        let label = std::str::from_utf8(&bytes[0x8028..0x8028 + 6]).unwrap();
+        assert!(bytes.len() > 0x488, "image too small to hold a superblock");
+        assert_eq!(
+            &bytes[0x438..0x43a],
+            &[0x53, 0xef],
+            "missing ext4 superblock magic"
+        );
+        // The volume label must be CIDATA so cloud-init's NoCloud datasource
+        // picks it up. Trim the NUL padding from the 16-byte field.
+        let label_bytes = &bytes[0x478..0x478 + 16];
+        let label = std::str::from_utf8(label_bytes)
+            .unwrap()
+            .trim_end_matches('\0');
         assert_eq!(label, "CIDATA");
 
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -482,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn build_cidata_iso_skips_when_nothing_to_emit() {
-        if xorriso_or_skip("build_cidata_iso_skips_when_nothing_to_emit") {
+        if ext4_tools_or_skip("build_cidata_iso_skips_when_nothing_to_emit") {
             return;
         }
         // No env, no mounts: build_cidata_iso still produces an ISO (callers

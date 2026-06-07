@@ -39,7 +39,13 @@ pub(crate) struct DeploymentOutput {
     pub(crate) replicas: u32,
     pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
-    pub(crate) instances: Vec<String>,
+    /// Running instances of this deployment. Each carries its id and — when it
+    /// has a reachable network — its routable guest address, so consumers
+    /// (service-discovery providers, proxies) can route to a specific instance.
+    /// Mirrors the Nomad/Consul "service instance = address" model. No display
+    /// name: only Docker has a distinct container name; VM runtimes would just
+    /// echo the id, so a name field would carry no extra information.
+    pub(crate) instances: Vec<DeploymentInstance>,
     pub(crate) environment: HashMap<String, EnvValue>,
     pub(crate) volumes: Vec<DeploymentVolume>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -98,6 +104,16 @@ impl DeploymentOutput {
             network: deployment.network,
         }
     }
+}
+
+/// One running instance of a deployment. `address` is the routable guest IP
+/// (present for VM runtimes and Docker containers that joined a network);
+/// `None` when the instance has no reachable address (e.g. no published ports).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct DeploymentInstance {
+    pub(crate) id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) address: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

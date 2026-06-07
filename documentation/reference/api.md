@@ -160,13 +160,20 @@ curl -H "Authorization: Bearer $TOKEN" \
     "replicas": 1,
     "ports": [],
     "labels": { "app": "nginx" },
-    "instances": ["abc123def456..."],
+    "instances": [{ "id": "abc123def456...", "address": "10.42.1.6" }],
     "environment": { "ENV": "production" },
     "volumes": [],
     "image_digest": "sha256:..."
   }
 ]
 ```
+
+Each entry in `instances` is an object with the instance `id` and, when the
+instance has a reachable network, its routable guest `address`. The `address`
+field is **omitted** when the instance has no reachable endpoint — for example a
+deployment with no published ports, where no network is allocated. This mirrors
+the Nomad/Consul "service instance = address" model, so service-discovery
+providers and proxies can route to a specific instance.
 
 ### `POST /deployments`
 
@@ -276,7 +283,7 @@ Retrieve a deployment by UUID.
   "replicas": 1,
   "ports": [],
   "labels": { "app": "nginx" },
-  "instances": ["abc123def456..."],
+  "instances": [{ "id": "abc123def456..." }],
   "environment": { "ENV": "production" },
   "volumes": [
     {

@@ -49,6 +49,8 @@ pub(crate) struct RuntimesConfig {
     pub(crate) podman: PodmanConfig,
     #[serde(default)]
     pub(crate) cloud_hypervisor: CloudHypervisorConfig,
+    #[serde(default)]
+    pub(crate) firecracker: FirecrackerConfig,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -132,6 +134,27 @@ pub(crate) struct CloudHypervisorConfig {
     /// How many rotated console log backups to keep alongside the live file
     /// (`.console.log.1`, `.console.log.2`, ...). Defaults to 3.
     pub(crate) max_console_log_backups: Option<u32>,
+}
+
+/// User-facing configuration for the Firecracker runtime. Parsed from the
+/// `[server.runtime.firecracker]` section of `config.toml`.
+///
+/// All fields are optional; when unset, `FirecrackerRuntimeConfig::default`
+/// falls back to `$RING_CONFIG_DIR/firecracker/...`.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub(crate) struct FirecrackerConfig {
+    /// Whether to register the Firecracker runtime. Off by default (runtimes
+    /// are opt-in). When `true` and the `firecracker` binary can't be resolved
+    /// at startup, Ring fails fast.
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    pub(crate) binary_path: Option<String>,
+    /// Path to the uncompressed kernel image (`vmlinux`). Firecracker boots a
+    /// kernel directly — there is no firmware step like Cloud Hypervisor.
+    pub(crate) kernel_path: Option<String>,
+    pub(crate) socket_dir: Option<String>,
+    /// Kernel command line passed to every microVM.
+    pub(crate) boot_args: Option<String>,
 }
 
 /// User-facing configuration for the embedded web dashboard. Off by default
