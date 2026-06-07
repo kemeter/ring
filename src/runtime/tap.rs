@@ -112,6 +112,26 @@ impl TapDevice {
         Ok(dev)
     }
 
+    /// Whether a host interface named `name` currently exists, by checking
+    /// `/sys/class/net/<name>`. Lets a caller deduce "this instance has a
+    /// network" from the host alone, without any in-memory state — needed after
+    /// a `ring-server` restart.
+    pub(crate) fn exists(name: &str) -> bool {
+        std::path::Path::new(&format!("/sys/class/net/{}", name)).exists()
+    }
+
+    /// Build a handle for an *existing* tap, by name, without creating or
+    /// configuring anything. Used to reclaim a tap after a `ring-server` restart
+    /// (when the original [`TapDevice`] was lost with the in-memory map) so it
+    /// can be deleted: `delete` re-attaches by name and clears persistence, and
+    /// is a no-op if the interface is already gone. Never creates an interface.
+    pub(crate) fn adopt(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            live: true,
+        }
+    }
+
     fn configure(&self, host_ip: &str, prefix_len: u8) -> Result<(), RuntimeError> {
         let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0) };
         if sock < 0 {
@@ -163,14 +183,17 @@ impl TapDevice {
         Ok(())
     }
 
-    /// Delete the device from the host. We hold no fd, so reopen `/dev/net/tun`,
-    /// re-attach to the existing tap by name, and clear persistence — once
-    /// persistence is off and this transient fd closes, the kernel removes the
-    /// interface.
+    /// Delete the device from the host via an `RTM_DELLINK` netlink request —
+    /// the same operation as `ip link delete`, done in-process so the server's
+    /// `CAP_NET_ADMIN` stays effective (a forked `ip` would lose it).
     ///
-    /// Re-attach can briefly fail with `EBUSY` if the VM process hasn't fully
-    /// released the tap yet (the caller kills it first, but the fd close is
-    /// asynchronous), so retry a few times before giving up. Idempotent.
+    /// The previous approach — re-attach by name, clear `TUNSETPERSIST`, close
+    /// the fd — does **not** actually remove the interface (verified live: the
+    /// tap survives), so it is not used. `RTM_DELLINK` removes it immediately.
+    ///
+    /// The caller kills the VM first, but the VM's fd close is asynchronous, so
+    /// the link can briefly be `EBUSY`; retry a few times before giving up.
+    /// Idempotent: a missing interface (`ENODEV`) is treated as success.
     pub(crate) fn delete(&mut self) {
         if !self.live {
             return;
@@ -178,32 +201,17 @@ impl TapDevice {
         self.live = false;
 
         for _ in 0..20 {
-            let Ok(tun) = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open("/dev/net/tun")
-            else {
-                return;
-            };
-            let mut ifr: libc::ifreq = unsafe { mem::zeroed() };
-            write_ifname(&mut ifr, &self.name);
-            ifr.ifr_ifru.ifru_flags = IFF_TAP | IFF_NO_PI;
-            // Re-attach to the existing tap, then turn persistence off so the
-            // kernel removes it when this fd closes.
-            if unsafe {
-                ioctl(
-                    tun.as_raw_fd(),
-                    TUNSETIFF,
-                    &mut ifr as *mut _ as *mut libc::c_void,
-                )
+            match rtnl_dellink(&self.name) {
+                // Gone now, or already gone — done either way.
+                Ok(()) => return,
+                Err(e) if e.raw_os_error() == Some(libc::ENODEV) => return,
+                // Still held by the VM (fd not closed yet) — brief spin-wait.
+                Err(e) if e.raw_os_error() == Some(libc::EBUSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                // Any other error (e.g. EPERM): retrying won't help.
+                Err(_) => return,
             }
-            .is_ok()
-            {
-                let _ = unsafe { ioctl_int(tun.as_raw_fd(), TUNSETPERSIST, 0) };
-                return;
-            }
-            // Busy — the previous holder hasn't let go yet. Brief spin-wait.
-            std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
 
@@ -253,6 +261,80 @@ unsafe fn ioctl_int(fd: libc::c_int, request: libc::c_ulong, arg: libc::c_int) -
         Err(io::Error::last_os_error())
     } else {
         Ok(())
+    }
+}
+
+/// Delete a network interface by name via `RTM_DELLINK` over a `NETLINK_ROUTE`
+/// socket — exactly what `ip link delete <name>` does, but in-process so the
+/// caller's `CAP_NET_ADMIN` applies (a forked `ip` would not inherit it).
+///
+/// Returns `Ok(())` when the kernel acknowledges the deletion, or an `io::Error`
+/// carrying the kernel's errno (e.g. `ENODEV` if already gone, `EBUSY` if a VM
+/// still holds the tap, `EPERM` if the capability is missing).
+fn rtnl_dellink(name: &str) -> io::Result<()> {
+    // Resolve the interface index; 0 means "no such interface".
+    let mut cname = [0i8; libc::IFNAMSIZ];
+    for (i, b) in name.as_bytes().iter().enumerate() {
+        cname[i] = *b as libc::c_char;
+    }
+    let ifindex = unsafe { libc::if_nametoindex(cname.as_ptr()) };
+    if ifindex == 0 {
+        return Err(io::Error::from_raw_os_error(libc::ENODEV));
+    }
+
+    // Open a route netlink socket.
+    let fd = unsafe { libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, libc::NETLINK_ROUTE) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let _guard = FdGuard(fd);
+
+    // Message = nlmsghdr (16 bytes) + ifinfomsg (16 bytes). We hand-pack it:
+    // the kernel only needs ifi_index set to target the link by index.
+    const NLMSG_HDR_LEN: usize = 16;
+    const IFINFO_LEN: usize = 16;
+    const TOTAL: usize = NLMSG_HDR_LEN + IFINFO_LEN;
+    const RTM_DELLINK: u16 = 17;
+    const NLM_F_REQUEST: u16 = 0x01;
+    const NLM_F_ACK: u16 = 0x04;
+
+    let mut buf = [0u8; TOTAL];
+    // nlmsghdr: len(u32), type(u16), flags(u16), seq(u32), pid(u32)
+    buf[0..4].copy_from_slice(&(TOTAL as u32).to_ne_bytes());
+    buf[4..6].copy_from_slice(&RTM_DELLINK.to_ne_bytes());
+    buf[6..8].copy_from_slice(&(NLM_F_REQUEST | NLM_F_ACK).to_ne_bytes());
+    buf[8..12].copy_from_slice(&1u32.to_ne_bytes()); // seq
+    buf[12..16].copy_from_slice(&0u32.to_ne_bytes()); // pid (0 = kernel assigns)
+    // ifinfomsg: family(u8), pad(u8), type(u16), index(i32), flags(u32), change(u32)
+    buf[16] = libc::AF_UNSPEC as u8;
+    buf[20..24].copy_from_slice(&(ifindex as i32).to_ne_bytes());
+
+    let sent = unsafe { libc::send(fd, buf.as_ptr() as *const libc::c_void, buf.len(), 0) };
+    if sent < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    // Read the ACK. An nlmsgerr payload starts with an i32 error code (0 = ok,
+    // negative errno on failure), right after a 16-byte nlmsghdr.
+    let mut resp = [0u8; 4096];
+    let n = unsafe { libc::recv(fd, resp.as_mut_ptr() as *mut libc::c_void, resp.len(), 0) };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if (n as usize) < NLMSG_HDR_LEN + 4 {
+        // No parsable error body; assume success (kernel sent a bare ACK).
+        return Ok(());
+    }
+    let err = i32::from_ne_bytes([
+        resp[NLMSG_HDR_LEN],
+        resp[NLMSG_HDR_LEN + 1],
+        resp[NLMSG_HDR_LEN + 2],
+        resp[NLMSG_HDR_LEN + 3],
+    ]);
+    if err == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(-err))
     }
 }
 
