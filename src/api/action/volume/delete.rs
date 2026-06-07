@@ -32,7 +32,7 @@ pub(crate) async fn delete(
                 .into_response();
         }
         Err(e) => {
-            log::error!("Failed to find volume {}: {}", id, e);
+            error!("Failed to find volume {}: {}", id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Failed to find volume" })),
@@ -48,7 +48,7 @@ pub(crate) async fn delete(
         match deployments::find_referencing_volume(&pool, &volume.namespace, &volume.name).await {
             Ok(deps) => deps,
             Err(e) => {
-                log::error!("Failed to check volume references: {}", e);
+                error!("Failed to check volume references: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "Failed to check references" })),
@@ -88,7 +88,7 @@ pub(crate) async fn delete(
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            log::error!("Failed to delete volume {}: {}", id, e);
+            error!("Failed to delete volume {}: {}", id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Failed to delete volume" })),

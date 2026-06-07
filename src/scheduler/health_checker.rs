@@ -46,7 +46,7 @@ impl HealthChecker {
     pub(crate) async fn execute_checks(
         &self,
         deployment: &Deployment,
-        runtime: &dyn crate::runtime::lifecycle_trait::RuntimeLifecycle,
+        runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
     ) -> HealthCheckOutcome {
         let mut outcome = HealthCheckOutcome {
             results: Vec::new(),
@@ -128,7 +128,7 @@ impl HealthChecker {
 
     async fn execute_single_check_with_runtime(
         &self,
-        runtime: &dyn crate::runtime::lifecycle_trait::RuntimeLifecycle,
+        runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
         deployment: &Deployment,
         health_check: &HealthCheck,
         instance_id: &str,
@@ -335,7 +335,7 @@ impl HealthChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::mock::MockRuntime;
+    use crate::hypervisor::mock::MockRuntime;
     use sqlx::sqlite::SqlitePoolOptions;
 
     async fn new_test_pool() -> SqlitePool {

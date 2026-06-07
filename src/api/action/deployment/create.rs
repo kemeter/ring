@@ -642,7 +642,7 @@ pub(crate) async fn create(
             if let Err(e) = namespace::create(&pool, new_namespace).await
                 && !e.to_string().contains("UNIQUE constraint failed")
             {
-                log::error!("Failed to create namespace '{}': {}", input.namespace, e);
+                error!("Failed to create namespace '{}': {}", input.namespace, e);
                 let message = Message {
                     message: "Failed to create namespace".to_string(),
                 };
@@ -652,7 +652,7 @@ pub(crate) async fn create(
         }
         Ok(Some(_)) => {}
         Err(e) => {
-            log::error!("Failed to check namespace '{}': {}", input.namespace, e);
+            error!("Failed to check namespace '{}': {}", input.namespace, e);
             let message = Message {
                 message: "Internal server error".to_string(),
             };
@@ -737,10 +737,9 @@ pub(crate) async fn create(
                         deployment.status = DeploymentStatus::Deleted;
                         deployment.updated_at = Some(Utc::now().to_string());
                         if let Err(e) = deployments::update(&pool, &deployment).await {
-                            log::error!(
+                            error!(
                                 "Failed to mark deployment {} as deleted: {}",
-                                deployment.id,
-                                e
+                                deployment.id, e
                             );
                         }
                     }
@@ -748,7 +747,7 @@ pub(crate) async fn create(
             }
         }
         Err(e) => {
-            log::error!("Database error while checking active deployments: {}", e);
+            error!("Database error while checking active deployments: {}", e);
             let message = Message {
                 message: "Internal server error".to_string(),
             };
@@ -761,7 +760,7 @@ pub(crate) async fn create(
     let volumes = match serde_json::to_string(&input.volumes) {
         Ok(json_str) => json_str,
         Err(e) => {
-            log::error!("Volume serialization error: {}", e);
+            error!("Volume serialization error: {}", e);
             let message = Message {
                 message: "Internal server error".to_string(),
             };

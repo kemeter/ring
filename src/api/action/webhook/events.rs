@@ -37,7 +37,7 @@ pub(crate) async fn events(
             return problem_response(StatusCode::NOT_FOUND, "Not Found", "webhook not found");
         }
         Err(e) => {
-            log::error!("Failed to load webhook {}: {}", id, e);
+            error!("Failed to load webhook {}: {}", id, e);
             return problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",
@@ -52,7 +52,7 @@ pub(crate) async fn events(
             (StatusCode::OK, Json(views)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to list events for webhook {}: {}", id, e);
+            error!("Failed to list events for webhook {}: {}", id, e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

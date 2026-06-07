@@ -5,81 +5,13 @@ use std::env;
 use std::process::Command as BaseCommand;
 
 #[macro_use]
-extern crate log;
-extern crate env_logger;
-mod commands {
-    pub(crate) mod apply;
-    pub(crate) mod context;
-    pub(crate) mod dashboard;
-    pub(crate) mod deployment;
-    pub(crate) mod doctor;
-    pub(crate) mod init;
-    pub(crate) mod server;
-
-    pub(crate) mod config;
-    pub(crate) mod login;
-    pub(crate) mod namespace;
-    pub(crate) mod node;
-    pub(crate) mod secret;
-    pub(crate) mod token;
-    pub(crate) mod user;
-    pub(crate) mod webhook;
-}
-
-/// Cross-cutting CLI presentation helpers, shared by the commands above:
-/// terminal styling, the `--output` format enum, and RFC 7807 error rendering.
-mod cli {
-    pub(crate) mod output;
-    pub(crate) mod problem_json;
-    pub(crate) mod style;
-}
-
-mod scheduler {
-    pub(crate) mod backoff;
-    pub(crate) mod docker_events;
-    pub(crate) mod event_worker;
-    pub(crate) mod health_checker;
-    pub(crate) mod intentional_shutdowns;
-    pub(crate) mod scheduler;
-}
-
-mod runtime {
-    pub(crate) mod cloud_hypervisor;
-    pub(crate) mod cloud_init;
-    pub(crate) mod docker;
-    pub(crate) mod error;
-    pub(crate) mod firecracker;
-    pub(crate) mod health_probes;
-    pub(crate) mod host_net;
-    pub(crate) mod lifecycle_trait;
-    #[cfg(test)]
-    pub(crate) mod mock;
-    pub(crate) mod podman;
-    pub(crate) mod port_forwarder;
-    pub(crate) mod resources;
-    pub(crate) mod tap;
-    pub(crate) mod types;
-    pub(crate) mod virtiofs;
-    pub(crate) mod vsock_client;
-}
-
-mod models {
-    pub(crate) mod audit_log;
-    pub(crate) mod config;
-    pub(crate) mod deployment_event;
-    pub(crate) mod deployments;
-    pub(crate) mod event_queue;
-    pub(crate) mod health_check;
-    pub(crate) mod health_check_logs;
-    pub(crate) mod namespace;
-    pub(crate) mod query;
-    pub(crate) mod secret;
-    pub(crate) mod token;
-    pub(crate) mod users;
-    pub(crate) mod volume;
-    pub(crate) mod volumes;
-    pub(crate) mod webhook;
-}
+extern crate tracing;
+mod cli;
+mod commands;
+mod hypervisor;
+mod models;
+mod runtime;
+mod scheduler;
 
 mod api;
 
@@ -100,7 +32,12 @@ mod fixtures;
 
 #[tokio::main]
 async fn main() {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let app = Command::new("ring")
         .version(env!("CARGO_PKG_VERSION"))

@@ -42,7 +42,7 @@ pub(crate) async fn rotate(Path(id): Path<String>, State(pool): State<Db>, auth:
             (StatusCode::CREATED, Json(output)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to rotate token: {}", e);
+            error!("Failed to rotate token: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

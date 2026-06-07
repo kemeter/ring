@@ -35,7 +35,7 @@ pub(crate) async fn delete(
                 .into_response();
         }
         Err(e) => {
-            log::error!("Failed to find secret {}: {}", id, e);
+            error!("Failed to find secret {}: {}", id, e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
@@ -57,7 +57,7 @@ pub(crate) async fn delete(
         match deployments::find_referencing_secret(&pool, &secret.namespace, &secret.name).await {
             Ok(deps) => deps,
             Err(e) => {
-                log::error!("Failed to check secret references: {}", e);
+                error!("Failed to check secret references: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({
@@ -99,7 +99,7 @@ pub(crate) async fn delete(
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            log::error!("Failed to delete secret with ID {}: {}", id, e);
+            error!("Failed to delete secret with ID {}: {}", id, e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({

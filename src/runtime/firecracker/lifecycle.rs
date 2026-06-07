@@ -13,18 +13,18 @@
 //! presence on disk (its `.sock`) is the source of truth for "is it running".
 
 use crate::config::server::FirecrackerConfig;
+use crate::hypervisor::cloud_init::GuestNet;
+use crate::hypervisor::error::RuntimeError;
+use crate::hypervisor::host_net::InstanceNet;
+use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
+use crate::hypervisor::port_forwarder::{self, PortForwarder};
+use crate::hypervisor::tap::TapDevice;
 use crate::models::deployments::{Deployment, DeploymentStatus};
 use crate::models::volume::ResolvedMount;
-use crate::runtime::cloud_init::GuestNet;
 use crate::runtime::docker::tiny_id;
-use crate::runtime::error::RuntimeError;
 use crate::runtime::firecracker::client::{
     BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
 };
-use crate::runtime::host_net::InstanceNet;
-use crate::runtime::lifecycle_trait::RuntimeLifecycle;
-use crate::runtime::port_forwarder::{self, PortForwarder};
-use crate::runtime::tap::TapDevice;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -337,7 +337,7 @@ impl FirecrackerLifecycle {
         });
         if !deployment.environment.is_empty() || guest_net.is_some() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
-            let iso_path = crate::runtime::cloud_init::build_cidata_iso(
+            let iso_path = crate::hypervisor::cloud_init::build_cidata_iso(
                 instance_id,
                 deployment,
                 &[],

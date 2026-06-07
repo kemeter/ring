@@ -13,7 +13,7 @@ pub(crate) async fn list(State(pool): State<Db>) -> Response {
     let list_namespaces = match NamespaceModel::find_all(&pool).await {
         Ok(list) => list,
         Err(e) => {
-            log::error!("Failed to list namespaces: {}", e);
+            error!("Failed to list namespaces: {}", e);
             return Json(namespaces).into_response();
         }
     };

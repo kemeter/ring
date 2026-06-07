@@ -6,7 +6,7 @@ mod lifecycle;
 mod logs;
 mod stats;
 
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use bollard::Docker;
 
 /// How an image was addressed in the manifest. A `tag` is mutable on the

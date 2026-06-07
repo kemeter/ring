@@ -103,7 +103,7 @@ impl From<WebhookRow> for Webhook {
         // malformed `events` column degrades to "subscribe to all" rather than
         // making the whole row unreadable on the delivery hot path.
         let events = serde_json::from_str(&row.events).unwrap_or_else(|e| {
-            log::warn!("Failed to deserialize events for webhook {}: {}", row.id, e);
+            warn!("Failed to deserialize events for webhook {}: {}", row.id, e);
             Vec::new()
         });
         Webhook {

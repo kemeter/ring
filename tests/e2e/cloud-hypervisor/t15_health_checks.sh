@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # T15-CH: validate that tcp/http health checks are wired through the shared
-# `runtime::health_probes` module on the Cloud Hypervisor runtime, and that
+# `hypervisor::health_probes` module on the Cloud Hypervisor runtime, and that
 # `command` is rejected at the API.
 #
 # Why a failure-only path: the Cirros image used by the CH e2e suite does

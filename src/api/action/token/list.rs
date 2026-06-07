@@ -18,7 +18,7 @@ pub(crate) async fn list(State(pool): State<Db>, auth: Auth) -> Response {
             (StatusCode::OK, Json(views)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to list tokens: {}", e);
+            error!("Failed to list tokens: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

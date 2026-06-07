@@ -4,14 +4,14 @@ use super::client::{
 };
 use crate::config::config::get_config_dir;
 use crate::config::server::CloudHypervisorConfig;
+use crate::hypervisor::error::RuntimeError;
+use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
+use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
+use crate::hypervisor::port_forwarder::{self, PortForwarder};
+use crate::hypervisor::virtiofs::{self, VirtiofsMount};
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::docker::tiny_id;
-use crate::runtime::error::RuntimeError;
-use crate::runtime::host_net::{InstanceNet, cid_for_instance};
-use crate::runtime::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
-use crate::runtime::port_forwarder::{self, PortForwarder};
-use crate::runtime::virtiofs::{self, VirtiofsMount};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -430,7 +430,7 @@ impl CloudHypervisorLifecycle {
         // reserves its whole memory at boot, so an over-ask fails the spawn with
         // an opaque "Cannot allocate memory". Catch it here with a clear
         // need/have message instead.
-        crate::runtime::resources::check_host_memory(deployment)?;
+        crate::hypervisor::resources::check_host_memory(deployment)?;
 
         let instance_image = self.instance_image_path(instance_id);
         if !instance_image.exists() {
@@ -555,9 +555,9 @@ impl CloudHypervisorLifecycle {
                 RuntimeError::VmStartFailed(format!("Failed to set up virtio-fs: {}", e))
             })?;
 
-        let guest_mounts: Vec<crate::runtime::cloud_init::GuestMount> = live_mounts
+        let guest_mounts: Vec<crate::hypervisor::cloud_init::GuestMount> = live_mounts
             .iter()
-            .map(|m| crate::runtime::cloud_init::GuestMount {
+            .map(|m| crate::hypervisor::cloud_init::GuestMount {
                 tag: m.tag.clone(),
                 destination: m.destination.clone(),
                 read_only: m.read_only,
@@ -600,7 +600,7 @@ impl CloudHypervisorLifecycle {
             .map(|_| PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id)));
         let guest_net = net_alloc
             .as_ref()
-            .map(|n| crate::runtime::cloud_init::GuestNet {
+            .map(|n| crate::hypervisor::cloud_init::GuestNet {
                 guest_ip: n.guest_ip.clone(),
                 host_ip: n.host_ip.clone(),
                 prefix_len: n.prefix_len,
@@ -617,7 +617,7 @@ impl CloudHypervisorLifecycle {
         }];
         if !deployment.environment.is_empty() || !guest_mounts.is_empty() || guest_net.is_some() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
-            let iso_path = crate::runtime::cloud_init::build_cidata_iso(
+            let iso_path = crate::hypervisor::cloud_init::build_cidata_iso(
                 instance_id,
                 deployment,
                 &guest_mounts,
@@ -1345,7 +1345,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.to_string()];
         let timeout = std::time::Duration::from_secs(30);
 
-        match crate::runtime::vsock_client::exec(cid, &argv, &[], timeout).await {
+        match crate::hypervisor::vsock_client::exec(cid, &argv, &[], timeout).await {
             Ok(resp) if resp.timed_out => (
                 HealthCheckStatus::Timeout,
                 Some(format!("command timed out: {}", command)),
@@ -1364,7 +1364,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
             // started yet) — the single most common `command` health-check
             // pitfall on this runtime. Point the operator straight at it
             // instead of leaving them with a bare io error.
-            Err(crate::runtime::vsock_client::VsockError::Connect { cid, source }) => (
+            Err(crate::hypervisor::vsock_client::VsockError::Connect { cid, source }) => (
                 HealthCheckStatus::Failed,
                 Some(format!(
                     "cannot reach ring-agent in the guest (CID {cid}): {source}. \
@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     fn skip_if_no_virtiofsd(test: &str) -> bool {
-        if crate::runtime::virtiofs::locate_virtiofsd().is_none() {
+        if crate::hypervisor::virtiofs::locate_virtiofsd().is_none() {
             eprintln!(
                 "skipping {}: virtiofsd not installed (apt install virtiofsd)",
                 test

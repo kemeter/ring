@@ -23,8 +23,8 @@
 //! Firecracker CI vmlinux) ship neither iso9660 nor vfat — only ext4, which is
 //! what the root disk uses — so an ISO/FAT datasource would be unmountable.
 
+use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::{Deployment, EnvValue};
-use crate::runtime::error::RuntimeError;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -38,7 +38,7 @@ pub(crate) struct GuestMount {
 }
 
 /// Static network config Ring asks the guest to apply on its primary NIC.
-/// All values come from `runtime::host_net::InstanceNet`, propagated through
+/// All values come from `hypervisor::host_net::InstanceNet`, propagated through
 /// the runtime layer so cloud-init can write a netplan/networkd dropin.
 pub(crate) struct GuestNet {
     pub guest_ip: String,

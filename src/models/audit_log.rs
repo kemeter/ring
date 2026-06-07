@@ -80,13 +80,9 @@ pub(crate) async fn record(
     // discard the result. Log here so a missed entry is still visible
     // instead of vanishing silently — this is the only place that needs it.
     if let Err(ref e) = result {
-        log::warn!(
+        warn!(
             "Failed to record audit entry ({} {} '{}' in namespace {:?}): {}",
-            entry.action,
-            entry.target_type,
-            entry.target_name,
-            entry.namespace,
-            e
+            entry.action, entry.target_type, entry.target_name, entry.namespace, e
         );
     }
 
@@ -123,10 +119,9 @@ pub(crate) async fn delete_by_namespace(
         .await;
 
     if let Err(ref e) = result {
-        log::warn!(
+        warn!(
             "Failed to purge audit trail for namespace '{}': {}",
-            namespace,
-            e
+            namespace, e
         );
     }
 

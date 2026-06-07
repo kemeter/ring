@@ -27,7 +27,7 @@ pub(crate) async fn delete(
         Ok(Some(_)) => {}
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
-            log::error!("Failed to look up namespace '{}': {}", name, e);
+            error!("Failed to look up namespace '{}': {}", name, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
@@ -46,13 +46,13 @@ pub(crate) async fn delete(
                 .into_response();
         }
         Err(e) => {
-            log::error!("Failed to count resources in namespace '{}': {}", name, e);
+            error!("Failed to count resources in namespace '{}': {}", name, e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
 
     if let Err(e) = namespace::delete_by_name(&pool, &name).await {
-        log::error!("Failed to delete namespace '{}': {}", name, e);
+        error!("Failed to delete namespace '{}': {}", name, e);
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 

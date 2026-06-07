@@ -79,7 +79,7 @@ pub(crate) async fn list(
             (StatusCode::OK, Json(output)).into_response()
         }
         Err(e) => {
-            log::error!("Failed to list volumes: {}", e);
+            error!("Failed to list volumes: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({ "error": "Failed to list volumes" })),

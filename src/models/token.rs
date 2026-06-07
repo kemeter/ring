@@ -80,14 +80,13 @@ impl From<TokenRow> for Token {
         // make the whole token unreadable (which on the auth path would lock a
         // user out), it degrades to "no scopes / all namespaces" and is logged.
         let scopes = serde_json::from_str(&row.scopes).unwrap_or_else(|e| {
-            log::warn!("Failed to deserialize scopes for token {}: {}", row.id, e);
+            warn!("Failed to deserialize scopes for token {}: {}", row.id, e);
             Vec::new()
         });
         let namespaces = serde_json::from_str(&row.namespaces).unwrap_or_else(|e| {
-            log::warn!(
+            warn!(
                 "Failed to deserialize namespaces for token {}: {}",
-                row.id,
-                e
+                row.id, e
             );
             Vec::new()
         });

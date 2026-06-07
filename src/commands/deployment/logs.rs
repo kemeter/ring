@@ -1,7 +1,7 @@
 use crate::config::auth::load_auth_config;
 use crate::config::config::Config;
 use crate::exit_code;
-use crate::runtime::lifecycle_trait::Log;
+use crate::hypervisor::lifecycle_trait::Log;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::collections::HashSet;
 

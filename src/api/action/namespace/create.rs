@@ -79,7 +79,7 @@ pub(crate) async fn create(
             format!("namespace '{}' already exists", new_namespace.name),
         ),
         Err(e) => {
-            log::error!("Failed to create namespace: {}", e);
+            error!("Failed to create namespace: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

@@ -6,7 +6,6 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use axum_macros::FromRef;
-use log::{error, info, warn};
 use sqlx::SqlitePool;
 use std::time::Duration;
 
@@ -79,7 +78,7 @@ pub(crate) type Db = SqlitePool;
 pub(crate) type RuntimeMap = std::sync::Arc<
     std::collections::HashMap<
         String,
-        std::sync::Arc<dyn crate::runtime::lifecycle_trait::RuntimeLifecycle>,
+        std::sync::Arc<dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle>,
     >,
 >;
 

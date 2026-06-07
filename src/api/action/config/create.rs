@@ -117,7 +117,7 @@ pub(crate) async fn create(
             ),
         ),
         Err(e) => {
-            log::error!("Failed to create configuration: {}", e);
+            error!("Failed to create configuration: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

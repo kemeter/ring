@@ -97,7 +97,7 @@ pub(crate) async fn list(
     let list_deployments = match deployments::find_all(&pool, filters).await {
         Ok(list) => list,
         Err(e) => {
-            log::error!("Failed to list deployments: {}", e);
+            error!("Failed to list deployments: {}", e);
             return Json(deployments).into_response();
         }
     };

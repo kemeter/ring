@@ -16,8 +16,6 @@ path = "src/main.rs"
 [dependencies]
 futures = "0.3.1"
 tokio = { version = "1.20", features = ["full"] }
-log = "0.4.0"
-env_logger = "0.11.2"
 bollard = "0.20.2"
 clap = { version = "4.5.1", features = ["derive"] }
 chrono = "0.4"
@@ -31,7 +29,6 @@ local-ip-address = "0.6.1"
 cli-table = "0.5.0"
 owo-colors = { version = "4", features = ["supports-colors"] }
 axum = { version = "0.8.4" }
-axum-extra = { version = "0.10.1", features = ["typed-header", "query", "json-deserializer"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
 tower-http = { version = "0.6", features = ["cors"] }
 axum-macros = "0.5.0"

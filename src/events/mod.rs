@@ -271,12 +271,12 @@ pub(crate) async fn publish(pool: &SqlitePool, event: Event) {
     let payload = match serde_json::to_string(&event.payload) {
         Ok(p) => p,
         Err(e) => {
-            log::error!("Failed to serialize event {} payload: {}", event.kind, e);
+            error!("Failed to serialize event {} payload: {}", event.kind, e);
             return;
         }
     };
     if let Err(e) = event_queue::enqueue(pool, &event.kind, &payload).await {
-        log::warn!("Failed to enqueue event {}: {}", event.kind, e);
+        warn!("Failed to enqueue event {}: {}", event.kind, e);
     }
 }
 

@@ -92,7 +92,7 @@ pub(crate) async fn create(
             );
         }
         Err(e) => {
-            log::error!("Failed to check namespace: {}", e);
+            error!("Failed to check namespace: {}", e);
             return problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",
@@ -141,7 +141,7 @@ pub(crate) async fn create(
             ),
         ),
         Err(e) => {
-            log::error!("Failed to create secret: {}", e);
+            error!("Failed to create secret: {}", e);
             problem_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Internal Server Error",

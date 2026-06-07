@@ -1,6 +1,6 @@
 //! virtio-fs daemon supervision.
 //!
-//! Lives at `runtime::` (not under `cloud_hypervisor::`) because the host-side
+//! Lives at `hypervisor::` (not under `cloud_hypervisor::`) because the host-side
 //! protocol is the same for any virtio-capable hypervisor: spawn a `virtiofsd`
 //! process pinned to a Unix socket and a host directory, then hand the socket
 //! to the VMM. Cloud Hypervisor consumes it via `VmConfig.fs[*].socket`;
@@ -13,7 +13,7 @@
 //! `/usr/libexec/virtiofsd` first, then `/usr/lib/qemu/virtiofsd`. Override
 //! by exporting `RING_VIRTIOFSD` to a custom path.
 
-use crate::runtime::error::RuntimeError;
+use crate::hypervisor::error::RuntimeError;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::{Child, Command};

@@ -46,7 +46,7 @@ pub(crate) async fn get(
         )
             .into_response(),
         Err(e) => {
-            log::error!("Failed to get secret: {}", e);
+            error!("Failed to get secret: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({
