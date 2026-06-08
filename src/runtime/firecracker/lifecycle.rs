@@ -218,7 +218,14 @@ impl FirecrackerLifecycle {
         };
         let tap = match &net_alloc {
             Some(n) => match TapDevice::create(&n.tap_name, &n.host_ip, n.prefix_len) {
-                Ok(t) => Some(t),
+                Ok(t) => {
+                    // The tap lets the guest reach the host; outbound NAT lets it
+                    // reach the Internet (git clone, composer, …). Idempotent and
+                    // global to the guest supernet, so it's a no-op after the
+                    // first VM. The operator never touches iptables.
+                    crate::hypervisor::host_nat::ensure_outbound_nat();
+                    Some(t)
+                }
                 Err(e) => {
                     self.kill_pid(pid).await;
                     let _ = std::fs::remove_file(&socket_path);

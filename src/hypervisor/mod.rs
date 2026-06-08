@@ -6,6 +6,7 @@
 pub(crate) mod cloud_init;
 pub(crate) mod error;
 pub(crate) mod health_probes;
+pub(crate) mod host_nat;
 pub(crate) mod host_net;
 pub(crate) mod lifecycle_trait;
 #[cfg(test)]
