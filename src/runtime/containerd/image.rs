@@ -33,7 +33,6 @@ use tonic::Request;
 /// (what containerd stores it under) and optional registry credentials.
 pub(crate) struct ContainerdImage {
     pub(crate) reference: String,
-    pub(crate) repo: String,
     pub(crate) parsed_ref: ImageReference,
     /// `(server, username, password)` registry credentials, when configured.
     pub(crate) auth: Option<(String, String, String)>,
@@ -51,7 +50,6 @@ impl ContainerdImage {
         };
         Self {
             reference,
-            repo,
             parsed_ref,
             auth,
         }
@@ -211,7 +209,7 @@ async fn pull_image(
     transfer
         .transfer(with_namespace!(request, namespace))
         .await
-        .map_err(|e| classify_pull_error(&e.message().to_string(), &image.reference))?;
+        .map_err(|e| classify_pull_error(e.message(), &image.reference))?;
 
     info!("containerd successfully pulled image {}", image.reference);
     Ok(())
@@ -378,7 +376,6 @@ mod tests {
     fn image_reference_tag_canonicalized() {
         let img = ContainerdImage::from_deployment("nginx", None);
         assert_eq!(img.reference, "nginx:latest");
-        assert_eq!(img.repo, "nginx");
     }
 
     #[test]
