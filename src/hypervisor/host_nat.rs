@@ -58,71 +58,21 @@ pub(crate) fn ensure_outbound_nat() {
 /// Raise CAP_NET_ADMIN into the ambient set so child processes (iptables)
 /// inherit it. Ambient requires the cap to be in BOTH permitted AND inheritable.
 /// `setcap cap_net_admin+ep` only fills permitted/effective — NOT inheritable —
-/// so we first add NET_ADMIN to the inheritable set via capset(), then raise it
-/// into ambient. If the cap isn't permitted at all (no setcap, not root), this
-/// fails and NAT just won't apply.
+/// so we first add NET_ADMIN to the inheritable set, then raise it into ambient.
+/// If the cap isn't permitted at all (no setcap, not root), this fails and NAT
+/// just won't apply. Uses the safe `caps` wrapper (no manual FFI/capset structs).
 fn raise_ambient_net_admin() -> Result<(), String> {
-    const PR_CAP_AMBIENT: libc::c_int = 47;
-    const PR_CAP_AMBIENT_RAISE: libc::c_ulong = 2;
-    const CAP_NET_ADMIN: u32 = 12;
-    const CAP_NET_ADMIN_BIT: u32 = 1 << CAP_NET_ADMIN; // NET_ADMIN is < 32
+    use caps::{CapSet, Capability};
 
-    // 1) Add NET_ADMIN to the inheritable set (keeping permitted/effective).
-    //    Use the v3 capability ABI (_LINUX_CAPABILITY_VERSION_3).
-    const VERSION_3: u32 = 0x2008_0522;
-    #[repr(C)]
-    struct CapHeader {
-        version: u32,
-        pid: libc::c_int,
-    }
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct CapData {
-        effective: u32,
-        permitted: u32,
-        inheritable: u32,
-    }
-
-    let mut hdr = CapHeader {
-        version: VERSION_3,
-        pid: 0,
-    };
-    let mut data = [CapData::default(); 2]; // two u32 blocks for 64 caps
-
-    // SAFETY: capget/capset are the documented syscalls; structs match the v3 ABI.
-    let rc = unsafe { libc::syscall(libc::SYS_capget, &mut hdr, data.as_mut_ptr()) };
-    if rc != 0 {
-        return Err(format!(
-            "capget failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    // NET_ADMIN (12) lives in block 0. Add it to inheritable; require permitted.
-    data[0].inheritable |= CAP_NET_ADMIN_BIT;
-    let rc = unsafe { libc::syscall(libc::SYS_capset, &mut hdr, data.as_ptr()) };
-    if rc != 0 {
-        return Err(format!(
-            "capset (inheritable) failed: {} — is cap_net_admin in the permitted set? (setcap cap_net_admin+ep)",
-            std::io::Error::last_os_error()
-        ));
-    }
-
-    // 2) Raise it into the ambient set so forked children keep it.
-    // SAFETY: prctl PR_CAP_AMBIENT is a pure capability-set op; args are scalars.
-    let rc = unsafe {
-        libc::prctl(
-            PR_CAP_AMBIENT,
-            PR_CAP_AMBIENT_RAISE,
-            CAP_NET_ADMIN as libc::c_ulong,
-            0 as libc::c_ulong,
-            0 as libc::c_ulong,
+    caps::raise(None, CapSet::Inheritable, Capability::CAP_NET_ADMIN).map_err(|e| {
+        format!(
+            "could not add CAP_NET_ADMIN to the inheritable set: {e} \
+             — is it in the permitted set? (setcap cap_net_admin+ep $(command -v ring))"
         )
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
+    })?;
+    caps::raise(None, CapSet::Ambient, Capability::CAP_NET_ADMIN)
+        .map_err(|e| format!("could not raise CAP_NET_ADMIN into the ambient set: {e}"))?;
+    Ok(())
 }
 
 fn enable_ip_forward() -> std::io::Result<()> {
@@ -224,12 +174,24 @@ fn default_out_iface() -> Option<String> {
         .args(["route", "show", "default"])
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // "default via 192.168.1.1 dev eth0 ..." → take the token after `dev`.
-    let mut it = text.split_whitespace();
-    while let Some(tok) = it.next() {
-        if tok == "dev" {
-            return it.next().map(|s| s.to_string());
+    parse_default_iface(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Parse the interface name from `ip route show default` output: from the line
+/// that starts with `default`, take the token after `dev`. Split out from
+/// [`default_out_iface`] so it can be unit-tested without invoking `ip`. Only
+/// the default route counts — a non-default line that happens to carry `dev`
+/// (e.g. a link-scope route) must not be mistaken for the uplink.
+fn parse_default_iface(route_output: &str) -> Option<String> {
+    for line in route_output.lines() {
+        if line.split_whitespace().next() != Some("default") {
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        while let Some(tok) = it.next() {
+            if tok == "dev" {
+                return it.next().map(|s| s.to_string());
+            }
         }
     }
     None
@@ -264,4 +226,85 @@ fn run_iptables(args: &[&str]) -> Result<bool, String> {
         }
     }
     Ok(out.status.success())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_verb_inserts_after_table_for_nat_rules() {
+        // `-t nat <chain> ...` must become `-t nat -A <chain> ...`, never
+        // `-A -t nat ...` (iptables rejects the latter).
+        let rule = [
+            "-t",
+            "nat",
+            "POSTROUTING",
+            "-s",
+            GUEST_SUPERNET,
+            "-j",
+            "MASQUERADE",
+        ];
+        assert_eq!(
+            with_verb(&rule, "-A"),
+            vec![
+                "-t",
+                "nat",
+                "-A",
+                "POSTROUTING",
+                "-s",
+                GUEST_SUPERNET,
+                "-j",
+                "MASQUERADE"
+            ]
+        );
+    }
+
+    #[test]
+    fn with_verb_prepends_for_filter_rules() {
+        // A FORWARD rule has no leading `-t`, so the verb goes at the front.
+        let rule = ["FORWARD", "-s", GUEST_SUPERNET, "-j", "ACCEPT"];
+        assert_eq!(
+            with_verb(&rule, "-C"),
+            vec!["-C", "FORWARD", "-s", GUEST_SUPERNET, "-j", "ACCEPT"]
+        );
+    }
+
+    #[test]
+    fn parse_default_iface_extracts_dev() {
+        assert_eq!(
+            parse_default_iface("default via 192.168.1.1 dev wlp3s0 proto dhcp metric 600\n")
+                .as_deref(),
+            Some("wlp3s0")
+        );
+    }
+
+    #[test]
+    fn parse_default_iface_handles_eth_and_extra_fields() {
+        assert_eq!(
+            parse_default_iface("default via 10.0.0.1 dev eth0 onlink").as_deref(),
+            Some("eth0")
+        );
+    }
+
+    #[test]
+    fn parse_default_iface_none_when_no_default_route() {
+        assert_eq!(parse_default_iface(""), None);
+        assert_eq!(parse_default_iface("10.0.0.0/24 dev eth0 scope link"), None);
+    }
+
+    #[test]
+    fn iptables_bin_falls_back_to_bare_name() {
+        // The result is always a non-empty command; on a host without any of the
+        // probed absolute paths it must fall back to "iptables" (PATH lookup).
+        let bin = iptables_bin();
+        assert!(!bin.is_empty());
+        assert!(bin.ends_with("iptables"));
+    }
+
+    #[test]
+    fn guest_supernet_is_the_documented_range() {
+        // The /16 the per-instance /30s are carved from; the NAT rules scope to it.
+        assert_eq!(GUEST_SUPERNET, "10.42.0.0/16");
+    }
 }

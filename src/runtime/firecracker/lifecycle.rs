@@ -445,16 +445,19 @@ impl FirecrackerLifecycle {
     /// tap: Firecracker holds the tap's backend fd while alive, so the tap
     /// can only be removed once the process has fully exited.
     async fn kill_pid(&self, pid: u32) {
-        let pid_i = pid as i32;
-        unsafe { libc::kill(pid_i, libc::SIGTERM) };
+        use nix::sys::signal::{Signal, kill};
+        use nix::unistd::Pid;
+
+        let target = Pid::from_raw(pid as i32);
+        let _ = kill(target, Signal::SIGTERM);
         for i in 0..20 {
-            // kill(pid, 0) returns -1/ESRCH once the process is gone.
-            if unsafe { libc::kill(pid_i, 0) } != 0 {
+            // `kill(pid, None)` only checks existence; Err (ESRCH) means gone.
+            if kill(target, None).is_err() {
                 return;
             }
             if i == 5 {
                 // Still alive after ~300ms — escalate.
-                unsafe { libc::kill(pid_i, libc::SIGKILL) };
+                let _ = kill(target, Signal::SIGKILL);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
