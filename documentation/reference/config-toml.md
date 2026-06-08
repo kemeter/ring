@@ -1,6 +1,6 @@
 # config.toml reference
 
-Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. It is split in two:
+Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. To load a different file — e.g. to keep `config_dev.toml` and `config_prod.toml` side by side — pass `--config <path>` or set `RING_CONFIG_FILE` (see [CLI reference](cli.md#--config)). It is split in two:
 
 - **`[contexts.<name>]`** — *client* config: how a CLI reaches a server (host, API, auth). There can be several (e.g. `local`, `staging`, `prod`), like kubectl contexts.
 - **`[server]`** — *daemon* config: what the Ring **server** does (which runtimes it enables, scheduler interval, dashboard). One shared table, outside `[contexts.*]`.

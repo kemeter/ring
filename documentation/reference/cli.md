@@ -23,6 +23,17 @@ ring --context production deployment list
 ring -c staging deployment list
 ```
 
+#### `--config`
+
+Load a specific `config.toml` instead of the default `$RING_CONFIG_DIR/config.toml`. Useful for keeping several explicitly-named files (`config_dev.toml`, `config_prod.toml`) and switching between them. Overrides the `RING_CONFIG_FILE` environment variable.
+
+This overrides **only** the config file — `auth.json`, Cloud Hypervisor firmware, and other assets still come from `$RING_CONFIG_DIR`. If the given file does not exist, Ring logs an error rather than silently falling back to the default.
+
+```bash
+ring --config ~/.config/kemeter/ring/config_dev.toml deployment list
+ring --config /etc/ring/config.toml server start
+```
+
 ## System
 
 ### `ring init`
@@ -605,6 +616,7 @@ The default context (the one with `current = true`) is used when no `--context` 
 ### CLI
 
 - `RING_TOKEN` — bearer token used for API requests. When set and non-empty, the CLI ignores `auth.json`. Useful for CI pipelines that should not depend on `ring login`.
+- `RING_CONFIG_FILE` — path to a specific `config.toml` to load (default: `$RING_CONFIG_DIR/config.toml`). The `--config` flag takes precedence.
 
 ```bash
 # Generate a server-side key
