@@ -36,7 +36,7 @@ pub(crate) fn command_config() -> Command {
                 .long("runtime")
                 .value_name("RUNTIME")
                 .help(
-                    "Runtime to configure, skipping the prompt: docker, podman, cloud-hypervisor, or both",
+                    "Runtime to configure, skipping the prompt: docker, podman, cloud-hypervisor, firecracker, or both",
                 )
                 .value_parser(clap::value_parser!(RuntimeChoice)),
         )
@@ -64,6 +64,7 @@ pub(crate) enum RuntimeChoice {
     Docker,
     Podman,
     CloudHypervisor,
+    Firecracker,
     Both,
 }
 
@@ -73,6 +74,7 @@ impl RuntimeChoice {
             RuntimeChoice::Docker => "Docker",
             RuntimeChoice::Podman => "Podman",
             RuntimeChoice::CloudHypervisor => "Cloud Hypervisor",
+            RuntimeChoice::Firecracker => "Firecracker (experimental)",
             RuntimeChoice::Both => "Both",
         }
     }
@@ -133,7 +135,51 @@ pub(crate) fn init(args: &ArgMatches) {
     println!("✓ Wrote {} (mode 0600)", secret_key_path);
 
     print_secret_key_block(&key, &secret_key_path);
+    run_preflight_checks(&key);
     print_next_steps();
+}
+
+/// Run `ring doctor`'s diagnostics on the config we just wrote, so the operator
+/// learns *now* that Docker isn't running or KVM is missing — instead of at the
+/// first `ring apply`, which is where these failures used to surface.
+///
+/// This is purely informative: `init` already succeeded (the files are on
+/// disk), so a failing dependency must NOT make the command exit non-zero or
+/// look like the init itself broke. We reload the freshly-written config so the
+/// checks see the runtimes the user just selected, and we set
+/// `RING_SECRET_KEY` in-process so the `RING_SECRET_KEY` server check passes
+/// (the operator hasn't had a chance to export it yet — it was printed seconds
+/// ago).
+fn run_preflight_checks(key: &str) {
+    use crate::commands::doctor;
+    use crate::config::config::load_config;
+
+    // The secret-key check reads RING_SECRET_KEY from the environment. We just
+    // generated a valid key; make the check reflect that rather than reporting
+    // a "missing key" that the operator is about to export anyway.
+    if std::env::var_os("RING_SECRET_KEY").is_none() {
+        // SAFETY: single-threaded at this point (CLI dispatch, no spawned
+        // threads reading the environment concurrently).
+        unsafe {
+            std::env::set_var("RING_SECRET_KEY", key);
+        }
+    }
+
+    let config = load_config("default", None);
+    let groups = doctor::collect_checks(&config);
+
+    println!();
+    println!("→ Pre-flight checks (ring doctor):");
+    println!();
+    let has_failure = doctor::report_checks(&groups);
+
+    if has_failure {
+        println!("Some dependencies are missing. Ring is configured, but the server may not");
+        println!(
+            "start until you resolve the [-] items above. Re-run `ring doctor` after fixing them."
+        );
+        println!();
+    }
 }
 
 const DEFAULT_PORT: u16 = 3030;
@@ -176,6 +222,7 @@ fn collect_settings(args: &ArgMatches) -> InitSettings {
                 RuntimeChoice::Docker,
                 RuntimeChoice::Podman,
                 RuntimeChoice::CloudHypervisor,
+                RuntimeChoice::Firecracker,
                 RuntimeChoice::Both,
             ],
         )
@@ -241,6 +288,9 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         settings.runtime,
         RuntimeChoice::CloudHypervisor | RuntimeChoice::Both
     );
+    // Firecracker is experimental and not part of `Both` (which stays the
+    // mainstream Docker+CH pairing). It's only enabled when picked explicitly.
+    let firecracker = matches!(settings.runtime, RuntimeChoice::Firecracker);
 
     if docker {
         out.push('\n');
@@ -269,6 +319,20 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         // don't need it, but the comment saves an hour of debugging when
         // they do.
         out.push_str("# seccomp = \"false\"  # only if VMs die with SIGSYS on boot\n");
+    }
+
+    if firecracker {
+        out.push('\n');
+        out.push_str("# Firecracker is experimental: no volumes, no command health checks,\n");
+        out.push_str("# no kind: job (treated as a worker). See the runtime docs.\n");
+        out.push_str("[server.runtime.firecracker]\n");
+        out.push_str("enabled = true\n");
+        out.push_str("# Uncomment and adjust if firecracker isn't on $PATH:\n");
+        out.push_str("# binary_path = \"/usr/local/bin/firecracker\"\n");
+        // Firecracker boots a kernel directly — there is no firmware step.
+        out.push_str("# kernel_path = \"/var/lib/ring/firecracker/vmlinux\"\n");
+        out.push_str("# socket_dir = \"/var/lib/ring/firecracker/sockets\"\n");
+        out.push_str("# boot_args = \"console=ttyS0 reboot=k panic=1 pci=off\"\n");
     }
 
     out
@@ -370,6 +434,15 @@ mod tests {
             RuntimeChoice::Podman
         );
 
+        // firecracker (experimental) is a valid runtime choice.
+        let m = command_config()
+            .try_get_matches_from(["init", "--runtime", "firecracker"])
+            .expect("firecracker must parse");
+        assert_eq!(
+            *m.get_one::<RuntimeChoice>("runtime").unwrap(),
+            RuntimeChoice::Firecracker
+        );
+
         // Unknown runtime is rejected by ValueEnum.
         assert!(
             command_config()
@@ -426,6 +499,35 @@ mod tests {
         assert!(out.contains("seccomp"));
         // No Docker block when CH only.
         assert!(!out.contains("[server.runtime.docker]"));
+    }
+
+    #[test]
+    fn build_config_firecracker_only_emits_firecracker_section() {
+        let s = InitSettings {
+            runtime: RuntimeChoice::Firecracker,
+            port: 5050,
+        };
+        let out = build_config_toml(&s);
+        assert!(out.contains("[server.runtime.firecracker]"));
+        assert!(out.contains("enabled = true"));
+        // Firecracker boots a kernel directly — the hint must mention kernel_path,
+        // not a firmware path.
+        assert!(out.contains("kernel_path"));
+        // Firecracker is exclusive and not part of `Both`: no docker/CH block.
+        assert!(!out.contains("[server.runtime.docker]"));
+        assert!(!out.contains("runtime.cloud_hypervisor"));
+    }
+
+    #[test]
+    fn build_config_both_excludes_firecracker() {
+        // `Both` is the mainstream Docker+CH pairing; the experimental
+        // Firecracker runtime must never be enabled implicitly.
+        let s = InitSettings {
+            runtime: RuntimeChoice::Both,
+            port: 3030,
+        };
+        let out = build_config_toml(&s);
+        assert!(!out.contains("[server.runtime.firecracker]"));
     }
 
     #[test]

@@ -66,7 +66,7 @@ ring init
 
 Ring will prompt you for two things:
 
-- **Which runtime to use** — Docker, Cloud Hypervisor, or both
+- **Which runtime to use** — Docker, Podman, Cloud Hypervisor, Firecracker (experimental), or both (Docker + Cloud Hypervisor)
 - **Which port the API should listen on** — defaults to `3030`
 
 It then writes `~/.config/kemeter/ring/config.toml`, persists a freshly generated `RING_SECRET_KEY` to `~/.config/kemeter/ring/secret-key` (mode `0600`), and prints the same key on stdout for convenience:
@@ -90,12 +90,22 @@ $ ring init
   Treat that file like a private key: chmod 0600, never commit, never back up unencrypted.
 ────────────────────────────────────────────────────────────────────────
 
+→ Pre-flight checks (ring doctor):
+
+Server
+  [+] RING_SECRET_KEY: set, decodes to a 32-byte AES-256 key
+
+Docker
+  [+] docker: Docker version 28.5.0, build 887030f
+
 → Next steps:
   1. Export the key above
   2. ring server start             # first boot creates the admin user (admin/changeme)
   3. ring login -u admin -p changeme
   4. ring user update --password "<your password>"  # rotate the default password
 ```
+
+At the end, `ring init` runs the same diagnostics as [`ring doctor`](/documentation/reference/cli) on the runtime you just selected — so you find out *now* that Docker isn't running, KVM is missing, or a kernel image is absent, instead of at your first `ring apply`. A failing check (`[-]`) is only a warning: `init` already wrote your config, so it still exits `0`. Fix the flagged items and re-run `ring doctor` to confirm. Only the selected runtime is checked, so a Docker-only init won't nag about Cloud Hypervisor dependencies.
 
 Copy the `export RING_SECRET_KEY=...` line into your shell, or pin it to a `systemd EnvironmentFile=` for a production install. The on-disk copy under `~/.config/kemeter/ring/secret-key` is a recovery aid if the terminal scrolls past or the install is interrupted — **it is not a substitute for setting the environment variable**, since `ring server start` only reads `RING_SECRET_KEY` from the environment. Lose the key (file deleted *and* env forgotten) and every secret you store becomes unrecoverable; leak it and every secret is compromised. See [Secrets and encryption](/documentation/concepts/secrets-encryption) for the threat model.
 
@@ -111,7 +121,7 @@ To configure a non-default runtime or port without a prompt (CI, Ansible, etc.),
 ring init --runtime cloud-hypervisor --port 4030
 ```
 
-- `--runtime` — `docker`, `cloud-hypervisor`, or `both`.
+- `--runtime` — `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor).
 - `--port` — the API port (default `3030`).
 
 Flags take precedence over prompts and over the non-interactive defaults, and compose per-field: passing only `--port` still prompts for the runtime on a TTY (or defaults to Docker when there's no TTY), and vice versa.

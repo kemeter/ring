@@ -6,7 +6,7 @@ pub(crate) fn command_config() -> Command {
     Command::new("doctor").about("Check system dependencies for configured runtimes")
 }
 
-struct Check {
+pub(crate) struct Check {
     name: String,
     passed: bool,
     detail: String,
@@ -135,6 +135,43 @@ fn check_docker() -> Vec<Check> {
     vec![check_binary("docker", "--version")]
 }
 
+/// Firecracker boots a kernel directly (no firmware step like Cloud
+/// Hypervisor), so its dependencies are: the `firecracker` binary, an
+/// uncompressed `vmlinux` kernel, `/dev/kvm`, and the same TAP network
+/// capabilities CH needs (Ring sets up the tap in-process via
+/// `CAP_NET_ADMIN`/`CAP_NET_RAW`). Firecracker is experimental — these checks
+/// only run when the runtime is explicitly enabled.
+fn check_firecracker(config: &Config) -> Vec<Check> {
+    let mut checks = Vec::new();
+
+    let binary = config
+        .server
+        .runtime
+        .firecracker
+        .binary_path
+        .as_deref()
+        .unwrap_or("firecracker");
+    checks.push(check_binary(binary, "--version"));
+
+    checks.push(check_kvm());
+    checks.push(check_capabilities(binary));
+
+    let default_kernel = format!("{}/firecracker/vmlinux", get_config_dir());
+    let kernel = config
+        .server
+        .runtime
+        .firecracker
+        .kernel_path
+        .as_deref()
+        .unwrap_or(&default_kernel);
+    checks.push(check_file("Kernel", kernel));
+
+    // Port forwarding is socat-based, same as CH.
+    checks.push(check_socat());
+
+    checks
+}
+
 fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     let mut checks = Vec::new();
 
@@ -246,16 +283,44 @@ fn check_server() -> Vec<Check> {
     }]
 }
 
-pub(crate) fn execute(_args: &ArgMatches, config: Config) {
-    let all_checks: Vec<(&str, Vec<Check>)> = vec![
-        ("Server", check_server()),
-        ("Docker", check_docker()),
-        ("Cloud Hypervisor", check_cloud_hypervisor(&config)),
-    ];
+/// Collect every diagnostic group. `Server` checks always run; runtime checks
+/// only run for runtimes enabled in the config, so `ring init --runtime docker`
+/// doesn't drown the operator in irrelevant Cloud Hypervisor failures. When no
+/// runtime is enabled (e.g. a stub config) we fall back to checking all of them
+/// — that matches the old behaviour and is the most useful default for a bare
+/// `ring doctor`.
+pub(crate) fn collect_checks(config: &Config) -> Vec<(&'static str, Vec<Check>)> {
+    let docker_enabled = config.server.runtime.docker.enabled;
+    let podman_enabled = config.server.runtime.podman.enabled;
+    let ch_enabled = config.server.runtime.cloud_hypervisor.enabled;
+    let fc_enabled = config.server.runtime.firecracker.enabled;
+    let none_enabled = !docker_enabled && !podman_enabled && !ch_enabled && !fc_enabled;
 
+    let mut groups: Vec<(&'static str, Vec<Check>)> = vec![("Server", check_server())];
+
+    // Podman speaks the Docker API, so its host-side dependency is the same
+    // `docker`/`podman` CLI presence check we already have for Docker.
+    if docker_enabled || podman_enabled || none_enabled {
+        groups.push(("Docker", check_docker()));
+    }
+    if ch_enabled || none_enabled {
+        groups.push(("Cloud Hypervisor", check_cloud_hypervisor(config)));
+    }
+    // Firecracker is experimental, so it's only diagnosed when explicitly
+    // enabled — never as part of the bare `ring doctor` fallback.
+    if fc_enabled {
+        groups.push(("Firecracker", check_firecracker(config)));
+    }
+
+    groups
+}
+
+/// Print a collected set of checks. Returns `true` if any check failed, so the
+/// caller decides what a failure means: `ring doctor` exits non-zero, while
+/// `ring init` only warns (init itself succeeded).
+pub(crate) fn report_checks(groups: &[(&str, Vec<Check>)]) -> bool {
     let mut has_failure = false;
-
-    for (runtime, checks) in &all_checks {
+    for (runtime, checks) in groups {
         println!("{}", runtime);
         for check in checks {
             let icon = if check.passed { "+" } else { "-" };
@@ -266,6 +331,12 @@ pub(crate) fn execute(_args: &ArgMatches, config: Config) {
         }
         println!();
     }
+    has_failure
+}
+
+pub(crate) fn execute(_args: &ArgMatches, config: Config) {
+    let groups = collect_checks(&config);
+    let has_failure = report_checks(&groups);
 
     if has_failure {
         std::process::exit(1);

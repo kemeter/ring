@@ -13,6 +13,9 @@
 #   4. re-running without --force refuses to overwrite (non-zero exit).
 #   5. `init --runtime podman --port 4040` writes a [server.runtime.podman]
 #      block (exclusive: no docker block).
+#   6. `init --runtime firecracker --port 5050` writes a
+#      [server.runtime.firecracker] block (experimental, exclusive: no docker
+#      or cloud_hypervisor block, and never enabled by `both`).
 
 set -euo pipefail
 
@@ -54,7 +57,7 @@ OUT=$(RING_CONFIG_DIR="$D3" "$RING_BIN" init --runtime lxc 2>&1)
 RC=$?
 set -e
 [ "$RC" -ne 0 ] || fail "3: invalid --runtime must exit non-zero"
-echo "$OUT" | grep -qiE "docker, podman, cloud-hypervisor, both" \
+echo "$OUT" | grep -qiE "docker, podman, cloud-hypervisor, firecracker, both" \
   || { echo "$OUT" >&2; fail "3: expected accepted runtime values in the error"; }
 [ -f "$D3/config.toml" ] && fail "3: no config.toml should be written on rejection"
 log "3 (invalid runtime rejected): exit $RC, no config written"
@@ -70,6 +73,17 @@ if grep -qF "[server.runtime.docker]" "$D5/config.toml"; then
 fi
 log "5 (scripted Podman init): config.toml correct"
 
+# --- Invariant 6: scripted Firecracker init (experimental, exclusive) ---
+D6=$(mktemp -d -t ring-e2e-init-XXXXXX)
+RING_CONFIG_DIR="$D6" "$RING_BIN" init --runtime firecracker --port 5050 </dev/null >/dev/null 2>&1 \
+  || fail "6: init --runtime firecracker exited non-zero"
+grep -qF "[server.runtime.firecracker]" "$D6/config.toml" \
+  || { cat "$D6/config.toml" >&2; fail "6: firecracker block missing"; }
+if grep -qE "\[server.runtime.docker\]|cloud_hypervisor" "$D6/config.toml"; then
+  fail "6: firecracker is exclusive, no docker/cloud_hypervisor block expected"
+fi
+log "6 (scripted Firecracker init): config.toml correct"
+
 # --- Invariant 4: refuse to overwrite without --force ---
 set +e
 OUT=$(RING_CONFIG_DIR="$D1" "$RING_BIN" init --runtime docker --port 3030 2>&1)
@@ -79,5 +93,5 @@ set -e
 echo "$OUT" | grep -qiF "already exists" || { echo "$OUT" >&2; fail "4: expected 'already exists'"; }
 log "4 (no clobber without --force): refused"
 
-rm -rf "$D1" "$D2" "$D3" "$D5"
+rm -rf "$D1" "$D2" "$D3" "$D5" "$D6"
 log "== T8-server: all invariants passed =="

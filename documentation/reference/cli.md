@@ -38,29 +38,38 @@ ring --config /etc/ring/config.toml server start
 
 ### `ring init`
 
-Initialize the Ring config directory.
+Initialize the Ring config directory: write `config.toml` and a freshly generated `RING_SECRET_KEY` (persisted to `secret-key`, mode `0600`) under `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`).
 
 ```bash
 ring init
 ```
 
-Creates `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`) and writes an empty `auth.json`. Produces no output on success.
+Interactive on a TTY (prompts for runtime and API port); scriptable via flags otherwise:
+
+- `--runtime` — `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor). `both` never enables Firecracker.
+- `--port` — the API port (default `3030`).
+- `--force` — overwrite an existing `config.toml` / `secret-key`. Regenerates the key, making every secret stored under the old one undecryptable.
+
+Flags win over prompts and over the non-interactive defaults (Docker, port `3030`), and compose per-field. When stdin is not a TTY and no flags are given, `init` uses the defaults instead of hanging on a prompt.
+
+After writing the files, `init` runs the same diagnostics as [`ring doctor`](#ring-doctor) on the selected runtime as a **pre-flight check**. Failing checks are surfaced as warnings but do **not** change the exit code — `init` already succeeded. Only the selected runtime is checked.
 
 > `ring init` does **not** create the SQLite database or seed the admin user. That happens automatically the first time `ring server start` runs the migrations.
 
 ### `ring doctor`
 
-Run diagnostic checks against the host:
+Run diagnostic checks against the host. Runtime checks only run for runtimes enabled in `config.toml`; with no runtime enabled, all of them run.
 
 - **Server-side env** — `RING_SECRET_KEY` is set, decodes to base64, and is exactly 32 bytes.
-- **Docker** — `docker --version` succeeds (the binary is present and the daemon is reachable).
+- **Docker / Podman** — `docker --version` succeeds (the binary is present and the daemon is reachable). Podman reuses this check since it speaks the Docker API.
 - **Cloud Hypervisor** — the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `xorriso` is on `$PATH` (needed for the cloud-init NoCloud ISO when a CH deployment ships `environment`), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
+- **Firecracker** (experimental, only when enabled) — the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set, the kernel image at the configured `kernel_path` (an uncompressed `vmlinux`, not a firmware blob) exists, and `socat` is on `$PATH` for port forwarding.
 
 ```bash
 ring doctor
 ```
 
-Use this as the first step when something doesn't work as expected.
+Use this as the first step when something doesn't work as expected. Exits non-zero if any check fails.
 
 ## Server
 
