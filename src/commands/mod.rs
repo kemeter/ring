@@ -8,6 +8,7 @@ pub(crate) mod server;
 
 pub(crate) mod config;
 pub(crate) mod login;
+pub(crate) mod logout;
 pub(crate) mod namespace;
 pub(crate) mod node;
 pub(crate) mod secret;

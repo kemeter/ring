@@ -68,6 +68,7 @@ async fn main() {
         .subcommand(commands::dashboard::command_config())
         .subcommand(commands::doctor::command_config())
         .subcommand(commands::login::command_config())
+        .subcommand(commands::logout::command_config())
         .subcommand(
             Command::new("deployment")
                 .args_conflicts_with_subcommands(true)
@@ -255,6 +256,9 @@ async fn main() {
         }
         Some(("login", sub_matches)) => {
             commands::login::execute(sub_matches, config, &client).await;
+        }
+        Some(("logout", sub_matches)) => {
+            commands::logout::execute(sub_matches, config, &client).await;
         }
         Some(("user", sub_matches)) => {
             let user_command = sub_matches.subcommand().unwrap_or(("list", sub_matches));
