@@ -256,6 +256,18 @@ export async function login(username: string, password: string): Promise<string>
   return data.token;
 }
 
+// Revoke the current session server-side. Best-effort: the caller clears the
+// local token regardless, but this ensures the token can't be replayed after
+// sign-out. A 401 (token already invalid) is treated as success.
+export async function logout(): Promise<void> {
+  try {
+    await request<void>('/logout', { method: 'POST' });
+  } catch {
+    // Already invalid or unreachable — the local clearToken() that follows is
+    // what the user sees, so swallow and let sign-out proceed.
+  }
+}
+
 export function listDeployments(): Promise<Deployment[]> {
   return request<Deployment[]>('/deployments');
 }
