@@ -7,169 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.0] - 2026-06-03
-
-### Changed (breaking)
-- **`POST /deployments` now uses RFC 7807** with the same shape as `POST /users` (`application/problem+json`, `violations[]` with `property_path`, `message`, `code`). Existing 400/422 responses with `{"message": "..."}` body are replaced. Codes for the rules already in place:
-  - `deployment.runtime.unsupported` — runtime must be one of: docker, cloud-hypervisor
-  - `deployment.command.cloud_hypervisor_unsupported`
-  - `deployment.image.cloud_hypervisor_requires_absolute_path`
-  - `deployment.network.host_runtime_unsupported`
-  - `deployment.ports.host_network_conflict`
-  - `deployment.replicas.host_network_conflict`
-
-  **New rules** (previously not validated, the manifest applied and broke at runtime):
-  - `deployment.ports.published.out_of_range` / `deployment.ports.target.out_of_range` — port 0 is reserved
-  - `deployment.ports.published.duplicate` — two entries publishing the same host port
-  - `deployment.ports.replicas_conflict` + `deployment.replicas.ports_conflict` — publishing host ports with `replicas > 1` causes inter-replica collisions
-  - `deployment.replicas.job_must_be_one` — `kind: job` is one-shot
-  - `deployment.health_checks.job_readiness_unsupported` — readiness checks only gate rolling updates
-  - `deployment.environment.key.invalid` — env var names must match `[A-Za-z_][A-Za-z0-9_]*`
-  - `deployment.resources.{limits,requests}.{cpu,memory}.invalid` — invalid quantity string
-  - `deployment.config.image_pull_policy.unsupported` — must be `Always`, `IfNotPresent` or `Never`
-
-  `property_path` follows JSONPath conventions for nested collections: `ports[0].published`, `volumes[2].source`, `resources.limits.cpu`.
-
-- **`POST /namespaces` now uses RFC 7807.** Validation failures return `application/problem+json` (422) with codes:
-  - `namespace.name.length` — must be 2 to 63 characters
-  - `namespace.name.format` — lowercase DNS-label rules (`a-z0-9` plus `-`, no leading/trailing dash)
-
-  Conflicts (duplicate name) now return `application/problem+json` (409) with `title: "Conflict"` and a `detail` line naming the offending namespace, instead of the legacy `{"error": "..."}` shape.
-
-- **`POST /secrets` now uses RFC 7807.** Validation codes:
-  - `secret.namespace.length` / `secret.namespace.format`
-  - `secret.name.length` — 2 to 253 characters
-  - `secret.name.format` — DNS-subdomain rules (lowercase alphanumerics plus `.` and `-`)
-  - `secret.value.length` — 1 to 1 MiB (matches Kubernetes' Secret limit)
-
-  404 (namespace missing) and 409 (duplicate) responses are problem+json with `Not Found` / `Conflict` titles.
-
-- **`POST /configs` and `PUT /configs/{id}` now use RFC 7807.** Validation codes:
-  - `config.namespace.length` / `config.namespace.format`
-  - `config.name.length` — 1 to 253 characters
-  - `config.name.format` — same DNS-subdomain rules as secrets
-  - `config.data.length` — 1 to 1 MiB
-  - `config.data.invalid_json` — on PUT, when `data` is non-empty but doesn't round-trip as JSON
-  - `config.labels.length` — at most 1000 characters
-
-  The previous 400 with `{"error": "Validation failed", "details": ...}` is replaced by a 422 with violations. 404 (config missing on PUT) and 409 (duplicate on POST) are problem+json.
-
-- **`POST /login` now emits problem+json on 401/500** with `title: "Unauthorized"` and `detail: "invalid credentials"` (same shape on internal errors with a generic detail). The legacy `{"errors": ["Invalid credentials"]}` body is gone.
-
-- **Validation errors on `POST /users` and `PUT /users/{id}` now use RFC 7807.** The 422 response shape changed from the bare `validator`-derived `{"errors": <map>}` to `application/problem+json`:
-
-  ```json
-  {
-    "type": "about:blank",
-    "title": "Validation failed",
-    "status": 422,
-    "detail": "username: must be 2 to 50 characters\npassword: must be 8 to 128 characters",
-    "violations": [
-      { "property_path": "username", "message": "must be 2 to 50 characters", "code": "user.username.length" },
-      { "property_path": "password", "message": "must be 8 to 128 characters", "code": "user.password.length" }
-    ]
-  }
-  ```
-
-  Every violation carries a stable `code` slug (e.g. `user.username.format`) that clients can branch on without parsing the human message. All applicable rules run on every request — the response lists every failure in one shot instead of stopping at the first.
-
-  Username format is now `[a-zA-Z0-9][a-zA-Z0-9._-]*` (2-50 chars), matching GitHub-style conventions for human-facing identifiers. Password rules unchanged (8-128 chars).
-
-- **`DeploymentStatus` is now snake_case in the JSON API and DB.** Previously the lifecycle states (`pending`, `running`, …) were lowercase while the error states (`CrashLoopBackOff`, `ImagePullBackOff`, …) were PascalCase — the mismatch silently dropped rows from string-matching filters elsewhere in the code (root cause of PR #84). All variants now share the same convention. Mapping for external consumers:
-  - `CrashLoopBackOff` → `crash_loop_back_off`
-  - `ImagePullBackOff` → `image_pull_back_off`
-  - `CreateContainerError` → `create_container_error`
-  - `NetworkError` → `network_error`
-  - `ConfigError` → `config_error`
-  - `FileSystemError` → `file_system_error`
-  - `Error` → `error` (unchanged shape, lowercased)
-
-  Migration `20220101000015_snake_case_deployment_status.sql` rewrites existing rows. Update any script that does `jq '.status == "CrashLoopBackOff"'` or similar.
-
-  Event `reason` strings (`ImagePullBackOff`, `InstanceCreationFailed`, …) stay PascalCase — those are event labels, not statuses.
-
 ### Added
-- **Host-memory admission control.** Before creating a Docker container or booting a Cloud Hypervisor VM, Ring now checks the deployment's requested memory (`resources.requests.memory`, falling back to `resources.limits.memory`) against the host's currently-available memory. If it doesn't fit, the deployment goes to a new terminal status `insufficient_resources` with an event naming the gap (`needs X MiB but only Y MiB is available — free memory or lower requests/limits`), instead of starting and being OOM-killed (Docker) or failing the VM spawn opaquely (CH). The status is terminal — Ring does not crash-loop, since the memory won't reappear on its own. The check is best-effort and point-in-time, and applies to memory only (CPU overcommit is left alone). Deployments that declare no memory request or limit are not gated.
-- **`volumes: type: secret`** — mount a `ring secret` as a read-only file inside the container. The decrypted value becomes the file contents, with no `key:` field (a secret holds a single opaque value). Pattern matches `type: config` but reads from the encrypted secret store instead of the plaintext config store. Use when an app expects a credentials *file path* rather than an env var (Prometheus `credentials_file`, TLS material, etc.). The mount is always read-only; rotation requires a redeploy. See [Deploy with secrets → Mount a secret as a file](/documentation/how-to/deploy-with-secrets#mount-a-secret-as-a-file).
-- **`ring apply`, `ring namespace create` and `ring secret create` render RFC 7807 problem details.** On validation failure the CLI prints the title line plus every violation with its property path, e.g.
-
-  ```
-  Unable to apply deployment 'nginx': Validation failed (422)
-    * ports[0].published: must be between 1 and 65535
-    * replicas: replicas > 1 (3) is incompatible with `ports` — drop `ports` or reduce `replicas` to 1
-  ```
-
-  instead of the legacy `API returned status 422: <raw body>` one-liner. Non-validation problems (404, 409) print the same way with the server's `title` and `detail`. Non-7807 responses fall back to the previous behaviour.
+- Podman runtime, opt-in under `[server.runtime.podman]` (#139)
+- Firecracker microVM runtime (experimental): boot, networking, outbound NAT, restart reconciliation (#142, #146, #147)
+- Scoped API tokens (PAT) with per-scope and per-namespace enforcement, plus `ring token` CLI (#134)
+- Outbound webhooks with HMAC-signed delivery and a durable event queue, plus `ring webhook` CLI (#135)
+- First-class Volume entity: `/volumes` CRUD and `ring volume` CLI (#112)
+- `ring init` runs `ring doctor` pre-flight checks for the selected runtime; `--runtime firecracker` now supported (#148)
+- Filter deployments by label (#129)
+- UDP port forwarding via `ports[].protocol` (#133)
+- Load `config.toml` from `--config` or `RING_CONFIG_FILE` (#145)
 
 ### Changed
-- **Failed Docker image pulls now surface an actionable reason instead of a raw daemon dump.** A `ImagePullBackOff` event previously read `Failed to pull image '…': <bollard string>`. Ring now classifies the failure and rewrites it: authentication refused → `registry authentication failed … — check config.server, config.username and config.password`; registry unreachable (connection refused, host not found, timeout) → `cannot reach the registry … — is it up and the registry host correct?`; missing tag/digest stays as `not found`. The original daemon string is preserved verbatim in `(original error: …)`. The deployment status (`image_pull_back_off`) and event reason are unchanged.
-
-### Dashboard (new)
-- **Web dashboard** (SvelteKit, served embedded by `ring server start --dashboard` or locally via `ring dashboard`). Login, **Overview** home page with summary cards (deployments by status, namespaces/secrets/configs counts, node health, failing deployments), and a deployments list with namespace filters and a created-at column.
-- **Deployment detail page** — overview, configured resources, running instances, **live metrics** (per-instance and aggregated CPU / memory / network I/O / disk I/O / PIDs), ports, volumes, environment, configured health checks, **health-check probe history**, **streamed logs** (live tail over SSE), and a recent-events timeline.
-- **Node page** — host info (hostname, OS, arch, uptime, CPU cores, memory, load average).
-- Read-only views for namespaces (with per-namespace audit trail), secrets, and configs.
-- **Dark/light theme toggle** (persisted, follows `prefers-color-scheme`) and the Ring version shown in the sidebar.
-- Per-page browser titles, copy-to-clipboard on IDs, and a responsive layout for small screens.
-
-### Added
-- **`ring init`** — interactive setup that prompts for runtime + port and generates `RING_SECRET_KEY`, plus **`--runtime` / `--port` flags** to script it non-interactively (CI, Ansible) without a TTY.
-- **`ring node get`** — host information for the server's machine.
-- **Startup banner** — `ring server start` prints a Vite-style banner with the API's Local/Network URLs, the dashboard URL (when enabled), and the registered runtimes.
-- **Semantic CLI colours and aligned tables** — errors red, success green, status column colour-coded; ANSI is dropped automatically in pipes / under `NO_COLOR` / with `--output json`.
-
-### Changed
-- **CLI commands exit non-zero on failure.** A command that can't reach the API or gets a non-2xx response now returns a categorised exit code (1 general, 2 auth, 3 connection, 4 not-found, 5 conflict) instead of silently exiting 0 — so `set -e`, CI gates and `&&` chains detect the error. Network failures render a single human line instead of the raw reqwest chain.
+- Runtimes are opt-in via a top-level `[server]` table; Docker is no longer enabled by default (#138)
+- An instance only reaches `running` once its readiness checks pass (#136)
+- `apply` warns on fields the Cloud Hypervisor runtime silently ignores (#130)
+- Extracted `auth` into its own config module (#137)
+- Split `runtime`/`hypervisor` modules, migrated to `tracing`, dropped dead deps (#141, #143)
 
 ### Fixed
-- **Scheduler no longer gets stuck cleaning up a deleted deployment** whose referenced secret/config/volume was removed — it reconciles straight to teardown instead of failing resolution every tick.
-- **`CreateContainerError` converges to `CrashLoopBackOff`** instead of looping forever; orphan Docker containers are cleaned up on create/connect-network failures; `kind: job` create errors converge to `Failed`.
-- **Deployment status enum unified to snake_case** end to end (DB, JSON, events), fixing rows silently dropped from string-matched filters.
+- Host-port deployments now recreate instead of rolling, avoiding the `port already allocated` loop (#140)
+- Actionable error when a Cloud Hypervisor `command` health check can't reach `ring-agent` (#131)
+- Cloud Hypervisor VMs survive a `ring-server` restart instead of being orphaned (#132)
+
+## [0.9.0] - 2026-06-03
+
+### Added
+- Web dashboard (SvelteKit): overview, deployment detail with live metrics, health-check history, streamed logs and events, node page, read-only namespaces/secrets/configs, theme toggle (#91, #92, #117, #122, #123, #124, #127, #128)
+- Host-memory admission control — deployments that don't fit go to a terminal `insufficient_resources` status instead of being OOM-killed
+- `volumes: type: secret` — mount a secret as a read-only file (#107)
+- `configs:` block inline in `ring apply`; publishable ports with `host_ip` (Docker + CH) (#105, #106)
+- `ring init` — interactive setup (runtime + port, generates `RING_SECRET_KEY`), scriptable via `--runtime` / `--port` (#83, #125)
+- `ring node get` — host information for the server's machine
+- Delete multiple deployments in one command (#114)
+- Startup banner showing API/dashboard URLs and registered runtimes (#121)
+- Semantic CLI colours and aligned tables (ANSI dropped in pipes / `NO_COLOR` / `--output json`) (#101)
+
+### Changed (breaking)
+- All write endpoints (`/deployments`, `/users`, `/namespaces`, `/secrets`, `/configs`, `/login`) now return RFC 7807 `application/problem+json` with a `violations[]` array and stable `code` slugs; every failure is reported in one pass. Replaces the legacy `{"message"|"error"|"errors": …}` shapes (#88, #89, #90)
+- `DeploymentStatus` is now snake_case everywhere in the JSON API and DB (e.g. `CrashLoopBackOff` → `crash_loop_back_off`); migration `20220101000015` rewrites existing rows. Update scripts matching the old PascalCase values (#85)
+- CLI commands exit non-zero on failure with a categorised code (auth/connection/not-found/conflict) instead of silently exiting 0 (#99, #100, #116)
+
+### Changed
+- `ring apply` / `ring namespace create` / `ring secret create` render RFC 7807 violations with their property paths instead of a raw status line (#89)
+- Failed Docker image pulls surface an actionable reason (auth refused / registry unreachable / not found) instead of a raw daemon dump (#95)
+
+### Fixed
+- Scheduler no longer gets stuck cleaning up a deleted deployment whose referenced secret/config/volume was removed (#118)
+- `CreateContainerError` converges to `CrashLoopBackOff` instead of looping forever; orphan containers cleaned up on create/connect-network failure; `kind: job` create errors converge to `Failed` (#84, #86, #87)
+- Secret names accept env-style uppercase + underscore (#103)
 
 ### Security
-- **IDOR fix** on `PUT`/`DELETE /users/{id}` (a user could modify/delete another); minimal-role authorization check.
-- **Unique random salt per password hash** (previously deterministic — identical passwords produced identical hashes).
-- **Single auth middleware** at the router with a fail-closed `User` extractor; **namespace-scoped audit log** for create/update/delete.
-- Dependency bumps closing OpenSSL CVEs.
+- IDOR fix on `PUT`/`DELETE /users/{id}` — a user could modify or delete another (#94)
+- Unique random salt per password hash (was deterministic — identical passwords produced identical hashes) (#97)
+- Single fail-closed auth middleware at the router; namespace-scoped audit log for create/update/delete (#96, #98)
+- Dependency bumps closing OpenSSL CVEs (#115)
 
 ### Internal
-- CI: **clippy is now blocking** (`-D warnings`) and a **dashboard lint** job (biome + svelte-check) was added.
-- Refactor: presentation helpers (`style`, `output`, `problem_json`) moved to a `cli` module; shared `OutputFormat` ValueEnum for `--output`.
+- CI: clippy is now blocking (`-D warnings`); added a dashboard lint job (biome + svelte-check) (#119)
+- Presentation helpers (`style`, `output`, `problem_json`) moved into a `cli` module; shared `OutputFormat` for `--output` (#126)
 
 ## [0.8.0] - 2026-05-12
 
 ### Added
-- **Cloud Hypervisor — readiness gate**: scheduler-side `is_ready_to_drain` with per-health-check anti-flap window. Rolling updates wait for the new instance to be ready before draining the parent. Includes Docker `HEALTHCHECK` translation so the same gate applies to both runtimes (PR #72).
-- **Cloud Hypervisor — `kind: job`**: dispatch worker/job in `apply`, boot one VM, mark `Completed` on guest shutdown. E2E `t21_job_kind.sh` validates the full lifecycle including artifact cleanup.
-- **Cloud Hypervisor — command health checks**: in-guest `ring-agent` over AF_VSOCK port 2375 reads the real exit code (PR #69).
-- **Cloud Hypervisor — full stats parity**: CPU and memory from `/proc/<vmm-pid>/{stat,status}` (PR #70), then network from `/sys/class/net/<tap>/statistics/*` (swapped host↔guest), threads from `/proc/<vmm-pid>/status`, disk I/O from `/proc/<vmm-pid>/io` when accessible (PR #78). Disk I/O degrades gracefully to zero on hardened hosts because CH clears `PR_SET_DUMPABLE`.
-- **Cloud Hypervisor — console log rotation**: size-based rotation with a 60s sweep, configurable via `[runtime.cloud_hypervisor].max_console_log_bytes` / `max_console_log_backups` (defaults 10 MiB × 3 backups). `ring deployment logs --tail N` reads through rotated backups (PR #77).
-- **Cloud Hypervisor — port conflict detection**: pre-check `TcpListener::bind` before VM boot, emit `PortAllocationFailed` event and `CrashLoopBackOff` after `MAX_RESTART_COUNT` — same semantics as Docker Compose.
-- **Cloud Hypervisor — `ring doctor` socat check**: verify `socat` presence when port mapping is requested.
-- **Docker — host network mode**: `network_mode: host` field on Docker deployments, with migration `20220101000014_network_mode.sql` and `documentation/how-to/use-host-network.md`.
-- **Scheduler — configurable anti-flap window**: `min_healthy_time` per health check variant (TCP/HTTP/Command), default 10s, scheduler picks the max across readiness HCs.
-- **API — config filtering**: `GET /configs?name=...`.
-- **API — `ForceReplace` event**: emitted when a rolling update is skipped (PR #71).
-- **Log level classification**: extended `classify_log` for kernel (`<N>` syslog priority, `BUG:`/`Oops:`/`Kernel panic`), cloud-init/systemd (`ERROR`/`WARN`/`INFO:`/`DEBUG`), and bracketed firmware markers (`[INFO]`/`[WARN]`/`[ERROR]`/`[DEBUG]`). Runtime-agnostic — benefits both Docker and CH.
-- **Documentation restructure to Diátaxis**: tutorials, how-to, reference, concepts, help. Sozune integration added as recommended HTTP proxy.
-- **Pre-built release binaries**: GitHub Actions workflow now attaches `ring` (x86_64-unknown-linux-gnu) and `ring-agent` (x86_64-unknown-linux-musl, static) tarballs to each tagged release.
+- Cloud Hypervisor readiness gate: rolling updates wait for the new instance to be ready before draining the parent, with Docker `HEALTHCHECK` translation so the gate applies to both runtimes (#72, #73)
+- Cloud Hypervisor `kind: job`: boot one VM, mark `Completed` on guest shutdown (#67)
+- Cloud Hypervisor command health checks via in-guest `ring-agent` over vsock (real exit code) (#69)
+- Cloud Hypervisor full stats parity: CPU, memory, network, threads and disk I/O (disk I/O degrades to zero on hardened hosts) (#70, #78)
+- Cloud Hypervisor console log rotation (size-based, configurable) (#77)
+- Cloud Hypervisor host-port conflict detection before VM boot (#74)
+- Cloud Hypervisor `ring doctor` socat check (#68)
+- Docker host network mode (`network_mode: host`) (#79)
+- Configurable anti-flap window (`min_healthy_time`) per health check (#76)
+- Filter configs by name (`GET /configs?name=...`)
+- `ForceReplace` event when a rolling update is skipped (#71)
+- Log level classification for kernel, cloud-init/systemd and firmware markers (#80)
+- E2E coverage for Docker and Cloud Hypervisor scenarios (#66)
+- Documentation restructured to Diátaxis; Sozune added as recommended HTTP proxy
+- Pre-built release binaries (`ring` + `ring-agent`) attached to each tagged release (#81)
 
 ### Changed
-- Health checks (Docker + CH) migrated to a shared `probe` module.
-- E2E tests split into `tests/e2e/docker/` and `tests/e2e/cloud-hypervisor/` with a `run.sh` orchestrator.
-- Cloud Hypervisor stats and logs documented as **Supported** in the parity table (no longer "partial").
+- Health checks (Docker + CH) migrated to a shared `probe` module
+- E2E tests split into `tests/e2e/docker/` and `tests/e2e/cloud-hypervisor/`
+- Cloud Hypervisor stats and logs marked **Supported** in the parity table
 
 ### Fixed
-- Cloud Hypervisor cleans up half-created VMs on boot failure.
-- Cloud Hypervisor retries on transient boot failures with exponential backoff and typed errors.
-- Scheduler emits docker-events at level `warning` (was `info`).
-- Anti-flap window no longer re-arms every scheduler cycle (PR #72).
-- Docker `command` health check now honors the exit code (PR #72).
-- `handle_rolling_update` no longer spawns/kills in a loop when the parent finishes draining (PR #72).
-- CLI `apply` serialises the `readiness` flag through to the API (PR #72).
-- `RING_SECRET_KEY` is validated at startup and surfaced in `ring doctor`.
-- Config loader falls back to `current = true` context when the requested name does not match.
-- OpenSSL CVEs (Dependabot high + moderate) addressed via `cargo upgrade`.
+- Cloud Hypervisor cleans up half-created VMs on boot failure and retries transient failures with exponential backoff
+- Anti-flap window no longer re-arms every scheduler cycle; Docker `command` health check now honours the exit code (#72)
+- `handle_rolling_update` no longer spawns/kills in a loop when the parent finishes draining (#72)
+- `RING_SECRET_KEY` validated at startup and surfaced in `ring doctor`
+- Config loader falls back to the `current = true` context when the requested name doesn't match
+- OpenSSL CVEs (Dependabot) addressed
 
 ## [0.7.0] - 2026-04-17
 
