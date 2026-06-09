@@ -21,8 +21,6 @@ pub(crate) struct User {
     pub(crate) username: String,
     #[serde(skip_serializing)]
     pub(crate) password: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub(crate) token: String,
     #[serde(skip_serializing)]
     pub(crate) login_at: Option<String>,
 }
@@ -36,12 +34,11 @@ struct UserRow {
     role: String,
     username: String,
     password: String,
-    token: Option<String>,
     login_at: Option<String>,
 }
 
 const SELECT_COLUMNS: &str =
-    "id, created_at, updated_at, status, role, username, password, token, login_at";
+    "id, created_at, updated_at, status, role, username, password, login_at";
 
 fn default_role() -> String {
     "user".to_string()
@@ -64,7 +61,6 @@ impl From<UserRow> for User {
             role: row.role,
             username: row.username,
             password: row.password,
-            token: row.token.unwrap_or_default(),
             login_at: row.login_at,
         }
     }
@@ -93,16 +89,6 @@ pub(crate) async fn find_by_username(
     Ok(row.map(User::from))
 }
 
-pub(crate) async fn find_by_token(pool: &SqlitePool, token: &str) -> Result<User, sqlx::Error> {
-    let sql = format!("SELECT {} FROM user WHERE token = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, UserRow>(&sql)
-        .bind(token)
-        .fetch_one(pool)
-        .await?;
-
-    Ok(User::from(row))
-}
-
 pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user", SELECT_COLUMNS);
     let rows = sqlx::query_as::<_, UserRow>(&sql).fetch_all(pool).await?;
@@ -110,9 +96,11 @@ pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error
     Ok(rows.into_iter().map(User::from).collect())
 }
 
-pub(crate) async fn login(pool: &SqlitePool, user: User) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE user SET token = ?, login_at = datetime() WHERE id = ?")
-        .bind(&user.token)
+/// Record a successful login by stamping `login_at`. The session credential
+/// itself is no longer stored on the user row — it lives in the `token` table
+/// (minted by the login handler); this only touches the last-login timestamp.
+pub(crate) async fn login(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE user SET login_at = datetime() WHERE id = ?")
         .bind(&user.id)
         .execute(pool)
         .await?;
@@ -128,14 +116,13 @@ pub(crate) async fn create(
     // role is hard-coded to 'user': there is no API path to create an admin
     // (that would be a privilege-escalation vector). Admin is set out of band.
     sqlx::query(
-        "INSERT INTO user (id, created_at, status, role, username, password, token) VALUES (?, datetime(), ?, ?, ?, ?, ?)"
+        "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, datetime(), ?, ?, ?, ?)"
     )
     .bind(Uuid::new_v4().to_string())
     .bind("active")
     .bind("user")
     .bind(username)
     .bind(password)
-    .bind(Uuid::new_v4().to_string())
     .execute(pool)
     .await?;
 

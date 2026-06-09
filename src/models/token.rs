@@ -11,6 +11,41 @@ use uuid::Uuid;
 /// to the session-token path, and lets the CLI recognise its own output.
 pub(crate) const TOKEN_PREFIX: &str = "ring_pat_";
 
+/// What a token row is, stored in the `kind` column. A login session and a
+/// PAT live in the same table but are different things: a session is minted by
+/// `/login`, carries full access, and is managed only through `/logout`; a PAT
+/// is created and managed by the user via `ring token`. Branching on `kind`
+/// (rather than a magic `name`) keeps `name` a free-text label — a user may
+/// name a PAT "session" without it colliding with the session machinery.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TokenKind {
+    /// A login session minted by `/login` (full access, ended by `/logout`).
+    Session,
+    /// A Personal Access Token created via `ring token create`.
+    Pat,
+}
+
+impl TokenKind {
+    /// On-disk value in the `kind` column. Must match the migration's
+    /// `DEFAULT 'pat'` and backfill (`20220101000022_drop_user_token.sql`).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            TokenKind::Session => "session",
+            TokenKind::Pat => "pat",
+        }
+    }
+
+    /// Parse the stored value back, defaulting to `Pat` for anything
+    /// unexpected — a token we can't classify is treated as a managed PAT
+    /// (visible, addressable), never silently hidden as a session.
+    fn from_str(s: &str) -> Self {
+        match s {
+            "session" => TokenKind::Session,
+            _ => TokenKind::Pat,
+        }
+    }
+}
+
 /// Number of leading characters of the clear token kept in `token_prefix` for
 /// display in listings (e.g. "ring_pat_a1b2c3"). Enough to disambiguate, not
 /// enough to be a secret.
@@ -41,6 +76,7 @@ pub(crate) struct Token {
     pub(crate) id: String,
     pub(crate) user_id: String,
     pub(crate) name: String,
+    pub(crate) kind: TokenKind,
     pub(crate) token_prefix: String,
     pub(crate) scopes: Vec<String>,
     /// Empty = all namespaces.
@@ -56,6 +92,7 @@ struct TokenRow {
     id: String,
     user_id: String,
     name: String,
+    kind: String,
     /// Selected by `SELECT_COLUMNS` for symmetry with the table but not mapped
     /// onto `Token`: auth looks tokens up *by* this hash in SQL, nothing reads
     /// the value back off a loaded token.
@@ -71,7 +108,7 @@ struct TokenRow {
     revoked_at: Option<String>,
 }
 
-const SELECT_COLUMNS: &str = "id, user_id, name, token_hash, token_prefix, scopes, namespaces, created_at, expire_at, last_used_at, revoked_at";
+const SELECT_COLUMNS: &str = "id, user_id, name, kind, token_hash, token_prefix, scopes, namespaces, created_at, expire_at, last_used_at, revoked_at";
 
 impl From<TokenRow> for Token {
     fn from(row: TokenRow) -> Self {
@@ -95,6 +132,7 @@ impl From<TokenRow> for Token {
             id: row.id,
             user_id: row.user_id,
             name: row.name,
+            kind: TokenKind::from_str(&row.kind),
             token_prefix: row.token_prefix,
             scopes,
             namespaces,
@@ -129,6 +167,13 @@ impl Token {
     pub(crate) fn is_active(&self) -> bool {
         !self.is_revoked() && !self.is_expired()
     }
+
+    /// True when this row is a login session (not a user-managed PAT). Sessions
+    /// are hidden from `ring token list` and not addressable by id — they are
+    /// managed only through `/login` and `/logout`.
+    pub(crate) fn is_session(&self) -> bool {
+        self.kind == TokenKind::Session
+    }
 }
 
 /// SHA-256 of the clear token, hex-encoded. Tokens are high-entropy secrets
@@ -162,6 +207,7 @@ pub(crate) async fn create(
     pool: &SqlitePool,
     user_id: &str,
     name: &str,
+    kind: TokenKind,
     scopes: &[String],
     namespaces: &[String],
     expire_at: Option<&str>,
@@ -173,12 +219,13 @@ pub(crate) async fn create(
     let namespaces_json = serde_json::to_string(namespaces).unwrap_or_else(|_| "[]".to_string());
 
     sqlx::query(
-        "INSERT INTO token (id, user_id, name, token_hash, token_prefix, scopes, namespaces, created_at, expire_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO token (id, user_id, name, kind, token_hash, token_prefix, scopes, namespaces, created_at, expire_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(user_id)
     .bind(name)
+    .bind(kind.as_str())
     .bind(&hash)
     .bind(&prefix)
     .bind(&scopes_json)
@@ -192,6 +239,7 @@ pub(crate) async fn create(
         id,
         user_id: user_id.to_string(),
         name: name.to_string(),
+        kind,
         token_prefix: prefix,
         scopes: scopes.to_vec(),
         namespaces: namespaces.to_vec(),
@@ -234,12 +282,15 @@ pub(crate) async fn find_all_for_user(
     pool: &SqlitePool,
     user_id: &str,
 ) -> Result<Vec<Token>, sqlx::Error> {
+    // Exclude login sessions: they live in this table but are not PATs the user
+    // created or manages, so they must not appear in `ring token list`.
     let sql = format!(
-        "SELECT {} FROM token WHERE user_id = ? ORDER BY created_at DESC",
+        "SELECT {} FROM token WHERE user_id = ? AND kind = ? ORDER BY created_at DESC",
         SELECT_COLUMNS
     );
     let rows = sqlx::query_as::<_, TokenRow>(&sql)
         .bind(user_id)
+        .bind(TokenKind::Pat.as_str())
         .fetch_all(pool)
         .await?;
 
@@ -269,6 +320,7 @@ pub(crate) async fn rotate(
         pool,
         &existing.user_id,
         &existing.name,
+        existing.kind,
         &existing.scopes,
         &existing.namespaces,
         existing.expire_at.as_deref(),
@@ -320,6 +372,7 @@ mod tests {
             id: "t".into(),
             user_id: "u".into(),
             name: "n".into(),
+            kind: TokenKind::Pat,
             token_prefix: "ring_pat_x".into(),
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             namespaces: namespaces.iter().map(|s| s.to_string()).collect(),

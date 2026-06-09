@@ -77,6 +77,7 @@ pub(crate) async fn create(
         &pool,
         &auth.user.id,
         &input.name,
+        token::TokenKind::Pat,
         &input.scopes,
         &input.namespaces,
         input.expire_at.as_deref(),

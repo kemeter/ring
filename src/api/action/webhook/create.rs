@@ -119,9 +119,17 @@ mod tests {
     /// Mint a PAT with the given scopes and return its clear `ring_pat_…` value.
     async fn pat(pool: &sqlx::SqlitePool, scopes: &[&str]) -> String {
         let scopes: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
-        let (clear, _) = token::create(pool, ADMIN_ID, "test", &scopes, &[], None)
-            .await
-            .expect("create token");
+        let (clear, _) = token::create(
+            pool,
+            ADMIN_ID,
+            "test",
+            token::TokenKind::Pat,
+            &scopes,
+            &[],
+            None,
+        )
+        .await
+        .expect("create token");
         clear
     }
 

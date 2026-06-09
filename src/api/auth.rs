@@ -35,11 +35,11 @@ use crate::models::users::User;
 /// the scopes and namespaces it was minted with.
 #[derive(Clone, Debug)]
 pub(crate) enum AuthSource {
-    /// Authenticated with a user session Bearer token: full access.
-    Bearer,
-    /// Authenticated with a scoped API token (PAT, `ring_pat_…`). Carries the
-    /// token's scopes and namespace boundary so handlers can enforce them via
-    /// [`require_scope`]. An empty `namespaces` means all namespaces.
+    /// Authenticated with a Bearer token from the `token` table — either a PAT
+    /// (`ring token create`) or a login session (`/login`, named "session",
+    /// scoped `admin`). Carries the token's scopes and namespace boundary so
+    /// handlers can enforce them via [`require_scope`]. An empty `namespaces`
+    /// means all namespaces; a session is `scopes = ["admin"]`, `namespaces = []`.
     Token {
         scopes: Vec<String>,
         namespaces: Vec<String>,
@@ -185,6 +185,16 @@ pub(crate) async fn auth_middleware(
         return next.run(req).await;
     }
 
+    // Logout is a self-action: any authenticated caller may revoke the exact
+    // token they are presenting (the handler resolves it from the bearer). It
+    // therefore needs no scope — gating it would wrongly block a narrowly-scoped
+    // PAT from logging itself out. A ticket never reaches here (returned above).
+    if req.method() == Method::POST
+        && req.extensions().get::<MatchedPath>().map(|m| m.as_str()) == Some("/logout")
+    {
+        return next.run(req).await;
+    }
+
     // Authorise: derive the scope this route requires and enforce it centrally.
     // The matched-path template (`/deployments/{id}`) is stable across ids, so
     // the table in `scope_for_route` stays small and reads like the router.
@@ -198,10 +208,12 @@ pub(crate) async fn auth_middleware(
                 return resp;
             }
         } else {
-            // Deny by default: a protected route with no scope mapping must
-            // not be reachable by a PAT. A session Bearer still passes (it has
-            // no scopes and is full-access), so this only locks down PATs.
-            if matches!(source, AuthSource::Token { .. }) {
+            // Deny by default: a protected route with no scope mapping is only
+            // reachable by a full-access (`admin`) token — i.e. a login session
+            // or an admin PAT. A narrower PAT is locked out, so a new handler
+            // can never ship silently reachable by every scoped token.
+            let is_admin = matches!(&source, AuthSource::Token { scopes, .. } if scopes.iter().any(|s| s == "admin"));
+            if !is_admin {
                 return forbidden("this route is not reachable with a scoped token");
             }
         }
@@ -214,24 +226,14 @@ pub(crate) async fn auth_middleware(
 /// extensions. Returns `Some(())` on success, `None` on any auth failure.
 /// Authorisation (scope/ticket-binding) is handled by the caller.
 async fn authenticate(state: &AppState, req: &mut Request) -> Option<()> {
-    // Bearer wins when present. Two kinds of Bearer token share this path:
-    // a scoped API token (PAT, recognised by its `ring_pat_` prefix) and the
-    // legacy full-access session token. PATs are tried first so a session
-    // token lookup never sees a PAT-shaped value.
+    // Bearer wins when present. PATs and login sessions are both rows in the
+    // `token` table, so a single resolver handles both.
     if let Some(token) = bearer_token(req) {
-        if token.starts_with(token_model::TOKEN_PREFIX) {
-            return resolve_api_token(state, req, &token).await;
-        }
-        return match users_model::find_by_token(&state.connection, &token).await {
-            Ok(user) => {
-                req.extensions_mut().insert(AuthContext {
-                    user,
-                    source: AuthSource::Bearer,
-                });
-                Some(())
-            }
-            Err(_) => None,
-        };
+        // Every Bearer credential — whether a PAT minted by `ring token create`
+        // or a login session minted by `/login` — is a `ring_pat_`-prefixed row
+        // in the `token` table. There is a single resolution path; a session is
+        // just a token named "session" scoped `admin`.
+        return resolve_api_token(state, req, &token).await;
     }
 
     // Fall back to a stream ticket. A ticket is only ever valid for the exact
@@ -301,17 +303,15 @@ async fn resolve_api_token(state: &AppState, req: &mut Request, clear: &str) -> 
 /// centrally, by [`auth_middleware`] using the route's mapped scope — handlers
 /// never call this directly.
 ///
-/// - A session `Bearer` identity (a logged-in human) passes unconditionally —
-///   PATs are the only credential that carries scopes, so this is fully
-///   backward compatible with existing dashboard/CLI usage.
-/// - A `Token` (PAT) identity must hold `required_scope` (or `admin`). The
-///   namespace boundary is enforced separately by [`require_namespace`], since
-///   a resource's namespace is only known after it is loaded.
+/// - A `Token` identity must hold `required_scope` (or `admin`). A login
+///   session is a `Token` scoped `admin`, so it passes unconditionally — fully
+///   backward compatible with existing dashboard/CLI usage. The namespace
+///   boundary is enforced separately by [`require_namespace`], since a
+///   resource's namespace is only known after it is loaded.
 /// - A `Ticket` identity never reaches scoped resources (logs-only) → 403.
 #[allow(clippy::result_large_err)]
 pub(crate) fn require_scope(source: &AuthSource, required_scope: &str) -> Result<(), Response> {
     match source {
-        AuthSource::Bearer => Ok(()),
         AuthSource::Token { scopes, .. } => {
             if scopes.iter().any(|s| s == "admin" || s == required_scope) {
                 Ok(())
@@ -334,9 +334,9 @@ pub(crate) fn require_scope(source: &AuthSource, required_scope: &str) -> Result
 /// namespaced resource fetched by id — the scope is already enforced centrally,
 /// but the namespace cannot be (it isn't known until the row is read).
 ///
-/// - `Bearer` (full-access human session) passes unconditionally.
-/// - `Token` (PAT) with an empty namespace list passes (all namespaces);
-///   otherwise the resource's namespace must be in the token's list, else 403.
+/// - `Token` with an empty namespace list passes (all namespaces) — this
+///   includes login sessions, which carry no namespace restriction; otherwise
+///   the resource's namespace must be in the token's list, else 403.
 /// - `Ticket` never reaches namespaced resources → 403.
 ///
 /// This is the per-handler half of the boundary that `scope_for_route` cannot
@@ -345,7 +345,6 @@ pub(crate) fn require_scope(source: &AuthSource, required_scope: &str) -> Result
 #[allow(clippy::result_large_err)]
 pub(crate) fn require_namespace(source: &AuthSource, namespace: &str) -> Result<(), Response> {
     match source {
-        AuthSource::Bearer => Ok(()),
         AuthSource::Token { namespaces, .. } => {
             if namespaces.is_empty() || namespaces.iter().any(|n| n == namespace) {
                 Ok(())
@@ -363,8 +362,8 @@ pub(crate) fn require_namespace(source: &AuthSource, namespace: &str) -> Result<
 /// Keep only the items whose namespace the caller is allowed to see. List
 /// endpoints can't use [`require_namespace`] (they return many resources across
 /// namespaces), so they filter their result set through this instead: a
-/// namespace-scoped PAT only ever sees its own namespaces, while a full-access
-/// session (Bearer) and an all-namespaces PAT see everything.
+/// namespace-scoped PAT only ever sees its own namespaces, while a login
+/// session and an all-namespaces PAT (both `namespaces = []`) see everything.
 ///
 /// `namespace_of` extracts the namespace from each item so this works for any
 /// resource type (secrets, configs, deployments).
@@ -374,8 +373,7 @@ pub(crate) fn filter_by_namespace<T>(
     namespace_of: impl Fn(&T) -> &str,
 ) -> Vec<T> {
     match source {
-        // Full access, or a PAT with no namespace restriction: see everything.
-        AuthSource::Bearer => items,
+        // A session or a PAT with no namespace restriction: see everything.
         AuthSource::Token { namespaces, .. } if namespaces.is_empty() => items,
         AuthSource::Token { namespaces, .. } => items
             .into_iter()
@@ -479,12 +477,13 @@ where
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         match parts.extensions.get::<AuthContext>() {
-            Some(ctx) => match ctx.source {
-                AuthSource::Bearer => Ok(RequireFullAccess(ctx.user.clone())),
-                // A scoped API token is not a full-access session: routes that
-                // demand full access (and can't express a scope check) reject
-                // it. Handlers that want to admit an `admin`-scoped PAT should
-                // use `Auth` + `require_scope("admin", …)` instead.
+            Some(ctx) => match &ctx.source {
+                // Full access = an `admin`-scoped token. That covers both login
+                // sessions (always `admin`) and an explicitly admin-scoped PAT.
+                // A narrower PAT or a (logs-only) ticket is rejected.
+                AuthSource::Token { scopes, .. } if scopes.iter().any(|s| s == "admin") => {
+                    Ok(RequireFullAccess(ctx.user.clone()))
+                }
                 AuthSource::Token { .. } => Err(unauthorized()),
                 AuthSource::Ticket { .. } => Err(unauthorized()),
             },
@@ -515,11 +514,12 @@ mod tests {
     }
 
     #[test]
-    fn session_bearer_bypasses_scope_checks() {
-        // A logged-in human carries no scopes; require_scope must let them
-        // through unconditionally (backward compatible).
-        assert!(require_scope(&AuthSource::Bearer, "deployments:write").is_ok());
-        assert!(require_namespace(&AuthSource::Bearer, "prod").is_ok());
+    fn session_token_bypasses_scope_checks() {
+        // A login session is a `Token` scoped `admin` with no namespace
+        // restriction. require_scope/require_namespace must let it through
+        // unconditionally (backward compatible with the old `Bearer` session).
+        assert!(require_scope(&pat(&["admin"], &[]), "deployments:write").is_ok());
+        assert!(require_namespace(&pat(&["admin"], &[]), "prod").is_ok());
     }
 
     #[test]
