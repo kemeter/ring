@@ -18,7 +18,7 @@ All requests except `POST /login` and `GET /healthz` require a Bearer token.
 curl -H "Authorization: Bearer $TOKEN" http://localhost:3030/deployments
 ```
 
-The Bearer token is either a **login session token** (from `POST /login`, full access) or a **scoped API token** (`ring_pat_…`, limited to its scopes and namespaces — see [Tokens](#tokens)). Both travel in the same `Authorization: Bearer` header.
+There is a single token format and a single auth path. The Bearer token is either a **login session** (from `POST /login`) or a **scoped API token / PAT** (from `ring token create`). Both are rows in the same `token` table, both are `ring_pat_…` values hashed at rest, and both travel in the same `Authorization: Bearer` header. The two are distinguished by a `kind` column (`session` vs `pat`), not by their name. A login session is a token of kind `session` scoped `admin` (full access) with no namespace restriction; a PAT is limited to its scopes and namespaces (see [Tokens](#tokens)). Sessions do not appear in the token list, cannot be managed by id, and are revoked with `POST /logout`.
 
 ### Get a token
 
@@ -36,16 +36,25 @@ Content-Type: application/json
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "token": "ring_pat_3f9a…"
 }
 ```
 
-Tokens are stable per user; the CLI saves them in `~/.config/kemeter/ring/auth.json` after `ring login`.
+Every login mints a **new** session token (they are not shared across logins), so the value differs each time. The clear token is returned once and only its SHA-256 hash is stored. The CLI saves it in `~/.config/kemeter/ring/auth.json` after `ring login`. The session has no expiry; it lives until revoked with `POST /logout`.
 
 **Errors** (all in `application/problem+json`):
 
 - `401 Unauthorized` — `{"title": "Unauthorized", "detail": "invalid credentials"}` for both unknown username and wrong password.
-- `500 Internal Server Error` — token persistence or credential verification failure.
+- `500 Internal Server Error` — session persistence or credential verification failure.
+
+### Log out
+
+```
+POST /logout
+Authorization: Bearer <token>
+```
+
+Revokes the token presented in the `Authorization` header — a caller can only revoke the credential it is currently holding. Always returns `204 No Content`, whether or not the token existed (it never reveals token state). After logout the token is rejected with `401`. This works for any token, but is primarily how a login session is ended; to revoke a PAT, use `DELETE /tokens/{id}` or `ring token revoke`.
 
 ## CORS
 

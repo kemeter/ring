@@ -87,7 +87,7 @@ On first start the server runs SQLite migrations, creates `ring.db` in the worki
 
 ### `ring login`
 
-Log in to a Ring server. The token is saved in `~/.config/kemeter/ring/auth.json` and reused by subsequent commands.
+Log in to a Ring server. Each login mints a fresh session token (a `ring_pat_…` value, full access) saved in `~/.config/kemeter/ring/auth.json` and reused by subsequent commands. The session does not expire; end it with `ring logout`. Logging in again creates an independent session — earlier ones stay valid until they are logged out.
 
 ```bash
 ring login --username <USERNAME> --password <PASSWORD>
@@ -116,6 +116,16 @@ error: cannot reach the server at http://localhost:3030 — is it running? (conn
 
 A timeout (`the server ... did not respond in time`) and a malformed
 request are reported the same way: one line, no nested error chain.
+
+### `ring logout`
+
+Revoke the current context's session on the server and remove its token from `auth.json`.
+
+```bash
+ring logout
+```
+
+The server-side revocation is best-effort: if the server is unreachable the local token is still removed, so the command never leaves you "stuck logged in" locally. Only the current context's entry is touched — other contexts in `auth.json` are left intact. Revoking a PAT (rather than a login session) is done with `ring token revoke <id>`, not this command.
 
 ## Deployments
 
@@ -322,6 +332,8 @@ ring user delete <ID>
 Scoped API tokens (Personal Access Tokens) let scripts, CI and external agents call the API without using a human's login session. A token carries a set of `verb:resource` scopes, an optional namespace boundary and an optional expiry, and can be revoked or rotated individually.
 
 The clear token (`ring_pat_…`) is shown **once**, at creation, and never again — only its prefix is stored in clear for display. Present it as `Authorization: Bearer ring_pat_…`.
+
+Login sessions (`ring login`) use the same storage and format — a session is a token scoped `admin`, created automatically on login and revoked on `ring logout`. It is distinguished from a PAT by its **kind** (not by its name), so naming a PAT `session` is fine and has no special effect. Sessions are **not** shown by `ring token list` and cannot be managed by id (`ring token revoke`/`rotate`); that command lists and acts only on the PATs you created. End a session with `ring logout`.
 
 **Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (grants everything).
 
