@@ -18,18 +18,20 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
 
-/// Load a token by id, enforcing the ownership rule shared by get/revoke/rotate:
-/// a user may only act on their own tokens. A non-owner gets the same 404 as a
-/// missing id, so the endpoint never confirms another user's token exists. The
-/// `Err` is a ready-to-return response (404 / 500) so callers can `?` it.
+/// Load a token by id, enforcing the rules shared by get/revoke/rotate: a user
+/// may only act on their own tokens, and login sessions are off-limits to the
+/// PAT-management API (they are managed only via `/login` and `/logout`). A
+/// non-owner — or a session row — gets the same 404 as a missing id, so the
+/// endpoint never confirms another user's token nor a session exists. The `Err`
+/// is a ready-to-return response (404 / 500) so callers can `?` it.
 ///
-/// Centralising this means the IDOR guard (`token.user_id == user_id`) lives in
-/// exactly one place — relaxing or fixing it can't be done in one handler and
-/// forgotten in the others.
+/// Centralising this means the IDOR guard (`token.user_id == user_id`) and the
+/// session boundary live in exactly one place — relaxing or fixing either can't
+/// be done in one handler and forgotten in the others.
 #[allow(clippy::result_large_err)]
 pub(crate) async fn find_owned(pool: &Db, id: &str, user_id: &str) -> Result<Token, Response> {
     match token::find(pool, id).await {
-        Ok(Some(t)) if t.user_id == user_id => Ok(t),
+        Ok(Some(t)) if t.user_id == user_id && !t.is_session() => Ok(t),
         Ok(_) => Err(problem_response(
             StatusCode::NOT_FOUND,
             "Not Found",

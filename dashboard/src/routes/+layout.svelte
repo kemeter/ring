@@ -3,7 +3,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { getCurrentUser, type CurrentUser } from '$lib/api';
+  import { getCurrentUser, logout as apiLogout, type CurrentUser } from '$lib/api';
   import { clearToken, getToken } from '$lib/auth';
   import { applyTheme, loadTheme, saveTheme, type Theme } from '$lib/theme';
 
@@ -62,7 +62,10 @@
     }
   });
 
-  function logout() {
+  async function logout() {
+    // Revoke the session server-side first so the token can't be replayed,
+    // then drop it locally and leave for the login page.
+    await apiLogout();
     clearToken();
     goto('/login');
   }

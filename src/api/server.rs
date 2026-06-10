@@ -13,6 +13,7 @@ use tower::{BoxError, ServiceBuilder};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::api::action::login::login;
+use crate::api::action::logout::logout;
 use crate::api::action::stream_ticket::stream_ticket;
 use crate::config::config::Config;
 
@@ -109,6 +110,7 @@ pub(crate) fn router(state: AppState) -> Router {
 
     // All other routes: protected + 10s timeout.
     let api_routes = Router::new()
+        .route("/logout", post(logout))
         .route("/auth/stream-ticket", post(stream_ticket))
         .route("/deployments", get(deployment_list).post(deployment_create))
         .route(

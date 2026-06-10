@@ -39,7 +39,6 @@ pub(crate) fn error(msg: &str) -> String {
 }
 
 /// Yellow — a warning; the command continued.
-#[allow(dead_code)] // Completes the semantic palette (error/warn/success); used as the CLI grows.
 pub(crate) fn warn(msg: &str) -> String {
     paint(colour_enabled(), || msg.yellow().to_string(), msg)
 }
@@ -55,6 +54,13 @@ pub(crate) fn success(msg: &str) -> String {
 /// plain text) and callers don't each repeat the colouring.
 pub(crate) fn print_error(msg: &str) {
     eprintln!("{}", error(msg));
+}
+
+/// Print a warning line to stderr, coloured yellow when colour is on. For a
+/// problem the command recovered from (e.g. a best-effort step that failed but
+/// did not block the operation).
+pub(crate) fn print_warning(msg: &str) {
+    eprintln!("{}", warn(msg));
 }
 
 /// Print a success line to stdout, coloured green when colour is on.

@@ -47,6 +47,10 @@ api.scheme = "http"
 api.port = $PORT
 user.salt = "t9-server-salt"
 scheduler.interval = 1
+
+# A runtime must be enabled or the server refuses to start (opt-in guard, #138).
+[server.runtime.docker]
+enabled = true
 EOF
 
 SRV_PID=""
@@ -124,7 +128,29 @@ echo "$LIST" | grep -q "$PAT" \
   && { echo "$LIST" >&2; fail "1: GET /tokens leaked the clear secret"; }
 echo "$LIST" | grep -q '"token_prefix"' \
   || { echo "$LIST" >&2; fail "1: GET /tokens should expose token_prefix"; }
-log "1: clear token shown once, never returned by list"
+# The login session is a row in the same `token` table, but it must NOT appear
+# in the user-facing token list (it is not a PAT the user manages).
+echo "$LIST" | grep -q '"name":"session"' \
+  && { echo "$LIST" >&2; fail "1: GET /tokens must not list the login session"; }
+log "1: clear token shown once, never returned by list, session hidden"
+
+# --- Invariant 1b: a PAT may be named "session" without being hidden ---
+# Sessions are distinguished by their `kind` column, not their name, so a
+# user-created PAT literally named "session" must stay listed and addressable
+# (the magic-name model used to swallow it from the list). Create one, confirm
+# it appears, then revoke it so it doesn't pollute later assertions.
+PAT_SESSION=$("$RING_BIN" token create session --scope deployments:read 2>/dev/null)
+echo "$PAT_SESSION" | grep -q '^ring_pat_' \
+  || { echo "$PAT_SESSION" >&2; fail "1b: could not create a PAT named 'session'"; }
+LIST_S=$(curl -fsS "$URL/tokens" -H "Authorization: Bearer $SESSION")
+echo "$LIST_S" | grep -q '"name":"session"' \
+  || { echo "$LIST_S" >&2; fail "1b: a PAT named 'session' must be listed"; }
+SESSION_PAT_ID=$(echo "$LIST_S" | jq -r '.[] | select(.name=="session") | .id' | head -n1)
+[ -n "$SESSION_PAT_ID" ] && [ "$SESSION_PAT_ID" != "null" ] \
+  || { echo "$LIST_S" >&2; fail "1b: PAT named 'session' must be addressable by id"; }
+"$RING_BIN" token revoke "$SESSION_PAT_ID" --yes >/dev/null 2>&1 \
+  || fail "1b: a PAT named 'session' must be revocable by id"
+log "1b: a PAT named 'session' is listed and manageable (kind, not name)"
 
 # --- Invariant 2: PAT with deployments:read reaches the read endpoint ---
 [ "$(code GET /deployments "$PAT")" = "200" ] \
