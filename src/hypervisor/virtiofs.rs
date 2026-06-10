@@ -179,12 +179,28 @@ pub(crate) async fn spawn_virtiofsd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::Mutex;
+
+    /// `RING_VIRTIOFSD` is process-global, but `tokio::test`s run concurrently
+    /// in one process. Without serialization, `locate_respects_env_override`
+    /// can set/remove the override (and delete its fake binary) in the middle
+    /// of another test's `locate_virtiofsd()` call, making `spawn_virtiofsd`
+    /// chase a path that has already vanished. Every test that reads or writes
+    /// the override must hold this lock for the whole window it depends on it.
+    ///
+    /// A `tokio::sync::Mutex` (not `std`) so the async tests can keep the guard
+    /// held across their `.await` points without tripping `await_holding_lock`.
+    static ENV_GUARD: Mutex<()> = Mutex::const_new(());
 
     #[test]
     fn locate_respects_env_override() {
+        // Sync test, no tokio runtime: take the lock without awaiting.
+        let _guard = ENV_GUARD.blocking_lock();
+
         let tmp = std::env::temp_dir().join("ring-virtiofs-test-fake");
         std::fs::write(&tmp, b"#!/bin/sh\nexit 0\n").unwrap();
-        // SAFETY: single-threaded test, no concurrent env access.
+        // SAFETY: ENV_GUARD serializes every test that touches RING_VIRTIOFSD,
+        // so no other test reads the env while we mutate it here.
         unsafe {
             std::env::set_var("RING_VIRTIOFSD", &tmp);
         }
@@ -226,6 +242,8 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_creates_socket_and_drop_kills_daemon() {
+        let _guard = ENV_GUARD.lock().await;
+
         let Some(virtiofsd) = virtiofsd_or_skip("spawn_creates_socket_and_drop_kills_daemon")
         else {
             return;
@@ -267,6 +285,8 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_fails_when_shared_dir_missing() {
+        let _guard = ENV_GUARD.lock().await;
+
         // No need for the real binary — this errors out before spawning.
         let dir = scratch_dir("missing-share");
         let result = spawn_virtiofsd(
@@ -285,6 +305,8 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_removes_stale_socket() {
+        let _guard = ENV_GUARD.lock().await;
+
         let Some(virtiofsd) = virtiofsd_or_skip("spawn_removes_stale_socket") else {
             return;
         };
