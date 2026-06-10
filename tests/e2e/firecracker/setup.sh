@@ -44,7 +44,9 @@ setup_fc() {
   # Snapshot pre-existing ring-* taps so cleanup only reaps taps THIS run leaked
   # (e.g. t4 SIGKILLs ring-server mid-run, leaving a tap with no graceful
   # teardown) — never orphans from unrelated runs on a shared host.
-  RING_E2E_FC_TAPS_BEFORE=$(ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u)
+  # `|| true`: grep exits 1 when there are no ring-* taps (a clean host), which
+  # would abort the suite under `set -e` before config is exported.
+  RING_E2E_FC_TAPS_BEFORE=$( (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) | sort -u)
   export RING_E2E_FC_TAPS_BEFORE
 
   RING_EXTRA_CONFIG=$(cat <<EOF
@@ -78,7 +80,7 @@ cleanup_fc() {
   # CAP_NET_ADMIN/root; `ip link delete` direct, then `sudo -n` for CI.
   if [ -n "${RING_E2E_FC_TAPS_BEFORE+x}" ]; then
     local now leaked
-    now=$(ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u)
+    now=$( (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) | sort -u)
     leaked=$(comm -13 <(printf '%s\n' "$RING_E2E_FC_TAPS_BEFORE") <(printf '%s\n' "$now"))
     for tap in $leaked; do
       ip link delete "$tap" 2>/dev/null \

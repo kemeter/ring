@@ -64,6 +64,69 @@ impl Drop for PortForwarder {
     }
 }
 
+/// The `socat` listen address for a forwarder — the exact argv token used both
+/// to spawn it and to recognise it in `/proc` later. Keeping one source of
+/// truth means an orphan left by a previous `ring-server` is matched by the
+/// same string that created it.
+fn listen_arg(host_ip: &str, published_port: u16, protocol: PortProtocol) -> String {
+    let proto = match protocol {
+        PortProtocol::Tcp => "TCP4",
+        PortProtocol::Udp => "UDP4",
+    };
+    if host_ip == DEFAULT_HOST_IP {
+        format!("{}-LISTEN:{},reuseaddr,fork", proto, published_port)
+    } else {
+        format!(
+            "{}-LISTEN:{},reuseaddr,fork,bind={}",
+            proto, published_port, host_ip
+        )
+    }
+}
+
+/// SIGKILL any `socat` whose command line carries this exact listen address.
+/// Used before re-spawning a forwarder when re-adopting an instance after a
+/// `ring-server` restart: a forwarder SIGKILLed along with the old server is
+/// gone, but one orphaned by an unclean exit is reparented to init and still
+/// holds the port — left alone, the re-spawn would hit `Address already in use`.
+/// Matching the full listen token (not just the port number) avoids killing an
+/// unrelated socat that merely mentions the same port elsewhere on its line.
+pub(crate) fn kill_orphan_forwarder(
+    host_ip: Option<&str>,
+    published_port: u16,
+    protocol: PortProtocol,
+) {
+    let needle = listen_arg(host_ip.unwrap_or(DEFAULT_HOST_IP), published_port, protocol);
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<i32>().ok()) else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{}/cmdline", pid)) else {
+            continue;
+        };
+        // argv is NUL-separated; argv[0] must be socat and some arg must equal
+        // the listen token exactly.
+        let mut args = cmdline.split(|&b| b == 0);
+        let is_socat = args
+            .next()
+            .map(|a0| a0.ends_with(b"socat"))
+            .unwrap_or(false);
+        if !is_socat {
+            continue;
+        }
+        if args.any(|arg| arg == needle.as_bytes()) {
+            // SAFETY: kill(2) with a pid we just read from /proc; ESRCH if it
+            // already exited is harmless.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
 /// Spawn a `socat` that forwards `<host_ip>:<published>` to
 /// `<guest_ip>:<target>`. `host_ip` is `None` for the default (all
 /// interfaces). Returns once the child has been spawned (we do not wait for
@@ -99,14 +162,7 @@ pub(crate) async fn spawn_forwarder(
         PortProtocol::Tcp => "TCP4",
         PortProtocol::Udp => "UDP4",
     };
-    let listen = if host_ip == DEFAULT_HOST_IP {
-        format!("{}-LISTEN:{},reuseaddr,fork", proto, published_port)
-    } else {
-        format!(
-            "{}-LISTEN:{},reuseaddr,fork,bind={}",
-            proto, published_port, host_ip
-        )
-    };
+    let listen = listen_arg(host_ip, published_port, protocol);
     let connect = format!("{}:{}:{}", proto, guest_ip, target_port);
 
     let child = Command::new("socat")
@@ -152,6 +208,33 @@ mod tests {
             return true;
         }
         false
+    }
+
+    #[test]
+    fn listen_arg_default_host_omits_bind() {
+        // Default host_ip → no `bind=`, byte-for-byte the historical command.
+        assert_eq!(
+            listen_arg(DEFAULT_HOST_IP, 8080, PortProtocol::Tcp),
+            "TCP4-LISTEN:8080,reuseaddr,fork"
+        );
+    }
+
+    #[test]
+    fn listen_arg_scoped_host_and_udp() {
+        // Non-default host_ip appends `bind=`; UDP switches the proto token.
+        assert_eq!(
+            listen_arg("127.0.0.1", 53, PortProtocol::Udp),
+            "UDP4-LISTEN:53,reuseaddr,fork,bind=127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn kill_orphan_forwarder_no_match_is_noop() {
+        // A port no socat listens on must not error or kill anything. We can't
+        // assert "nothing died" cheaply, but the call must return cleanly on a
+        // host with no matching forwarder (the re-adoption fast path).
+        let port = pick_free_port();
+        kill_orphan_forwarder(None, port, PortProtocol::Tcp);
     }
 
     /// Bind a random ephemeral port and immediately release it so we can

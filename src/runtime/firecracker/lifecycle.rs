@@ -486,7 +486,109 @@ impl FirecrackerLifecycle {
         instances
     }
 
+    /// Instances of a deployment that are alive on disk (socket present) but
+    /// absent from our PID map — i.e. inherited from a previous `ring-server`.
+    /// These are the ones whose in-process networking state was lost on restart.
+    fn orphan_instances(&self, deployment_id: &str) -> Vec<String> {
+        let pids = self.pids.lock().unwrap();
+        self.scan_instances(deployment_id)
+            .into_iter()
+            .filter(|id| !pids.contains_key(id))
+            .collect()
+    }
+
+    /// Re-adopt the host networking of instances inherited from a previous
+    /// `ring-server` (socket on disk, but no PID in our map). The VM and its
+    /// persistent tap survive a restart, but the socat forwarders — children of
+    /// the old process — died with it, so a deployment with `ports` loses its
+    /// host port-forwarding. Re-derive the network from the instance id (the IP
+    /// and tap name are pure functions of it), re-adopt the tap, re-spawn one
+    /// socat per published port, and re-register the PID so the instance is
+    /// fully owned again. Nothing is persisted: every input is either
+    /// deterministic or already in the deployment. No-op for portless
+    /// deployments (no network to lose) and for instances we already track.
+    async fn readopt_networking(&self, deployment: &Deployment) {
+        if deployment.ports.is_empty() {
+            return;
+        }
+        for instance_id in self.orphan_instances(&deployment.id) {
+            // Skip if we already re-adopted its forwarders on an earlier tick.
+            if self
+                .port_forwarders
+                .lock()
+                .unwrap()
+                .contains_key(&instance_id)
+            {
+                continue;
+            }
+            let net = InstanceNet::for_instance(&instance_id);
+            // The tap is persistent, so it's still on the host — adopt by name
+            // and bring it back under our ownership. ensure_outbound_nat is
+            // idempotent and global, so re-running it after a restart is a no-op.
+            let tap = TapDevice::adopt(&net.tap_name);
+            crate::hypervisor::host_nat::ensure_outbound_nat();
+
+            let mut forwarders = Vec::with_capacity(deployment.ports.len());
+            let mut ok = true;
+            for p in &deployment.ports {
+                // A forwarder orphaned by an unclean exit of the previous
+                // ring-server is reparented to init and still holds the port;
+                // kill it first so the re-spawn below doesn't hit "address
+                // already in use". No-op when the old server SIGKILLed it or
+                // exited cleanly (Drop killed it).
+                port_forwarder::kill_orphan_forwarder(
+                    p.host_ip.as_deref(),
+                    p.published,
+                    p.protocol,
+                );
+                match port_forwarder::spawn_forwarder(
+                    &net.guest_ip,
+                    p.published,
+                    p.target,
+                    p.host_ip.as_deref(),
+                    p.protocol,
+                )
+                .await
+                {
+                    Ok(fw) => forwarders.push(fw),
+                    Err(e) => {
+                        warn!(
+                            "Firecracker: failed to re-adopt port {} for {} after restart: {}",
+                            p.published, instance_id, e
+                        );
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if !ok {
+                // Drop partial forwarders; leave the instance for the next tick
+                // to retry rather than tearing down a live VM over a bind race.
+                continue;
+            }
+
+            self.taps.lock().unwrap().insert(instance_id.clone(), tap);
+            if !forwarders.is_empty() {
+                self.port_forwarders
+                    .lock()
+                    .unwrap()
+                    .insert(instance_id.clone(), forwarders);
+            }
+            if let Some(pid) = find_pid_by_socket(&self.socket_path(&instance_id)) {
+                self.pids.lock().unwrap().insert(instance_id.clone(), pid);
+            }
+            info!(
+                "Firecracker: re-adopted networking for {} after restart",
+                instance_id
+            );
+        }
+    }
+
     async fn handle_worker_deployment(&self, mut deployment: Deployment) -> Deployment {
+        // Before scaling, re-adopt any instance inherited from a previous
+        // ring-server so its network is restored without recreating the VM.
+        self.readopt_networking(&deployment).await;
+
         let current = self.scan_instances(&deployment.id);
         let desired = deployment.replicas as usize;
 
@@ -595,6 +697,12 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         _resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         if deployment.status == DeploymentStatus::Deleted {
+            // Re-adopt first so an instance inherited from a previous
+            // ring-server (its forwarders orphaned, not in our maps) is brought
+            // back under ownership — then stop_vm's Drop kills its socat. Without
+            // this, deleting right after a restart could leak an orphan forwarder
+            // still holding the port.
+            self.readopt_networking(&deployment).await;
             for instance_id in self.scan_instances(&deployment.id) {
                 if !self.stop_vm(&instance_id).await {
                     warn!(
@@ -684,6 +792,48 @@ mod tests {
             found,
             vec!["dep-1-aaa".to_string(), "dep-1-bbb".to_string()]
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn orphan_instances_are_on_disk_but_not_in_pid_map() {
+        // After a restart the pid map is empty, so every on-disk instance is an
+        // orphan whose networking must be re-adopted. An instance we still track
+        // in `pids` (booted by this process) is not an orphan.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ring-fc-orphan-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = FirecrackerRuntimeConfig {
+            socket_dir: dir.to_string_lossy().to_string(),
+            ..FirecrackerRuntimeConfig::default()
+        };
+        let lc = FirecrackerLifecycle::new(cfg);
+
+        for f in ["dep-1-aaa.sock", "dep-1-bbb.sock"] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+
+        // Empty pid map (post-restart): both instances are orphans.
+        let mut orphans = lc.orphan_instances("dep-1");
+        orphans.sort();
+        assert_eq!(
+            orphans,
+            vec!["dep-1-aaa".to_string(), "dep-1-bbb".to_string()]
+        );
+
+        // One instance is tracked again (re-adopted or freshly booted): no
+        // longer an orphan.
+        lc.pids
+            .lock()
+            .unwrap()
+            .insert("dep-1-aaa".to_string(), 4242);
+        assert_eq!(lc.orphan_instances("dep-1"), vec!["dep-1-bbb".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
     }
