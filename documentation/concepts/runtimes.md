@@ -124,8 +124,9 @@ Ring copies the rootfs per instance (so replicas and reboots don't share guest s
 - **No volumes** — `volumes:` are not mounted yet (virtio-fs reuse is planned)
 - **No `command` health checks** — needs an in-guest agent over vsock, like Cloud Hypervisor
 - **No metrics** and **no `kind: job`** — a `job` deployment is treated as a worker
-- **No reconciliation across `ring-server` restarts** — instances tracked in-process are not re-adopted after a restart
 - Crash detection is tick-bound (no event stream), and `labels` are silently ignored
+
+A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them — re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down — so a deployment keeps its guest state and its published ports across a restart.
 
 ## Choosing
 
