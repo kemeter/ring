@@ -70,7 +70,7 @@ EOF
 
 # Record pre-existing ring-* taps so we attribute the NEW one to this VM, not an
 # orphan left by an earlier run on a shared host.
-taps_now() { ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u; }
+taps_now() { (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) | sort -u; }
 TAPS_BEFORE=$(taps_now)
 
 "$RING_BIN" apply --file "$FIXTURE"
@@ -99,6 +99,18 @@ for _ in $(seq 1 20); do
 done
 [ -n "$TAP" ] || fail "no new ring-* tap before restart"
 log "firecracker pid=$FC_PID, tap=$TAP"
+
+# Record the socat forwarder backing the published port. It's a child of this
+# ring-server, so the SIGKILL below takes it down — re-adoption must re-spawn it.
+socat_pid() { pgrep -f "socat.*TCP4-LISTEN:$PORT_A" | head -n1 || true; }
+SOCAT_PID=""
+for _ in $(seq 1 30); do
+  SOCAT_PID=$(socat_pid)
+  [ -n "$SOCAT_PID" ] && break
+  sleep 0.5
+done
+[ -n "$SOCAT_PID" ] || fail "no socat forwarder for port $PORT_A before restart"
+log "socat forwarder pid=$SOCAT_PID for port $PORT_A"
 
 # === 2. SIGKILL ring-server, leaving the VM alive ===
 log "killing ring-server (pid=$RING_PID), VM should keep running"
@@ -144,6 +156,27 @@ fi
 # And it must be the same firecracker process (proves no reboot-over).
 kill -0 "$FC_PID" 2>/dev/null || fail "original VM pid $FC_PID gone — a duplicate was booted over it"
 log "re-adopted same instance $INSTANCE_ID (pid $FC_PID still the one running)"
+
+# Re-adoption must leave the published port served by exactly one socat that is
+# a CHILD of the restarted ring-server (ppid == new RING_PID) — not the orphan
+# reparented to init when the old server was killed. This is the real proof the
+# networking was re-adopted: owned again, and idempotent (no double-bind).
+socat_pids_for_port() { pgrep -f "socat.*TCP4-LISTEN:$PORT_A" || true; }
+OWNED=""
+for _ in $(seq 1 30); do
+  mapfile -t sp < <(socat_pids_for_port)
+  if [ "${#sp[@]}" -eq 1 ]; then
+    ppid=$(ps -o ppid= -p "${sp[0]}" 2>/dev/null | tr -d ' ')
+    if [ "$ppid" = "$RING_PID" ]; then OWNED="${sp[0]}"; break; fi
+  fi
+  sleep 1
+done
+if [ -z "$OWNED" ]; then
+  echo "socat for port $PORT_A: $(socat_pids_for_port | tr '\n' ' ') (want exactly 1, child of $RING_PID)" >&2
+  for p in $(socat_pids_for_port); do ps -o pid,ppid,cmd -p "$p" --no-headers >&2 || true; done
+  fail "port $PORT_A not re-adopted: expected exactly one socat owned by the restarted ring-server"
+fi
+log "port $PORT_A re-adopted: single socat pid=$OWNED owned by ring-server $RING_PID"
 
 # === 5. Delete reaps the VM, socket, rootfs and tap — via the disk fallbacks ===
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "restart-vm")

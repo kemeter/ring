@@ -531,6 +531,16 @@ impl FirecrackerLifecycle {
             let mut forwarders = Vec::with_capacity(deployment.ports.len());
             let mut ok = true;
             for p in &deployment.ports {
+                // A forwarder orphaned by an unclean exit of the previous
+                // ring-server is reparented to init and still holds the port;
+                // kill it first so the re-spawn below doesn't hit "address
+                // already in use". No-op when the old server SIGKILLed it or
+                // exited cleanly (Drop killed it).
+                port_forwarder::kill_orphan_forwarder(
+                    p.host_ip.as_deref(),
+                    p.published,
+                    p.protocol,
+                );
                 match port_forwarder::spawn_forwarder(
                     &net.guest_ip,
                     p.published,
@@ -687,6 +697,12 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         _resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         if deployment.status == DeploymentStatus::Deleted {
+            // Re-adopt first so an instance inherited from a previous
+            // ring-server (its forwarders orphaned, not in our maps) is brought
+            // back under ownership — then stop_vm's Drop kills its socat. Without
+            // this, deleting right after a restart could leak an orphan forwarder
+            // still holding the port.
+            self.readopt_networking(&deployment).await;
             for instance_id in self.scan_instances(&deployment.id) {
                 if !self.stop_vm(&instance_id).await {
                     warn!(
