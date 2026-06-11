@@ -48,6 +48,10 @@ api.scheme = "http"
 api.port = $PORT
 user.salt = "t6-server-salt"
 scheduler.interval = 1
+
+# Ring refuses to start with no runtime enabled.
+[server.runtime.docker]
+enabled = true
 EOF
 
 NS="t6cfg"

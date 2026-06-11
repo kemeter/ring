@@ -8,6 +8,12 @@ use std::fs;
 
 #[derive(Deserialize, Debug, Clone)]
 pub(crate) struct Contexts {
+    /// Client contexts. Optional: a server-only `config.toml` (just a
+    /// `[server]` table, no `[contexts.<name>]`) is valid, because the daemon
+    /// never reads client contexts — it only needs `[server]`. When this map is
+    /// empty, `pick_context` synthesises a default client context and attaches
+    /// the shared `[server]` table to it (see `pick_context`).
+    #[serde(default)]
     pub(crate) contexts: HashMap<String, Config>,
     /// The single, top-level `[server]` table. It is shared by the whole file
     /// (a host runs one daemon, whatever client contexts point at it), so it is
@@ -153,6 +159,18 @@ fn pick_context(contexts: Contexts, context_current: &str) -> Option<Config> {
     // to whichever context we return so `configuration.server.*` is populated
     // regardless of which client context was picked.
     let server = contexts.server;
+
+    // A server-only config (a `[server]` table with no `[contexts.<name>]`) is
+    // valid: the daemon needs `[server]`, not client contexts. Synthesise a
+    // default context so the shared `[server]` table is still applied instead
+    // of being dropped to `ServerConfig::default()` by the caller's fallback.
+    if contexts.contexts.is_empty() {
+        return Some(Config {
+            server,
+            ..Config::default()
+        });
+    }
+
     let mut current_fallback: Option<Config> = None;
     for (context_name, mut config) in contexts.contexts {
         config.name = context_name.clone();
@@ -267,6 +285,24 @@ api.port = 3030
         let picked = pick_context(contexts, "dev").expect("dev should match");
         assert!(picked.server.runtime.docker.enabled);
         assert!(picked.server.runtime.cloud_hypervisor.enabled);
+    }
+
+    #[test]
+    fn server_only_config_parses_and_keeps_runtime() {
+        // A daemon config needs only `[server]`; client contexts are optional.
+        // The shared [server] table must survive onto the synthesised context
+        // instead of being lost to ServerConfig::default().
+        let toml_str = r#"
+[server.runtime.docker]
+enabled = true
+"#;
+        let contexts = make_contexts(toml_str);
+        let picked = pick_context(contexts, "default")
+            .expect("a server-only config must yield a usable context");
+        assert!(
+            picked.server.runtime.docker.enabled,
+            "the [server] table must be preserved when no contexts are declared"
+        );
     }
 
     #[test]
