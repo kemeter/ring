@@ -84,6 +84,11 @@ host = "127.0.0.1"
 api.scheme = "http"
 api.port = $port
 user.salt = "t1-server-salt"
+
+# Ring refuses to start with no runtime enabled; this case asserts a healthy
+# start, so it must enable one.
+[server.runtime.docker]
+enabled = true
 EOF
 RING_CONFIG_DIR="$cfg" RING_DATABASE_PATH="$cfg/ring.db" RING_SECRET_KEY="$key" \
   "$RING_BIN" server start > "$cfg/out.log" 2>&1 &
