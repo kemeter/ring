@@ -57,16 +57,22 @@ pub(crate) async fn execute(
                 exit_code::from_http_status(status.as_u16()).exit();
             }
 
-            let users_list: Vec<UserDto> = response.json().await.unwrap_or(vec![]);
+            let users_list: Vec<UserDto> = match response.json().await {
+                Ok(list) => list,
+                Err(e) => {
+                    eprintln!("Failed to parse user list: {}", e);
+                    exit_code::ExitCode::General.exit();
+                }
+            };
 
             for user in users_list {
                 users.push(UserTableItem {
                     id: user.id,
                     created_at: style::format_date(&user.created_at),
-                    updated_at: style::format_date(&user.updated_at),
+                    updated_at: style::format_date(user.updated_at.as_deref().unwrap_or_default()),
                     status: user.status,
                     username: user.username,
-                    login_at: style::format_date(&user.login_at),
+                    login_at: style::format_date(user.login_at.as_deref().unwrap_or_default()),
                 })
             }
 
@@ -83,8 +89,8 @@ pub(crate) async fn execute(
 struct UserDto {
     id: String,
     created_at: String,
-    updated_at: String,
+    updated_at: Option<String>,
     status: String,
     username: String,
-    login_at: String,
+    login_at: Option<String>,
 }
