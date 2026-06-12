@@ -34,6 +34,8 @@ ring user list -o json
 
 Output: username, ID, timestamps. Password hashes never appear.
 
+A freshly created user has no **Updated at** or **Login at** until it is edited or logs in for the first time; those cells render empty rather than dropping the row.
+
 ## Update your own password
 
 ```bash
