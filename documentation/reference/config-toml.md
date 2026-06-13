@@ -91,6 +91,16 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 | `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring fails fast |
 | `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
 
+### `[server.runtime.containerd]`
+
+containerd speaks its own native gRPC API on a Unix socket — no Docker daemon in between. CNI plugins (`/opt/cni/bin`) must be present for container networking.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Register the containerd runtime. Must be `true` for Ring to use containerd. When `true` and the socket doesn't answer a `Version` round-trip at startup, Ring fails fast |
+| `socket` | string | no | `/run/containerd/containerd.sock` | Path to the containerd gRPC Unix socket (the stock location used by `containerd`, k3s and RKE2) |
+| `namespace` | string | no | `ring` | containerd metadata namespace Ring creates its images, snapshots, containers and tasks under. Keeps Ring's objects from colliding with `k8s.io`, `moby` or `default` on a shared host. This is containerd's own partition concept, unrelated to a Ring deployment namespace |
+
 ### `[server.runtime.cloud_hypervisor]`
 
 | Field | Type | Default | Purpose |

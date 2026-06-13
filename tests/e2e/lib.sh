@@ -312,3 +312,92 @@ wait_docker_container_gone() {
   done
   fail "containers still present for deployment $id after ${timeout}s"
 }
+
+# --- containerd helpers -----------------------------------------------------
+#
+# These mirror the docker helpers above but query containerd directly via `ctr`
+# in Ring's namespace ($RING_CONTAINERD_NS, default "ring"). Ring tags every
+# container it creates with a `ring_deployment=<id>` containerd label, so we
+# filter on that the same way the docker helpers filter on the Docker label.
+
+RING_CONTAINERD_NS="${RING_CONTAINERD_NS:-ring}"
+
+# Count containerd containers belonging to a deployment.
+_ctr_container_count() {
+  local id="$1"
+  ctr -n "$RING_CONTAINERD_NS" containers list -q "labels.\"ring_deployment\"==$id" 2>/dev/null \
+    | grep -c . || true
+}
+
+# Usage: assert_containerd_container_exists <deployment_id>
+assert_containerd_container_exists() {
+  local id="$1"
+  local count
+  count=$(_ctr_container_count "$id")
+  if [ "${count:-0}" -lt 1 ]; then
+    fail "expected at least 1 containerd container for deployment $id, got ${count:-0}"
+  fi
+  log "containerd container exists for deployment $id (count=$count)"
+}
+
+# Usage: wait_containerd_container_count <deployment_id> <expected> [timeout]
+wait_containerd_container_count() {
+  local id="$1"
+  local expected="$2"
+  local timeout="${3:-30}"
+  local count=0
+  for _ in $(seq 1 "$timeout"); do
+    count=$(_ctr_container_count "$id")
+    if [ "${count:-0}" -eq "$expected" ]; then
+      log "deployment $id has $expected containerd container(s) as expected"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "deployment $id has ${count:-0} containerd container(s), expected $expected (timeout ${timeout}s)"
+}
+
+# Usage: wait_containerd_task_running <deployment_id> [timeout]
+# Asserts that at least one task for the deployment reports RUNNING.
+wait_containerd_task_running() {
+  local id="$1"
+  local timeout="${2:-30}"
+  for _ in $(seq 1 "$timeout"); do
+    # `ctr tasks ls` is global to the namespace; cross-reference against the
+    # deployment's container ids.
+    local cids
+    cids=$(ctr -n "$RING_CONTAINERD_NS" containers list -q "labels.\"ring_deployment\"==$id" 2>/dev/null)
+    if [ -n "$cids" ]; then
+      local running
+      running=$(ctr -n "$RING_CONTAINERD_NS" tasks list 2>/dev/null \
+        | awk 'NR>1 {print $1, $3}' \
+        | while read -r tid status; do
+            if echo "$cids" | grep -qx "$tid" && [ "$status" = "RUNNING" ]; then
+              echo "$tid"
+            fi
+          done | grep -c . || true)
+      if [ "${running:-0}" -ge 1 ]; then
+        log "deployment $id has a RUNNING containerd task"
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  fail "no RUNNING containerd task for deployment $id after ${timeout}s"
+}
+
+# Usage: wait_containerd_container_gone <deployment_id> [timeout]
+wait_containerd_container_gone() {
+  local id="$1"
+  local timeout="${2:-30}"
+  for _ in $(seq 1 "$timeout"); do
+    local count
+    count=$(_ctr_container_count "$id")
+    if [ "${count:-0}" -eq 0 ]; then
+      log "no containerd container left for deployment $id"
+      return 0
+    fi
+    sleep 1
+  done
+  fail "containerd containers still present for deployment $id after ${timeout}s"
+}

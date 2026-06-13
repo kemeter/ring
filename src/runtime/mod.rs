@@ -4,6 +4,7 @@
 //! runtime contract live in the sibling [`crate::hypervisor`] module.
 
 pub(crate) mod cloud_hypervisor;
+pub(crate) mod containerd;
 pub(crate) mod docker;
 pub(crate) mod firecracker;
 pub(crate) mod podman;

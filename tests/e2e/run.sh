@@ -5,7 +5,12 @@
 #   tests/e2e/run.sh                    # run every suite
 #   tests/e2e/run.sh docker             # run only Docker tests
 #   tests/e2e/run.sh podman             # run only Podman tests
+#   tests/e2e/run.sh containerd         # run only containerd tests (root + CNI)
 #   tests/e2e/run.sh cloud-hypervisor   # run only Cloud Hypervisor tests
+#
+# The containerd suite is not in the default set: it needs access to the
+# root-owned containerd socket and CNI plugins, so run it explicitly
+# (e.g. `sudo -E tests/e2e/run.sh containerd`).
 #
 # The script doesn't `set -e` on the loop so a single failing test does not
 # abort the rest of the run; the summary at the end reports pass/fail per
@@ -31,6 +36,17 @@ cleanup_between_tests() {
   if command -v docker > /dev/null 2>&1; then
     docker ps -aq --filter "label=ring_deployment" 2>/dev/null \
       | xargs -r docker rm -f > /dev/null 2>&1 || true
+  fi
+  # containerd: kill leftover tasks and delete Ring-labelled containers in the
+  # ring namespace, best-effort (only if the socket is reachable).
+  if command -v ctr > /dev/null 2>&1 \
+     && ctr -n "${RING_CONTAINERD_NS:-ring}" namespaces list > /dev/null 2>&1; then
+    for cid in $(ctr -n "${RING_CONTAINERD_NS:-ring}" containers list -q \
+                   'labels."ring_deployment"!=""' 2>/dev/null); do
+      ctr -n "${RING_CONTAINERD_NS:-ring}" tasks kill -s SIGKILL "$cid" 2>/dev/null || true
+      ctr -n "${RING_CONTAINERD_NS:-ring}" tasks delete "$cid" 2>/dev/null || true
+      ctr -n "${RING_CONTAINERD_NS:-ring}" containers delete "$cid" 2>/dev/null || true
+    done
   fi
   rm -rf /tmp/ring-e2e-?????? 2>/dev/null || true
   sleep 1

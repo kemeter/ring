@@ -36,7 +36,7 @@ pub(crate) fn command_config() -> Command {
                 .long("runtime")
                 .value_name("RUNTIME")
                 .help(
-                    "Runtime to configure, skipping the prompt: docker, podman, cloud-hypervisor, firecracker, or both",
+                    "Runtime to configure, skipping the prompt: docker, podman, containerd, cloud-hypervisor, firecracker, or both",
                 )
                 .value_parser(clap::value_parser!(RuntimeChoice)),
         )
@@ -63,6 +63,7 @@ pub(crate) struct InitSettings {
 pub(crate) enum RuntimeChoice {
     Docker,
     Podman,
+    Containerd,
     CloudHypervisor,
     Firecracker,
     Both,
@@ -73,6 +74,7 @@ impl RuntimeChoice {
         match self {
             RuntimeChoice::Docker => "Docker",
             RuntimeChoice::Podman => "Podman",
+            RuntimeChoice::Containerd => "containerd",
             RuntimeChoice::CloudHypervisor => "Cloud Hypervisor",
             RuntimeChoice::Firecracker => "Firecracker (experimental)",
             RuntimeChoice::Both => "Both",
@@ -221,6 +223,7 @@ fn collect_settings(args: &ArgMatches) -> InitSettings {
             vec![
                 RuntimeChoice::Docker,
                 RuntimeChoice::Podman,
+                RuntimeChoice::Containerd,
                 RuntimeChoice::CloudHypervisor,
                 RuntimeChoice::Firecracker,
                 RuntimeChoice::Both,
@@ -284,6 +287,7 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         RuntimeChoice::Docker | RuntimeChoice::Both
     );
     let podman = matches!(settings.runtime, RuntimeChoice::Podman);
+    let containerd = matches!(settings.runtime, RuntimeChoice::Containerd);
     let cloud_hypervisor = matches!(
         settings.runtime,
         RuntimeChoice::CloudHypervisor | RuntimeChoice::Both
@@ -305,6 +309,14 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
         out.push_str("enabled = true\n");
         // Default is rootless-first; uncomment to pin a specific socket.
         out.push_str("# host = \"unix:///run/user/1000/podman/podman.sock\"  # rootless\n");
+    }
+
+    if containerd {
+        out.push('\n');
+        out.push_str("[server.runtime.containerd]\n");
+        out.push_str("enabled = true\n");
+        out.push_str("# socket = \"/run/containerd/containerd.sock\"\n");
+        out.push_str("# namespace = \"ring\"\n");
     }
 
     if cloud_hypervisor {
@@ -483,6 +495,20 @@ mod tests {
         assert!(out.contains("[server.runtime.podman]"));
         assert!(out.contains("enabled = true"));
         // Podman is exclusive — no Docker or CH block.
+        assert!(!out.contains("[server.runtime.docker]"));
+        assert!(!out.contains("runtime.cloud_hypervisor"));
+    }
+
+    #[test]
+    fn build_config_containerd_only_emits_containerd_section() {
+        let s = InitSettings {
+            runtime: RuntimeChoice::Containerd,
+            port: 3030,
+        };
+        let out = build_config_toml(&s);
+        assert!(out.contains("[server.runtime.containerd]"));
+        assert!(out.contains("enabled = true"));
+        // containerd is exclusive — no Docker or CH block.
         assert!(!out.contains("[server.runtime.docker]"));
         assert!(!out.contains("runtime.cloud_hypervisor"));
     }
