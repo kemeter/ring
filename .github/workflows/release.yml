@@ -46,6 +46,11 @@ jobs:
           bun install --frozen-lockfile
           bun run build
 
+      # The containerd runtime's gRPC bindings are generated at build time by
+      # containerd-client's build script, which needs protoc.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Build release binary
         run: cargo build --release --bin ring
 

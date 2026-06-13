@@ -31,6 +31,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
       - uses: oven-sh/setup-bun@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build dashboard
         run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: rustup component add clippy
@@ -64,6 +66,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
       - uses: oven-sh/setup-bun@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build dashboard
         run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: docker pull nginx:alpine
