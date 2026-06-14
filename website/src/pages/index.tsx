@@ -13,7 +13,7 @@ export const meta = {
   title: HOME_TITLE,
   description: HOME_DESCRIPTION,
   canonical: SITE_URL,
-  keywords: ['workload orchestration', 'docker', 'cloud hypervisor', 'kubernetes alternative', 'rust', 'devops'],
+  keywords: ['workload orchestration', 'docker', 'podman', 'containerd', 'cloud hypervisor', 'firecracker', 'kubernetes alternative', 'rust', 'devops'],
   og: {
     title: HOME_TITLE,
     description: HOME_DESCRIPTION,
@@ -27,7 +27,7 @@ export const meta = {
   },
 };
 
-const DECLARATIVE_CODE = `deployments:
+const RUNTIME_DOCKER_CODE = `deployments:
   web-app:
     name: web-app
     namespace: production
@@ -35,12 +35,65 @@ const DECLARATIVE_CODE = `deployments:
     image: "nginx:1.21"
     replicas: 3
 
-    environment:
-      NODE_ENV: "production"
+    health_checks:
+      - type: http
+        url: "http://localhost:80/"
+        interval: "10s"
+        timeout: "5s"`;
+
+const RUNTIME_PODMAN_CODE = `deployments:
+  web-app:
+    name: web-app
+    namespace: production
+    runtime: podman
+    image: "nginx:1.21"
+    replicas: 3
 
     health_checks:
       - type: http
         url: "http://localhost:80/"
+        interval: "10s"
+        timeout: "5s"`;
+
+const RUNTIME_CONTAINERD_CODE = `deployments:
+  web-app:
+    name: web-app
+    namespace: production
+    runtime: containerd
+    image: "nginx:1.21"
+    replicas: 3
+
+    health_checks:
+      - type: http
+        url: "http://localhost:80/"
+        interval: "10s"
+        timeout: "5s"`;
+
+const RUNTIME_VM_CODE = `deployments:
+  web-app:
+    name: web-app
+    namespace: production
+    runtime: cloud-hypervisor
+    image: "/var/lib/ring/images/web-app.raw"
+    replicas: 3
+
+    health_checks:
+      - type: tcp
+        port: 80
+        interval: "10s"
+        timeout: "5s"`;
+
+const RUNTIME_FIRECRACKER_CODE = `deployments:
+  web-app:
+    name: web-app
+    namespace: production
+    runtime: firecracker
+    image: "/var/lib/ring/images/web-app.ext4"
+    replicas: 3
+
+    health_checks:
+      - type: tcp
+        port: 80
         interval: "10s"
         timeout: "5s"`;
 
@@ -111,12 +164,16 @@ export default function HomePage() {
       <Hero />
 
       <FeatureSection
-        badge="Declarative"
-        title="Define once, deploy anywhere"
-        description="Describe your entire deployment in a simple YAML file. Ring handles container creation, networking, health checks, and scaling automatically."
-        code={DECLARATIVE_CODE}
-        language="yaml"
-        filename="app.yaml"
+        badge="Multi-runtime"
+        title="One manifest, any runtime"
+        description="Describe your deployment once and pick where it runs. Switch between Docker, Podman, containerd, Cloud Hypervisor, and Firecracker by changing a single line — Ring handles creation, networking, health checks, and scaling the same way for each."
+        panes={[
+          { label: 'docker', code: RUNTIME_DOCKER_CODE, language: 'yaml' },
+          { label: 'podman', code: RUNTIME_PODMAN_CODE, language: 'yaml' },
+          { label: 'containerd', code: RUNTIME_CONTAINERD_CODE, language: 'yaml' },
+          { label: 'cloud-hypervisor', code: RUNTIME_VM_CODE, language: 'yaml' },
+          { label: 'firecracker', code: RUNTIME_FIRECRACKER_CODE, language: 'yaml' },
+        ]}
       />
 
       <FeatureSection
@@ -151,7 +208,7 @@ export default function HomePage() {
       <FeatureSection
         badge="Isolation"
         title="Namespace isolation"
-        description="Organize deployments by environment with namespaces. Each namespace gets its own isolated Docker network. Deploy the same application across multiple environments."
+        description="Organize deployments by environment with namespaces. Each namespace gets its own isolated network. Deploy the same application across multiple environments."
         code={NAMESPACE_CODE}
         language="yaml"
         filename="multi-env.yaml"

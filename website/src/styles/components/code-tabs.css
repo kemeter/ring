@@ -3,6 +3,7 @@
 
   .code-tabs-bar {
     display: inline-flex;
+    flex-wrap: wrap;
     gap: var(--space-1);
     padding: var(--space-1);
     margin-bottom: var(--space-2);

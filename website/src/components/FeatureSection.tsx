@@ -1,13 +1,15 @@
 import CodeBlock from './CodeBlock';
+import TabbedCode, { CodePane } from './TabbedCode';
 import '@/styles/components/feature-section.css';
 
 interface FeatureSectionProps {
   badge?: string;
   title: string;
   description: string;
-  code: string;
+  code?: string;
   language?: string;
   filename?: string;
+  panes?: CodePane[];
   reversed?: boolean;
 }
 
@@ -18,6 +20,7 @@ export default function FeatureSection({
   code,
   language = 'yaml',
   filename,
+  panes,
   reversed = false,
 }: FeatureSectionProps) {
   return (
@@ -29,7 +32,11 @@ export default function FeatureSection({
           <p>{description}</p>
         </div>
         <div className="feature-code">
-          <CodeBlock code={code} language={language} filename={filename} />
+          {panes && panes.length > 0 ? (
+            <TabbedCode panes={panes} />
+          ) : (
+            <CodeBlock code={code ?? ''} language={language} filename={filename} />
+          )}
         </div>
       </div>
     </section>

@@ -9,13 +9,13 @@ export default function Hero() {
     <section className="hero">
       <div className="hero-inner">
         <h1 className="hero-title">
-          Lightweight workload orchestration,
+          One orchestrator for containers and VMs,
           <br />
           <span className="hero-title-accent">simplified.</span>
         </h1>
         <p className="hero-subtitle">
-          Deploy and manage workloads with declarative YAML,
-          a REST API, and zero complexity. A lightweight alternative to Kubernetes.
+          Run your workloads on Docker, Podman, containerd, Cloud Hypervisor, or Firecracker —
+          from the same declarative YAML and REST API. A lightweight alternative to Kubernetes.
         </p>
 
         <div className="hero-install">

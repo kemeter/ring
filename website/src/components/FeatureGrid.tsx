@@ -9,8 +9,8 @@ interface GridFeature {
 const FEATURES: GridFeature[] = [
   {
     number: '01',
-    title: 'Declarative YAML',
-    description: 'Describe your entire deployment in one file. Ring handles containers, networking, and scaling.',
+    title: 'Pluggable runtimes',
+    description: 'Run the same workload on Docker, Podman, containerd, Cloud Hypervisor, or Firecracker. One manifest, swap the runtime in a single line.',
   },
   {
     number: '02',
@@ -25,7 +25,7 @@ const FEATURES: GridFeature[] = [
   {
     number: '04',
     title: 'Health checks & rolling updates',
-    description: 'Zero-downtime rolling updates. If a new container fails, the rollout stops automatically.',
+    description: 'Zero-downtime rolling updates. If a new workload fails, the rollout stops automatically.',
   },
 ];
 
