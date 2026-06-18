@@ -10,14 +10,40 @@ pub(crate) async fn fetch_container_stats(
     docker: &Docker,
     container_id: &str,
 ) -> Result<ContainerStatsResponse, RuntimeError> {
-    let options = StatsOptionsBuilder::new()
-        .stream(false)
-        .one_shot(true)
-        .build();
+    // CPU percentage is a delta between two cumulative samples. A one-shot read
+    // carries no previous sample (precpu_stats is empty), so the delta — and
+    // therefore the reported CPU — collapses to ~0. Stream instead and take the
+    // second frame, which Docker populates with precpu_stats from the first.
+    let options = StatsOptionsBuilder::new().stream(true).build();
 
     let mut stream = docker.stats(container_id, Some(options));
 
-    match stream.next().await {
+    let mut last_error = None;
+    for _ in 0..2 {
+        match stream.next().await {
+            Some(Ok(stats)) => {
+                // The first frame has no precpu baseline; keep reading until we
+                // get one (or fall through to the last frame we saw).
+                if stats
+                    .precpu_stats
+                    .as_ref()
+                    .and_then(|p| p.cpu_usage.as_ref())
+                    .and_then(|u| u.total_usage)
+                    .unwrap_or(0)
+                    > 0
+                {
+                    return Ok(stats);
+                }
+                last_error = Some(Ok(stats));
+            }
+            Some(Err(e)) => {
+                last_error = Some(Err(e));
+            }
+            None => break,
+        }
+    }
+
+    match last_error {
         Some(Ok(stats)) => Ok(stats),
         Some(Err(e)) => Err(RuntimeError::StatsFetchFailed(format!(
             "Failed to get stats for {}: {}",
