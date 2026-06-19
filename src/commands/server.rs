@@ -79,11 +79,17 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // isn't enabled is never touched, even if its socket/binary happens to
     // exist. This is what lets Ring run Docker-only, CH-only, or any mix.
     //
-    // Fail-fast: a runtime the operator explicitly enabled but that's
-    // unreachable at startup is a configuration error, not a silent skip — we
-    // refuse to start so the misconfiguration surfaces immediately rather than
-    // as a 500 on the first deployment.
+    // Best-effort startup: a runtime the operator enabled but that's unreachable
+    // at boot is logged and skipped — it does NOT take the node down. A broken
+    // (or freshly-added-but-misconfigured) runtime must never knock out the
+    // others that are working. We verify ALL enabled runtimes (no short-circuit
+    // on the first failure), collect every failure, and report them together.
+    // The two hard floors below still hold: zero usable runtime aborts, and an
+    // apply targeting an enabled-but-unregistered runtime gets an actionable
+    // error (see api::action::create) instead of a confusing "unknown runtime".
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
+    // (runtime name, reason) for every enabled runtime that failed to come up.
+    let mut runtime_failures: Vec<(String, String)> = Vec::new();
 
     // Docker: enabled in config → verify the daemon answers a `ping()` (client
     // construction alone is lazy and always succeeds, so it can't gate this).
@@ -100,11 +106,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 docker::connect_with_host(&host).ok()
             }
             Err(e) => {
-                error!(
-                    "Refusing to start: Docker runtime is enabled in config but unreachable: {}",
-                    e
-                );
-                std::process::exit(1);
+                warn!("Docker runtime enabled but unreachable, skipping: {}", e);
+                runtime_failures.push(("docker".to_string(), e.to_string()));
+                None
             }
         }
     } else {
@@ -115,9 +119,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // Podman: enabled in config → verify the daemon answers a `ping()` over its
     // Docker-compatible API. Podman speaks the same wire protocol, so we reuse
     // `DockerLifecycle` (no PodmanLifecycle) and register it under the "podman"
-    // key. Same fail-fast contract as Docker. No event listener yet: Podman's
-    // event stream only flows while `podman system service` is up (see
-    // runtime::podman docs) — the orphan reaper stays Docker-only for now.
+    // key. No event listener yet: Podman's event stream only flows while
+    // `podman system service` is up (see runtime::podman docs) — the orphan
+    // reaper stays Docker-only for now.
     if configuration.server.runtime.podman.enabled {
         let host = configuration.server.runtime.podman.host.clone();
         match docker::connect_and_verify(&host).await {
@@ -125,15 +129,18 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 info!("Connected to Podman at {}", host);
                 runtimes_map.insert(
                     "podman".to_string(),
-                    Arc::new(DockerLifecycle::new(podman, intentional_shutdowns.clone())),
+                    // Podman has no event listener (see below) — use the
+                    // reconcile-based crash detector so crash loops still
+                    // converge to CrashLoopBackOff.
+                    Arc::new(DockerLifecycle::new_podman(
+                        podman,
+                        intentional_shutdowns.clone(),
+                    )),
                 );
             }
             Err(e) => {
-                error!(
-                    "Refusing to start: Podman runtime is enabled in config but unreachable: {}",
-                    e
-                );
-                std::process::exit(1);
+                warn!("Podman runtime enabled but unreachable, skipping: {}", e);
+                runtime_failures.push(("podman".to_string(), e.to_string()));
             }
         }
     } else {
@@ -141,9 +148,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     }
 
     // containerd: enabled in config → verify the gRPC socket answers a Version
-    // round-trip, else fail fast. Unlike Podman, containerd speaks its own native
-    // API (no Docker daemon in between), so it has its own ContainerdLifecycle
-    // registered under the "containerd" key.
+    // round-trip. Unlike Podman, containerd speaks its own native API (no Docker
+    // daemon in between), so it has its own ContainerdLifecycle registered under
+    // the "containerd" key.
     if configuration.server.runtime.containerd.enabled {
         let containerd_config =
             ContainerdRuntimeConfig::from_user_config(&configuration.server.runtime.containerd);
@@ -152,81 +159,110 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 runtimes_map.insert("containerd".to_string(), Arc::new(containerd));
             }
             Err(e) => {
-                error!(
-                    "Refusing to start: containerd runtime is enabled in config but unreachable: {}",
+                warn!(
+                    "containerd runtime enabled but unreachable, skipping: {}",
                     e
                 );
-                std::process::exit(1);
+                runtime_failures.push(("containerd".to_string(), e.to_string()));
             }
         }
     } else {
         info!("containerd runtime disabled in config, skipping");
     }
 
-    // Cloud Hypervisor: enabled in config → its binary must resolve, else fail
-    // fast. The config/log-rotator are only built when we'll use it.
+    // Cloud Hypervisor: enabled in config → its binary must resolve. The
+    // config/log-rotator are only built when we'll use it.
     let mut _ch_log_rotator = None;
     if configuration.server.runtime.cloud_hypervisor.enabled {
         let ch_runtime_config =
             crate::runtime::cloud_hypervisor::CloudHypervisorRuntimeConfig::from_user_config(
                 &configuration.server.runtime.cloud_hypervisor,
             );
-        if !ch_runtime_config.is_available() {
-            error!(
-                "Refusing to start: Cloud Hypervisor runtime is enabled in config but its binary \
-                 '{}' could not be found",
+        if ch_runtime_config.is_available() {
+            info!(
+                "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
+                ch_runtime_config.binary_path,
+                ch_runtime_config.firmware_path,
+                ch_runtime_config.socket_dir,
+                ch_runtime_config.seccomp,
+            );
+            let ch_lifecycle = CloudHypervisorLifecycle::new(ch_runtime_config);
+            _ch_log_rotator = Some(ch_lifecycle.spawn_console_log_rotator());
+            runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
+        } else {
+            let reason = format!(
+                "binary '{}' could not be found",
                 ch_runtime_config.binary_path
             );
-            std::process::exit(1);
+            warn!(
+                "Cloud Hypervisor runtime enabled but unavailable, skipping: {}",
+                reason
+            );
+            runtime_failures.push(("cloud-hypervisor".to_string(), reason));
         }
-        info!(
-            "Cloud Hypervisor runtime: binary={}, firmware={}, socket_dir={}, seccomp={:?}",
-            ch_runtime_config.binary_path,
-            ch_runtime_config.firmware_path,
-            ch_runtime_config.socket_dir,
-            ch_runtime_config.seccomp,
-        );
-        let ch_lifecycle = CloudHypervisorLifecycle::new(ch_runtime_config);
-        _ch_log_rotator = Some(ch_lifecycle.spawn_console_log_rotator());
-        runtimes_map.insert("cloud-hypervisor".to_string(), Arc::new(ch_lifecycle));
     } else {
         info!("Cloud Hypervisor runtime disabled in config, skipping");
     }
 
-    // Firecracker: same opt-in + fail-fast contract. Its binary must resolve
-    // when enabled, else Ring refuses to start.
+    // Firecracker: same opt-in contract. Its binary must resolve when enabled,
+    // else the runtime is skipped (best-effort, like the others).
     if configuration.server.runtime.firecracker.enabled {
         let fc_runtime_config =
             FirecrackerRuntimeConfig::from_user_config(&configuration.server.runtime.firecracker);
-        if !fc_runtime_config.is_available() {
-            error!(
-                "Refusing to start: Firecracker runtime is enabled in config but its binary \
-                 '{}' could not be found",
+        if fc_runtime_config.is_available() {
+            info!(
+                "Firecracker runtime: binary={}, kernel={}, socket_dir={}",
+                fc_runtime_config.binary_path,
+                fc_runtime_config.kernel_path,
+                fc_runtime_config.socket_dir,
+            );
+            runtimes_map.insert(
+                "firecracker".to_string(),
+                Arc::new(FirecrackerLifecycle::new(fc_runtime_config)),
+            );
+        } else {
+            let reason = format!(
+                "binary '{}' could not be found",
                 fc_runtime_config.binary_path
             );
-            std::process::exit(1);
+            warn!(
+                "Firecracker runtime enabled but unavailable, skipping: {}",
+                reason
+            );
+            runtime_failures.push(("firecracker".to_string(), reason));
         }
-        info!(
-            "Firecracker runtime: binary={}, kernel={}, socket_dir={}",
-            fc_runtime_config.binary_path,
-            fc_runtime_config.kernel_path,
-            fc_runtime_config.socket_dir,
-        );
-        runtimes_map.insert(
-            "firecracker".to_string(),
-            Arc::new(FirecrackerLifecycle::new(fc_runtime_config)),
-        );
     } else {
         info!("Firecracker runtime disabled in config, skipping");
     }
 
-    // Hard floor: no runtime enabled means Ring can't deploy anything — fail
-    // loudly with an actionable message instead of starting a useless server.
-    if runtimes_map.is_empty() {
-        error!(
-            "Refusing to start: no container runtime is enabled. Enable at least one in \
-             config.toml, e.g. `[server.runtime.docker]` with `enabled = true`."
+    // Aggregate report: surface every enabled-but-skipped runtime in one place so
+    // the operator sees the full picture (not just the first failure).
+    if !runtime_failures.is_empty() {
+        let summary = runtime_failures
+            .iter()
+            .map(|(name, reason)| format!("{} ({})", name, reason))
+            .collect::<Vec<_>>()
+            .join(", ");
+        warn!(
+            "Enabled runtimes that failed to start and were skipped: {}",
+            summary
         );
+    }
+
+    // Hard floor: if every enabled runtime failed (or none was enabled), Ring
+    // can't deploy anything — fail loudly instead of starting a useless server.
+    if runtimes_map.is_empty() {
+        if runtime_failures.is_empty() {
+            error!(
+                "Refusing to start: no container runtime is enabled. Enable at least one in \
+                 config.toml, e.g. `[server.runtime.docker]` with `enabled = true`."
+            );
+        } else {
+            error!(
+                "Refusing to start: every enabled runtime is unreachable. Fix at least one of \
+                 the runtimes above, or enable a reachable one in config.toml."
+            );
+        }
         std::process::exit(1);
     }
 
