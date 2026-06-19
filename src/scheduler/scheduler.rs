@@ -912,13 +912,32 @@ async fn drain_docker_events(
     pool: &SqlitePool,
     event_rx: &mut mpsc::Receiver<DockerEvent>,
     intentional_shutdowns: &IntentionalShutdowns,
+    disconnect_logged: &mut bool,
 ) {
     loop {
         match event_rx.try_recv() {
-            Ok(event) => apply_docker_event(pool, event, intentional_shutdowns).await,
+            Ok(event) => {
+                // A live event means the channel is healthy; re-arm the
+                // one-shot log so a *later* disconnect is reported again.
+                *disconnect_logged = false;
+                apply_docker_event(pool, event, intentional_shutdowns).await
+            }
             Err(mpsc::error::TryRecvError::Empty) => return,
             Err(mpsc::error::TryRecvError::Disconnected) => {
-                error!("Docker event channel disconnected — listener task likely died");
+                // The channel is disconnected for the whole process lifetime
+                // when no Docker event listener was started — the normal case
+                // for a Podman- or containerd-only node (crash detection there
+                // is reconcile-based, not event-based). Log it ONCE at debug so
+                // we don't spam an ERROR every scheduler tick. A genuinely
+                // crashed listener on a Docker node also lands here; the single
+                // line is enough to notice it.
+                if !*disconnect_logged {
+                    debug!(
+                        "Docker event channel disconnected — no event listener \
+                         (Podman/containerd use reconcile-based crash detection)"
+                    );
+                    *disconnect_logged = true;
+                }
                 return;
             }
         }
@@ -1083,6 +1102,10 @@ pub(crate) async fn schedule(
     let cleanup_interval = Duration::from_secs(300);
     let mut last_cleanup = Instant::now();
 
+    // One-shot guard so a permanently disconnected event channel (a node with
+    // no Docker event listener) is logged once, not every tick.
+    let mut event_disconnect_logged = false;
+
     // Per-deployment retry backoff. Shared across runtimes so any new runtime
     // (Docker, Cloud Hypervisor, future Firecracker, ...) automatically gets
     // exponential backoff on transient failures without duplicating the logic.
@@ -1098,7 +1121,13 @@ pub(crate) async fn schedule(
         // Doing this before `find_all` ensures that the deployments we load
         // already reflect the latest restart_count, so the worker scaler can
         // hit CrashLoopBackOff in the same cycle as the crash that caused it.
-        drain_docker_events(&pool, &mut event_rx, &intentional_shutdowns).await;
+        drain_docker_events(
+            &pool,
+            &mut event_rx,
+            &intentional_shutdowns,
+            &mut event_disconnect_logged,
+        )
+        .await;
 
         // The scheduler picks up every status that can still progress on the
         // next tick. Pending/Creating need their first apply, Running needs
