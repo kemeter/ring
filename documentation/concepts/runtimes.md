@@ -25,7 +25,7 @@ Enable just the runtimes a host actually runs — Docker-only, Podman-only, cont
 | Memory overhead per workload | ~10 MB | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) | ~5–50 MB (minimal device model) |
 | Image format | Docker image (`nginx:1.25`) | Docker/OCI image | OCI image (`nginx:1.25`) | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
 | Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | CNI (bridge + host-local IPAM) | Per-VM /30 subnet, host-port forwarding via `socat` | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP) |
-| Live event stream | Yes (sub-second crash detection) | Only while `podman system service` runs (not yet consumed) | No (tick-bound) | No (tick-bound) | No (tick-bound) |
+| Crash detection | ✓ event-driven (sub-second) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) |
 | `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | Not yet |
 | `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Not yet (runs as worker) |
 | Labels (`labels:`) | Forwarded to container | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
@@ -66,7 +66,7 @@ The socket must be running — start it once with `systemctl --user start podman
 - You want Docker semantics without the Docker daemon
 
 **Caveats:**
-- **Event stream**: Podman only emits events while `podman system service` is up. Ring does not yet consume Podman events (the orphan-volume reaper stays Docker-only), so crash detection is tick-bound for now.
+- **Crash detection is tick-bound.** Ring does not consume Podman's event stream, so a crashed container is noticed on the next scheduler reconcile pass (which still bumps `restart_count` and converges a crash loop to `CrashLoopBackOff`, bounded), not sub-second like Docker. The orphan-volume reaper, which *does* rely on live events, stays Docker-only.
 - **Host networking** (`network.mode: host`) is not yet allowed on Podman — Docker only.
 - Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root — mind file permissions on mounts.
 
