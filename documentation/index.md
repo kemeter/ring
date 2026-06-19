@@ -4,7 +4,7 @@ Ring is a lightweight workload orchestrator that lets you deploy and manage cont
 
 ## What is Ring?
 
-Ring is a single-node alternative to Kubernetes and Docker Swarm. It runs as one process, persists state in SQLite, and reconciles deployments against Docker (or Cloud Hypervisor microVMs, in alpha). You describe what you want in YAML, Ring keeps it that way.
+Ring is a single-node alternative to Kubernetes and Docker Swarm. It runs as one process, persists state in SQLite, and reconciles deployments against any of five runtimes — Docker, Podman, containerd, Cloud Hypervisor, or Firecracker. You describe what you want in YAML, Ring keeps it that way.
 
 > **New to Ring?** Start with [Install and run Ring](/documentation/tutorials/install-and-run), then deploy your [first workload](/documentation/tutorials/first-deployment).
 
@@ -35,18 +35,21 @@ curl -X POST http://localhost:3030/deployments \
 
 ### Multiple runtimes
 
-Two runtimes share the same manifest shape, with different trade-offs:
+Five runtimes share the same manifest shape, with different trade-offs:
 
-- **Docker** — default. Containers, per-namespace bridge networks, container metrics, all three health-check types (TCP / HTTP / command).
-- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary; TCP, HTTP and command (via `ring-agent`) health checks all work; `kind: job` is supported but signals success on clean guest shutdown rather than on the workload's exit code (no per-process visibility from the host). Several Docker features still have no VM equivalent (labels, registry credentials, full container metrics, inter-VM networking).
+- **Docker** — default, production-ready. Containers, per-namespace bridge networks, container metrics, all three health-check types (TCP / HTTP / command).
+- **Podman** — Docker-compatible, **rootless by default**. Same client, same manifest, no privileged daemon.
+- **containerd** — the OCI runtime under Docker/Kubernetes, driven directly over gRPC. For hosts that already run containerd and don't want a second engine.
+- **Cloud Hypervisor** — alpha. Each deployment runs as a dedicated microVM with full kernel isolation. Stronger security boundary, narrower feature set.
+- **Firecracker** — experimental. Minimal KVM-backed microVM (the tech behind AWS Lambda), ~1 s boot.
 
-The full per-feature parity matrix is in [How-to: deploy on Cloud Hypervisor → Limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
+Containers (Docker / Podman / containerd) share the host kernel and boot in ~1 s; micro-VMs (Cloud Hypervisor / Firecracker) boot a full guest kernel for a stronger isolation boundary. Pick one with the `runtime:` field — see the [Runtimes](/documentation/runtimes) section for a guide per runtime, and [Concepts → Runtimes](/documentation/concepts/runtimes) for the trade-offs.
 
 ```yaml
 deployments:
   app:
-    runtime: docker            # or cloud-hypervisor
-    image: "myapp:latest"      # or "/var/lib/ring/images/app.raw" on CH
+    runtime: docker            # docker | podman | containerd | cloud-hypervisor | firecracker
+    image: "myapp:latest"      # or a raw disk image / rootfs path on the micro-VM runtimes
 ```
 
 ### Namespace isolation
@@ -111,15 +114,22 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Configure health checks](/documentation/how-to/configure-health-checks)
 - [Perform a rolling update](/documentation/how-to/perform-rolling-update)
 - [Run a job](/documentation/how-to/run-a-job)
-- [Observe and debug](/documentation/how-to/observe-and-debug)
 - [Isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
 - [Expose HTTP traffic](/documentation/how-to/expose-http-traffic)
 - [Use host network mode](/documentation/how-to/use-host-network)
 - [Manage users](/documentation/how-to/manage-users)
 - [Authenticate scripts and CI with API tokens](/documentation/how-to/authenticate-scripts-with-tokens)
 - [Subscribe to events with webhooks](/documentation/how-to/subscribe-to-events-with-webhooks)
+- [Use the web dashboard](/documentation/how-to/use-the-dashboard)
 - [Run Ring as a service](/documentation/how-to/run-as-service)
-- [Deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor)
+
+**Runtimes** — deploy on each runtime
+- [Overview](/documentation/runtimes) — pick a runtime
+- [Docker](/documentation/runtimes/docker)
+- [Podman](/documentation/runtimes/podman)
+- [containerd](/documentation/runtimes/containerd)
+- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor)
+- [Firecracker](/documentation/runtimes/firecracker)
 
 **Reference** — exhaustive specs
 - [Manifest](/documentation/reference/manifest) — complete YAML/JSON schema
@@ -139,6 +149,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Why not Kubernetes](/documentation/concepts/why-not-kubernetes)
 
 **Help**
+- [Observe and debug](/documentation/help/observe-and-debug)
 - [Troubleshooting](/documentation/help/troubleshooting)
 - [FAQ](/documentation/help/faq)
 
@@ -147,7 +158,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - **Ring server** — central process that exposes the REST API and runs the scheduler. Default tick: every 10 seconds (override with `RING_SCHEDULER_INTERVAL` or `[scheduler] interval`).
 - **Scheduler** — reconciliation loop that creates, removes, and health-checks instances. On the Docker runtime it also listens to live Docker events (`die`, `start`, `oom`, `kill`) to detect crashes; on the Cloud Hypervisor runtime it reconciles by scanning sockets.
 - **Docker runtime** — default runtime. Containers, one bridge network per namespace (`ring_<namespace>`).
-- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
+- **Cloud Hypervisor runtime (alpha)** — runs deployments as microVMs. Different feature set than Docker — see the [parity table](/documentation/runtimes/cloud-hypervisor#limitations-parity-with-docker).
 - **SQLite database** — stores deployments, users, secrets, configs, events; WAL mode by default.
 - **REST API** — the only control surface; the CLI is a client.
 

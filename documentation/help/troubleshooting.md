@@ -1,6 +1,6 @@
 # Troubleshooting
 
-When something breaks, work outside-in: confirm Ring is responsive, then look at what Ring decided, then at what the application did. The full debugging flow is in [how-to: observe and debug](/documentation/how-to/observe-and-debug); this page collects the specific errors and their fixes.
+When something breaks, work outside-in: confirm Ring is responsive, then look at what Ring decided, then at what the application did. The full debugging flow is in [how-to: observe and debug](/documentation/help/observe-and-debug); this page collects the specific errors and their fixes.
 
 ## Server won't start
 
@@ -252,7 +252,7 @@ Custom guest images from scratch (e.g. Buildroot) won't pick up env vars unless 
 
 ### `command:` health check rejected
 
-Either the in-guest `ring-agent` isn't running, or the agent's `cap_net_admin` / vsock module isn't enabled. See [how-to: deploy on Cloud Hypervisor → prerequisites](/documentation/how-to/deploy-on-cloud-hypervisor#prerequisites).
+Either the in-guest `ring-agent` isn't running, or the agent's `cap_net_admin` / vsock module isn't enabled. See [Cloud Hypervisor → prerequisites](/documentation/runtimes/cloud-hypervisor#prerequisites).
 
 ## Generic diagnostic flow
 
@@ -262,7 +262,7 @@ Either the in-guest `ring-agent` isn't running, or the agent's `cap_net_admin` /
 ring doctor
 ```
 
-After that, the full debugging order from [how-to: observe and debug](/documentation/how-to/observe-and-debug):
+After that, the full debugging order from [how-to: observe and debug](/documentation/help/observe-and-debug):
 
 ```bash
 curl http://localhost:3030/healthz                       # is Ring up?
@@ -292,7 +292,7 @@ RUST_LOG=ring::scheduler=debug ring server start    # one component
 
 ## See also
 
-- [How-to: observe and debug](/documentation/how-to/observe-and-debug)
+- [How-to: observe and debug](/documentation/help/observe-and-debug)
 - [Reference: environment variables](/documentation/reference/environment-variables)
 - [Reference: config.toml](/documentation/reference/config-toml)
 - [FAQ](/documentation/help/faq)

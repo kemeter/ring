@@ -56,24 +56,30 @@ const ctx = require.context('@docs', true, /\.md$/, 'sync');
 
 // Folder display order in the sidebar. Folders not listed here appear after,
 // in alphabetical order.
-const FOLDER_ORDER = ['tutorials', 'how-to', 'reference', 'concepts', 'help'];
+const FOLDER_ORDER = ['tutorials', 'how-to', 'runtimes', 'reference', 'concepts', 'help'];
 
 // Per-folder page order. Pages not listed here fall back to alphabetical.
 const PAGE_ORDER: Record<string, string[]> = {
   tutorials: ['install-and-run', 'first-deployment'],
   'how-to': [
+    // Deploying workloads
     'deploy-with-secrets',
     'configure-health-checks',
     'perform-rolling-update',
     'run-a-job',
-    'observe-and-debug',
+    // Networking & traffic
     'isolate-namespaces-network',
     'expose-http-traffic',
     'use-host-network',
+    // Access & security
     'manage-users',
+    'authenticate-scripts-with-tokens',
+    'subscribe-to-events-with-webhooks',
+    // Operations
+    'use-the-dashboard',
     'run-as-service',
-    'deploy-on-cloud-hypervisor',
   ],
+  runtimes: ['index', 'docker', 'podman', 'containerd', 'cloud-hypervisor', 'firecracker'],
   reference: ['manifest', 'cli', 'api', 'config-toml', 'environment-variables'],
   concepts: [
     'architecture',
@@ -84,7 +90,7 @@ const PAGE_ORDER: Record<string, string[]> = {
     'health-checks-design',
     'why-not-kubernetes',
   ],
-  help: ['troubleshooting', 'faq'],
+  help: ['observe-and-debug', 'troubleshooting', 'faq'],
 };
 
 function pageOrderIndex(segments: string[]): number {
