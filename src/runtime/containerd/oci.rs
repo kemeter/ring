@@ -32,8 +32,14 @@ pub(crate) fn build_spec(
     deployment: &Deployment,
     resolved_mounts: &[ResolvedMount],
     config_files: &[(String, String)],
+    image_default_args: &[String],
 ) -> Any {
-    let spec = build_spec_value(deployment, resolved_mounts, config_files);
+    let spec = build_spec_value(
+        deployment,
+        resolved_mounts,
+        config_files,
+        image_default_args,
+    );
     // `spec` is an in-memory serde_json::Value built from owned data, so
     // serialisation cannot fail in practice; expect() over unwrap_or_default()
     // so a truly impossible failure surfaces loudly instead of silently
@@ -50,8 +56,18 @@ pub(crate) fn build_spec_value(
     deployment: &Deployment,
     resolved_mounts: &[ResolvedMount],
     config_files: &[(String, String)],
+    image_default_args: &[String],
 ) -> Value {
-    let args = deployment.command.clone();
+    // The deployment command overrides the image default. When the deployment
+    // gives no command, fall back to the image's Entrypoint+Cmd: containerd is
+    // low-level and (unlike the Docker daemon) does NOT merge image defaults
+    // into the OCI spec, so an empty `process.args` makes `runc create` fail
+    // with `args must not be empty`.
+    let args = if deployment.command.is_empty() {
+        image_default_args.to_vec()
+    } else {
+        deployment.command.clone()
+    };
 
     let mut env: Vec<String> =
         vec!["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string()];
@@ -71,11 +87,11 @@ pub(crate) fn build_spec_value(
     let mut mounts = default_mounts();
     mounts.extend(spec_mounts_from_resolved(resolved_mounts, config_files));
 
-    // `args` may legitimately be empty (use the image entrypoint). The OCI spec
-    // requires `process.args` to be non-empty, but the runc shim merges the
-    // image config's entrypoint/cmd when the container is created from an image,
-    // so omitting `args` entirely lets the image defaults apply. We only set
-    // `args` when the deployment overrides the command.
+    // `args` is resolved above (deployment command, else image default). It can
+    // still be empty if the image declares neither Entrypoint nor Cmd — such an
+    // image is only runnable with an explicit command, and runc will reject it
+    // with a clear `args must not be empty`. We set `args` only when non-empty
+    // to keep the spec clean.
     let mut process = json!({
         "terminal": false,
         "user": { "uid": uid, "gid": gid },
@@ -318,24 +334,48 @@ mod tests {
         let mut d = make_deployment();
         d.environment
             .insert("FOO".to_string(), EnvValue::Plain("bar".to_string()));
-        let spec = build_spec_value(&d, &[], &[]);
+        let spec = build_spec_value(&d, &[], &[], &[]);
         assert_eq!(spec["process"]["args"][0], "nginx");
         let env = spec["process"]["env"].as_array().unwrap();
         assert!(env.iter().any(|e| e == "FOO=bar"));
     }
 
     #[test]
-    fn spec_omits_args_when_command_empty() {
+    fn spec_falls_back_to_image_default_args_when_command_empty() {
+        // No deployment command → the image's Entrypoint+Cmd must populate
+        // process.args, or runc rejects the container with "args must not be
+        // empty" (the containerd crash-loop bug on official images).
         let mut d = make_deployment();
         d.command.clear();
-        let spec = build_spec_value(&d, &[], &[]);
+        let image_args = vec!["/docker-entrypoint.sh".to_string(), "nginx".to_string()];
+        let spec = build_spec_value(&d, &[], &[], &image_args);
+        assert_eq!(spec["process"]["args"][0], "/docker-entrypoint.sh");
+        assert_eq!(spec["process"]["args"][1], "nginx");
+    }
+
+    #[test]
+    fn spec_command_overrides_image_default_args() {
+        // Deployment command wins over the image default.
+        let d = make_deployment(); // command = ["nginx", "-g", "daemon off;"]
+        let image_args = vec!["/docker-entrypoint.sh".to_string()];
+        let spec = build_spec_value(&d, &[], &[], &image_args);
+        assert_eq!(spec["process"]["args"][0], "nginx");
+    }
+
+    #[test]
+    fn spec_omits_args_when_no_command_and_no_image_default() {
+        // Neither deployment command nor image default → args omitted (runc will
+        // surface a clear error rather than us shipping an empty array).
+        let mut d = make_deployment();
+        d.command.clear();
+        let spec = build_spec_value(&d, &[], &[], &[]);
         assert!(spec["process"].get("args").is_none());
     }
 
     #[test]
     fn spec_has_network_namespace() {
         let d = make_deployment();
-        let spec = build_spec_value(&d, &[], &[]);
+        let spec = build_spec_value(&d, &[], &[], &[]);
         let namespaces = spec["linux"]["namespaces"].as_array().unwrap();
         assert!(namespaces.iter().any(|n| n["type"] == "network"));
     }
@@ -348,7 +388,7 @@ mod tests {
             destination: "/data".to_string(),
             read_only: true,
         }];
-        let spec = build_spec_value(&d, &mounts, &[]);
+        let spec = build_spec_value(&d, &mounts, &[], &[]);
         let m = spec["mounts"].as_array().unwrap();
         assert!(
             m.iter()

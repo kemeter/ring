@@ -439,6 +439,7 @@ impl ContainerdLifecycle {
             .unwrap_or(ImagePullPolicy::Always);
         let resolved = ensure_image(client, ns, &image, policy).await?;
         deployment.image_digest = resolved.digest;
+        let image_default_args = resolved.default_args;
 
         // Instance id: human-readable, unique, also the container + snapshot key.
         let instance_id = format!("{}_{}_{}", deployment.namespace, deployment.name, tiny_id());
@@ -456,7 +457,12 @@ impl ContainerdLifecycle {
                 return Err(e);
             }
         };
-        let spec = oci::build_spec(deployment, resolved_mounts, &config_files);
+        let spec = oci::build_spec(
+            deployment,
+            resolved_mounts,
+            &config_files,
+            &image_default_args,
+        );
 
         // 4. Register the container object, tagged with the owning deployment.
         if let Err(e) = self
