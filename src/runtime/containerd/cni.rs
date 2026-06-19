@@ -22,8 +22,30 @@ use std::process::Stdio;
 /// Where Ring writes its default CNI network configuration.
 const CNI_CONF_DIR: &str = "/etc/cni/net.d";
 const CNI_CONF_FILE: &str = "/etc/cni/net.d/10-ring.conflist";
-/// Standard search path for CNI plugin binaries.
-const CNI_BIN_DIR: &str = "/opt/cni/bin";
+/// Candidate directories for CNI plugin binaries, in priority order. `/opt/cni/bin`
+/// is the CNI upstream / containerd / Kubernetes default, but Debian/Ubuntu package
+/// the plugins under `/usr/lib/cni` and Fedora under `/usr/libexec/cni` (both follow
+/// the FHS rather than `/opt`). We probe all three so Ring works regardless of how
+/// the plugins were installed, instead of assuming the upstream layout.
+const CNI_BIN_DIRS: &[&str] = &["/opt/cni/bin", "/usr/lib/cni", "/usr/libexec/cni"];
+
+/// Resolve the directory holding the CNI plugin binaries by probing the known
+/// install locations for `bridge` (the plugin Ring invokes directly). Honours an
+/// explicit `CNI_PATH` override first. Falls back to the upstream default so the
+/// resulting error message names the conventional path.
+fn cni_bin_dir() -> String {
+    if let Ok(path) = std::env::var("CNI_PATH")
+        && !path.is_empty()
+    {
+        return path;
+    }
+    for dir in CNI_BIN_DIRS {
+        if Path::new(dir).join("bridge").is_file() {
+            return (*dir).to_string();
+        }
+    }
+    CNI_BIN_DIRS[0].to_string()
+}
 /// Network name + bridge used by Ring's default conflist.
 const CNI_NETWORK_NAME: &str = "ring";
 const CNI_BRIDGE: &str = "ring-cni0";
@@ -91,7 +113,7 @@ fn default_conflist() -> String {
 /// still boots, just without a CNI address (health checks that need an IP will
 /// report the missing address).
 pub(crate) fn plugins_available() -> bool {
-    Path::new(CNI_BIN_DIR).join("bridge").exists()
+    Path::new(&cni_bin_dir()).join("bridge").is_file()
 }
 
 /// Run `CNI ADD` for a container's network namespace and return the assigned IP.
@@ -102,8 +124,8 @@ pub(crate) fn plugins_available() -> bool {
 pub(crate) async fn add(container_id: &str, netns_path: &str) -> Option<IpAddr> {
     if !plugins_available() {
         warn!(
-            "CNI plugins not found under {} — instance {} will have no CNI network",
-            CNI_BIN_DIR, container_id
+            "CNI plugins not found under any of {:?} — instance {} will have no CNI network",
+            CNI_BIN_DIRS, container_id
         );
         return None;
     }
@@ -170,13 +192,14 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Option<Ve
     })
     .to_string();
 
-    let plugin = Path::new(CNI_BIN_DIR).join("bridge");
+    let bin_dir = cni_bin_dir();
+    let plugin = Path::new(&bin_dir).join("bridge");
     let mut child = match std::process::Command::new(&plugin)
         .env("CNI_COMMAND", command)
         .env("CNI_CONTAINERID", container_id)
         .env("CNI_NETNS", netns_path)
         .env("CNI_IFNAME", CNI_IFNAME)
-        .env("CNI_PATH", CNI_BIN_DIR)
+        .env("CNI_PATH", &bin_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -219,6 +242,12 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Option<Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// `CNI_PATH` is a process-global env var; tests that set/remove it must not
+    /// run concurrently or they race each other's view of the var. Serialise the
+    /// window with a shared lock (same pattern as the virtiofsd env tests).
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn default_conflist_is_valid_json_with_bridge() {
@@ -234,5 +263,39 @@ mod tests {
         let raw = r#"{"ips":[{"address":"10.43.0.5/16"}]}"#;
         let result: CniResult = serde_json::from_slice(raw.as_bytes()).unwrap();
         assert_eq!(result.ips[0].address, "10.43.0.5/16");
+    }
+
+    #[test]
+    fn cni_bin_dir_honours_cni_path_override() {
+        let _g = ENV_GUARD.lock().unwrap();
+        // CNI_PATH wins over probing, even pointing at a path that doesn't exist.
+        let prev = std::env::var_os("CNI_PATH");
+        // SAFETY: this is the only test touching CNI_PATH and it restores it.
+        unsafe { std::env::set_var("CNI_PATH", "/custom/cni") };
+        assert_eq!(cni_bin_dir(), "/custom/cni");
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("CNI_PATH", v),
+                None => std::env::remove_var("CNI_PATH"),
+            }
+        }
+    }
+
+    #[test]
+    fn cni_bin_dir_falls_back_to_upstream_default() {
+        let _g = ENV_GUARD.lock().unwrap();
+        // With no override and (assumed) no plugins under the test paths, the
+        // resolver still returns the conventional upstream path so error
+        // messages name something sensible.
+        let prev = std::env::var_os("CNI_PATH");
+        // SAFETY: this is the only test touching CNI_PATH and it restores it.
+        unsafe { std::env::remove_var("CNI_PATH") };
+        let resolved = cni_bin_dir();
+        assert!(CNI_BIN_DIRS.contains(&resolved.as_str()));
+        unsafe {
+            if let Some(v) = prev {
+                std::env::set_var("CNI_PATH", v);
+            }
+        }
     }
 }
