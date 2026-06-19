@@ -27,13 +27,31 @@ fn filter_instances(
 pub struct DockerLifecycle {
     docker: Docker,
     intentional_shutdowns: IntentionalShutdowns,
+    /// Whether crash detection comes from a Docker event listener (`die`/`oom`/
+    /// `kill` → `restart_count`). Docker runs one; Podman does not (its event
+    /// stream only flows while `podman system service` is up), so for Podman the
+    /// reconcile pass must detect exited containers itself — otherwise a
+    /// crash-looping container is silently recreated forever and never reaches
+    /// `CrashLoopBackOff`. `true` for Docker, `false` for Podman.
+    events_driven: bool,
 }
 
 impl DockerLifecycle {
+    /// Docker: an event listener drives crash counting.
     pub fn new(docker: Docker, intentional_shutdowns: IntentionalShutdowns) -> Self {
         Self {
             docker,
             intentional_shutdowns,
+            events_driven: true,
+        }
+    }
+
+    /// Podman: no event listener — the reconcile pass detects crashes instead.
+    pub fn new_podman(docker: Docker, intentional_shutdowns: IntentionalShutdowns) -> Self {
+        Self {
+            docker,
+            intentional_shutdowns,
+            events_driven: false,
         }
     }
 }
@@ -50,6 +68,7 @@ impl RuntimeLifecycle for DockerLifecycle {
             self.docker.clone(),
             resolved_mounts,
             self.intentional_shutdowns.clone(),
+            self.events_driven,
         )
         .await
     }

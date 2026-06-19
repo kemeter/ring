@@ -15,6 +15,7 @@ pub(crate) async fn apply(
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
     intentional_shutdowns: IntentionalShutdowns,
+    events_driven: bool,
 ) -> Deployment {
     let status_filter = if deployment.status == DeploymentStatus::Deleted {
         "all"
@@ -26,7 +27,55 @@ pub(crate) async fn apply(
     if deployment.kind == "job" {
         handle_job_deployment(deployment, docker, resolved_mounts, intentional_shutdowns).await
     } else {
-        handle_worker_deployment(deployment, docker, resolved_mounts, intentional_shutdowns).await
+        handle_worker_deployment(
+            deployment,
+            docker,
+            resolved_mounts,
+            intentional_shutdowns,
+            events_driven,
+        )
+        .await
+    }
+}
+
+/// Detect containers that started then exited unexpectedly since the last
+/// reconcile, and bump `restart_count` for each so a crash loop eventually
+/// reaches `CrashLoopBackOff`.
+///
+/// Only used when the runtime has NO event listener (Podman). On Docker the
+/// `die`/`oom`/`kill` events already drive `restart_count`, so running this
+/// there too would double-count and contend over `IntentionalShutdowns`.
+///
+/// Operator-initiated stops (scale-down, delete, rolling update, health-check
+/// eviction) pre-mark the container in `IntentionalShutdowns`; those are
+/// consumed and skipped here so a scale-down is never mistaken for a crash. Each
+/// real crash is reaped (removed) so its `exited` state isn't re-counted on the
+/// next tick.
+async fn detect_and_count_crashes(
+    deployment: &mut Deployment,
+    docker: &Docker,
+    intentional_shutdowns: &IntentionalShutdowns,
+) {
+    let exited = list_instances(docker, deployment.id.to_string(), "exited").await;
+    for container_id in exited {
+        if intentional_shutdowns.take(&container_id).await {
+            // Operator-initiated stop — not a crash. Reap it quietly.
+            remove_container(docker.clone(), container_id).await;
+            continue;
+        }
+        deployment.restart_count += 1;
+        deployment.emit_event(
+            "error",
+            format!(
+                "Container {} exited unexpectedly (restart {})",
+                &container_id[..container_id.len().min(12)],
+                deployment.restart_count
+            ),
+            "docker",
+            Some("container_crashed"),
+        );
+        // Reap the dead container so it is not counted again next tick.
+        remove_container(docker.clone(), container_id).await;
     }
 }
 
@@ -250,6 +299,7 @@ async fn handle_worker_deployment(
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
     intentional_shutdowns: IntentionalShutdowns,
+    events_driven: bool,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
@@ -260,6 +310,20 @@ async fn handle_worker_deployment(
     } else if deployment.status == DeploymentStatus::CrashLoopBackOff {
         return deployment;
     } else {
+        // Runtimes without an event listener (Podman) can't learn of a
+        // started-then-exited container from a `die` event, so detect it here:
+        // count each unexpected exit toward restart_count before deciding how
+        // many to (re)create. Without this the deployment recreates a crashing
+        // container forever and never reaches CrashLoopBackOff. Re-check the
+        // restart bound right after, so we converge in the same tick.
+        if !events_driven {
+            detect_and_count_crashes(&mut deployment, &docker, &intentional_shutdowns).await;
+            if deployment.restart_count >= MAX_RESTART_COUNT {
+                deployment.status = DeploymentStatus::CrashLoopBackOff;
+                return deployment;
+            }
+        }
+
         let current_count: usize = deployment.instances.len();
         let target_count: usize = match deployment.replicas.try_into() {
             Ok(count) => count,
