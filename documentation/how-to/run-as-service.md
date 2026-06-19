@@ -119,5 +119,5 @@ rm -rf ~/.config/kemeter/ring
 ## See also
 
 - [Tutorial: install and run](/documentation/tutorials/install-and-run) — first install
-- [How-to: observe and debug](/documentation/how-to/observe-and-debug) — logs and event streams
+- [How-to: observe and debug](/documentation/help/observe-and-debug) — logs and event streams
 - [Reference: environment variables](/documentation/reference/environment-variables)

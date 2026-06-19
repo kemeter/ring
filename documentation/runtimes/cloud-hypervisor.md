@@ -1,4 +1,4 @@
-# Deploy on Cloud Hypervisor
+# Cloud Hypervisor
 
 The Cloud Hypervisor runtime is **alpha**. It runs each deployment as a dedicated microVM with full kernel isolation — a stronger security boundary than containers, at the cost of a narrower feature set. This page walks through the setup and the gotchas.
 

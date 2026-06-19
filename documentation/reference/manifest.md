@@ -4,7 +4,7 @@ The complete schema for the YAML / JSON files you pass to `ring apply -f`. Every
 
 A manifest has three top-level keys: `namespaces:` (optional), `configs:` (optional) and `deployments:` (required).
 
-> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [How-to: deploy on Cloud Hypervisor → Limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations-parity-with-docker).
+> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [Cloud Hypervisor → Limitations](/documentation/runtimes/cloud-hypervisor#limitations-parity-with-docker).
 
 ```yaml
 namespaces:
@@ -173,7 +173,7 @@ volumes:
     permission: ro
 ```
 
-For `config` and `secret` volumes, the `source` is the config's or secret's `name` (not its UUID), and the resource must live in the **same namespace** as the deployment. See [how-to: deploy on Cloud Hypervisor → Volumes](/documentation/how-to/deploy-on-cloud-hypervisor#volumes-virtiofs) for runtime-specific lifecycle details.
+For `config` and `secret` volumes, the `source` is the config's or secret's `name` (not its UUID), and the resource must live in the **same namespace** as the deployment. See [Cloud Hypervisor → Volumes](/documentation/runtimes/cloud-hypervisor#volumes-virtiofs) for runtime-specific lifecycle details.
 
 For `secret` volumes specifically:
 - The whole decrypted value becomes the file contents (no `key:` field).
@@ -339,7 +339,7 @@ health_checks:
 | `http` | `url` | Full URL. `localhost` is rewritten to the instance's runtime-private IP. Probe succeeds on a 2xx response within `timeout`. Redirects (3xx) are not followed and count as failures. |
 | `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. **Current behavior:** the probe succeeds as soon as `docker exec` *starts the command without an API error*; the command's actual **exit code is not checked**. So a command that runs but exits non-zero will report `success`. This is a known limitation — track the [code source](https://github.com/kemeter/ring/blob/main/src/runtime/docker/health_check.rs) for the fix. |
 
-**Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is supported via the in-guest `ring-agent` daemon. See [how-to: deploy on Cloud Hypervisor → Health checks](/documentation/how-to/deploy-on-cloud-hypervisor#health-checks).
+**Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is supported via the in-guest `ring-agent` daemon. See [Cloud Hypervisor → Health checks](/documentation/runtimes/cloud-hypervisor#health-checks).
 
 See [how-to: configure health checks](/documentation/how-to/configure-health-checks) for tuning and recipes, and [health checks (design)](/documentation/concepts/health-checks-design) for the rolling-update interaction.
 

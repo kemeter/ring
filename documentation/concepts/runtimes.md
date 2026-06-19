@@ -114,7 +114,7 @@ The trade-off: the VM model has no native primitive for several things Docker gi
 - Memory overhead is larger
 - No inter-VM networking — each VM is on its own /30, cross-VM traffic goes through host-published ports
 - Crash detection is tick-bound (no event stream from CH)
-- Some manifest fields are silently ignored — see [Cloud Hypervisor limitations](/documentation/how-to/deploy-on-cloud-hypervisor#limitations)
+- Some manifest fields are silently ignored — see [Cloud Hypervisor limitations](/documentation/runtimes/cloud-hypervisor#limitations)
 
 ## Firecracker runtime (experimental)
 
@@ -164,7 +164,7 @@ If you do need stronger isolation (running untrusted code, multi-tenant where on
 
 ## See also
 
-- [How-to: deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor) — full setup including KVM, firmware, image prep
+- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor) — full setup including KVM, firmware, image prep
 - [Architecture](/documentation/concepts/architecture) — where the runtime sits in the process
 - [Namespaces and networking](/documentation/concepts/namespaces-and-networking) — per-runtime networking model
 - [Manifest reference](/documentation/reference/manifest) — per-field per-runtime behavior

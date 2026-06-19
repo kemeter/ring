@@ -222,4 +222,4 @@ If your workload depends on inter-instance discovery, Docker is currently the on
 
 - [Namespaces and networking](/documentation/concepts/namespaces-and-networking) — the runtime model
 - [Manifest reference: `ports`, `labels`, `volumes`](/documentation/reference/manifest)
-- [How-to: deploy on Cloud Hypervisor](/documentation/how-to/deploy-on-cloud-hypervisor) — CH networking caveats
+- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor) — CH networking caveats
