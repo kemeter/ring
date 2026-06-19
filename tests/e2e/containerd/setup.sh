@@ -15,7 +15,13 @@ set -euo pipefail
 
 RING_CONTAINERD_SOCKET="${RING_CONTAINERD_SOCKET:-/run/containerd/containerd.sock}"
 RING_CONTAINERD_NS="${RING_CONTAINERD_NS:-ring}"
-CNI_BIN_DIR="${CNI_BIN_DIR:-/opt/cni/bin}"
+# Probe the same locations Ring's cni_bin_dir() does: the CNI upstream default
+# (/opt/cni/bin) plus the Debian/Ubuntu (/usr/lib/cni) and Fedora
+# (/usr/libexec/cni) package layouts. An explicit CNI_PATH wins.
+CNI_BIN_DIRS=("/opt/cni/bin" "/usr/lib/cni" "/usr/libexec/cni")
+if [ -n "${CNI_PATH:-}" ]; then
+  CNI_BIN_DIRS=("$CNI_PATH")
+fi
 
 check_containerd_prereqs() {
   if ! command -v ctr > /dev/null 2>&1; then
@@ -40,8 +46,15 @@ check_containerd_prereqs() {
 
   # CNI plugins are required for container networking. Without them Ring boots
   # the container with no address and the networking/health-check tests fail.
-  if [ ! -x "$CNI_BIN_DIR/bridge" ] || [ ! -x "$CNI_BIN_DIR/host-local" ]; then
-    echo "[containerd-setup] FAIL: CNI plugins missing under $CNI_BIN_DIR (need bridge + host-local)" >&2
+  local found=""
+  for dir in "${CNI_BIN_DIRS[@]}"; do
+    if [ -x "$dir/bridge" ] && [ -x "$dir/host-local" ]; then
+      found="$dir"
+      break
+    fi
+  done
+  if [ -z "$found" ]; then
+    echo "[containerd-setup] FAIL: CNI plugins missing under ${CNI_BIN_DIRS[*]} (need bridge + host-local)" >&2
     echo "                   install the containernetworking-plugins package, or download from" >&2
     echo "                   https://github.com/containernetworking/plugins/releases" >&2
     return 1

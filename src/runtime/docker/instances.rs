@@ -1,36 +1,39 @@
 use bollard::Docker;
+use bollard::models::ContainerSummaryStateEnum;
 use bollard::query_parameters::ListContainersOptionsBuilder;
-use std::collections::HashMap;
 
 fn build_list_options(status: &str) -> bollard::query_parameters::ListContainersOptions {
+    // Always list every container and filter by state client-side (see
+    // `matches_status`). We deliberately do NOT push a server-side `status`
+    // filter:
+    // Podman's Docker-compatible API rejects `restarting` (it has no such
+    // state) and fails the whole request, which `list_*` then swallows into an
+    // empty Vec — making the scheduler believe a deployment has 0 live
+    // instances and spawn one new container every tick, unbounded. Listing all
+    // and filtering in-process behaves identically on Docker and Podman.
+    let all = !matches!(status, "all");
+    ListContainersOptionsBuilder::new().all(all).build()
+}
+
+/// Whether a container counts as a live instance for the given filter.
+///
+/// `active` = running or restarting. We deliberately drop `created`: a
+/// container stuck in `created` (Docker accepted the spec but `start` failed —
+/// e.g. the OCI runtime can't exec the binary) is *not* a live instance.
+/// Counting it as active masked the failure — the scheduler saw
+/// `current_count == target_count`, skipped the retry path, and `restart_count`
+/// never climbed to `MAX_RESTART_COUNT`. With it excluded, the next tick sees
+/// 0 instances, retries, increments `restart_count`, and eventually flips the
+/// deployment to `CrashLoopBackOff` like any other crash loop.
+fn matches_status(state: Option<&ContainerSummaryStateEnum>, status: &str) -> bool {
     match status {
-        "all" => ListContainersOptionsBuilder::new().all(true).build(),
-        "active" => {
-            // We deliberately drop `created` here. A container stuck in
-            // `created` (Docker accepted the spec but `start` failed — e.g.
-            // OCI runtime can't exec the binary) is *not* a live instance.
-            // Counting it as active masked the failure: the scheduler saw
-            // `current_count == target_count`, skipped the retry path, and
-            // restart_count never climbed to MAX_RESTART_COUNT. With it out
-            // of the filter, the next tick sees 0 instances, re-tries,
-            // increments restart_count, and eventually flips the deployment
-            // to CrashLoopBackOff like any other crash loop.
-            let filters = HashMap::from([(
-                "status".to_string(),
-                vec!["running".to_string(), "restarting".to_string()],
-            )]);
-            ListContainersOptionsBuilder::new()
-                .all(true)
-                .filters(&filters)
-                .build()
-        }
-        s => {
-            let filters = HashMap::from([("status".to_string(), vec![s.to_string()])]);
-            ListContainersOptionsBuilder::new()
-                .all(false)
-                .filters(&filters)
-                .build()
-        }
+        "all" => true,
+        "active" => matches!(
+            state,
+            Some(ContainerSummaryStateEnum::RUNNING) | Some(ContainerSummaryStateEnum::RESTARTING)
+        ),
+        // An explicit single state filter (e.g. "exited", "created").
+        s => state.map(|st| st.to_string() == s).unwrap_or(false),
     }
 }
 
@@ -41,7 +44,8 @@ pub(crate) async fn list_instances(docker: &Docker, id: String, status: &str) ->
     match docker.list_containers(Some(options)).await {
         Ok(containers) => {
             for container in containers {
-                if let Some(labels) = container.labels
+                if matches_status(container.state.as_ref(), status)
+                    && let Some(labels) = container.labels
                     && let Some(deployment_id) = labels.get("ring_deployment")
                     && deployment_id == &id
                     && let Some(container_id) = container.id
@@ -67,7 +71,8 @@ pub(crate) async fn list_instances_with_names(
     match docker.list_containers(Some(options)).await {
         Ok(containers) => {
             for container in containers {
-                if let Some(labels) = &container.labels
+                if matches_status(container.state.as_ref(), status)
+                    && let Some(labels) = &container.labels
                     && let Some(deployment_id) = labels.get("ring_deployment")
                     && deployment_id == &id
                     && let Some(container_id) = &container.id
@@ -86,4 +91,59 @@ pub(crate) async fn list_instances_with_names(
     }
 
     instances
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn active_counts_running_and_restarting() {
+        assert!(matches_status(
+            Some(&ContainerSummaryStateEnum::RUNNING),
+            "active"
+        ));
+        assert!(matches_status(
+            Some(&ContainerSummaryStateEnum::RESTARTING),
+            "active"
+        ));
+    }
+
+    #[test]
+    fn active_excludes_created_and_exited() {
+        // A `created` container (start failed) is NOT a live instance — this is
+        // the exclusion that lets the scheduler retry and eventually reach
+        // CrashLoopBackOff instead of treating it as healthy.
+        assert!(!matches_status(
+            Some(&ContainerSummaryStateEnum::CREATED),
+            "active"
+        ));
+        assert!(!matches_status(
+            Some(&ContainerSummaryStateEnum::EXITED),
+            "active"
+        ));
+        assert!(!matches_status(None, "active"));
+    }
+
+    #[test]
+    fn all_matches_any_state() {
+        assert!(matches_status(
+            Some(&ContainerSummaryStateEnum::CREATED),
+            "all"
+        ));
+        assert!(matches_status(None, "all"));
+    }
+
+    #[test]
+    fn explicit_state_filter_matches_by_name() {
+        assert!(matches_status(
+            Some(&ContainerSummaryStateEnum::EXITED),
+            "exited"
+        ));
+        assert!(!matches_status(
+            Some(&ContainerSummaryStateEnum::RUNNING),
+            "exited"
+        ));
+        assert!(!matches_status(None, "exited"));
+    }
 }

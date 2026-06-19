@@ -42,8 +42,16 @@ impl ContainerdImage {
     /// Build from the deployment's image string and optional config auth.
     pub(crate) fn from_deployment(image: &str, auth: Option<(String, String, String)>) -> Self {
         let (repo, parsed_ref) = parse_image_reference(image);
+        // Unlike the Docker daemon, containerd does NOT expand short image names:
+        // it needs a fully-qualified reference. A bare `nginx` reaches its
+        // Transfer resolver as `dummy://nginx:1.25-alpine`, whose `:1.25-alpine`
+        // the URL parser reads as a port → "invalid port after host" and the
+        // pull fails (deployment crash-loops). So we apply Docker Hub's implicit
+        // rules ourselves: default the registry to `docker.io` and the namespace
+        // to `library` for official images.
+        let repo = normalize_repository(&repo);
         // The reference containerd stores the image under is the canonical
-        // `name:tag` / `name@digest` — same string the user wrote, normalized.
+        // `name:tag` / `name@digest`.
         let reference = match &parsed_ref {
             ImageReference::Tag(t) => format!("{}:{}", repo, t),
             ImageReference::Digest(d) => format!("{}@{}", repo, d),
@@ -53,6 +61,33 @@ impl ContainerdImage {
             parsed_ref,
             auth,
         }
+    }
+}
+
+/// Expand a Docker-style repository name to a fully-qualified containerd
+/// reference, applying the same implicit defaults the Docker CLI/daemon do:
+///   - `nginx`            → `docker.io/library/nginx`   (official image)
+///   - `bitnami/redis`    → `docker.io/bitnami/redis`   (Hub user/org image)
+///   - `ghcr.io/o/p`      → `ghcr.io/o/p`               (explicit registry, kept)
+///   - `localhost:5000/x` → `localhost:5000/x`          (local registry, kept)
+///
+/// The first path segment is a registry host only if it contains a `.` or `:`
+/// (a domain or `host:port`) or is exactly `localhost`; otherwise it's part of
+/// the repository path on Docker Hub.
+fn normalize_repository(repo: &str) -> String {
+    let first_segment = repo.split('/').next().unwrap_or(repo);
+    let has_registry_host =
+        first_segment.contains('.') || first_segment.contains(':') || first_segment == "localhost";
+
+    if has_registry_host {
+        // Registry is explicit — leave it as the user wrote it.
+        repo.to_string()
+    } else if repo.contains('/') {
+        // Hub user/org image: registry defaults to docker.io, path kept.
+        format!("docker.io/{}", repo)
+    } else {
+        // Official image: docker.io + the implicit `library` namespace.
+        format!("docker.io/library/{}", repo)
     }
 }
 
@@ -67,10 +102,49 @@ struct OciDescriptor {
     digest: String,
 }
 
-/// Subset of an OCI image config we need: the rootfs diff ids.
+/// A multi-arch manifest list / OCI image index: a list of per-platform
+/// manifests instead of a single image. Docker Hub serves most official images
+/// (nginx, alpine, …) this way, so the digest containerd records as the image
+/// target points here, NOT at an image manifest. We must pick the entry matching
+/// the host platform and recurse into it.
+#[derive(Deserialize)]
+struct OciIndex {
+    manifests: Vec<OciIndexEntry>,
+}
+
+#[derive(Deserialize)]
+struct OciIndexEntry {
+    digest: String,
+    #[serde(default)]
+    platform: Option<OciPlatform>,
+}
+
+#[derive(Deserialize)]
+struct OciPlatform {
+    architecture: String,
+    os: String,
+}
+
+/// Subset of an OCI image config we need: the rootfs diff ids plus the default
+/// process the image declares. containerd is low-level — unlike the Docker
+/// daemon, nothing merges the image's Entrypoint/Cmd into the OCI spec for us,
+/// so Ring must read them here and apply them when the deployment overrides no
+/// command (otherwise `runc create` fails with `args must not be empty`).
 #[derive(Deserialize)]
 struct OciImageConfig {
     rootfs: OciRootfs,
+    #[serde(default)]
+    config: OciImageConfigInner,
+}
+
+/// The `config` block of an OCI image config: the container runtime defaults.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+struct OciImageConfigInner {
+    #[serde(default)]
+    entrypoint: Option<Vec<String>>,
+    #[serde(default)]
+    cmd: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +159,10 @@ pub(crate) struct ResolvedImage {
     /// Snapshot chain id that serves as the read-only parent of each
     /// per-instance writable snapshot.
     pub(crate) chain_id: String,
+    /// The image's default process (`Entrypoint` + `Cmd`), used as `process.args`
+    /// when the deployment does not override the command. Empty if the image
+    /// declares neither — that image is only runnable with an explicit command.
+    pub(crate) default_args: Vec<String>,
 }
 
 /// Ensure the image is present (and unpacked) honouring `policy`, then resolve
@@ -124,11 +202,13 @@ pub(crate) async fn ensure_image(
     }
 
     let descriptor = get_image_target(client, namespace, &image.reference).await?;
-    let chain_id = resolve_chain_id(client, namespace, &descriptor.digest).await?;
+    let (chain_id, default_args) =
+        resolve_chain_id_and_args(client, namespace, &descriptor.digest).await?;
 
     Ok(ResolvedImage {
         digest: Some(descriptor.digest),
         chain_id,
+        default_args,
     })
 }
 
@@ -271,18 +351,91 @@ async fn get_image_target(
         })
 }
 
-/// Compute the rootfs chain id of an image from its manifest + config.
+/// The host platform containerd unpacked layers for. Ring builds for
+/// `x86_64-unknown-linux-gnu`; matching `linux/amd64` is correct for the
+/// supported targets. `arm64` falls out of `target_arch` when cross-built.
+fn host_architecture() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "amd64"
+    }
+}
+
+/// If `digest` points at a multi-arch index, return the digest of the manifest
+/// matching the host platform; otherwise return `digest` unchanged.
 ///
-/// containerd stores the image config (with `rootfs.diff_ids`) in the content
-/// store, keyed by the manifest's `config.digest`. The chain id is the iterated
-/// SHA-256 of the diff ids — the same value the snapshotter keys unpacked layers
-/// under, so it is the correct parent for a writable snapshot.
-async fn resolve_chain_id(
+/// We distinguish an index from an image manifest by structure: an index has a
+/// `manifests` array and no `config`. Parsing as `OciIndex` succeeds only for
+/// the former, so a failed parse means "already an image manifest" and we pass
+/// the digest through untouched.
+async fn resolve_platform_manifest(
+    client: &containerd_client::Client,
+    namespace: &str,
+    digest: &str,
+) -> Result<String, RuntimeError> {
+    let bytes = read_content(client, namespace, digest).await?;
+
+    let index: OciIndex = match serde_json::from_slice(&bytes) {
+        Ok(index) => index,
+        // Not an index (no `manifests` array) — it's already an image manifest.
+        Err(_) => return Ok(digest.to_string()),
+    };
+
+    // An image manifest can also deserialize loosely; require a non-empty
+    // `manifests` list to treat it as an index.
+    if index.manifests.is_empty() {
+        return Ok(digest.to_string());
+    }
+
+    let arch = host_architecture();
+    select_platform_digest(&index, arch).ok_or_else(|| {
+        RuntimeError::Other(format!(
+            "image index {} has no manifest for platform linux/{}",
+            digest, arch
+        ))
+    })
+}
+
+/// Pick the manifest digest matching `linux/<arch>` from an index, falling back
+/// to a platform-less entry. Pure (no I/O) so it is unit-tested directly.
+fn select_platform_digest(index: &OciIndex, arch: &str) -> Option<String> {
+    index
+        .manifests
+        .iter()
+        .find(|m| {
+            m.platform
+                .as_ref()
+                .is_some_and(|p| p.os == "linux" && p.architecture == arch)
+        })
+        // Some indexes carry attestation manifests with no platform; the real
+        // images declare one, so the platform match above wins when present.
+        .or_else(|| index.manifests.iter().find(|m| m.platform.is_none()))
+        .map(|m| m.digest.clone())
+}
+
+/// Compute an image's rootfs chain id AND its default process args from its
+/// manifest + config.
+///
+/// containerd stores the image config (with `rootfs.diff_ids` and the
+/// `Entrypoint`/`Cmd` defaults) in the content store, keyed by the manifest's
+/// `config.digest`. The chain id is the iterated SHA-256 of the diff ids — the
+/// same value the snapshotter keys unpacked layers under, so it is the correct
+/// parent for a writable snapshot. The default args (`Entrypoint ++ Cmd`) are
+/// what containerd would run when no command override is given; Ring applies
+/// them to the OCI spec itself because nothing else does at this level.
+async fn resolve_chain_id_and_args(
     client: &containerd_client::Client,
     namespace: &str,
     manifest_digest: &str,
-) -> Result<String, RuntimeError> {
-    let manifest_bytes = read_content(client, namespace, manifest_digest).await?;
+) -> Result<(String, Vec<String>), RuntimeError> {
+    // The target may be a multi-arch index (manifest list) rather than an image
+    // manifest. Follow the index to the host-platform manifest before parsing
+    // the `config` pointer — otherwise `config` is absent and parsing fails,
+    // which manifested as an endless crash loop on official Docker Hub images.
+    let manifest_digest = resolve_platform_manifest(client, namespace, manifest_digest).await?;
+
+    let manifest_bytes = read_content(client, namespace, &manifest_digest).await?;
     let manifest: OciManifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
         RuntimeError::Other(format!(
             "failed to parse image manifest {}: {}",
@@ -304,7 +457,16 @@ async fn resolve_chain_id(
         ));
     }
 
-    Ok(compute_chain_id(&config.rootfs.diff_ids))
+    let default_args = image_default_args(&config.config);
+    Ok((compute_chain_id(&config.rootfs.diff_ids), default_args))
+}
+
+/// The default process an image declares: `Entrypoint` concatenated with `Cmd`,
+/// matching Docker/OCI semantics. Pure (no I/O) so it is unit-tested directly.
+fn image_default_args(config: &OciImageConfigInner) -> Vec<String> {
+    let mut args = config.entrypoint.clone().unwrap_or_default();
+    args.extend(config.cmd.clone().unwrap_or_default());
+    args
 }
 
 /// Iterated chain id over an ordered list of layer diff ids, per the OCI image
@@ -374,13 +536,153 @@ mod tests {
 
     #[test]
     fn image_reference_tag_canonicalized() {
+        // Containerd needs a fully-qualified reference: a bare `nginx` must
+        // expand to docker.io/library/nginx, else its Transfer resolver builds
+        // `dummy://nginx:latest` and the URL parser rejects the tag as a port.
         let img = ContainerdImage::from_deployment("nginx", None);
-        assert_eq!(img.reference, "nginx:latest");
+        assert_eq!(img.reference, "docker.io/library/nginx:latest");
+    }
+
+    #[test]
+    fn image_reference_with_tag_canonicalized() {
+        let img = ContainerdImage::from_deployment("nginx:1.25-alpine", None);
+        assert_eq!(img.reference, "docker.io/library/nginx:1.25-alpine");
     }
 
     #[test]
     fn image_reference_digest_canonicalized() {
         let img = ContainerdImage::from_deployment("nginx@sha256:abc", None);
-        assert_eq!(img.reference, "nginx@sha256:abc");
+        assert_eq!(img.reference, "docker.io/library/nginx@sha256:abc");
+    }
+
+    fn entry(digest: &str, os: Option<&str>, arch: Option<&str>) -> OciIndexEntry {
+        OciIndexEntry {
+            digest: digest.to_string(),
+            platform: match (os, arch) {
+                (Some(os), Some(arch)) => Some(OciPlatform {
+                    os: os.to_string(),
+                    architecture: arch.to_string(),
+                }),
+                _ => None,
+            },
+        }
+    }
+
+    #[test]
+    fn select_platform_picks_matching_arch() {
+        // A typical multi-arch index (nginx:alpine on Docker Hub): the bug was
+        // parsing this as an image manifest, which has no `config` field.
+        let index = OciIndex {
+            manifests: vec![
+                entry("sha256:arm64", Some("linux"), Some("arm64")),
+                entry("sha256:amd64", Some("linux"), Some("amd64")),
+            ],
+        };
+        assert_eq!(
+            select_platform_digest(&index, "amd64"),
+            Some("sha256:amd64".to_string())
+        );
+        assert_eq!(
+            select_platform_digest(&index, "arm64"),
+            Some("sha256:arm64".to_string())
+        );
+    }
+
+    #[test]
+    fn select_platform_falls_back_to_platformless_entry() {
+        let index = OciIndex {
+            manifests: vec![entry("sha256:plain", None, None)],
+        };
+        assert_eq!(
+            select_platform_digest(&index, "amd64"),
+            Some("sha256:plain".to_string())
+        );
+    }
+
+    #[test]
+    fn select_platform_none_when_no_match() {
+        // Index with only a non-matching arch and no platform-less fallback.
+        let index = OciIndex {
+            manifests: vec![entry("sha256:arm64", Some("linux"), Some("arm64"))],
+        };
+        assert_eq!(select_platform_digest(&index, "amd64"), None);
+    }
+
+    #[test]
+    fn image_default_args_concatenates_entrypoint_and_cmd() {
+        let cfg = OciImageConfigInner {
+            entrypoint: Some(vec!["/docker-entrypoint.sh".to_string()]),
+            cmd: Some(vec!["nginx".to_string(), "-g".to_string()]),
+        };
+        assert_eq!(
+            image_default_args(&cfg),
+            vec!["/docker-entrypoint.sh", "nginx", "-g"]
+        );
+    }
+
+    #[test]
+    fn image_default_args_cmd_only() {
+        let cfg = OciImageConfigInner {
+            entrypoint: None,
+            cmd: Some(vec!["/bin/sh".to_string()]),
+        };
+        assert_eq!(image_default_args(&cfg), vec!["/bin/sh"]);
+    }
+
+    #[test]
+    fn image_default_args_empty_when_neither() {
+        let cfg = OciImageConfigInner {
+            entrypoint: None,
+            cmd: None,
+        };
+        assert!(image_default_args(&cfg).is_empty());
+    }
+
+    #[test]
+    fn select_platform_ignores_non_linux_os() {
+        let index = OciIndex {
+            manifests: vec![
+                entry("sha256:win", Some("windows"), Some("amd64")),
+                entry("sha256:lin", Some("linux"), Some("amd64")),
+            ],
+        };
+        assert_eq!(
+            select_platform_digest(&index, "amd64"),
+            Some("sha256:lin".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_official_image_gets_library_namespace() {
+        assert_eq!(normalize_repository("nginx"), "docker.io/library/nginx");
+    }
+
+    #[test]
+    fn normalize_hub_user_image_gets_docker_io() {
+        assert_eq!(
+            normalize_repository("bitnami/redis"),
+            "docker.io/bitnami/redis"
+        );
+    }
+
+    #[test]
+    fn normalize_explicit_registry_is_untouched() {
+        assert_eq!(
+            normalize_repository("ghcr.io/owner/proj"),
+            "ghcr.io/owner/proj"
+        );
+        assert_eq!(
+            normalize_repository("registry.example.com/team/app"),
+            "registry.example.com/team/app"
+        );
+    }
+
+    #[test]
+    fn normalize_registry_with_port_is_untouched() {
+        assert_eq!(
+            normalize_repository("localhost:5000/app"),
+            "localhost:5000/app"
+        );
+        assert_eq!(normalize_repository("localhost/app"), "localhost/app");
     }
 }
