@@ -1171,7 +1171,7 @@ pub(crate) async fn schedule(
             }
         };
 
-        info!("Processing {} deployments", list_deployments.len());
+        debug!("Processing {} deployments", list_deployments.len());
         let mut deleted: Vec<String> = Vec::new();
 
         for deployment in list_deployments.into_iter() {
