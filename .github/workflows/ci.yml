@@ -23,19 +23,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
       - uses: oven-sh/setup-bun@v2
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build dashboard
         run: cd dashboard && bun install --frozen-lockfile && bun run build
       - run: rustup component add clippy
+      # Rust-specific cache (tokio/axum/clap all use it): prunes stale target/
+      # artifacts, keys on toolchain + Cargo.lock, and adds restore-keys so a
+      # Cargo.lock change reuses the closest cache instead of starting cold.
+      # save-if keeps PR runs from filling the 10 GB repo quota — only main saves.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo clippy --all-targets -- -D warnings
 
   dashboard-lint:
@@ -58,18 +58,14 @@ jobs:
       RING_SECRET_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
       - uses: oven-sh/setup-bun@v2
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Build dashboard
         run: cd dashboard && bun install --frozen-lockfile && bun run build
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: docker pull nginx:alpine
       - run: cargo test
 
@@ -78,5 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      # Caches ~/.cargo/bin (cache-bin defaults to true) so the compiled
+      # cargo-audit binary is reused instead of recompiled from scratch each run.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo install cargo-audit
       - run: cargo audit --ignore RUSTSEC-2023-0071
