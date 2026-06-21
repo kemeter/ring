@@ -28,13 +28,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-gnu-${{ hashFiles('**/Cargo.lock') }}
+      # Per-job cache key (rust-cache appends the job id automatically), so the
+      # gnu and musl release builds keep separate caches.
+      - uses: Swatinem/rust-cache@v2
 
       # The dashboard's static build is baked into the Rust binary via
       # rust-embed, so it must exist before `cargo build` runs. Skipping
@@ -80,13 +76,9 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-release-musl-${{ hashFiles('**/Cargo.lock') }}
+      # Distinct per-job cache (rust-cache appends the job id), keeping the musl
+      # target/ artifacts separate from the gnu build above.
+      - uses: Swatinem/rust-cache@v2
 
       # ring-agent must be a static binary so users can drop it into any
       # guest image regardless of its libc — musl is the standard choice.
