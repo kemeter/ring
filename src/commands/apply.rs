@@ -68,8 +68,8 @@ struct Deployment {
     #[serde(default)]
     volumes: Vec<Volume>,
 
-    #[serde(default)]
-    config: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config: Option<DeploymentConfig>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     command: Vec<String>,
@@ -85,6 +85,41 @@ struct Deployment {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<NetworkConfig>,
+}
+
+/// Runtime config block of a deployment. Mirrors the API's `DeploymentConfig`
+/// so a manifest can carry structured fields (notably `user`) instead of a flat
+/// string map — the previous `HashMap<String, String>` could not express the
+/// `user` struct the API expects.
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+struct DeploymentConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_pull_policy: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    user: Option<UserConfig>,
+}
+
+/// Numeric uid/gid the container runs as (forwarded to Docker's `User`).
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+struct UserConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    privileged: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -273,8 +308,18 @@ impl Deployment {
             }
         }
 
-        for (_, value) in self.config.iter_mut() {
-            *value = env_resolver(value, env_vars);
+        if let Some(config) = self.config.as_mut() {
+            for s in [
+                &mut config.image_pull_policy,
+                &mut config.server,
+                &mut config.username,
+                &mut config.password,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                *s = env_resolver(s, env_vars);
+            }
         }
 
         for arg in self.command.iter_mut() {
@@ -741,7 +786,7 @@ mod tests {
             labels: HashMap::new(),
             environment: HashMap::new(),
             volumes: Vec::new(),
-            config: HashMap::new(),
+            config: None,
             command: Vec::new(),
             resources: None,
             health_checks: Vec::new(),
@@ -958,7 +1003,7 @@ deployments:
             labels: HashMap::new(),
             environment: HashMap::new(),
             volumes: Vec::new(),
-            config: HashMap::new(),
+            config: None,
             command: vec![
                 "/bin/sh".to_string(),
                 "-c".to_string(),
