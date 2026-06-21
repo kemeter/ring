@@ -120,31 +120,30 @@ fn build_health_config(health_checks: &[HealthCheck]) -> Option<HealthConfig> {
 /// daemon.
 ///
 /// We prefer the cache when:
-///   - no registry credentials were provided (`has_auth == false`), or
 ///   - the policy is `IfNotPresent` (explicitly opts into the cache), or
 ///   - the reference is a `Digest` (immutable content — re-pulling is a
-///     no-op).
+///     no-op), or
+///   - no registry credentials were provided *and the policy is not
+///     `Always`* — the implicit/default path stays cache-friendly.
 ///
-/// The first clause is the design rule, not a fallback: Kemeter only sends
-/// registry credentials when a private registry is actually needed. When it
-/// sends none, that's deliberate — Ring serves the image already present
-/// locally, *whatever the policy*, including `Always`. (`Always` can only
-/// mean "re-check the registry every reconcile" when there *is* a registry
-/// to check; with no registry configured there is nothing to re-check, so
-/// the local image is authoritative.) This is also what kept things working
-/// before 1790c8d, which inadvertently turned this nominal path into an
-/// anonymous pull of a private image and crash-looped prod.
-///
-/// When credentials *are* present, strict `Always` is honoured and we hit
-/// the registry on every reconcile.
+/// `Always` always reaches the registry, with or without credentials. A
+/// missing `image_pull_policy` defaults to `Always`, so a user who re-pushes
+/// the same public tag expects the new content to be pulled; short-circuiting
+/// on `!has_auth` silently downgraded that to `IfNotPresent` and served the
+/// stale local layer. Without credentials the pull is anonymous: it succeeds
+/// for a public image and fails with a clear registry error otherwise — which
+/// is what `Always` asks for. The `!has_auth` shortcut therefore guards only
+/// the non-`Always` policies (it kept anonymous pulls of private images from
+/// crash-looping before 1790c8d, a concern that does not apply once the user
+/// has explicitly opted into `Always`).
 pub(crate) fn prefer_local_cache(
     policy: ImagePullPolicy,
     reference: &ImageReference,
     has_auth: bool,
 ) -> bool {
-    !has_auth
-        || matches!(policy, ImagePullPolicy::IfNotPresent)
+    matches!(policy, ImagePullPolicy::IfNotPresent)
         || matches!(reference, ImageReference::Digest(_))
+        || (!has_auth && !matches!(policy, ImagePullPolicy::Always))
 }
 
 /// Classify a Docker image-pull error into a `RuntimeError` whose message
@@ -1046,18 +1045,24 @@ mod tests {
         assert_eq!(cfg.test.as_ref().unwrap()[1], "/usr/local/bin/ready.sh");
     }
 
-    // --- prefer_local_cache: no private registry configured means we serve
-    //     the local image first. This is the nominal design, not a fallback. ---
+    // --- prefer_local_cache: without credentials, the non-Always policies
+    //     stay cache-friendly, but Always always reaches the registry. ---
 
     #[test]
-    fn prefer_cache_no_registry_serves_local_first_any_policy() {
-        // Design rule: when Kemeter sends no registry credentials (auth=None)
-        // — because none is needed — Ring serves the cached image first,
-        // whatever the policy. Not a degraded mode: this is the intended
-        // behaviour. Always must not force a registry round-trip here.
+    fn prefer_cache_no_auth_non_always_serves_local_first() {
+        // Without credentials, the implicit/default cache-friendly path holds
+        // for the non-Always policies.
         let r = ImageReference::Tag("9809f6b1".to_string());
-        assert!(prefer_local_cache(ImagePullPolicy::Always, &r, false));
         assert!(prefer_local_cache(ImagePullPolicy::IfNotPresent, &r, false));
+    }
+
+    #[test]
+    fn prefer_cache_always_no_auth_goes_to_registry() {
+        // Regression: a missing image_pull_policy defaults to Always, so a
+        // re-pushed public tag must be re-pulled. The `!has_auth` shortcut
+        // must not downgrade Always to a cache hit.
+        let r = ImageReference::Tag("9809f6b1".to_string());
+        assert!(!prefer_local_cache(ImagePullPolicy::Always, &r, false));
     }
 
     #[test]
