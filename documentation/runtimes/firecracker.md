@@ -79,9 +79,27 @@ A `kind: job` deployment boots a single microVM (replicas are ignored) and is ma
 
 Completed jobs are sticky (never rebooted) and their per-instance artifacts (socket, rootfs copy, console log) are reaped; the deployment row stays for inspection.
 
+## Volumes
+
+Firecracker has no virtio-fs (the Cloud Hypervisor mechanism — its maintainers declined it on attack-surface grounds), so a volume is realised as a separate **ext4 image attached as a virtio-block device**. Ring builds the image on the host, attaches it after the root device (`/dev/vdb`, `/dev/vdc`, … in declaration order), and cloud-init in the guest mounts it at the destination.
+
+```yaml
+volumes:
+  - { type: bind,   source: /srv/assets, destination: /mnt/assets, permission: ro }
+  - { type: volume, source: appdata,     destination: /var/lib/app, permission: rw }
+  - { type: config, source: nginx-conf, key: nginx.conf, destination: /etc/nginx/nginx.conf }
+```
+
+- **bind** — a fresh ext4 image seeded from the host source directory.
+- **volume** (named) — a persistent ext4 image under `<socket_dir>/volumes/<namespace>/<name>.ext4`, created once (256 MiB) and reused; it survives deployment deletion (it *is* the data).
+- **config** / **secret** — a fresh ext4 image holding the rendered file, mounted read-only.
+
+Bind and config/secret images are ephemeral and reaped when the instance stops; only named volumes persist.
+
+> Volume mounting requires **cloud-init** (and `mount`/`mkdir`) in the guest rootfs — the same requirement as the static network config. A rootfs without cloud-init attaches the block device but won't mount it.
+
 ## Known gaps (experimental)
 
-- **Volumes are not mounted yet.** Firecracker has no virtio-fs (the Cloud Hypervisor mechanism — its maintainers declined it on attack-surface grounds), so volumes would go through **virtio-block** (one ext4 image per volume, attached as an extra drive). Feasibility is proven; the runtime wiring is pending.
 - `image:` must be a host rootfs file — no registry pull.
 
 ## See also

@@ -18,4 +18,5 @@ pub(crate) mod stats;
 pub(crate) mod tap;
 pub(crate) mod types;
 pub(crate) mod virtiofs;
+pub(crate) mod volume_image;
 pub(crate) mod vsock_client;
