@@ -8,17 +8,19 @@
 //!   structured for direct consumption by a dashboard or any other client that
 //!   prefers to skip the text-parsing step.
 //!
-//! No moving parts, no background aggregator — every scrape recomputes from the
-//! database, so values are always consistent with what the rest of the API
-//! would return.
+//! The inventory series (counts by status/runtime, table totals) are recomputed
+//! from the database on every scrape, so they are always consistent with what
+//! the rest of the API would return.
 //!
 //! Endpoint is intentionally unauthenticated: Prometheus scrapers default to no
 //! auth and operators front the API with TLS / network ACLs anyway.
 //!
-//! This is the lightweight inventory snapshot (counts only). Per-deployment
-//! resource usage (CPU/memory/network) lives behind `/deployments/{id}/metrics`
-//! because querying every runtime on each scrape would be expensive; it can be
-//! folded in here later as an additive section without breaking this format.
+//! Per-deployment resource usage (CPU/memory/network) is NOT read on the scrape
+//! path — querying every runtime on each scrape would be expensive. It comes
+//! from a background-refreshed snapshot (`scheduler::stats_cache`), so those
+//! series are at most one refresh interval stale; `ring_runtime_last_refresh_seconds`
+//! exposes that staleness. For a fresh point-in-time read of one deployment,
+//! use `/deployments/{id}/metrics`.
 
 use crate::api::server::AppState;
 use crate::models::deployments::DeploymentStatus;
@@ -34,7 +36,18 @@ const PROM_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 
 pub(crate) async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let snap = Snapshot::collect(&state.connection).await;
+    let mut snap = Snapshot::collect(&state.connection).await;
+
+    // Runtime resource usage comes from the background cache, never the request
+    // path, so the scrape stays cheap. A poisoned lock yields no runtime series
+    // (logged) rather than failing the whole scrape.
+    match state.stats_cache.read() {
+        Ok(guard) => {
+            snap.runtime_last_refresh_seconds = guard.last_refresh_unix;
+            snap.deployment_runtime = guard.deployments.iter().map(RuntimeSeries::from).collect();
+        }
+        Err(e) => error!("metrics: stats cache lock poisoned: {}", e),
+    }
 
     let (body, content_type) = if wants_json(&headers) {
         let body = serde_json::to_string(&snap).unwrap_or_else(|e| {
@@ -91,6 +104,53 @@ struct Snapshot {
     events_by_status: BTreeMap<String, u64>,
     /// Health-check results by status; failing checks surface here.
     health_checks_by_status: BTreeMap<String, u64>,
+    /// Unix timestamp of the last successful runtime-stats refresh; `0` if the
+    /// background worker has not completed a cycle yet.
+    runtime_last_refresh_seconds: u64,
+    /// Per-deployment runtime resource usage, sourced from the background
+    /// cache (not the DB). Empty until the first refresh, or when no active
+    /// deployment reports stats.
+    deployment_runtime: Vec<RuntimeSeries>,
+}
+
+/// Serializable, render-ready copy of one deployment's cached runtime stats.
+/// Mirrors `stats_cache::DeploymentRuntimeStats` but lives here so the cache
+/// type need not depend on serde or the metrics format.
+#[derive(Debug, Serialize)]
+struct RuntimeSeries {
+    name: String,
+    namespace: String,
+    runtime: String,
+    instances: u64,
+    cpu_usage_percent: f64,
+    memory_usage_bytes: u64,
+    memory_limit_bytes: u64,
+    network_rx_bytes: u64,
+    network_tx_bytes: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
+    pids: u64,
+    restarts: u64,
+}
+
+impl From<&crate::scheduler::stats_cache::DeploymentRuntimeStats> for RuntimeSeries {
+    fn from(s: &crate::scheduler::stats_cache::DeploymentRuntimeStats) -> Self {
+        RuntimeSeries {
+            name: s.name.clone(),
+            namespace: s.namespace.clone(),
+            runtime: s.runtime.clone(),
+            instances: s.instance_count,
+            cpu_usage_percent: s.cpu_usage_percent,
+            memory_usage_bytes: s.memory_usage_bytes,
+            memory_limit_bytes: s.memory_limit_bytes,
+            network_rx_bytes: s.network_rx_bytes,
+            network_tx_bytes: s.network_tx_bytes,
+            disk_read_bytes: s.disk_read_bytes,
+            disk_write_bytes: s.disk_write_bytes,
+            pids: s.pids,
+            restarts: s.restarts,
+        }
+    }
 }
 
 /// Delivery statuses of the outbound event queue, always emitted so the series
@@ -241,7 +301,120 @@ fn render_prom(snap: &Snapshot) -> String {
         &snap.health_checks_by_status,
     );
 
+    render_runtime(&mut out, snap);
+
     out
+}
+
+/// Render the per-deployment runtime resource usage section. Sourced from the
+/// background cache; values are at most one refresh interval stale, surfaced
+/// via `ring_runtime_last_refresh_seconds` so a stale/stalled worker is
+/// detectable (`time() - ring_runtime_last_refresh_seconds`).
+///
+/// CPU, memory, pids and instance counts are gauges (point-in-time). Network
+/// and disk byte totals are counters (monotonic, cumulative since the
+/// instance started) — `rate(...)` them in PromQL.
+fn render_runtime(out: &mut String, snap: &Snapshot) {
+    write_gauge(
+        out,
+        "ring_runtime_last_refresh_seconds",
+        "Unix timestamp of the last successful runtime-stats refresh. 0 means never.",
+        snap.runtime_last_refresh_seconds,
+    );
+
+    if snap.deployment_runtime.is_empty() {
+        return;
+    }
+
+    // (name, HELP, value extractor). One group per metric: a single HELP/TYPE
+    // pair followed by all its series, as the exposition format requires.
+    let gauges: [RuntimeMetric; 5] = [
+        (
+            "ring_deployment_instances",
+            "Number of running instances per deployment.",
+            |s| s.instances.to_string(),
+        ),
+        (
+            "ring_deployment_cpu_usage_percent",
+            "Aggregate CPU usage percent across a deployment's instances.",
+            |s| format!("{:.2}", s.cpu_usage_percent),
+        ),
+        (
+            "ring_deployment_memory_usage_bytes",
+            "Aggregate memory usage in bytes across a deployment's instances.",
+            |s| s.memory_usage_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_memory_limit_bytes",
+            "Aggregate memory limit in bytes across a deployment's instances.",
+            |s| s.memory_limit_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_pids",
+            "Aggregate process/thread count across a deployment's instances.",
+            |s| s.pids.to_string(),
+        ),
+    ];
+    for metric in gauges {
+        write_runtime_metric_group(out, metric, "gauge", &snap.deployment_runtime);
+    }
+
+    let counters: [RuntimeMetric; 5] = [
+        (
+            "ring_deployment_network_rx_bytes_total",
+            "Cumulative bytes received per deployment since instance start.",
+            |s| s.network_rx_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_network_tx_bytes_total",
+            "Cumulative bytes transmitted per deployment since instance start.",
+            |s| s.network_tx_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_disk_read_bytes_total",
+            "Cumulative bytes read from disk per deployment since instance start.",
+            |s| s.disk_read_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_disk_write_bytes_total",
+            "Cumulative bytes written to disk per deployment since instance start.",
+            |s| s.disk_write_bytes.to_string(),
+        ),
+        (
+            "ring_deployment_restarts_total",
+            "Cumulative restart count across a deployment's instances.",
+            |s| s.restarts.to_string(),
+        ),
+    ];
+    for metric in counters {
+        write_runtime_metric_group(out, metric, "counter", &snap.deployment_runtime);
+    }
+}
+
+/// A per-deployment runtime metric: its name, HELP text, and a function
+/// extracting its rendered value from one deployment's stats.
+type RuntimeMetric = (&'static str, &'static str, fn(&RuntimeSeries) -> String);
+
+/// Emit one metric group: the HELP/TYPE header, then one labelled series per
+/// deployment.
+fn write_runtime_metric_group(
+    out: &mut String,
+    (name, help, value): RuntimeMetric,
+    metric_type: &str,
+    deployments: &[RuntimeSeries],
+) {
+    let _ = writeln!(out, "# HELP {name} {help}");
+    let _ = writeln!(out, "# TYPE {name} {metric_type}");
+    for s in deployments {
+        let _ = writeln!(
+            out,
+            "{name}{{deployment=\"{}\",namespace=\"{}\",runtime=\"{}\"}} {}",
+            escape_label_value(&s.name),
+            escape_label_value(&s.namespace),
+            escape_label_value(&s.runtime),
+            value(s),
+        );
+    }
 }
 
 fn write_gauge(out: &mut String, name: &str, help: &str, value: u64) {
@@ -387,6 +560,53 @@ mod tests {
         // Event queue statuses are always emitted.
         assert!(body.contains("ring_events_by_status{status=\"pending\"}"));
         assert!(body.contains("ring_events_by_status{status=\"dead\"}"));
+    }
+
+    #[test]
+    fn render_runtime_emits_labelled_series_and_skips_when_empty() {
+        // Empty cache: only the freshness gauge, no per-deployment series.
+        let body = render_prom(&Snapshot::default());
+        assert!(body.contains("ring_runtime_last_refresh_seconds 0"));
+        assert!(!body.contains("ring_deployment_cpu_usage_percent"));
+
+        // Populated cache: one deployment, fully labelled, gauges + counters.
+        let snap = Snapshot {
+            runtime_last_refresh_seconds: 1717000000,
+            deployment_runtime: vec![RuntimeSeries {
+                name: "web".to_string(),
+                namespace: "prod".to_string(),
+                runtime: "docker".to_string(),
+                instances: 2,
+                cpu_usage_percent: 12.5,
+                memory_usage_bytes: 1000,
+                memory_limit_bytes: 4000,
+                network_rx_bytes: 50,
+                network_tx_bytes: 60,
+                disk_read_bytes: 70,
+                disk_write_bytes: 80,
+                pids: 9,
+                restarts: 3,
+            }],
+            ..Default::default()
+        };
+        let body = render_prom(&snap);
+
+        assert!(body.contains("ring_runtime_last_refresh_seconds 1717000000"));
+        assert!(body.contains("# TYPE ring_deployment_cpu_usage_percent gauge"));
+        assert!(body.contains(
+            "ring_deployment_cpu_usage_percent{deployment=\"web\",namespace=\"prod\",runtime=\"docker\"} 12.50"
+        ));
+        assert!(body.contains(
+            "ring_deployment_instances{deployment=\"web\",namespace=\"prod\",runtime=\"docker\"} 2"
+        ));
+        // Cumulative metrics are counters with the `_total` suffix.
+        assert!(body.contains("# TYPE ring_deployment_network_rx_bytes_total counter"));
+        assert!(body.contains(
+            "ring_deployment_network_rx_bytes_total{deployment=\"web\",namespace=\"prod\",runtime=\"docker\"} 50"
+        ));
+        assert!(body.contains(
+            "ring_deployment_restarts_total{deployment=\"web\",namespace=\"prod\",runtime=\"docker\"} 3"
+        ));
     }
 
     #[tokio::test]
