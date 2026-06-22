@@ -20,7 +20,7 @@ use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, ex
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::tap::TapDevice;
 use crate::hypervisor::vsock_client::{self, VsockError};
-use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::docker::tiny_id;
@@ -754,6 +754,135 @@ impl FirecrackerLifecycle {
         }
         deployment
     }
+
+    /// Whether an instance is genuinely alive: its API socket is on disk AND a
+    /// `firecracker` process is still bound to it. Firecracker removes the
+    /// socket on a clean exit (guest poweroff), but a crash can leave a stale
+    /// socket behind — so socket presence alone is not "running". Used by the
+    /// job path to tell "still running" from "guest powered off / crashed".
+    fn instance_alive(&self, instance_id: &str) -> bool {
+        let socket = self.socket_path(instance_id);
+        Path::new(&socket).exists() && find_pid_by_socket(&socket).is_some()
+    }
+
+    /// Run a `kind: job` deployment: boot a single VM and mark it `Completed`
+    /// once the guest powers off. Firecracker exposes no VM-state API like
+    /// Cloud Hypervisor's `info()`, but the guest powering off makes the
+    /// `firecracker` process exit, which is an equally clean signal — a job
+    /// that was `Running` and now has no live process has completed.
+    ///
+    /// `replicas` is ignored (a job is one VM). Because the guest's main-process
+    /// exit code isn't surfaced, any clean shutdown is treated as success —
+    /// same convention (“Approach A”) as the Cloud Hypervisor runtime.
+    async fn handle_job_deployment(&self, mut deployment: Deployment) -> Deployment {
+        // Terminal states are sticky: never reboot a finished job.
+        if matches!(
+            deployment.status,
+            DeploymentStatus::Completed
+                | DeploymentStatus::Failed
+                | DeploymentStatus::CrashLoopBackOff
+        ) {
+            return deployment;
+        }
+
+        // Re-adopt across a restart so an inherited job VM isn't double-booted.
+        self.readopt_networking(&deployment).await;
+
+        let instance = self.scan_instances(&deployment.id).into_iter().next();
+
+        if let Some(instance_id) = instance {
+            if self.instance_alive(&instance_id) {
+                // Still running.
+                deployment.instances = vec![instance_id];
+                if matches!(
+                    deployment.status,
+                    DeploymentStatus::Creating | DeploymentStatus::Pending
+                ) {
+                    deployment.status = DeploymentStatus::Running;
+                }
+            } else {
+                // Socket on disk but no live process: the guest powered off (or
+                // the VM crashed). Either way the job is done — finalize and
+                // sweep the leftover socket/rootfs/console artifacts.
+                info!(
+                    "Firecracker job VM {} has no live process, finalizing as Completed",
+                    instance_id
+                );
+                self.stop_vm(&instance_id).await;
+                deployment.instances.clear();
+                deployment.status = DeploymentStatus::Completed;
+                deployment.emit_event(
+                    "info",
+                    format!("Job VM {} completed", instance_id),
+                    "firecracker",
+                    Some("job_completed"),
+                );
+            }
+        } else if deployment.status == DeploymentStatus::Running {
+            // Was Running, now nothing on disk: firecracker exited cleanly on
+            // guest poweroff and took its socket with it. A clean exit is
+            // success.
+            info!(
+                "Firecracker job deployment {} has no live VM after Running; finalizing as Completed",
+                deployment.id
+            );
+            deployment.instances.clear();
+            deployment.status = DeploymentStatus::Completed;
+            deployment.emit_event(
+                "info",
+                "Job VM exited and firecracker terminated; finalized as completed".to_string(),
+                "firecracker",
+                Some("job_completed"),
+            );
+        } else if matches!(
+            deployment.status,
+            DeploymentStatus::Creating | DeploymentStatus::Pending
+        ) {
+            // No VM yet: boot exactly one.
+            match self.start_vm(&deployment).await {
+                Ok(instance_id) => {
+                    deployment.instances = vec![instance_id];
+                    deployment.status = DeploymentStatus::Running;
+                }
+                Err(e) => {
+                    error!(
+                        "Firecracker: failed to start job VM for deployment {}: {}",
+                        deployment.id, e
+                    );
+                    let (status, reason) = classify_vm_start_error(&e);
+                    deployment.emit_event("error", format!("{}", e), "firecracker", Some(reason));
+                    if let Some(terminal) = status {
+                        deployment.status = terminal;
+                    } else {
+                        deployment.restart_count += 1;
+                        if deployment.restart_count >= MAX_RESTART_COUNT {
+                            deployment.status = DeploymentStatus::Failed;
+                        }
+                    }
+                }
+            }
+        }
+
+        deployment
+    }
+}
+
+/// Classify a VM start failure into either a terminal deployment status
+/// (permanent: missing kernel/rootfs) or `None` for transient errors that
+/// should bump `restart_count` and let the scheduler retry. Mirrors the Cloud
+/// Hypervisor classifier so the two runtimes converge identically.
+fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'static str) {
+    match e {
+        RuntimeError::ImageNotFound(_) => {
+            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
+        }
+        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
+        RuntimeError::InsufficientResources(_) => (
+            Some(DeploymentStatus::InsufficientResources),
+            "insufficient_resources",
+        ),
+        _ => (None, "VmStartFailed"),
+    }
 }
 
 /// Find the PID of the `firecracker` process bound to `socket_path`, by scanning
@@ -868,9 +997,10 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         }
 
         if deployment.kind == "job" {
-            warn!("Firecracker: kind 'job' not yet supported, treating as worker");
+            self.handle_job_deployment(deployment).await
+        } else {
+            self.handle_worker_deployment(deployment).await
         }
-        self.handle_worker_deployment(deployment).await
     }
 
     async fn list_instances(&self, deployment_id: String, _status: &str) -> Vec<String> {
@@ -1287,5 +1417,97 @@ mod tests {
         let lc = FirecrackerLifecycle::new(cfg);
         assert_eq!(lc.socket_path("dep-1-abc"), "/tmp/fc/dep-1-abc.sock");
         assert_eq!(lc.rootfs_path("dep-1-abc"), "/tmp/fc/dep-1-abc.ext4");
+    }
+
+    fn lifecycle_with_scratch_dir(label: &str) -> (FirecrackerLifecycle, std::path::PathBuf) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ring-fc-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = FirecrackerRuntimeConfig {
+            socket_dir: dir.to_string_lossy().to_string(),
+            ..FirecrackerRuntimeConfig::default()
+        };
+        (FirecrackerLifecycle::new(cfg), dir)
+    }
+
+    fn job_deployment(status: DeploymentStatus) -> Deployment {
+        Deployment {
+            id: "job1234-5678".to_string(),
+            created_at: String::new(),
+            updated_at: None,
+            status,
+            restart_count: 0,
+            namespace: "default".to_string(),
+            name: "job".to_string(),
+            image: "/tmp/does-not-exist.ext4".to_string(),
+            config: None,
+            runtime: "firecracker".to_string(),
+            kind: "job".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: std::collections::HashMap::new(),
+            environment: std::collections::HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+            network: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn job_terminal_status_is_sticky_completed() {
+        let (lc, dir) = lifecycle_with_scratch_dir("job-completed");
+        let dep = job_deployment(DeploymentStatus::Completed);
+        let out = lc.handle_job_deployment(dep).await;
+        assert_eq!(out.status, DeploymentStatus::Completed);
+        assert!(out.instances.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn job_terminal_status_is_sticky_failed() {
+        let (lc, dir) = lifecycle_with_scratch_dir("job-failed");
+        let dep = job_deployment(DeploymentStatus::Failed);
+        let out = lc.handle_job_deployment(dep).await;
+        assert_eq!(out.status, DeploymentStatus::Failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn job_running_with_no_live_vm_completes() {
+        // A job that was Running but has nothing on disk: the guest powered off
+        // and firecracker exited, taking its socket with it → Completed.
+        let (lc, dir) = lifecycle_with_scratch_dir("job-running-gone");
+        let dep = job_deployment(DeploymentStatus::Running);
+        let out = lc.handle_job_deployment(dep).await;
+        assert_eq!(out.status, DeploymentStatus::Completed);
+        assert!(out.instances.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn job_missing_kernel_does_not_complete_silently() {
+        // Creating with no kernel/rootfs on disk: start_vm fails. The default
+        // kernel path doesn't exist in the scratch dir, so this is a transient
+        // VmStartFailed → bumps restart_count, never silently Completed.
+        let (lc, dir) = lifecycle_with_scratch_dir("job-no-kernel");
+        let dep = job_deployment(DeploymentStatus::Creating);
+        let out = lc.handle_job_deployment(dep).await;
+        assert_ne!(out.status, DeploymentStatus::Completed);
+        assert_ne!(out.status, DeploymentStatus::Running);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
