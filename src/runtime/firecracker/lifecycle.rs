@@ -47,6 +47,11 @@ pub(crate) struct FirecrackerRuntimeConfig {
     /// Kernel command line. The default enables the serial console so console
     /// logs are capturable, and panics reboot rather than hang.
     pub boot_args: String,
+    /// Maximum size (bytes) for a per-VM console log before rotation. Defaults
+    /// to 10 MiB. Set to 0 to disable rotation entirely.
+    pub max_console_log_bytes: u64,
+    /// How many rotated console log backups to keep. Defaults to 3.
+    pub max_console_log_backups: u32,
 }
 
 impl Default for FirecrackerRuntimeConfig {
@@ -57,6 +62,8 @@ impl Default for FirecrackerRuntimeConfig {
             kernel_path: format!("{}/firecracker/vmlinux", base_dir),
             socket_dir: format!("{}/firecracker/sockets", base_dir),
             boot_args: "console=ttyS0 reboot=k panic=1 pci=off".to_string(),
+            max_console_log_bytes: 10 * 1024 * 1024,
+            max_console_log_backups: 3,
         }
     }
 }
@@ -82,6 +89,12 @@ impl FirecrackerRuntimeConfig {
             kernel_path: user.kernel_path.clone().unwrap_or(defaults.kernel_path),
             socket_dir: user.socket_dir.clone().unwrap_or(defaults.socket_dir),
             boot_args: user.boot_args.clone().unwrap_or(defaults.boot_args),
+            max_console_log_bytes: user
+                .max_console_log_bytes
+                .unwrap_or(defaults.max_console_log_bytes),
+            max_console_log_backups: user
+                .max_console_log_backups
+                .unwrap_or(defaults.max_console_log_backups),
         }
     }
 }
@@ -137,6 +150,47 @@ impl FirecrackerLifecycle {
         format!("{}/{}.console.log", self.config.socket_dir, instance_id)
     }
 
+    /// Spawn a background task that walks the socket directory every 60s and
+    /// rotates any `*.console.log` past the configured size threshold. Returns
+    /// the handle so the caller (`ring-server`) can abort it on shutdown.
+    ///
+    /// Unlike Cloud Hypervisor, Firecracker holds its console fd by inode (it's
+    /// the spawned process' stdout), so this uses **copy-truncate** rather than
+    /// rename — see [`crate::hypervisor::console_logs::copy_truncate_all_in_dir`].
+    /// No-op (logs once) when rotation is disabled.
+    pub fn spawn_console_log_rotator(&self) -> tokio::task::JoinHandle<()> {
+        let dir = std::path::PathBuf::from(&self.config.socket_dir);
+        let max_bytes = self.config.max_console_log_bytes;
+        let max_backups = self.config.max_console_log_backups;
+        tokio::spawn(async move {
+            if max_bytes == 0 {
+                tracing::info!(
+                    "Firecracker console log rotation disabled (max_console_log_bytes = 0)"
+                );
+                return;
+            }
+            tracing::info!(
+                "Firecracker console log rotator armed: dir={:?} max_bytes={} max_backups={}",
+                dir,
+                max_bytes,
+                max_backups
+            );
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            // Skip the initial tick so we don't sweep before socket_dir exists.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                tracing::debug!("Firecracker console log rotator: sweeping {:?}", dir);
+                crate::hypervisor::console_logs::copy_truncate_all_in_dir(
+                    &dir,
+                    max_bytes,
+                    max_backups,
+                )
+                .await;
+            }
+        })
+    }
+
     /// Boot one worker microVM. Returns the new instance id on success.
     async fn start_vm(&self, deployment: &Deployment) -> Result<String, RuntimeError> {
         // Pre-flight: kernel + base rootfs must exist before we spawn anything.
@@ -177,9 +231,21 @@ impl FirecrackerLifecycle {
         // boot/runtime issues are diagnosable and log shippers can tail it.
         // Falls back to null if the file can't be opened — never block boot on
         // logging. stderr (firecracker's own diagnostics) shares the same file.
+        //
+        // Opened with O_APPEND (not a plain create): Firecracker holds this fd
+        // for the VM's whole life, so the rotator can't make it reopen by name
+        // the way Cloud Hypervisor does. With O_APPEND every write seeks to EOF
+        // first, which makes copy-truncate rotation land new output at offset 0
+        // instead of leaving a sparse hole. The instance id is unique per boot
+        // (`<deployment>-<tiny_id>`), so there is no stale file to clear.
         let console_log = self.console_log_path(&instance_id);
         let (out, err): (std::process::Stdio, std::process::Stdio) =
-            match std::fs::File::create(&console_log) {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .truncate(false)
+                .open(&console_log)
+            {
                 Ok(f) => match f.try_clone() {
                     Ok(f2) => (f.into(), f2.into()),
                     Err(_) => (f.into(), std::process::Stdio::null()),
@@ -483,7 +549,17 @@ impl FirecrackerLifecycle {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
         let _ = std::fs::remove_file(self.cidata_path(instance_id));
-        let _ = std::fs::remove_file(self.console_log_path(instance_id));
+        let console_log = self.console_log_path(instance_id);
+        let _ = std::fs::remove_file(&console_log);
+        // Sweep any rotated backups (`<id>.console.log.1`, `.2`, ...) the
+        // rotator left behind. Stop at the first missing index.
+        for idx in 1u32..=1000 {
+            let backup = format!("{}.{}", console_log, idx);
+            if !Path::new(&backup).exists() {
+                break;
+            }
+            let _ = std::fs::remove_file(&backup);
+        }
         // Remove the vsock base socket and the per-port multiplexed socket
         // Firecracker creates (`<base>_<port>`). No-ops when the instance had
         // no vsock device.
@@ -1176,6 +1252,8 @@ mod tests {
             kernel_path: None,
             socket_dir: Some("/var/run/fc".to_string()),
             boot_args: None,
+            max_console_log_bytes: None,
+            max_console_log_backups: None,
         };
         let cfg = FirecrackerRuntimeConfig::from_user_config(&user);
         assert_eq!(cfg.binary_path, "/opt/fc/firecracker");
@@ -1184,6 +1262,11 @@ mod tests {
         let defaults = FirecrackerRuntimeConfig::default();
         assert_eq!(cfg.kernel_path, defaults.kernel_path);
         assert_eq!(cfg.boot_args, defaults.boot_args);
+        assert_eq!(cfg.max_console_log_bytes, defaults.max_console_log_bytes);
+        assert_eq!(
+            cfg.max_console_log_backups,
+            defaults.max_console_log_backups
+        );
     }
 
     #[test]

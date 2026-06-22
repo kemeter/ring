@@ -246,29 +246,8 @@ pub(crate) async fn rotate_if_needed(path: &Path, max_bytes: u64, max_backups: u
         return;
     }
 
-    let oldest = backup_path(path, max_backups);
-    if oldest.exists()
-        && let Err(e) = tokio::fs::remove_file(&oldest).await
-    {
-        warn!(
-            "console log rotate: failed to remove oldest backup {:?}: {}",
-            oldest, e
-        );
-    }
-
-    // Shift .N-1 → .N down to .1 → .2.
-    for idx in (1..max_backups).rev() {
-        let from = backup_path(path, idx);
-        let to = backup_path(path, idx + 1);
-        if from.exists()
-            && let Err(e) = tokio::fs::rename(&from, &to).await
-        {
-            warn!(
-                "console log rotate: failed to shift {:?} -> {:?}: {}",
-                from, to, e
-            );
-            return;
-        }
+    if !shift_backups(path, max_backups).await {
+        return;
     }
 
     // Finally, live -> .1.
@@ -286,9 +265,118 @@ pub(crate) async fn rotate_if_needed(path: &Path, max_bytes: u64, max_backups: u
     );
 }
 
-/// Walk `socket_dir` once and rotate every `*.console.log` that has grown
-/// past the threshold. Called on a 60-second cadence by the rotator task.
-pub(crate) async fn rotate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u32) {
+/// Drop the oldest backup and shift `.N-1` → `.N` down to `.1` → `.2`, freeing
+/// the `.1` slot for the live file. Returns `false` if a rename failed (caller
+/// should abort the rotation). Shared by the rename-based ([`rotate_if_needed`])
+/// and copy-truncate ([`copy_truncate_if_needed`]) strategies.
+async fn shift_backups(path: &Path, max_backups: u32) -> bool {
+    let oldest = backup_path(path, max_backups);
+    if oldest.exists()
+        && let Err(e) = tokio::fs::remove_file(&oldest).await
+    {
+        warn!(
+            "console log rotate: failed to remove oldest backup {:?}: {}",
+            oldest, e
+        );
+    }
+
+    for idx in (1..max_backups).rev() {
+        let from = backup_path(path, idx);
+        let to = backup_path(path, idx + 1);
+        if from.exists()
+            && let Err(e) = tokio::fs::rename(&from, &to).await
+        {
+            warn!(
+                "console log rotate: failed to shift {:?} -> {:?}: {}",
+                from, to, e
+            );
+            return false;
+        }
+    }
+    true
+}
+
+/// Rotate `<path>` by **copy-truncate**, for writers that hold the live file by
+/// inode (a redirected process stdout, e.g. Firecracker) rather than by name.
+///
+/// A rename would leave such a writer appending to the now-rotated path
+/// forever; instead we copy the live content into `<path>.1` and truncate the
+/// live file in place. The writer keeps the same fd, so it must have opened
+/// with `O_APPEND` — otherwise its write offset is unchanged by the truncate
+/// and the next write leaves a sparse hole. (Firecracker's console fd is opened
+/// `O_APPEND` in the runtime's `start_vm` for exactly this reason.)
+///
+/// Same no-op conditions as [`rotate_if_needed`].
+pub(crate) async fn copy_truncate_if_needed(path: &Path, max_bytes: u64, max_backups: u32) {
+    if max_bytes == 0 {
+        return;
+    }
+    let size = match tokio::fs::metadata(path).await {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if size <= max_bytes {
+        return;
+    }
+
+    // No backups kept: just truncate the live file in place.
+    if max_backups == 0 {
+        if let Err(e) = truncate_in_place(path).await {
+            warn!(
+                "console log copy-truncate: failed to truncate {:?}: {}",
+                path, e
+            );
+        }
+        return;
+    }
+
+    if !shift_backups(path, max_backups).await {
+        return;
+    }
+
+    // Copy live content into .1, then truncate the live file in place so the
+    // inode the writer holds stays the same.
+    let target = backup_path(path, 1);
+    if let Err(e) = tokio::fs::copy(path, &target).await {
+        warn!(
+            "console log copy-truncate: failed to copy {:?} -> {:?}: {}",
+            path, target, e
+        );
+        return;
+    }
+    if let Err(e) = truncate_in_place(path).await {
+        warn!(
+            "console log copy-truncate: failed to truncate {:?}: {}",
+            path, e
+        );
+        return;
+    }
+    debug!(
+        "console log copy-truncated: {:?} (size {} > {})",
+        path, size, max_bytes
+    );
+}
+
+/// Truncate `path` to zero bytes without unlinking it (the writer's inode must
+/// survive). Opening with `write(true).truncate(true)` keeps the same inode.
+async fn truncate_in_place(path: &Path) -> std::io::Result<()> {
+    tokio::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .await
+        .map(|_| ())
+}
+
+/// Walk `socket_dir` once and rotate every `*.console.log` that has grown past
+/// the threshold, using the given `strategy`. Called on a 60-second cadence by
+/// each runtime's rotator task.
+async fn rotate_all_in_dir_with(
+    dir: &Path,
+    max_bytes: u64,
+    max_backups: u32,
+    strategy: RotateStrategy,
+) {
     if max_bytes == 0 {
         return;
     }
@@ -304,8 +392,31 @@ pub(crate) async fn rotate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u
         if !name.ends_with(".console.log") {
             continue;
         }
-        rotate_if_needed(&path, max_bytes, max_backups).await;
+        match strategy {
+            RotateStrategy::Rename => rotate_if_needed(&path, max_bytes, max_backups).await,
+            RotateStrategy::CopyTruncate => {
+                copy_truncate_if_needed(&path, max_bytes, max_backups).await
+            }
+        }
     }
+}
+
+#[derive(Clone, Copy)]
+enum RotateStrategy {
+    /// Rename the live file to `.1` (path-based writers like Cloud Hypervisor).
+    Rename,
+    /// Copy then truncate in place (inode-held writers like Firecracker).
+    CopyTruncate,
+}
+
+/// Rename-based directory sweep — Cloud Hypervisor.
+pub(crate) async fn rotate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u32) {
+    rotate_all_in_dir_with(dir, max_bytes, max_backups, RotateStrategy::Rename).await;
+}
+
+/// Copy-truncate directory sweep — Firecracker (inode-held console fd).
+pub(crate) async fn copy_truncate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u32) {
+    rotate_all_in_dir_with(dir, max_bytes, max_backups, RotateStrategy::CopyTruncate).await;
 }
 
 #[cfg(test)]
@@ -561,5 +672,99 @@ mod tests {
         assert!(other.exists(), "non-console files must be left alone");
 
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn copy_truncate_copies_to_backup_and_keeps_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let path = scratch_file("ct-inode");
+        tokio::fs::write(&path, b"payload-over-threshold")
+            .await
+            .unwrap();
+        let inode_before = std::fs::metadata(&path).unwrap().ino();
+
+        copy_truncate_if_needed(&path, 8, 3).await;
+
+        // Live file still exists at the SAME inode (the writer's fd survives).
+        assert!(path.exists(), "live file must not be unlinked");
+        let inode_after = std::fs::metadata(&path).unwrap().ino();
+        assert_eq!(inode_before, inode_after, "inode must be preserved");
+        // Live file truncated to zero.
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        // Content copied into .1.
+        assert_eq!(
+            tokio::fs::read(backup_path(&path, 1)).await.unwrap(),
+            b"payload-over-threshold"
+        );
+
+        tokio::fs::remove_file(&path).await.ok();
+        tokio::fs::remove_file(backup_path(&path, 1)).await.ok();
+    }
+
+    #[tokio::test]
+    async fn copy_truncate_appending_writer_resumes_at_zero() {
+        // The whole reason copy-truncate needs an O_APPEND writer: after the
+        // truncate, the next write must land at offset 0, not leave a sparse
+        // hole the size of the pre-rotation file.
+        use tokio::io::AsyncWriteExt;
+
+        let path = scratch_file("ct-append");
+        let mut writer = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .truncate(false)
+            .open(&path)
+            .await
+            .unwrap();
+        writer.write_all(b"before-rotation\n").await.unwrap();
+        writer.flush().await.unwrap();
+
+        copy_truncate_if_needed(&path, 4, 1).await;
+
+        // Writer keeps the same fd and appends after the truncate.
+        writer.write_all(b"after\n").await.unwrap();
+        writer.flush().await.unwrap();
+
+        // No sparse hole: the live file is exactly the post-rotation bytes.
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"after\n");
+        assert_eq!(
+            tokio::fs::read(backup_path(&path, 1)).await.unwrap(),
+            b"before-rotation\n"
+        );
+
+        drop(writer);
+        tokio::fs::remove_file(&path).await.ok();
+        tokio::fs::remove_file(backup_path(&path, 1)).await.ok();
+    }
+
+    #[tokio::test]
+    async fn copy_truncate_zero_backups_truncates_in_place() {
+        use std::os::unix::fs::MetadataExt;
+
+        let path = scratch_file("ct-zero-backups");
+        tokio::fs::write(&path, b"payload-over-threshold")
+            .await
+            .unwrap();
+        let inode_before = std::fs::metadata(&path).unwrap().ino();
+
+        copy_truncate_if_needed(&path, 4, 0).await;
+
+        assert!(path.exists());
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode_before);
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        assert!(!backup_path(&path, 1).exists());
+
+        tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn copy_truncate_no_op_under_threshold() {
+        let path = scratch_file("ct-under");
+        tokio::fs::write(&path, b"small").await.unwrap();
+        copy_truncate_if_needed(&path, 1024, 3).await;
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"small");
+        assert!(!backup_path(&path, 1).exists());
+        tokio::fs::remove_file(&path).await.ok();
     }
 }
