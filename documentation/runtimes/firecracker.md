@@ -55,10 +55,20 @@ ring apply -f app.yaml
 
 What Ring does: copies the rootfs per instance, spawns a `firecracker` process, drives its REST API to set the kernel / rootfs / network / machine config, then boots. Networking is a Ring-owned TAP (a /30 subnet per VM) with `socat` host-port forwarding; outbound NAT lets guests reach external networks.
 
+## Logs
+
+The guest serial console (kernel, init, and anything the workload writes to the console) is persisted per instance and readable with the standard commands — same as every other runtime:
+
+```bash
+ring deployment logs <deployment-id>            # whole console
+ring deployment logs <deployment-id> --tail 50  # last 50 lines
+ring deployment logs <deployment-id> --follow   # stream as the guest writes
+```
+
 ## Known gaps (experimental)
 
 - **Volumes are not mounted yet.** Firecracker has no virtio-fs (the Cloud Hypervisor mechanism — its maintainers declined it on attack-surface grounds), so volumes would go through **virtio-block** (one ext4 image per volume, attached as an extra drive). Feasibility is proven; the runtime wiring is pending.
-- **No `command` health checks** (needs an in-guest agent over vsock, like Cloud Hypervisor), no metrics, and **`kind: job` runs as a worker** (no job semantics yet).
+- **No metrics yet** (no per-instance CPU/memory/network/disk stats), and **`kind: job` runs as a worker** (no job semantics yet).
 - `image:` must be a host rootfs file — no registry pull.
 
 ## See also

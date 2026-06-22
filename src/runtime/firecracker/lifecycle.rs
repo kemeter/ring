@@ -16,7 +16,7 @@ use crate::config::server::FirecrackerConfig;
 use crate::hypervisor::cloud_init::GuestNet;
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
-use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
+use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::tap::TapDevice;
 use crate::hypervisor::vsock_client::{self, VsockError};
@@ -775,6 +775,105 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
 
     async fn remove_instance(&self, instance_id: String) -> bool {
         self.stop_vm(&instance_id).await
+    }
+
+    /// Read the persisted serial console for every instance of the deployment.
+    /// Scans disk (not just our PID map) so a crashed or restart-inherited VM's
+    /// console is still readable. Reads through rotated backups via the shared
+    /// `console_logs` helper.
+    async fn get_logs(
+        &self,
+        deployment_id: &str,
+        tail: Option<&str>,
+        since: Option<i32>,
+        instance_filter: Option<&str>,
+    ) -> Vec<Log> {
+        let mut logs = Vec::new();
+        for instance_id in self.scan_instances(deployment_id) {
+            if let Some(want) = instance_filter
+                && instance_id != want
+            {
+                continue;
+            }
+            let path = PathBuf::from(self.console_log_path(&instance_id));
+            let lines = crate::hypervisor::console_logs::read_lines(&path, tail, since).await;
+            for message in lines {
+                logs.push(Log {
+                    instance: instance_id.clone(),
+                    level: classify_log(&message),
+                    timestamp: extract_date(&message),
+                    message,
+                });
+            }
+        }
+        logs
+    }
+
+    /// Follow the serial console of every matching instance, equivalent to
+    /// `tail -f`, emitting each new line as an SSE event. Mirrors
+    /// `get_logs` instance selection (disk scan + optional filter).
+    async fn stream_logs(
+        &self,
+        deployment_id: &str,
+        tail: Option<&str>,
+        since: Option<i32>,
+        instance_filter: Option<&str>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>
+                + Send,
+        >,
+    > {
+        use futures::stream::{self, StreamExt};
+
+        let filtered: Vec<String> = self
+            .scan_instances(deployment_id)
+            .into_iter()
+            .filter(|id| match instance_filter {
+                Some(want) => id == want,
+                None => true,
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            return Box::pin(stream::empty());
+        }
+
+        let mut streams: Vec<
+            std::pin::Pin<
+                Box<
+                    dyn futures::Stream<
+                            Item = Result<axum::response::sse::Event, std::convert::Infallible>,
+                        > + Send,
+                >,
+            >,
+        > = Vec::new();
+
+        for instance_id in filtered {
+            let path = PathBuf::from(self.console_log_path(&instance_id));
+            let owned_id = instance_id.clone();
+            let raw = crate::hypervisor::console_logs::stream_lines(
+                path,
+                tail.map(|s| s.to_string()),
+                since,
+            )
+            .await;
+
+            let mapped = raw.map(move |line| {
+                let log = Log {
+                    instance: owned_id.clone(),
+                    level: classify_log(&line),
+                    timestamp: extract_date(&line),
+                    message: line,
+                };
+                let json = serde_json::to_string(&log).unwrap_or_default();
+                Ok(axum::response::sse::Event::default().data(json))
+            });
+
+            streams.push(Box::pin(mapped));
+        }
+
+        Box::pin(stream::select_all(streams))
     }
 
     /// The guest IP is a pure function of the instance id (same allocation as

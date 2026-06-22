@@ -1,5 +1,4 @@
 mod client;
-mod console_logs;
 mod lifecycle;
 mod stats;
 

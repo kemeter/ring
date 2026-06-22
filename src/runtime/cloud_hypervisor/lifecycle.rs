@@ -151,7 +151,8 @@ impl CloudHypervisorLifecycle {
             loop {
                 ticker.tick().await;
                 tracing::debug!("CH console log rotator: sweeping {:?}", dir);
-                super::console_logs::rotate_all_in_dir(&dir, max_bytes, max_backups).await;
+                crate::hypervisor::console_logs::rotate_all_in_dir(&dir, max_bytes, max_backups)
+                    .await;
             }
         })
     }
@@ -1245,7 +1246,7 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 continue;
             }
             let path = self.console_log_path(&instance_id);
-            let lines = super::console_logs::read_lines(&path, tail, since).await;
+            let lines = crate::hypervisor::console_logs::read_lines(&path, tail, since).await;
             for message in lines {
                 logs.push(Log {
                     instance: instance_id.clone(),
@@ -1298,8 +1299,12 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         for instance_id in filtered {
             let path = self.console_log_path(&instance_id);
             let owned_id = instance_id.clone();
-            let raw =
-                super::console_logs::stream_lines(path, tail.map(|s| s.to_string()), since).await;
+            let raw = crate::hypervisor::console_logs::stream_lines(
+                path,
+                tail.map(|s| s.to_string()),
+                since,
+            )
+            .await;
 
             let mapped = raw.map(move |line| {
                 let log = Log {
