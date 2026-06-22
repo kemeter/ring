@@ -105,6 +105,24 @@ Check the server is up. Does not require authentication.
 { "state": "UP" }
 ```
 
+### `GET /metrics`
+
+Prometheus metrics for the whole node. Does not require authentication (Prometheus scrapers send none; front it with TLS / a network ACL).
+
+Content negotiation by `Accept`:
+
+- default (or any non-JSON `Accept`) → Prometheus text exposition `version=0.0.4`
+- `Accept: application/json` → the same values as a JSON object
+
+Two families of series are exposed:
+
+- **Inventory** (read from the database on each scrape): `ring_deployments`, `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` is the outbound-queue depth, `dead` the dead-letter count), `ring_health_checks_by_status{status=…}`, and counts for `ring_namespaces` / `ring_secrets` / `ring_volumes` / `ring_users` / `ring_webhooks` / `ring_configs`. Every known status is emitted even at `0`, so a series never disappears between scrapes (which would break alerts written against it).
+- **Per-deployment resource usage** (labelled `deployment` / `namespace` / `runtime`): gauges `ring_deployment_instances`, `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_memory_limit_bytes`, `ring_deployment_pids`; counters `ring_deployment_network_rx_bytes_total`, `ring_deployment_network_tx_bytes_total`, `ring_deployment_disk_read_bytes_total`, `ring_deployment_disk_write_bytes_total`, `ring_deployment_restarts_total`.
+
+Resource usage is refreshed in the background on the scheduler interval, not at request time, so a scrape never blocks on the runtimes. `ring_runtime_last_refresh_seconds` carries the Unix time of the last successful refresh — alert on `time() - ring_runtime_last_refresh_seconds` to catch a stalled refresh. Values are therefore at most one interval stale; for a fresh point-in-time read of one deployment use [`GET /deployments/{id}/metrics`](#get-deploymentsidmetrics).
+
+The per-deployment series carry one time series per running deployment (`deployment` / `namespace` labels). Series count grows with the number of deployments, so on nodes that churn through many short-lived deployments keep an eye on your Prometheus cardinality.
+
 ## Deployments
 
 ### `GET /deployments`
