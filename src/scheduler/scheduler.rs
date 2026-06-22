@@ -1441,6 +1441,51 @@ mod tests {
         }
     }
 
+    // A secret value containing `$` (e.g. a password like "pa$$w0rd") must
+    // survive resolution untouched: Ring stores the decrypted bytes and injects
+    // them verbatim into the container env, with no shell/variable expansion.
+    #[tokio::test]
+    async fn secret_value_with_dollar_is_preserved_through_resolution() {
+        use crate::models::secret::{Secret, create as create_secret, encrypt_value};
+        use base64::Engine as _;
+
+        let pool = new_test_pool().await;
+        // Test key for encrypt/decrypt (same shape as secret.rs tests).
+        unsafe {
+            std::env::set_var(
+                "RING_SECRET_KEY",
+                base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+            );
+        }
+
+        let raw = "pa$$w0rd$with$dollars";
+        let secret = Secret {
+            id: "sec-1".to_string(),
+            created_at: chrono::Utc::now().to_string(),
+            updated_at: None,
+            namespace: "test".to_string(),
+            name: "DB_PASSWORD".to_string(),
+            value: encrypt_value(raw),
+        };
+        create_secret(&pool, &secret).await.unwrap();
+
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.namespace = "test".to_string();
+        deployment.environment.insert(
+            "DB_PASSWORD".to_string(),
+            EnvValue::SecretRef {
+                secret_ref: "DB_PASSWORD".to_string(),
+            },
+        );
+
+        resolve_environment(&mut deployment, &pool).await.unwrap();
+
+        match deployment.environment.get("DB_PASSWORD") {
+            Some(EnvValue::Plain(v)) => assert_eq!(v, raw, "the `$` must not be stripped"),
+            other => panic!("expected resolved Plain value, got {other:?}"),
+        }
+    }
+
     #[test]
     fn rollout_deadline_not_exceeded_for_fresh_child() {
         // created_at = now → well within the 600s default deadline.
