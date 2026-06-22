@@ -14,6 +14,7 @@ pub(crate) mod lifecycle_trait;
 pub(crate) mod mock;
 pub(crate) mod port_forwarder;
 pub(crate) mod resources;
+pub(crate) mod stats;
 pub(crate) mod tap;
 pub(crate) mod types;
 pub(crate) mod virtiofs;

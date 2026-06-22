@@ -1,7 +1,9 @@
-//! Per-VM resource stats for the Cloud Hypervisor runtime.
+//! Per-VM resource stats shared by the KVM-backed runtimes (Cloud Hypervisor,
+//! Firecracker).
 //!
-//! Docker exposes stats through the daemon's API; we have no equivalent for
-//! CH, so we read host-side files directly:
+//! Docker exposes stats through the daemon's API; we have no equivalent for a
+//! bare VMM process, so we read host-side files directly. Everything here keys
+//! off the VMM process PID and the per-VM tap name, so it is VMM-agnostic:
 //!
 //! - **CPU**: two samples of `/proc/<pid>/stat` (utime + stime) divided by
 //!   the elapsed wall time, normalised to 100% per online CPU.
@@ -12,15 +14,15 @@
 //!   (bytes the host wrote toward the guest) maps to guest `rx`, matching
 //!   the convention `ring deployment metrics` users expect from Docker.
 //! - **Disk I/O**: `read_bytes` / `write_bytes` from `/proc/<pid>/io` when
-//!   we can read it. Cloud Hypervisor clears `PR_SET_DUMPABLE` early in
-//!   its init for sandboxing, which makes that file return `EACCES` even
-//!   to the parent under `kernel.yama.ptrace_scope >= 1`. When unreadable,
-//!   we report zeros — counted by host alone, with no other reliable
-//!   source short of cgroup `io.stat` (which Ring does not currently set
-//!   up per-VM).
+//!   we can read it. A hardened VMM (e.g. Cloud Hypervisor) clears
+//!   `PR_SET_DUMPABLE` early for sandboxing, which makes that file return
+//!   `EACCES` even to the parent under `kernel.yama.ptrace_scope >= 1`. When
+//!   unreadable, we report zeros — counted by host alone, with no other
+//!   reliable source short of cgroup `io.stat` (which Ring does not currently
+//!   set up per-VM).
 //! - **PIDs**: `Threads:` from `/proc/<pid>/status` (vCPU threads + io +
-//!   control). CH has no equivalent of a cgroup pids.max, so `limit` is
-//!   reported as 0 (= unlimited) to mirror Docker semantics.
+//!   control). There is no cgroup pids.max per VM, so `limit` is reported as
+//!   0 (= unlimited) to mirror Docker semantics.
 
 use crate::api::dto::stats::{DiskIoStats, MemoryStats, NetworkStats, PidStats};
 
