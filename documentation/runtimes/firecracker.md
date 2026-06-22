@@ -71,10 +71,17 @@ Console logs are rotated once they cross `max_console_log_bytes` (10 MiB by defa
 
 Per-instance CPU, memory, network, disk I/O, and thread counts are exposed at `GET /deployments/{id}/metrics`, the same as every other runtime. Ring reads them host-side from the `firecracker` process (`/proc/<pid>/{stat,status,io}`) and the per-VM tap counters — no in-guest agent required. Memory `usage_percent` is reported against the deployment's memory limit; network counters read zero for deployments that publish no ports (no tap is created).
 
+## Jobs (`kind: job`)
+
+A `kind: job` deployment boots a single microVM (replicas are ignored) and is marked **`completed`** once the guest finishes. Firecracker exposes no VM-state API, so completion is signalled by the **guest rebooting**: with the default `reboot=k` kernel cmdline, a guest `reboot` is trapped by Firecracker and exits the VMM cleanly. Ring's next scheduler tick sees the process gone and finalizes the deployment.
+
+> Your job's workload must end by issuing `reboot` (e.g. `reboot -f` once the work is done), **not** `poweroff`. A `poweroff` only halts the vCPU and leaves the Firecracker process running, so the job would never be observed as complete. Because the guest's exit code isn't surfaced, any clean reboot is treated as success.
+
+Completed jobs are sticky (never rebooted) and their per-instance artifacts (socket, rootfs copy, console log) are reaped; the deployment row stays for inspection.
+
 ## Known gaps (experimental)
 
 - **Volumes are not mounted yet.** Firecracker has no virtio-fs (the Cloud Hypervisor mechanism — its maintainers declined it on attack-surface grounds), so volumes would go through **virtio-block** (one ext4 image per volume, attached as an extra drive). Feasibility is proven; the runtime wiring is pending.
-- **`kind: job` runs as a worker** (no job-completion semantics yet).
 - `image:` must be a host rootfs file — no registry pull.
 
 ## See also

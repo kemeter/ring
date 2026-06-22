@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - containerd runtime over native gRPC: index/entrypoint resolution for multi-arch images, CNI networking, logs, command health checks (#144)
 - Podman runtime, opt-in under `[server.runtime.podman]` (#139)
 - Firecracker microVM runtime (experimental): boot, networking, outbound NAT, restart reconciliation (#142, #146, #147)
-- Firecracker reaches Cloud Hypervisor parity for observability: serial console log read/stream (#167), per-instance CPU/memory/network/disk/pid metrics (#168), and copy-truncate console-log rotation
+- Firecracker reaches Cloud Hypervisor parity for observability: serial console log read/stream (#167), per-instance CPU/memory/network/disk/pid metrics (#168), and copy-truncate console-log rotation (#169)
+- Firecracker `kind: job`: boot one VM, mark `completed` when the guest reboots (which exits the VMM); artifacts reaped, terminal status sticky (#170)
 - Public Prometheus `/metrics` endpoint exposing inventory and queue gauges, plus background-refreshed per-deployment runtime resource usage (#164)
 - Scoped API tokens (PAT) with per-scope and per-namespace enforcement, plus `ring token` CLI (#134)
 - Outbound webhooks with HMAC-signed delivery and a durable event queue, plus `ring webhook` CLI (#135)
