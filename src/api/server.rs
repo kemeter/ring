@@ -67,6 +67,7 @@ use crate::api::action::webhook::events as webhook_events;
 use crate::api::action::webhook::list as webhook_list;
 
 use crate::api::action::healthz::healthz;
+use crate::api::action::metrics::metrics;
 
 use crate::api::auth::auth_middleware;
 
@@ -99,7 +100,8 @@ pub(crate) fn router(state: AppState) -> Router {
     // axum does not document) makes the public surface unambiguous.
     let public_routes = Router::new()
         .route("/login", post(login))
-        .route("/healthz", get(healthz));
+        .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics));
 
     // SSE: protected, but NO timeout layer — a tower Timeout would kill the
     // long-lived stream. The auth middleware only wraps the request→response
