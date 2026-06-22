@@ -152,7 +152,49 @@ Returns CPU% (one core = 100), memory (`usage_bytes`, `limit_bytes`, `usage_perc
 - **Docker** — all five categories populated, sourced from the Docker stats endpoint
 - **Cloud Hypervisor** — CPU% and memory from `/proc/<pid>/*` of the VMM process; `network`, `disk_io`, `pids` reported as zero pending host-side wiring
 
-**Snapshot, not history.** Ring does not retain a time-series. Scrape the endpoint periodically into Prometheus / InfluxDB / a flat file if you want trends. A first-class Prometheus exporter is on the roadmap.
+**Snapshot, not history.** `ring deployment metrics` returns the current sample only — Ring does not retain a time-series. For trends, scrape the Prometheus endpoint below into your monitoring stack.
+
+## Prometheus
+
+`GET /metrics` exposes node-wide metrics in Prometheus text exposition format. No authentication (Prometheus scrapers send none); front it with TLS or a network ACL.
+
+```bash
+curl http://localhost:3030/metrics                       # Prometheus text
+curl -H 'Accept: application/json' http://localhost:3030/metrics   # same values as JSON
+```
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: ring
+    static_configs:
+      - targets: ['localhost:3030']
+```
+
+Two families of series:
+
+- **Inventory** — `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` = outbound-queue depth, `dead` = dead-lettered), `ring_health_checks_by_status{status=…}`, plus counts for namespaces, secrets, volumes, users, webhooks, configs.
+- **Per-deployment resource usage** — `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_network_*_bytes_total`, `ring_deployment_restarts_total`, … labelled `deployment` / `namespace` / `runtime`.
+
+Resource usage is refreshed in the background on the scheduler interval, not per scrape, so scraping is cheap regardless of how many deployments are running. `ring_runtime_last_refresh_seconds` exposes the last refresh time — values are at most one interval stale.
+
+Useful alerts:
+
+```promql
+# A deployment is crash-looping
+ring_deployments_by_status{status="crash_loop_back_off"} > 0
+
+# Outbound event queue is backing up
+ring_events_by_status{status="pending"} > 50
+
+# Events are being dead-lettered (delivery gave up)
+ring_events_by_status{status="dead"} > 0
+
+# The background stats refresh has stalled (no update in 2 minutes)
+time() - ring_runtime_last_refresh_seconds > 120
+```
+
+See [Reference: REST API](/documentation/reference/api) for the full list of series.
 
 ## Node view
 
@@ -207,9 +249,7 @@ An SSE events endpoint similar to `/logs?follow=true` is on the roadmap.
 ## Limits
 
 - **No structured-log ingestion.** JSON logs are passed through unparsed.
-- **No metrics history.** Each call returns the current sample only.
-- **No Prometheus endpoint** out of the box. Scrape per-deployment with an adapter.
-- **No outbound webhook for events.** Poll-and-forward for now.
+- **No metrics history.** `ring deployment metrics` returns the current sample only; for trends, scrape `/metrics` into Prometheus.
 
 ## See also
 

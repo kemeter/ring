@@ -67,6 +67,7 @@ use crate::api::action::webhook::events as webhook_events;
 use crate::api::action::webhook::list as webhook_list;
 
 use crate::api::action::healthz::healthz;
+use crate::api::action::metrics::metrics;
 
 use crate::api::auth::auth_middleware;
 
@@ -85,12 +86,15 @@ pub(crate) type RuntimeMap = std::sync::Arc<
 
 pub(crate) type TicketStoreState = crate::api::stream_tickets::TicketStore;
 
+pub(crate) type StatsCacheState = crate::scheduler::stats_cache::StatsCache;
+
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
     pub(crate) configuration: Config,
     pub(crate) runtimes: RuntimeMap,
     pub(crate) ticket_store: TicketStoreState,
+    pub(crate) stats_cache: StatsCacheState,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -99,7 +103,8 @@ pub(crate) fn router(state: AppState) -> Router {
     // axum does not document) makes the public surface unambiguous.
     let public_routes = Router::new()
         .route("/login", post(login))
-        .route("/healthz", get(healthz));
+        .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics));
 
     // SSE: protected, but NO timeout layer — a tower Timeout would kill the
     // long-lived stream. The auth middleware only wraps the request→response
@@ -202,7 +207,12 @@ pub(crate) fn router(state: AppState) -> Router {
     app
 }
 
-pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes: RuntimeMap) {
+pub(crate) async fn start(
+    pool: SqlitePool,
+    mut configuration: Config,
+    runtimes: RuntimeMap,
+    stats_cache: StatsCacheState,
+) {
     info!("Starting server on {}", configuration.get_api_url());
 
     let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
@@ -212,6 +222,7 @@ pub(crate) async fn start(pool: SqlitePool, mut configuration: Config, runtimes:
         configuration,
         runtimes,
         ticket_store: TicketStoreState::new(),
+        stats_cache,
     };
 
     let app = router(state);
@@ -281,6 +292,7 @@ pub(crate) mod tests {
             configuration,
             runtimes,
             ticket_store: TicketStoreState::new(),
+            stats_cache: crate::scheduler::stats_cache::new_cache(),
         };
 
         (pool, router(state))

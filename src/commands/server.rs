@@ -280,10 +280,32 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     let event_listener_handler =
         docker_for_events.map(|docker| task::spawn(start_event_listener(event_tx, docker)));
 
+    // Shared cache of per-deployment runtime resource usage, refreshed in the
+    // background and read by `/metrics` so a scrape never blocks on the
+    // runtimes. See `scheduler::stats_cache`.
+    let stats_cache = crate::scheduler::stats_cache::new_cache();
+    {
+        let cache = stats_cache.clone();
+        let cache_pool = pool.clone();
+        let cache_runtimes = runtimes.clone();
+        let cache_interval = configuration.server.scheduler.interval;
+        task::spawn(async move {
+            crate::scheduler::stats_cache::run(
+                cache,
+                cache_pool,
+                cache_runtimes,
+                cache_interval,
+                unix_now,
+            )
+            .await;
+        });
+    }
+
     let api_server_handler = task::spawn(ApiServer::start(
         pool.clone(),
         configuration.clone(),
         runtimes.clone(),
+        stats_cache,
     ));
 
     // Embedded dashboard — only spawned when explicitly enabled in config,
@@ -331,6 +353,16 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     {
         eprintln!("Docker event listener task failed: {}", e);
     }
+}
+
+/// Current Unix time in seconds, or `0` if the clock is before the epoch
+/// (never in practice). Handed to the stats-cache worker as its timestamp
+/// source so the module itself stays free of direct clock access.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Print a concise, human-readable summary of where the server is reachable

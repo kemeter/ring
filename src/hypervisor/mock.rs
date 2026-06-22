@@ -10,19 +10,29 @@ use std::pin::Pin;
 
 pub(crate) struct MockRuntime {
     health_check_result: (HealthCheckStatus, Option<String>),
+    instance_stats: Vec<InstanceStatsOutput>,
 }
 
 impl MockRuntime {
     pub(crate) fn healthy() -> Self {
         Self {
             health_check_result: (HealthCheckStatus::Success, None),
+            instance_stats: Vec::new(),
         }
     }
 
     pub(crate) fn unhealthy(message: &str) -> Self {
         Self {
             health_check_result: (HealthCheckStatus::Failed, Some(message.to_string())),
+            instance_stats: Vec::new(),
         }
+    }
+
+    /// Seed the stats this mock returns from `get_instance_stats`, so the
+    /// stats-cache refresh path can be exercised with deterministic numbers.
+    pub(crate) fn with_instance_stats(mut self, stats: Vec<InstanceStatsOutput>) -> Self {
+        self.instance_stats = stats;
+        self
     }
 }
 
@@ -73,6 +83,6 @@ impl RuntimeLifecycle for MockRuntime {
     }
 
     async fn get_instance_stats(&self, _deployment_id: &str) -> Vec<InstanceStatsOutput> {
-        Vec::new()
+        self.instance_stats.clone()
     }
 }

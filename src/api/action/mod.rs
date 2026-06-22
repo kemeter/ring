@@ -3,6 +3,7 @@ pub(crate) mod deployment;
 pub(crate) mod healthz;
 pub(crate) mod login;
 pub(crate) mod logout;
+pub(crate) mod metrics;
 pub(crate) mod namespace;
 pub(crate) mod node;
 pub(crate) mod secret;

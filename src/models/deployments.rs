@@ -81,6 +81,31 @@ impl std::str::FromStr for DeploymentStatus {
     }
 }
 
+impl DeploymentStatus {
+    /// Every variant, in declaration order. Used to emit a metric series per
+    /// status even when its count is zero — a Prometheus series that vanishes
+    /// between scrapes breaks alerts written against it, so all statuses are
+    /// always present.
+    pub(crate) const fn all() -> [DeploymentStatus; 14] {
+        [
+            Self::Pending,
+            Self::Creating,
+            Self::Running,
+            Self::Completed,
+            Self::Failed,
+            Self::Deleted,
+            Self::CrashLoopBackOff,
+            Self::ImagePullBackOff,
+            Self::CreateContainerError,
+            Self::NetworkError,
+            Self::ConfigError,
+            Self::FileSystemError,
+            Self::InsufficientResources,
+            Self::Error,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod status_roundtrip_tests {
     use super::DeploymentStatus;
@@ -92,23 +117,7 @@ mod status_roundtrip_tests {
     /// went undetected for months because there was no such test).
     #[test]
     fn every_variant_round_trips() {
-        let all = [
-            DeploymentStatus::Pending,
-            DeploymentStatus::Creating,
-            DeploymentStatus::Running,
-            DeploymentStatus::Completed,
-            DeploymentStatus::Failed,
-            DeploymentStatus::Deleted,
-            DeploymentStatus::CrashLoopBackOff,
-            DeploymentStatus::ImagePullBackOff,
-            DeploymentStatus::CreateContainerError,
-            DeploymentStatus::NetworkError,
-            DeploymentStatus::ConfigError,
-            DeploymentStatus::FileSystemError,
-            DeploymentStatus::InsufficientResources,
-            DeploymentStatus::Error,
-        ];
-        for s in all {
+        for s in DeploymentStatus::all() {
             let txt = s.to_string();
             // snake_case: lowercase + underscores only.
             assert!(
