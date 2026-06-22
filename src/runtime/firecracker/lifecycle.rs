@@ -15,15 +15,17 @@
 use crate::config::server::FirecrackerConfig;
 use crate::hypervisor::cloud_init::GuestNet;
 use crate::hypervisor::error::RuntimeError;
-use crate::hypervisor::host_net::InstanceNet;
+use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
 use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::tap::TapDevice;
+use crate::hypervisor::vsock_client::{self, VsockError};
 use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::ResolvedMount;
 use crate::runtime::docker::tiny_id;
 use crate::runtime::firecracker::client::{
-    BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface,
+    BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface, Vsock,
 };
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -307,6 +309,14 @@ impl FirecrackerLifecycle {
         format!("{}/{}.cidata.iso", self.config.socket_dir, instance_id)
     }
 
+    /// Host-side base path of the multiplexing Unix socket for the guest's
+    /// vsock device. Firecracker appends `_<port>` per guest listener, so this
+    /// base is what `PUT /vsock` receives and what teardown must clean up
+    /// (alongside the per-port `<base>_<port>` files Firecracker creates).
+    fn vsock_path(&self, instance_id: &str) -> String {
+        format!("{}/{}.vsock", self.config.socket_dir, instance_id)
+    }
+
     async fn configure_and_boot(
         &self,
         client: &FirecrackerClient,
@@ -385,6 +395,23 @@ impl FirecrackerLifecycle {
             .await
             .map_err(|e| e.to_string())?;
 
+        // Attach a vsock device only when the deployment declares a `command`
+        // health check — its sole consumer, mirroring the Cloud Hypervisor
+        // runtime. The guest reaches `ring-agent` over AF_VSOCK; the host
+        // reaches it through the multiplexing Unix socket at `vsock_path`.
+        // Same boot-time limitation as CH: adding a `command` check to a
+        // running deployment only takes effect after the next restart.
+        if needs_vsock(deployment) {
+            client
+                .put_vsock(&Vsock {
+                    vsock_id: "vsock0".to_string(),
+                    guest_cid: cid_for_instance(instance_id),
+                    uds_path: self.vsock_path(instance_id),
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+
         client.start().await.map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -437,6 +464,12 @@ impl FirecrackerLifecycle {
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
         let _ = std::fs::remove_file(self.cidata_path(instance_id));
         let _ = std::fs::remove_file(self.console_log_path(instance_id));
+        // Remove the vsock base socket and the per-port multiplexed socket
+        // Firecracker creates (`<base>_<port>`). No-ops when the instance had
+        // no vsock device.
+        let vsock_base = self.vsock_path(instance_id);
+        let _ = std::fs::remove_file(&vsock_base);
+        let _ = std::fs::remove_file(format!("{}_{}", vsock_base, RING_AGENT_VSOCK_PORT));
         !Path::new(&socket_path).exists()
     }
 
@@ -657,6 +690,21 @@ fn cmdline_matches_socket(cmdline: &[u8], socket_path: &str) -> bool {
 /// (falling back to requests). vCPUs round up from a fractional CPU quantity to
 /// at least 1; memory falls back to a sane floor so a microVM has room to run a
 /// real service rather than OOMing at boot.
+/// AF_VSOCK port `ring-agent` listens on inside the guest. Must match
+/// `crates/ring-agent` and `hypervisor::vsock_client::VSOCK_PORT`. Used here
+/// only to clean up the per-port multiplexing socket Firecracker creates.
+const RING_AGENT_VSOCK_PORT: u32 = 2375;
+
+/// A deployment needs a vsock device iff it declares a `command` health check
+/// — the only consumer of the in-guest agent today. Mirrors the gate in the
+/// Cloud Hypervisor runtime so the two behave identically.
+fn needs_vsock(deployment: &Deployment) -> bool {
+    deployment
+        .health_checks
+        .iter()
+        .any(|hc| matches!(hc, HealthCheck::Command { .. }))
+}
+
 fn parse_resources(deployment: &Deployment) -> (u32, u32) {
     use crate::models::deployments::{parse_cpu_string, parse_memory_string};
 
@@ -746,6 +794,54 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
             return None;
         }
         net.guest_ip.parse().ok()
+    }
+
+    /// Run a `command` health check inside the guest via `ring-agent` over the
+    /// Firecracker vsock-over-Unix-socket transport. Mirrors the Cloud
+    /// Hypervisor implementation; only the transport differs (`exec_uds` does
+    /// Firecracker's `CONNECT` handshake before speaking the agent protocol).
+    async fn execute_command_probe(
+        &self,
+        instance_id: &str,
+        command: &str,
+    ) -> (HealthCheckStatus, Option<String>) {
+        let cid = cid_for_instance(instance_id);
+        let uds_path = self.vsock_path(instance_id);
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.to_string()];
+        let timeout = std::time::Duration::from_secs(30);
+
+        match vsock_client::exec_uds(cid, &uds_path, &argv, &[], timeout).await {
+            Ok(resp) if resp.timed_out => (
+                HealthCheckStatus::Timeout,
+                Some(format!("command timed out: {}", command)),
+            ),
+            Ok(resp) if resp.exit_code == 0 => (HealthCheckStatus::Success, None),
+            Ok(resp) => (
+                HealthCheckStatus::Failed,
+                Some(format!(
+                    "exit code {}: {}",
+                    resp.exit_code,
+                    resp.stderr.trim()
+                )),
+            ),
+            // A connect failure almost always means the guest image doesn't
+            // ship `ring-agent` listening on AF_VSOCK port 2375 (or it hasn't
+            // started yet) — the most common `command` health-check pitfall on
+            // this runtime. Point the operator straight at it.
+            Err(VsockError::Connect { cid, source }) => (
+                HealthCheckStatus::Failed,
+                Some(format!(
+                    "cannot reach ring-agent in the guest (CID {cid}): {source}. \
+                     `command` health checks on firecracker require ring-agent \
+                     running in the guest image on AF_VSOCK port 2375 — see the \
+                     firecracker runtime docs"
+                )),
+            ),
+            Err(e) => (
+                HealthCheckStatus::Failed,
+                Some(format!("vsock probe failed: {}", e)),
+            ),
+        }
     }
 }
 
