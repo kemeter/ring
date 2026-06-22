@@ -484,20 +484,85 @@ async fn create_config_on_server(
         );
         Ok(())
     } else if status == reqwest::StatusCode::CONFLICT {
-        info!(
-            "Config '{}' already exists in namespace '{}', skipping",
-            config.name, config.namespace
-        );
-        println!(
-            "Config '{}' already exists in namespace '{}', skipping",
-            config.name, config.namespace
-        );
-        Ok(())
+        // The config already exists. `apply` is declarative, so update it in
+        // place instead of skipping — otherwise edits to a config (Grafana
+        // dashboards, datasources, prometheus.yml, ...) never reach the server.
+        update_config_on_server(config, api_url, auth_token, client).await
     } else {
         let context = format!("Failed to create config '{}'", config.name);
         let code = render_response_error(&context, response).await;
         Err(ApplyError::Reported(code))
     }
+}
+
+/// Look up an existing config by namespace + name and PUT the new content onto
+/// it, so a re-applied config map is updated rather than skipped.
+async fn update_config_on_server(
+    config: &ConfigDefinition,
+    api_url: &str,
+    auth_token: &str,
+    client: &reqwest::Client,
+) -> Result<(), ApplyError> {
+    let list_url = format!(
+        "{}/configs?namespace={}&name={}",
+        api_url, config.namespace, config.name
+    );
+
+    let list_response = client
+        .get(&list_url)
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .send()
+        .await
+        .map_err(ApplyError::Http)?;
+
+    if !list_response.status().is_success() {
+        let context = format!("Failed to look up existing config '{}'", config.name);
+        let code = render_response_error(&context, list_response).await;
+        return Err(ApplyError::Reported(code));
+    }
+
+    let configs: Vec<serde_json::Value> = list_response.json().await.map_err(ApplyError::Http)?;
+
+    let Some(id) = first_config_id(&configs) else {
+        return Err(ApplyError::Validation(format!(
+            "Config '{}' reported as existing but could not be found for update",
+            config.name
+        )));
+    };
+
+    let update_url = format!("{}/configs/{}", api_url, id);
+    let response = client
+        .put(&update_url)
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .json(&json!(config))
+        .send()
+        .await
+        .map_err(ApplyError::Http)?;
+
+    if response.status().is_success() {
+        info!(
+            "Config '{}' updated in namespace '{}'",
+            config.name, config.namespace
+        );
+        println!(
+            "Config '{}' updated in namespace '{}'",
+            config.name, config.namespace
+        );
+        Ok(())
+    } else {
+        let context = format!("Failed to update config '{}'", config.name);
+        let code = render_response_error(&context, response).await;
+        Err(ApplyError::Reported(code))
+    }
+}
+
+/// Extract the `id` of the first config from a `GET /configs` list response.
+/// Returns `None` when the list is empty or the first entry has no string id.
+fn first_config_id(configs: &[serde_json::Value]) -> Option<&str> {
+    configs
+        .first()
+        .and_then(|config| config.get("id"))
+        .and_then(serde_json::Value::as_str)
 }
 
 async fn deploy_to_server(
@@ -1111,5 +1176,28 @@ deployments:
         let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
         assert_eq!(config.namespaces.len(), 0);
         assert_eq!(config.deployments.len(), 1);
+    }
+
+    #[test]
+    fn first_config_id_returns_id_of_first_entry() {
+        let configs = vec![
+            serde_json::json!({"id": "abc-123", "name": "app-config"}),
+            serde_json::json!({"id": "def-456", "name": "other"}),
+        ];
+        assert_eq!(first_config_id(&configs), Some("abc-123"));
+    }
+
+    #[test]
+    fn first_config_id_none_when_list_is_empty() {
+        assert_eq!(first_config_id(&[]), None);
+    }
+
+    #[test]
+    fn first_config_id_none_when_id_is_missing_or_not_a_string() {
+        let no_id = vec![serde_json::json!({"name": "app-config"})];
+        assert_eq!(first_config_id(&no_id), None);
+
+        let non_string_id = vec![serde_json::json!({"id": 42})];
+        assert_eq!(first_config_id(&non_string_id), None);
     }
 }
