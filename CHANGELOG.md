@@ -8,11 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- containerd runtime over native gRPC: index/entrypoint resolution for multi-arch images, CNI networking, logs, command health checks (#144)
 - Podman runtime, opt-in under `[server.runtime.podman]` (#139)
 - Firecracker microVM runtime (experimental): boot, networking, outbound NAT, restart reconciliation (#142, #146, #147)
+- Public Prometheus `/metrics` endpoint exposing inventory and queue gauges, plus background-refreshed per-deployment runtime resource usage (#164)
 - Scoped API tokens (PAT) with per-scope and per-namespace enforcement, plus `ring token` CLI (#134)
 - Outbound webhooks with HMAC-signed delivery and a durable event queue, plus `ring webhook` CLI (#135)
 - First-class Volume entity: `/volumes` CRUD and `ring volume` CLI (#112)
+- `ring logout` and `POST /logout` to revoke the session; login now prompts for username/password when flags are omitted (#150, #154)
 - `ring init` runs `ring doctor` pre-flight checks for the selected runtime; `--runtime firecracker` now supported (#148)
 - Filter deployments by label (#129)
 - UDP port forwarding via `ports[].protocol` (#133)
@@ -21,11 +24,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Runtimes are opt-in via a top-level `[server]` table; Docker is no longer enabled by default (#138)
 - An instance only reaches `running` once its readiness checks pass (#136)
+- Login session unified into the token table (`user.token` dropped) (#150)
 - `apply` warns on fields the Cloud Hypervisor runtime silently ignores (#130)
 - Extracted `auth` into its own config module (#137)
 - Split `runtime`/`hypervisor` modules, migrated to `tracing`, dropped dead deps (#141, #143)
 
 ### Fixed
+- Podman crash loops are now detected via reconciliation and reach `CrashLoopBackOff`; no more `event channel disconnected` log spam every tick (#159)
+- `apply` manifests can set `user`/`group` again (deployment config typed as a struct) (#161)
+- `Always` pull policy is honoured for credential-less (public) images (#162)
+- Docker CPU percentage no longer reports near-zero from one-shot stats (#156)
+- containerd probes CNI plugin dirs instead of assuming `/opt/cni/bin` (#158)
+- `user list` renders rows with null `updated_at`/`login_at` instead of an empty table (#155)
+- A server-only `config.toml` without `[contexts]` is now accepted (#153)
+- Firecracker re-adopts instance networking and re-spawns port-forwarders across `ring-server` restarts (#151)
 - Host-port deployments now recreate instead of rolling, avoiding the `port already allocated` loop (#140)
 - Actionable error when a Cloud Hypervisor `command` health check can't reach `ring-agent` (#131)
 - Cloud Hypervisor VMs survive a `ring-server` restart instead of being orphaned (#132)
