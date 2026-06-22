@@ -1422,22 +1422,23 @@ impl CloudHypervisorLifecycle {
     ) -> Option<crate::api::dto::stats::InstanceStatsOutput> {
         let info = self.process_info(instance_id)?;
 
-        let prev = super::stats::read_cpu_sample(info.pid).await?;
+        let prev = crate::hypervisor::stats::read_cpu_sample(info.pid).await?;
         tokio::time::sleep(tokio::time::Duration::from_millis(CPU_SAMPLE_INTERVAL_MS)).await;
-        let curr = super::stats::read_cpu_sample(info.pid).await?;
+        let curr = crate::hypervisor::stats::read_cpu_sample(info.pid).await?;
 
         let interval_secs = CPU_SAMPLE_INTERVAL_MS as f64 / 1000.0;
         // SC_CLK_TCK is fixed at compile time on Linux (typically 100). Reading
         // it via libc would force a sysconf dependency; the constant is stable.
-        let cpu_usage_percent = super::stats::compute_cpu_percent(prev, curr, interval_secs, 100.0);
+        let cpu_usage_percent =
+            crate::hypervisor::stats::compute_cpu_percent(prev, curr, interval_secs, 100.0);
 
-        let rss = super::stats::read_rss_bytes(info.pid).await;
-        let memory = super::stats::memory_stats(rss, info.memory_limit_bytes);
+        let rss = crate::hypervisor::stats::read_rss_bytes(info.pid).await;
+        let memory = crate::hypervisor::stats::memory_stats(rss, info.memory_limit_bytes);
 
         let tap_name = InstanceNet::for_instance(instance_id).tap_name;
-        let network = super::stats::network_stats_from_tap(&tap_name).await;
-        let disk_io = super::stats::disk_io_stats(info.pid).await;
-        let pids = super::stats::pid_stats(info.pid).await;
+        let network = crate::hypervisor::stats::network_stats_from_tap(&tap_name).await;
+        let disk_io = crate::hypervisor::stats::disk_io_stats(info.pid).await;
+        let pids = crate::hypervisor::stats::pid_stats(info.pid).await;
 
         Some(crate::api::dto::stats::InstanceStatsOutput {
             instance_id: instance_id.to_string(),

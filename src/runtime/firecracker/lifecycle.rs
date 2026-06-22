@@ -88,10 +88,11 @@ impl FirecrackerRuntimeConfig {
 
 pub struct FirecrackerLifecycle {
     config: FirecrackerRuntimeConfig,
-    /// PID per instance id, captured at spawn so teardown can kill the right
-    /// process. Absence means the VM is gone (or was never tracked by this
-    /// process — e.g. inherited across a ring-server restart).
-    pids: Mutex<HashMap<String, u32>>,
+    /// Process info per instance id, captured at spawn so teardown can kill the
+    /// right process and stats can report `memory.usage_percent` without a
+    /// round-trip to the VMM. Absence means the VM is gone (or was never
+    /// tracked by this process — e.g. inherited across a ring-server restart).
+    pids: Mutex<HashMap<String, InstanceProcessInfo>>,
     /// Live host tap devices, keyed by instance id. Unlike Cloud Hypervisor,
     /// Firecracker doesn't create the tap itself — Ring owns its whole
     /// lifecycle. Dropping the entry deletes the interface from the host.
@@ -99,6 +100,16 @@ pub struct FirecrackerLifecycle {
     /// Live socat port-forwarders, keyed by instance id. Dropping the entry
     /// kills the socat process.
     port_forwarders: Mutex<HashMap<String, Vec<PortForwarder>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InstanceProcessInfo {
+    /// The `firecracker` process PID — used for teardown and `/proc/<pid>` stats.
+    pub pid: u32,
+    /// Memory limit (bytes) handed to the microVM at boot, so stats can report
+    /// `usage_percent`. 0 when the VM was inherited across a restart (we never
+    /// re-read the original limit) — reported as "unlimited", matching Docker.
+    pub memory_limit_bytes: u64,
 }
 
 impl FirecrackerLifecycle {
@@ -297,7 +308,15 @@ impl FirecrackerLifecycle {
             }
         }
 
-        self.pids.lock().unwrap().insert(instance_id.clone(), pid);
+        let (_, mem_mib) = parse_resources(deployment);
+        let memory_limit_bytes = (mem_mib as u64).saturating_mul(1024 * 1024);
+        self.pids.lock().unwrap().insert(
+            instance_id.clone(),
+            InstanceProcessInfo {
+                pid,
+                memory_limit_bytes,
+            },
+        );
         if let Some(t) = tap {
             self.taps.lock().unwrap().insert(instance_id.clone(), t);
         }
@@ -443,6 +462,7 @@ impl FirecrackerLifecycle {
             .lock()
             .unwrap()
             .remove(instance_id)
+            .map(|info| info.pid)
             .or_else(|| find_pid_by_socket(&socket_path));
         if let Some(pid) = pid {
             self.kill_pid(pid).await;
@@ -608,7 +628,15 @@ impl FirecrackerLifecycle {
                     .insert(instance_id.clone(), forwarders);
             }
             if let Some(pid) = find_pid_by_socket(&self.socket_path(&instance_id)) {
-                self.pids.lock().unwrap().insert(instance_id.clone(), pid);
+                let (_, mem_mib) = parse_resources(deployment);
+                let memory_limit_bytes = (mem_mib as u64).saturating_mul(1024 * 1024);
+                self.pids.lock().unwrap().insert(
+                    instance_id.clone(),
+                    InstanceProcessInfo {
+                        pid,
+                        memory_limit_bytes,
+                    },
+                );
             }
             info!(
                 "Firecracker: re-adopted networking for {} after restart",
@@ -942,6 +970,77 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
             ),
         }
     }
+
+    /// Per-instance CPU / memory / network / disk / pid stats for every running
+    /// instance of the deployment. Reads host-side `/proc/<pid>/*` and the
+    /// per-VM tap counters via the shared `stats` helpers — same source and
+    /// semantics as Cloud Hypervisor. Instances we don't have a PID for (e.g.
+    /// inherited across a restart before `readopt_networking` ran) are skipped.
+    async fn get_instance_stats(
+        &self,
+        deployment_id: &str,
+    ) -> Vec<crate::api::dto::stats::InstanceStatsOutput> {
+        let instances = self.scan_instances(deployment_id);
+        let mut out = Vec::with_capacity(instances.len());
+        for instance_id in instances {
+            if let Some(stats) = self.read_instance_stats(&instance_id).await {
+                out.push(stats);
+            }
+        }
+        out
+    }
+}
+
+/// Sampling window for CPU%: long enough for ticks to accumulate on an idle
+/// VM, short enough that an HTTP `metrics` call doesn't feel laggy. Matches
+/// the Cloud Hypervisor runtime and Docker's ~1s frame cadence.
+const CPU_SAMPLE_INTERVAL_MS: u64 = 500;
+
+impl FirecrackerLifecycle {
+    /// The tracked process info for an instance, or `None` if this server
+    /// didn't boot it (no PID — typical after a ring-server restart until
+    /// networking is re-adopted).
+    fn process_info(&self, instance_id: &str) -> Option<InstanceProcessInfo> {
+        self.pids.lock().ok()?.get(instance_id).copied()
+    }
+
+    /// Sample CPU twice with a short delay, read RSS once, and assemble the
+    /// `InstanceStatsOutput`. Returns `None` if the process tracking entry is
+    /// gone (VM stopped, or this server didn't spawn the VM).
+    async fn read_instance_stats(
+        &self,
+        instance_id: &str,
+    ) -> Option<crate::api::dto::stats::InstanceStatsOutput> {
+        let info = self.process_info(instance_id)?;
+
+        let prev = crate::hypervisor::stats::read_cpu_sample(info.pid).await?;
+        tokio::time::sleep(tokio::time::Duration::from_millis(CPU_SAMPLE_INTERVAL_MS)).await;
+        let curr = crate::hypervisor::stats::read_cpu_sample(info.pid).await?;
+
+        let interval_secs = CPU_SAMPLE_INTERVAL_MS as f64 / 1000.0;
+        // SC_CLK_TCK is fixed at compile time on Linux (typically 100).
+        let cpu_usage_percent =
+            crate::hypervisor::stats::compute_cpu_percent(prev, curr, interval_secs, 100.0);
+
+        let rss = crate::hypervisor::stats::read_rss_bytes(info.pid).await;
+        let memory = crate::hypervisor::stats::memory_stats(rss, info.memory_limit_bytes);
+
+        let tap_name = InstanceNet::for_instance(instance_id).tap_name;
+        let network = crate::hypervisor::stats::network_stats_from_tap(&tap_name).await;
+        let disk_io = crate::hypervisor::stats::disk_io_stats(info.pid).await;
+        let pids = crate::hypervisor::stats::pid_stats(info.pid).await;
+
+        Some(crate::api::dto::stats::InstanceStatsOutput {
+            instance_id: instance_id.to_string(),
+            instance_name: instance_id.to_string(),
+            cpu_usage_percent,
+            memory,
+            network,
+            disk_io,
+            pids,
+            restart_count: 0,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1024,10 +1123,13 @@ mod tests {
 
         // One instance is tracked again (re-adopted or freshly booted): no
         // longer an orphan.
-        lc.pids
-            .lock()
-            .unwrap()
-            .insert("dep-1-aaa".to_string(), 4242);
+        lc.pids.lock().unwrap().insert(
+            "dep-1-aaa".to_string(),
+            InstanceProcessInfo {
+                pid: 4242,
+                memory_limit_bytes: 0,
+            },
+        );
         assert_eq!(lc.orphan_instances("dep-1"), vec!["dep-1-bbb".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
