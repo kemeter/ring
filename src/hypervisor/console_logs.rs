@@ -1,19 +1,21 @@
 //! Read and stream the per-VM serial console log file.
 //!
-//! Cloud Hypervisor's `serial.mode = "File"` makes the VMM append every byte
-//! the guest writes to `/dev/console` (cloud-init banner, kernel messages,
-//! systemd journal when redirected, app stdout when configured) to a single
-//! file. This module turns that file into the line-oriented stream the
-//! `RuntimeLifecycle` trait expects:
+//! Both VM runtimes append every byte the guest writes to its serial console
+//! (cloud-init banner, kernel messages, systemd journal when redirected, app
+//! stdout when configured) to a single per-instance `<id>.console.log` file:
+//! Cloud Hypervisor via `serial.mode = "File"`, Firecracker via the spawned
+//! process' redirected stdout. This module turns that file into the
+//! line-oriented stream the `RuntimeLifecycle` trait expects:
 //!
 //! - [`read_lines`] — synchronous one-shot read with `tail` (last N lines)
 //!   and `since` (drop lines older than N seconds, best-effort: the console
 //!   has no native timestamps so we fall back to file mtime windowing).
-//! - [`stream_lines`] — async streaming reader that follows the file as CH
-//!   appends to it, equivalent to `tail -f`.
+//! - [`stream_lines`] — async streaming reader that follows the file as the
+//!   VMM appends to it, equivalent to `tail -f`.
 //!
-//! Lines are returned raw — callers (`get_logs` / `stream_logs` in
-//! `lifecycle.rs`) wrap them in a `Log` with `classify_log` / `extract_date`.
+//! Lines are returned raw — callers (`get_logs` / `stream_logs` in each
+//! runtime's `lifecycle.rs`) wrap them in a `Log` with `classify_log` /
+//! `extract_date`.
 
 use futures::stream::{self, Stream, StreamExt};
 use std::path::{Path, PathBuf};
@@ -212,10 +214,12 @@ pub(crate) async fn stream_lines(
 /// Rotate `<path>` if it has grown past `max_bytes`.
 ///
 /// Shifts `<path>.{N-1}` → `<path>.N`, dropping anything past `max_backups`,
-/// then renames `<path>` to `<path>.1`. Cloud Hypervisor re-creates the live
-/// file on its next write (the VMM holds the file by name, not by inode,
-/// because `serial.mode = "File"` is a path-based config) so this is safe to
-/// call while a VM is running.
+/// then renames `<path>` to `<path>.1`. Safe to call while a VM is running for
+/// path-based writers like Cloud Hypervisor (`serial.mode = "File"`), which
+/// re-create the live file by name on their next write. Writers that hold the
+/// file by inode (e.g. a redirected process stdout) keep appending to the
+/// rotated path until restarted — callers for those runtimes must account for
+/// that before relying on rotation.
 ///
 /// No-op when:
 /// - `max_bytes == 0` (rotation disabled by config)

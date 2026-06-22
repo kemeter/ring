@@ -4,6 +4,7 @@
 //! that `runtime` holds only the concrete runtime implementations.
 
 pub(crate) mod cloud_init;
+pub(crate) mod console_logs;
 pub(crate) mod error;
 pub(crate) mod health_probes;
 pub(crate) mod host_nat;
