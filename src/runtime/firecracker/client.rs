@@ -58,6 +58,19 @@ pub(crate) struct NetworkInterface {
     pub guest_mac: Option<String>,
 }
 
+/// A virtio-vsock device. Unlike Cloud Hypervisor's vhost-vsock (a kernel
+/// AF_VSOCK endpoint on the host), Firecracker multiplexes vsock over a host
+/// Unix socket: the host connects to `<uds_path>_<port>`, writes
+/// `CONNECT <port>\n`, and from then on speaks the guest agent's protocol.
+/// `guest_cid` is informational on the host side (the guest sees it as its
+/// AF_VSOCK CID); the host addresses ports through `uds_path`, not the CID.
+#[derive(Debug, Serialize, Clone)]
+pub(crate) struct Vsock {
+    pub vsock_id: String,
+    pub guest_cid: u32,
+    pub uds_path: String,
+}
+
 /// Instance actions. The only one used at boot is `InstanceStart`; graceful
 /// shutdown uses `SendCtrlAltDel` (the guest must run an ACPI handler).
 #[derive(Debug, Serialize, Clone)]
@@ -187,6 +200,15 @@ impl FirecrackerClient {
         let endpoint = format!("/network-interfaces/{}", iface.iface_id);
         let body = serde_json::to_string(iface).map_err(|e| ClientError::Json(e.to_string()))?;
         self.request(Method::PUT, &endpoint, Some(body)).await?;
+        Ok(())
+    }
+
+    /// `PUT /vsock` — attach the virtio-vsock device. Firecracker allows a
+    /// single vsock device per VM, so the id is fixed by convention. Must be
+    /// called before `InstanceStart`.
+    pub async fn put_vsock(&self, vsock: &Vsock) -> Result<(), ClientError> {
+        let body = serde_json::to_string(vsock).map_err(|e| ClientError::Json(e.to_string()))?;
+        self.request(Method::PUT, "/vsock", Some(body)).await?;
         Ok(())
     }
 
