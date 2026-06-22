@@ -196,6 +196,12 @@ pub(crate) struct FirecrackerConfig {
     pub(crate) socket_dir: Option<String>,
     /// Kernel command line passed to every microVM.
     pub(crate) boot_args: Option<String>,
+    /// Maximum size (bytes) for a per-VM console log before rotation kicks
+    /// in. Defaults to 10 MiB. Set to 0 to disable rotation entirely.
+    pub(crate) max_console_log_bytes: Option<u64>,
+    /// How many rotated console log backups to keep alongside the live file
+    /// (`.console.log.1`, `.console.log.2`, ...). Defaults to 3.
+    pub(crate) max_console_log_backups: Option<u32>,
 }
 
 /// User-facing configuration for the embedded web dashboard. Off by default

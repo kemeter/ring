@@ -65,6 +65,8 @@ ring deployment logs <deployment-id> --tail 50  # last 50 lines
 ring deployment logs <deployment-id> --follow   # stream as the guest writes
 ```
 
+Console logs are rotated once they cross `max_console_log_bytes` (10 MiB by default; see [config reference](/documentation/reference/config-toml)). Because Firecracker holds the log open by inode — it's the VM process' stdout — rotation is done by **copy-truncate**: the content is copied to `<id>.console.log.1` and the live file is truncated in place, so the VM keeps writing to the same path without a sparse hole. `ring deployment logs` reads back through the rotated backups.
+
 ## Metrics
 
 Per-instance CPU, memory, network, disk I/O, and thread counts are exposed at `GET /deployments/{id}/metrics`, the same as every other runtime. Ring reads them host-side from the `firecracker` process (`/proc/<pid>/{stat,status,io}`) and the per-VM tap counters — no in-guest agent required. Memory `usage_percent` is reported against the deployment's memory limit; network counters read zero for deployments that publish no ports (no tap is created).

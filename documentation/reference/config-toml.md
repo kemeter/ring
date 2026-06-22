@@ -110,6 +110,8 @@ containerd speaks its own native gRPC API on a Unix socket — no Docker daemon 
 | `firmware_path` | string | `$RING_CONFIG_DIR/cloud-hypervisor/vmlinux` | Path to `hypervisor-fw` (the EFI firmware) |
 | `socket_dir` | string | `$RING_CONFIG_DIR/cloud-hypervisor/sockets` | Where Ring puts per-VM Unix sockets, console logs, volume shares |
 | `seccomp` | string | unset (CH default: kill on violation) | Forwarded to `cloud-hypervisor --seccomp`. Accepts `"true"`, `"false"`, `"log"`. Set to `"false"` only on hosts where the kernel uses syscalls not whitelisted by CH (otherwise VMs die with `SIGSYS`) |
+| `max_console_log_bytes` | int | `10485760` (10 MiB) | Size at which a per-VM console log is rotated. `0` disables rotation |
+| `max_console_log_backups` | int | `3` | How many rotated backups (`<id>.console.log.1`, `.2`, …) to keep |
 
 ### `[server.runtime.firecracker]`
 
@@ -120,6 +122,8 @@ containerd speaks its own native gRPC API on a Unix socket — no Docker daemon 
 | `kernel_path` | string | `$RING_CONFIG_DIR/firecracker/vmlinux` | Path to the uncompressed kernel image. Firecracker boots a kernel directly — there is no firmware step |
 | `socket_dir` | string | `$RING_CONFIG_DIR/firecracker/sockets` | Where Ring puts per-VM API sockets and per-instance rootfs copies |
 | `boot_args` | string | `console=ttyS0 reboot=k panic=1 pci=off` | Kernel command line passed to every microVM |
+| `max_console_log_bytes` | int | `10485760` (10 MiB) | Size at which a per-VM console log is rotated. `0` disables rotation. Firecracker rotates by copy-truncate (it holds the log by inode), so the live file keeps its path across rotations |
+| `max_console_log_backups` | int | `3` | How many rotated backups (`<id>.console.log.1`, `.2`, …) to keep |
 
 ## Examples
 

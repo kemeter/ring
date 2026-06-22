@@ -206,6 +206,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
 
     // Firecracker: same opt-in contract. Its binary must resolve when enabled,
     // else the runtime is skipped (best-effort, like the others).
+    let mut _fc_log_rotator = None;
     if configuration.server.runtime.firecracker.enabled {
         let fc_runtime_config =
             FirecrackerRuntimeConfig::from_user_config(&configuration.server.runtime.firecracker);
@@ -216,10 +217,9 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                 fc_runtime_config.kernel_path,
                 fc_runtime_config.socket_dir,
             );
-            runtimes_map.insert(
-                "firecracker".to_string(),
-                Arc::new(FirecrackerLifecycle::new(fc_runtime_config)),
-            );
+            let fc_lifecycle = FirecrackerLifecycle::new(fc_runtime_config);
+            _fc_log_rotator = Some(fc_lifecycle.spawn_console_log_rotator());
+            runtimes_map.insert("firecracker".to_string(), Arc::new(fc_lifecycle));
         } else {
             let reason = format!(
                 "binary '{}' could not be found",
