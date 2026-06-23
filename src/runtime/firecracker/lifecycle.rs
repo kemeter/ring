@@ -470,16 +470,16 @@ impl FirecrackerLifecycle {
             ));
         }
 
-        // If the deployment publishes any port, allocate a deterministic /30
-        // and create the host tap. Unlike Cloud Hypervisor, Firecracker does
-        // not create the tap — Ring creates it here (held in `tap` so an early
-        // return on any later error deletes it via Drop) and hands its name to
-        // Firecracker, while cloud-init configures the matching guest IP.
-        let net_alloc = if deployment.ports.is_empty() {
-            None
-        } else {
-            Some(InstanceNet::for_instance(&instance_id))
-        };
+        // Every microVM gets a network. A guest is an isolated machine that
+        // needs connectivity to be useful at all: outbound to fetch what it runs
+        // (the guest init clones its source, pulls dependencies) and inbound to
+        // be reachable — independent of whether it publishes a port. Allocate a
+        // deterministic /30 and create the host tap. Unlike Cloud Hypervisor,
+        // Firecracker does not create the tap — Ring creates it here (held in
+        // `tap` so an early return on any later error deletes it via Drop) and
+        // hands its name to Firecracker, while cloud-init configures the
+        // matching guest IP.
+        let net_alloc = Some(InstanceNet::for_instance(&instance_id));
         let tap = match &net_alloc {
             Some(n) => match TapDevice::create(&n.tap_name, &n.host_ip, n.prefix_len) {
                 Ok(t) => {
