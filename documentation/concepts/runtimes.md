@@ -26,8 +26,8 @@ Enable just the runtimes a host actually runs — Docker-only, Podman-only, cont
 | Image format | Docker image (`nginx:1.25`) | Docker/OCI image | OCI image (`nginx:1.25`) | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
 | Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | CNI (bridge + host-local IPAM) | Per-VM /30 subnet, host-port forwarding via `socat` | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP) |
 | Crash detection | ✓ event-driven (sub-second) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) |
-| `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | Not yet |
-| `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Not yet (runs as worker) |
+| `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | In-guest `ring-agent` over vsock (host Unix socket) |
+| `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Clean shutdown (guest reboot) = success (no exit code from host) |
 | Labels (`labels:`) | Forwarded to container | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
 | Host networking | Supported | Not supported by Ring yet | Not supported by Ring yet | N/A | N/A |
 | Private registry creds | Supported | Supported | Supported (basic auth) | N/A (no image pull) | N/A (no image pull) |
@@ -148,10 +148,12 @@ Ring copies the rootfs per instance (so replicas and reboots don't share guest s
 - You can ship a kernel + rootfs pair (the Firecracker CI artifacts are a good starting point)
 - You're building short-lived or high-density workloads where microVM overhead matters
 
+**Supported** (at parity with Cloud Hypervisor): per-instance CPU/memory/network/disk/pid
+metrics, serial-console log read/stream with copy-truncate rotation, `command` health
+checks via the in-guest `ring-agent` over vsock, `kind: job` run-to-completion, and
+`volumes:` mounted as virtio-block ext4 images.
+
 **Current limitations (experimental):**
-- **No volumes** — `volumes:` are not mounted yet (virtio-fs reuse is planned)
-- **No `command` health checks** — needs an in-guest agent over vsock, like Cloud Hypervisor
-- **No metrics** and **no `kind: job`** — a `job` deployment is treated as a worker
 - Crash detection is tick-bound (no event stream), and `labels` are silently ignored
 
 A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them — re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down — so a deployment keeps its guest state and its published ports across a restart.

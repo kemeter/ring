@@ -1,11 +1,12 @@
-//! Firecracker microVM runtime — boot-minimal implementation.
+//! Firecracker microVM runtime.
 //!
-//! Scope of this first cut: boot `replicas` worker microVMs from a kernel
-//! (config) + a per-deployment rootfs (`deployment.image` on the host), track
-//! them by their API socket, scale up/down, and tear down. No networking, no
-//! volumes, no stats, no health probes yet — those reuse the shared helpers
-//! (`host_net`, `port_forwarder`, `virtiofs`, `vsock_client`) in later phases,
-//! exactly as the Cloud Hypervisor runtime does.
+//! Boots `replicas` microVMs from a kernel (config) + a per-deployment rootfs
+//! (`deployment.image` on the host), tracks them by their API socket, scales
+//! up/down, and tears down. At parity with the Cloud Hypervisor runtime via the
+//! shared helpers (`host_net`, `port_forwarder`, `vsock_client`): networking
+//! with outbound NAT, per-instance stats, serial-console logs, `command` health
+//! checks through the in-guest `ring-agent` over vsock, `kind: job`
+//! run-to-completion, and volumes mounted as virtio-block ext4 images.
 //!
 //! Mirrors `cloud_hypervisor::lifecycle` structure: a `*RuntimeConfig` with
 //! defaults + `is_available` + `from_user_config`, a lifecycle struct holding
