@@ -150,6 +150,186 @@ impl FirecrackerLifecycle {
         format!("{}/{}.console.log", self.config.socket_dir, instance_id)
     }
 
+    /// Per-instance ephemeral volume image (Bind/Content). One file per volume
+    /// index, reaped when the instance stops.
+    fn ephemeral_volume_path(&self, instance_id: &str, idx: usize) -> String {
+        format!("{}/{}.vol{}.ext4", self.config.socket_dir, instance_id, idx)
+    }
+
+    /// Persistent Named-volume image, shared across instances of the same
+    /// namespace+name and NOT reaped on stop. Lives under `volumes/<ns>/`.
+    fn named_volume_path(&self, namespace: &str, name: &str) -> PathBuf {
+        PathBuf::from(&self.config.socket_dir)
+            .join("volumes")
+            .join(namespace)
+            .join(format!("{}.ext4", name))
+    }
+
+    /// Build + attach a virtio-block device for each resolved mount, returning
+    /// the cloud-init `GuestMount`s the guest needs to mount them. Drives attach
+    /// in declaration order right after the root device, so volume N is
+    /// `/dev/vd{b,c,...}` (index 0 → `vdb`).
+    ///
+    /// - **Bind**: a fresh ext4 image seeded from the host source directory.
+    /// - **Content**: a fresh ext4 image holding the single rendered file.
+    /// - **Named**: a persistent ext4 image created once and reused.
+    async fn prepare_volume_drives(
+        &self,
+        client: &FirecrackerClient,
+        instance_id: &str,
+        deployment: &Deployment,
+        resolved_mounts: &[ResolvedMount],
+    ) -> Result<Vec<crate::hypervisor::cloud_init::GuestMount>, String> {
+        use crate::hypervisor::cloud_init::GuestMount;
+        use crate::hypervisor::volume_image as vol;
+
+        // /dev/vda is root and cidata takes the free letter after the last
+        // volume, so volumes can use vdb..=vdy at most — 24 of them. Past that
+        // the device letters would overflow into punctuation ('{', '|', …) and
+        // silently corrupt the boot; fail loudly instead.
+        const MAX_VOLUMES: usize = 24;
+        if resolved_mounts.len() > MAX_VOLUMES {
+            return Err(format!(
+                "firecracker supports at most {} volumes, got {}",
+                MAX_VOLUMES,
+                resolved_mounts.len()
+            ));
+        }
+
+        let mut guest_mounts = Vec::with_capacity(resolved_mounts.len());
+
+        for (idx, m) in resolved_mounts.iter().enumerate() {
+            // /dev/vda is root; volumes start at vdb.
+            let dev_letter = (b'b' + idx as u8) as char;
+            let device = format!("/dev/vd{}", dev_letter);
+            let label = format!("ringvol{}", idx);
+
+            let (img_path, destination, read_only) = match m {
+                ResolvedMount::Bind {
+                    source,
+                    destination,
+                    read_only,
+                } => {
+                    let src = Path::new(source);
+                    if !src.is_dir() {
+                        return Err(format!(
+                            "firecracker bind volume source '{}' is not a directory on the host",
+                            source
+                        ));
+                    }
+                    let size = vol::sizing_mib_for_bytes(vol::dir_size_bytes(src).await);
+                    let img = PathBuf::from(self.ephemeral_volume_path(instance_id, idx));
+                    vol::build_ext4_from_dir(&img, src, size, &label)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    (img, destination.clone(), *read_only)
+                }
+                ResolvedMount::Content {
+                    content,
+                    destination,
+                } => {
+                    // Stage the single rendered file under its basename, build
+                    // an ext4 from that dir, and mount it at the destination's
+                    // PARENT directory (mirroring the CH semantics where the
+                    // file lands at the user-supplied path).
+                    let dest_path = Path::new(destination);
+                    let filename = dest_path.file_name().ok_or_else(|| {
+                        format!(
+                            "content volume destination has no filename: {}",
+                            destination
+                        )
+                    })?;
+                    let mount_dir = dest_path
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "/".to_string());
+
+                    let stage = PathBuf::from(self.config.socket_dir.clone())
+                        .join(format!("{}.vol{}.stage", instance_id, idx));
+                    if stage.exists() {
+                        let _ = tokio::fs::remove_dir_all(&stage).await;
+                    }
+                    tokio::fs::create_dir_all(&stage)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    tokio::fs::write(stage.join(filename), content.as_bytes())
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    let size = vol::sizing_mib_for_bytes(content.len() as u64);
+                    let img = PathBuf::from(self.ephemeral_volume_path(instance_id, idx));
+                    let built = vol::build_ext4_from_dir(&img, &stage, size, &label).await;
+                    let _ = tokio::fs::remove_dir_all(&stage).await;
+                    built.map_err(|e| e.to_string())?;
+                    // Content is rendered config — read-only in the guest.
+                    (img, mount_dir, true)
+                }
+                ResolvedMount::Named {
+                    name,
+                    destination,
+                    read_only,
+                    ..
+                } => {
+                    let img = self.named_volume_path(&deployment.namespace, name);
+                    if !img.exists() {
+                        // 256 MiB default for a fresh persistent volume; the
+                        // guest can grow usage up to that.
+                        vol::create_empty_ext4(&img, 256, &label)
+                            .await
+                            .map_err(|e| e.to_string())?;
+                    }
+                    (img, destination.clone(), *read_only)
+                }
+            };
+
+            client
+                .put_drive(&Drive {
+                    drive_id: format!("vol{}", idx),
+                    path_on_host: img_path.to_string_lossy().to_string(),
+                    is_root_device: false,
+                    is_read_only: read_only,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+
+            guest_mounts.push(GuestMount::block(device, destination, read_only));
+        }
+
+        Ok(guest_mounts)
+    }
+
+    /// Remove a stopped instance's ephemeral volume images (Bind/Content) and
+    /// any leftover staging dirs. Persistent Named volumes live under
+    /// `volumes/` and are intentionally left in place.
+    ///
+    /// Ephemeral indices are sparse — a Named volume occupies an index but has
+    /// no `.vol{idx}.ext4` file — so we scan the socket dir for this instance's
+    /// `*.vol*.ext4` images and `*.vol*.stage` dirs rather than walking indices
+    /// (which would stop at the first gap and leak the rest).
+    fn cleanup_ephemeral_volumes(&self, instance_id: &str) {
+        let img_prefix = format!("{}.vol", instance_id);
+        let entries = match std::fs::read_dir(&self.config.socket_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !name.starts_with(&img_prefix) {
+                continue;
+            }
+            let path = entry.path();
+            if name.ends_with(".ext4") {
+                let _ = std::fs::remove_file(&path);
+            } else if name.ends_with(".stage") {
+                // Staging dir orphaned by a crash mid-build; normally removed
+                // inline once the image is built.
+                let _ = std::fs::remove_dir_all(&path);
+            }
+        }
+    }
+
     /// Spawn a background task that walks the socket directory every 60s and
     /// rotates any `*.console.log` past the configured size threshold. Returns
     /// the handle so the caller (`ring-server`) can abort it on shutdown.
@@ -192,7 +372,11 @@ impl FirecrackerLifecycle {
     }
 
     /// Boot one worker microVM. Returns the new instance id on success.
-    async fn start_vm(&self, deployment: &Deployment) -> Result<String, RuntimeError> {
+    async fn start_vm(
+        &self,
+        deployment: &Deployment,
+        resolved_mounts: &[ResolvedMount],
+    ) -> Result<String, RuntimeError> {
         // Pre-flight: kernel + base rootfs must exist before we spawn anything.
         if !Path::new(&self.config.kernel_path).exists() {
             return Err(RuntimeError::VmStartFailed(format!(
@@ -325,6 +509,7 @@ impl FirecrackerLifecycle {
                 &rootfs_rw,
                 deployment,
                 net_alloc.as_ref(),
+                resolved_mounts,
             )
             .await;
         if let Err(e) = boot {
@@ -333,6 +518,7 @@ impl FirecrackerLifecycle {
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&rootfs_rw);
             let _ = std::fs::remove_file(self.cidata_path(&instance_id));
+            self.cleanup_ephemeral_volumes(&instance_id);
             return Err(RuntimeError::VmStartFailed(format!(
                 "configure/boot failed for {}: {}",
                 instance_id, e
@@ -409,6 +595,7 @@ impl FirecrackerLifecycle {
         rootfs_rw: &str,
         deployment: &Deployment,
         net_alloc: Option<&InstanceNet>,
+        resolved_mounts: &[ResolvedMount],
     ) -> Result<(), String> {
         client
             .put_boot_source(&BootSource {
@@ -419,6 +606,7 @@ impl FirecrackerLifecycle {
             .await
             .map_err(|e| e.to_string())?;
 
+        // rootfs is /dev/vda.
         client
             .put_drive(&Drive {
                 drive_id: "rootfs".to_string(),
@@ -429,20 +617,30 @@ impl FirecrackerLifecycle {
             .await
             .map_err(|e| e.to_string())?;
 
-        // A cidata ISO is attached whenever cloud-init has something to do:
-        // env vars or a static network config. Mounts are not wired yet.
+        // Volumes attach next as virtio-block devices /dev/vdb, /dev/vdc, …
+        // (in declaration order, right after the root device). Each backing
+        // ext4 image is built on the host; the guest mounts the device at the
+        // requested destination via cloud-init.
+        let guest_mounts = self
+            .prepare_volume_drives(client, instance_id, deployment, resolved_mounts)
+            .await?;
+
+        // A cidata drive is attached whenever cloud-init has something to do:
+        // env vars, a static network config, or volume mounts. It attaches
+        // AFTER the volumes so the guest device letters for volumes are stable
+        // (vdb, vdc, …); cidata takes the next free letter.
         let guest_net = net_alloc.map(|n| GuestNet {
             guest_ip: n.guest_ip.clone(),
             host_ip: n.host_ip.clone(),
             prefix_len: n.prefix_len,
             mac: n.mac.clone(),
         });
-        if !deployment.environment.is_empty() || guest_net.is_some() {
+        if !deployment.environment.is_empty() || guest_net.is_some() || !guest_mounts.is_empty() {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
             let iso_path = crate::hypervisor::cloud_init::build_cidata_iso(
                 instance_id,
                 deployment,
-                &[],
+                &guest_mounts,
                 guest_net.as_ref(),
                 &socket_dir,
             )
@@ -560,6 +758,9 @@ impl FirecrackerLifecycle {
             }
             let _ = std::fs::remove_file(&backup);
         }
+        // Reap ephemeral (Bind/Content) volume images. Persistent Named volumes
+        // live under volumes/ and are intentionally kept.
+        self.cleanup_ephemeral_volumes(instance_id);
         // Remove the vsock base socket and the per-port multiplexed socket
         // Firecracker creates (`<base>_<port>`). No-ops when the instance had
         // no vsock device.
@@ -721,7 +922,11 @@ impl FirecrackerLifecycle {
         }
     }
 
-    async fn handle_worker_deployment(&self, mut deployment: Deployment) -> Deployment {
+    async fn handle_worker_deployment(
+        &self,
+        mut deployment: Deployment,
+        resolved_mounts: &[ResolvedMount],
+    ) -> Deployment {
         // Before scaling, re-adopt any instance inherited from a previous
         // ring-server so its network is restored without recreating the VM.
         self.readopt_networking(&deployment).await;
@@ -731,7 +936,7 @@ impl FirecrackerLifecycle {
 
         if current.len() < desired {
             for _ in current.len()..desired {
-                match self.start_vm(&deployment).await {
+                match self.start_vm(&deployment, resolved_mounts).await {
                     Ok(_) => {}
                     Err(e) => {
                         error!("Firecracker: failed to start instance: {}", e);
@@ -774,7 +979,11 @@ impl FirecrackerLifecycle {
     /// `replicas` is ignored (a job is one VM). Because the guest's main-process
     /// exit code isn't surfaced, any clean shutdown is treated as success —
     /// same convention (“Approach A”) as the Cloud Hypervisor runtime.
-    async fn handle_job_deployment(&self, mut deployment: Deployment) -> Deployment {
+    async fn handle_job_deployment(
+        &self,
+        mut deployment: Deployment,
+        resolved_mounts: &[ResolvedMount],
+    ) -> Deployment {
         // Terminal states are sticky: never reboot a finished job.
         if matches!(
             deployment.status,
@@ -839,7 +1048,7 @@ impl FirecrackerLifecycle {
             DeploymentStatus::Creating | DeploymentStatus::Pending
         ) {
             // No VM yet: boot exactly one.
-            match self.start_vm(&deployment).await {
+            match self.start_vm(&deployment, resolved_mounts).await {
                 Ok(instance_id) => {
                     deployment.instances = vec![instance_id];
                     deployment.status = DeploymentStatus::Running;
@@ -975,7 +1184,7 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
     async fn apply(
         &self,
         mut deployment: Deployment,
-        _resolved_mounts: Vec<ResolvedMount>,
+        resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         if deployment.status == DeploymentStatus::Deleted {
             // Re-adopt first so an instance inherited from a previous
@@ -997,9 +1206,11 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         }
 
         if deployment.kind == "job" {
-            self.handle_job_deployment(deployment).await
+            self.handle_job_deployment(deployment, &resolved_mounts)
+                .await
         } else {
-            self.handle_worker_deployment(deployment).await
+            self.handle_worker_deployment(deployment, &resolved_mounts)
+                .await
         }
     }
 
@@ -1438,6 +1649,35 @@ mod tests {
         (FirecrackerLifecycle::new(cfg), dir)
     }
 
+    #[test]
+    fn cleanup_reaps_sparse_ephemeral_images_and_stage_dirs() {
+        let (lc, dir) = lifecycle_with_scratch_dir("vol-cleanup");
+        let id = "inst-abcd";
+
+        // Named-then-Bind ordering: vol0 (named) has NO ephemeral file, vol1
+        // (bind) does. The old index-walk broke at vol0 and leaked vol1.
+        let vol1 = dir.join(format!("{}.vol1.ext4", id));
+        std::fs::write(&vol1, b"ext4").unwrap();
+        // An orphaned staging dir from a crash mid-build.
+        let stage = dir.join(format!("{}.vol2.stage", id));
+        std::fs::create_dir_all(&stage).unwrap();
+        // A persistent named image and another instance's file must survive.
+        std::fs::create_dir_all(dir.join("volumes/ns")).unwrap();
+        let named = dir.join("volumes/ns/data.ext4");
+        std::fs::write(&named, b"keep").unwrap();
+        let other = dir.join("inst-zzzz.vol0.ext4");
+        std::fs::write(&other, b"keep").unwrap();
+
+        lc.cleanup_ephemeral_volumes(id);
+
+        assert!(!vol1.exists(), "sparse ephemeral image must be reaped");
+        assert!(!stage.exists(), "orphaned staging dir must be reaped");
+        assert!(named.exists(), "named volume must persist");
+        assert!(other.exists(), "another instance's image must be untouched");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn job_deployment(status: DeploymentStatus) -> Deployment {
         Deployment {
             id: "job1234-5678".to_string(),
@@ -1471,7 +1711,7 @@ mod tests {
     async fn job_terminal_status_is_sticky_completed() {
         let (lc, dir) = lifecycle_with_scratch_dir("job-completed");
         let dep = job_deployment(DeploymentStatus::Completed);
-        let out = lc.handle_job_deployment(dep).await;
+        let out = lc.handle_job_deployment(dep, &[]).await;
         assert_eq!(out.status, DeploymentStatus::Completed);
         assert!(out.instances.is_empty());
         std::fs::remove_dir_all(&dir).ok();
@@ -1481,7 +1721,7 @@ mod tests {
     async fn job_terminal_status_is_sticky_failed() {
         let (lc, dir) = lifecycle_with_scratch_dir("job-failed");
         let dep = job_deployment(DeploymentStatus::Failed);
-        let out = lc.handle_job_deployment(dep).await;
+        let out = lc.handle_job_deployment(dep, &[]).await;
         assert_eq!(out.status, DeploymentStatus::Failed);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1492,7 +1732,7 @@ mod tests {
         // and firecracker exited, taking its socket with it → Completed.
         let (lc, dir) = lifecycle_with_scratch_dir("job-running-gone");
         let dep = job_deployment(DeploymentStatus::Running);
-        let out = lc.handle_job_deployment(dep).await;
+        let out = lc.handle_job_deployment(dep, &[]).await;
         assert_eq!(out.status, DeploymentStatus::Completed);
         assert!(out.instances.is_empty());
         std::fs::remove_dir_all(&dir).ok();
@@ -1505,7 +1745,7 @@ mod tests {
         // VmStartFailed → bumps restart_count, never silently Completed.
         let (lc, dir) = lifecycle_with_scratch_dir("job-no-kernel");
         let dep = job_deployment(DeploymentStatus::Creating);
-        let out = lc.handle_job_deployment(dep).await;
+        let out = lc.handle_job_deployment(dep, &[]).await;
         assert_ne!(out.status, DeploymentStatus::Completed);
         assert_ne!(out.status, DeploymentStatus::Running);
         std::fs::remove_dir_all(&dir).ok();

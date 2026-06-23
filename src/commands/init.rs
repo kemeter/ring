@@ -335,8 +335,8 @@ pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
 
     if firecracker {
         out.push('\n');
-        out.push_str("# Firecracker is experimental: no volumes, no command health checks,\n");
-        out.push_str("# no kind: job (treated as a worker). See the runtime docs.\n");
+        out.push_str("# Firecracker is experimental. Volumes need cloud-init in the guest\n");
+        out.push_str("# rootfs; image: must be a host rootfs file (no registry pull). See docs.\n");
         out.push_str("[server.runtime.firecracker]\n");
         out.push_str("enabled = true\n");
         out.push_str("# Uncomment and adjust if firecracker isn't on $PATH:\n");

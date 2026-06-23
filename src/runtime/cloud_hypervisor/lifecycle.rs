@@ -558,10 +558,12 @@ impl CloudHypervisorLifecycle {
 
         let guest_mounts: Vec<crate::hypervisor::cloud_init::GuestMount> = live_mounts
             .iter()
-            .map(|m| crate::hypervisor::cloud_init::GuestMount {
-                tag: m.tag.clone(),
-                destination: m.destination.clone(),
-                read_only: m.read_only,
+            .map(|m| {
+                crate::hypervisor::cloud_init::GuestMount::virtiofs(
+                    m.tag.clone(),
+                    m.destination.clone(),
+                    m.read_only,
+                )
             })
             .collect();
 

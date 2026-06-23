@@ -28,13 +28,54 @@ use crate::models::deployments::{Deployment, EnvValue};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
-/// One virtio-fs mount the guest needs to perform at boot. The host side
-/// (virtiofsd, socket) is set up before calling [`build_cidata_iso`]; this
-/// struct only carries what cloud-init needs to mount it inside the VM.
+/// How the guest reaches a mount's backing storage.
+///
+/// Cloud Hypervisor shares host directories over **virtio-fs** (the `tag` is the
+/// virtiofsd mount tag). Firecracker has no virtio-fs, so it attaches each
+/// volume as a **virtio-block** device and the guest mounts the resulting
+/// `/dev/vdX` as an ext4 filesystem. The cloud-init renderer emits the right
+/// fstab/`mount` directives for either.
+pub(crate) enum MountTransport {
+    /// `source` is a virtiofs tag, mounted with `-t virtiofs`.
+    Virtiofs,
+    /// `source` is a block device path (e.g. `/dev/vdb`), mounted with `-t ext4`.
+    Block,
+}
+
+/// One mount the guest needs to perform at boot. The host side (virtiofsd +
+/// socket for virtio-fs, or the attached block device for virtio-block) is set
+/// up before calling [`build_cidata_iso`]; this struct only carries what
+/// cloud-init needs to mount it inside the VM.
 pub(crate) struct GuestMount {
-    pub tag: String,
+    /// The mount source as the guest sees it: a virtiofs tag, or a block device
+    /// path like `/dev/vdb`.
+    pub source: String,
     pub destination: String,
     pub read_only: bool,
+    pub transport: MountTransport,
+}
+
+impl GuestMount {
+    /// A virtio-fs mount (Cloud Hypervisor): `tag` is the virtiofsd mount tag.
+    pub fn virtiofs(tag: String, destination: String, read_only: bool) -> Self {
+        Self {
+            source: tag,
+            destination,
+            read_only,
+            transport: MountTransport::Virtiofs,
+        }
+    }
+
+    /// A virtio-block mount (Firecracker): `device` is the guest block device
+    /// path (e.g. `/dev/vdb`), mounted as ext4.
+    pub fn block(device: String, destination: String, read_only: bool) -> Self {
+        Self {
+            source: device,
+            destination,
+            read_only,
+            transport: MountTransport::Block,
+        }
+    }
 }
 
 /// Static network config Ring asks the guest to apply on its primary NIC.
@@ -248,17 +289,23 @@ fn render_user_data(
         mounts_block.push_str("mounts:\n");
         for m in mounts {
             let opts = if m.read_only { "ro" } else { "defaults" };
+            let fstype = match m.transport {
+                MountTransport::Virtiofs => "virtiofs",
+                MountTransport::Block => "ext4",
+            };
             // [device, mountpoint, fstype, opts, dump, fsck_pass]
             mounts_block.push_str(&format!(
-                "  - [\"{tag}\", \"{dest}\", \"virtiofs\", \"{opts}\", \"0\", \"0\"]\n",
-                tag = m.tag,
+                "  - [\"{src}\", \"{dest}\", \"{fstype}\", \"{opts}\", \"0\", \"0\"]\n",
+                src = m.source,
                 dest = m.destination,
+                fstype = fstype,
                 opts = opts,
             ));
             runcmd_lines.push_str(&format!(
-                "  - [mkdir, -p, \"{dest}\"]\n  - [mount, -t, virtiofs, -o, \"{opts}\", \"{tag}\", \"{dest}\"]\n",
-                tag = m.tag,
+                "  - [mkdir, -p, \"{dest}\"]\n  - [mount, -t, {fstype}, -o, \"{opts}\", \"{src}\", \"{dest}\"]\n",
+                src = m.source,
                 dest = m.destination,
+                fstype = fstype,
                 opts = opts,
             ));
         }
@@ -372,16 +419,8 @@ mod tests {
     #[test]
     fn user_data_emits_mounts_and_runcmd_for_virtiofs() {
         let mounts = vec![
-            GuestMount {
-                tag: "bind-0".to_string(),
-                destination: "/data".to_string(),
-                read_only: false,
-            },
-            GuestMount {
-                tag: "cfg-1".to_string(),
-                destination: "/etc/app".to_string(),
-                read_only: true,
-            },
+            GuestMount::virtiofs("bind-0".to_string(), "/data".to_string(), false),
+            GuestMount::virtiofs("cfg-1".to_string(), "/etc/app".to_string(), true),
         ];
         let yaml = render_user_data(&[], &mounts, None);
         // fstab entries via cloud-init `mounts:` module
@@ -492,11 +531,11 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
 
         let dep = empty_deployment("ch-cidata-test");
-        let mounts = vec![GuestMount {
-            tag: "bind-0".to_string(),
-            destination: "/data".to_string(),
-            read_only: false,
-        }];
+        let mounts = vec![GuestMount::virtiofs(
+            "bind-0".to_string(),
+            "/data".to_string(),
+            false,
+        )];
 
         let iso = build_cidata_iso("ch-cidata-test", &dep, &mounts, None, &dir)
             .await

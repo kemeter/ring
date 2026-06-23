@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Firecracker microVM runtime (experimental): boot, networking, outbound NAT, restart reconciliation (#142, #146, #147)
 - Firecracker reaches Cloud Hypervisor parity for observability: serial console log read/stream (#167), per-instance CPU/memory/network/disk/pid metrics (#168), and copy-truncate console-log rotation (#169)
 - Firecracker `kind: job`: boot one VM, mark `completed` when the guest reboots (which exits the VMM); artifacts reaped, terminal status sticky (#170)
+- Firecracker volumes via virtio-block: bind/named/config/secret mounts realised as ext4 images attached as extra drives and mounted by cloud-init; named volumes persist, ephemeral ones are reaped
 - Public Prometheus `/metrics` endpoint exposing inventory and queue gauges, plus background-refreshed per-deployment runtime resource usage (#164)
 - Scoped API tokens (PAT) with per-scope and per-namespace enforcement, plus `ring token` CLI (#134)
 - Outbound webhooks with HMAC-signed delivery and a durable event queue, plus `ring webhook` CLI (#135)
