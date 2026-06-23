@@ -124,8 +124,15 @@ pub(crate) fn sizing_mib_for_bytes(bytes: u64) -> u64 {
     (payload_mib + OVERHEAD_MIB).max(FLOOR_MIB)
 }
 
-/// Sum the byte size of every regular file under `dir` (recursively). Used to
-/// size a `Bind` volume image from its host source directory.
+/// Estimate the on-disk byte size of everything under `dir` (recursively): the
+/// payload `mke2fs -d` will copy into the volume image. Used to size a `Bind`
+/// volume image from its host source directory.
+///
+/// Counts regular files, symlinks (their own size, not the target — we never
+/// follow links, so a dangling or out-of-tree link can't crash the walk or
+/// inflate the estimate), and directory entries themselves (each costs a bit of
+/// metadata). Under-counting here means `mke2fs -d` could fail on a too-small
+/// image, so we err toward including everything we touch.
 pub(crate) async fn dir_size_bytes(dir: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![dir.to_path_buf()];
@@ -136,14 +143,17 @@ pub(crate) async fn dir_size_bytes(dir: &Path) -> u64 {
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            match entry.file_type().await {
-                Ok(ft) if ft.is_dir() => stack.push(path),
-                Ok(ft) if ft.is_file() => {
-                    if let Ok(meta) = entry.metadata().await {
-                        total += meta.len();
-                    }
-                }
-                _ => {}
+            // symlink_metadata: stat the entry itself, never the link target.
+            let Ok(meta) = tokio::fs::symlink_metadata(&path).await else {
+                continue;
+            };
+            let ft = meta.file_type();
+            if ft.is_dir() {
+                total += meta.len();
+                stack.push(path);
+            } else {
+                // Regular file or symlink: count its own byte length.
+                total += meta.len();
             }
         }
     }
@@ -205,7 +215,9 @@ mod tests {
         tokio::fs::create_dir_all(dir.join("sub")).await.unwrap();
         tokio::fs::write(dir.join("a"), b"12345").await.unwrap();
         tokio::fs::write(dir.join("sub/b"), b"678").await.unwrap();
-        assert_eq!(dir_size_bytes(&dir).await, 8);
+        // At least the file payload (5 + 3 = 8 bytes); directory entries add
+        // their own (filesystem-dependent) metadata size on top.
+        assert!(dir_size_bytes(&dir).await >= 8);
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 }
