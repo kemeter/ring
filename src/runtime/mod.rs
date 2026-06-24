@@ -8,3 +8,4 @@ pub(crate) mod containerd;
 pub(crate) mod docker;
 pub(crate) mod firecracker;
 pub(crate) mod podman;
+pub(crate) mod registry_auth;
