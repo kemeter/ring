@@ -14,6 +14,8 @@ Runtimes are opt-in — add this under the `[server]` table in `~/.config/kemete
 [server.runtime.docker]
 enabled = true
 # host = "unix:///var/run/docker.sock"   # default; override for a remote daemon
+# use_host_registry_auth = true          # allow deployments to pull with the host's docker login
+# host_registry_config = "/home/deploy/.docker/config.json"  # pin the file if the daemon runs as another user
 ```
 
 If `enabled = true` but the daemon is unreachable, Ring logs a warning and skips Docker (the node still starts if another runtime is usable).
@@ -50,6 +52,7 @@ ring apply -f web.yaml
 - **Per-namespace networking.** Each namespace gets its own bridge network (`ring_<namespace>`), so containers in the same namespace reach each other by name.
 - **Event-driven crash detection.** Ring listens to the Docker event stream, so a crash is noticed sub-second (the other runtimes detect crashes on the scheduler tick instead).
 - **Full feature set.** Everything in the [manifest reference](/documentation/reference/manifest) works on Docker — it's the baseline the other runtimes are compared against.
+- **Registry auth from the host.** Already `docker login`-ed on the host? Set `use_host_registry_auth = true` here, then `config.use_host_auth: true` on the deployment, to pull private images without putting the secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
 
 ## See also
 

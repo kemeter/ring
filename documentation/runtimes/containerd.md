@@ -21,6 +21,8 @@ The OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is re
 enabled = true
 # socket = "/run/containerd/containerd.sock"   # default
 # namespace = "ring"                            # default; Ring's containerd namespace
+# use_host_registry_auth = true                 # pull private images using the host docker config
+# host_registry_config = "/root/.docker/config.json"  # pin the file if needed
 ```
 
 ## Deploy
@@ -48,6 +50,7 @@ ring apply -f web.yaml
 - **Image entrypoint is honoured.** containerd is low-level and doesn't merge the image's `Entrypoint`/`Cmd` for you the way the Docker daemon does — Ring reads them from the image config and applies them when the deployment gives no `command`.
 - **`command` health checks** run via `Tasks.Exec` (gRPC), no in-guest agent needed.
 - **Crash detection is reconcile-based** (tick-paced), like Podman — it inspects task exit status on each scheduler pass.
+- **Private registries.** containerd has no `login` of its own. Either inline `config.server`/`username`/`password`, or — since `nerdctl login` writes to `~/.docker/config.json` — set `use_host_registry_auth = true` and pull with `config.use_host_auth: true` (no secret in the manifest). See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
 
 ## See also
 

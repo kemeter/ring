@@ -81,6 +81,8 @@ The daemon's own configuration, shared by every context in the file. All subsect
 |---|---|---|---|---|
 | `enabled` | bool | no | `false` | Register the Docker runtime. Must be `true` for Ring to use Docker. When `true` and the daemon is unreachable at startup, Ring fails fast |
 | `host` | string | no | `"unix:///var/run/docker.sock"` | Docker daemon URL. Use `tcp://host:2375` for a remote daemon, `tcp://host:2376` for TLS |
+| `use_host_registry_auth` | bool | no | `false` | Authorize deployments to resolve registry credentials from the host Docker config (see [host registry auth](#host-registry-auth)). A deployment must also set `config.use_host_auth: true` to activate it |
+| `host_registry_config` | string | no | unset | Explicit path to the host registry config (`config.json` schema). When unset, standard Docker resolution applies (`$DOCKER_CONFIG`, then `~/.docker/config.json`) |
 
 ### `[server.runtime.podman]`
 
@@ -90,6 +92,8 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 |---|---|---|---|---|
 | `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring fails fast |
 | `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
+| `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)) |
+| `host_registry_config` | string | no | unset | Explicit path to the host registry config. Podman's `login` writes to `containers/auth.json` — point at it here when the default Docker resolution doesn't pick it up |
 
 ### `[server.runtime.containerd]`
 
@@ -100,6 +104,19 @@ containerd speaks its own native gRPC API on a Unix socket — no Docker daemon 
 | `enabled` | bool | no | `false` | Register the containerd runtime. Must be `true` for Ring to use containerd. When `true` and the socket doesn't answer a `Version` round-trip at startup, Ring fails fast |
 | `socket` | string | no | `/run/containerd/containerd.sock` | Path to the containerd gRPC Unix socket (the stock location used by `containerd`, k3s and RKE2) |
 | `namespace` | string | no | `ring` | containerd metadata namespace Ring creates its images, snapshots, containers and tasks under. Keeps Ring's objects from colliding with `k8s.io`, `moby` or `default` on a shared host. This is containerd's own partition concept, unrelated to a Ring deployment namespace |
+| `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)). containerd has no `login` of its own; tools like `nerdctl` write to `~/.docker/config.json`, the default this resolves |
+| `host_registry_config` | string | no | unset | Explicit path to the host registry config |
+
+### Host registry auth
+
+`use_host_registry_auth` lets a deployment pull private images using the credentials the operator already configured on the host (e.g. via `docker login`), instead of inlining `server`/`username`/`password` in the manifest — which would otherwise be stored in cleartext in the database and returned by the API.
+
+It is a deliberate **two-flag handshake**:
+
+1. The server authorizes it per runtime with `use_host_registry_auth = true`.
+2. The deployment activates it with `config.use_host_auth: true` (see [manifest `config`](/documentation/reference/manifest#config)).
+
+Both are required — a deployment requesting host auth on a runtime that did not authorize it fails fast, with no silent fallback to an anonymous pull. The credential lookup honors `credHelpers`/`credsStore`. Set `host_registry_config` when the Ring daemon runs as a different user than the one who logged in (its `~` would otherwise resolve to the daemon's home, not yours).
 
 ### `[server.runtime.cloud_hypervisor]`
 
