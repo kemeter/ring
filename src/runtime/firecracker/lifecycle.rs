@@ -598,10 +598,28 @@ impl FirecrackerLifecycle {
         net_alloc: Option<&InstanceNet>,
         resolved_mounts: &[ResolvedMount],
     ) -> Result<(), String> {
+        // Configure the guest NIC from the kernel command line (ipconfig) rather
+        // than from userspace. The kernel brings eth0 up with its address before
+        // PID 1 starts, so `network-online.target` is satisfied immediately and
+        // nothing in the guest has to race to assign the address. The format is
+        //   ip=<client>::<gw>:<netmask>:<hostname>:<device>:off
+        // (off = no autoconf). When the deployment has no network this is empty
+        // and the base boot_args are used unchanged.
+        let boot_args = match net_alloc {
+            Some(n) => format!(
+                "{} ip={}::{}:{}::eth0:off",
+                self.config.boot_args,
+                n.guest_ip,
+                n.host_ip,
+                prefix_to_netmask(n.prefix_len),
+            ),
+            None => self.config.boot_args.clone(),
+        };
+
         client
             .put_boot_source(&BootSource {
                 kernel_image_path: self.config.kernel_path.clone(),
-                boot_args: Some(self.config.boot_args.clone()),
+                boot_args: Some(boot_args),
                 initrd_path: None,
             })
             .await
@@ -1146,6 +1164,39 @@ fn needs_vsock(deployment: &Deployment) -> bool {
         .health_checks
         .iter()
         .any(|hc| matches!(hc, HealthCheck::Command { .. }))
+}
+
+/// Render a CIDR prefix length as a dotted-quad netmask (e.g. 30 -> 255.255.255.252)
+/// for the kernel ipconfig `ip=` parameter, which wants the mask in that form.
+fn prefix_to_netmask(prefix_len: u8) -> String {
+    let bits: u32 = if prefix_len >= 32 {
+        u32::MAX
+    } else {
+        u32::MAX.checked_shl(32 - prefix_len as u32).unwrap_or(0)
+    };
+    format!(
+        "{}.{}.{}.{}",
+        (bits >> 24) & 0xff,
+        (bits >> 16) & 0xff,
+        (bits >> 8) & 0xff,
+        bits & 0xff
+    )
+}
+
+#[cfg(test)]
+mod netmask_tests {
+    use super::prefix_to_netmask;
+
+    #[test]
+    fn prefix_30_is_a_four_host_mask() {
+        assert_eq!(prefix_to_netmask(30), "255.255.255.252");
+    }
+
+    #[test]
+    fn prefix_24_and_32() {
+        assert_eq!(prefix_to_netmask(24), "255.255.255.0");
+        assert_eq!(prefix_to_netmask(32), "255.255.255.255");
+    }
 }
 
 fn parse_resources(deployment: &Deployment) -> (u32, u32) {
