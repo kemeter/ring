@@ -782,6 +782,7 @@ mod tests {
                 group: Some(1000),
                 privileged: Some(false),
             }),
+            use_host_auth: false,
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -798,6 +799,7 @@ mod tests {
                 group: None,
                 privileged: Some(false),
             }),
+            use_host_auth: false,
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -865,6 +867,7 @@ mod tests {
                 group: Some(0),
                 privileged: Some(true),
             }),
+            use_host_auth: false,
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }

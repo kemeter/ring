@@ -107,6 +107,11 @@ struct DeploymentConfig {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     user: Option<UserConfig>,
+
+    /// Resolve registry credentials from the host's Docker config instead of
+    /// inlining `server`/`username`/`password`. Mutually exclusive with them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    use_host_auth: bool,
 }
 
 /// Numeric uid/gid the container runs as (forwarded to Docker's `User`).
