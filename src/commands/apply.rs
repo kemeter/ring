@@ -257,7 +257,15 @@ struct NamespaceDefinition {
 struct ConfigDefinition {
     namespace: String,
     name: String,
-    data: String,
+    // The JSON payload sent to the server: a `{"<filename>": "<contents>"}`
+    // object. May be written inline, built from `files`, or both — see
+    // `resolve_config_data`. Always `Some` once resolution has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+    // Map of `filename -> path` (relative to the manifest) whose contents are
+    // read at load time and merged into `data`. Never sent to the server.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    files: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     labels: Option<String>,
 }
@@ -391,9 +399,77 @@ pub(crate) fn command_config() -> Command {
 fn load_config_file(file_path: &str) -> Result<ConfigFile, ApplyError> {
     let contents = fs::read_to_string(file_path).map_err(ApplyError::FileRead)?;
 
-    let config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
+    let mut config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
+
+    // `files` references are relative to the manifest's directory, so resolve
+    // them while we still know where the manifest lives.
+    let manifest_dir = Path::new(file_path).parent().unwrap_or(Path::new("."));
+    for (key, def) in config.configs.iter_mut() {
+        resolve_config_data(key, def, manifest_dir)?;
+    }
 
     Ok(config)
+}
+
+/// Turn a config's `data` (inline JSON) and `files` (filename -> path) into a
+/// single JSON object string stored back into `data`. Rules:
+///   - `data` alone: kept as-is (backwards compatible).
+///   - `files` alone: builds `{"<name>": "<contents>", ...}`.
+///   - both: merged, but a filename present in *both* is a hard error, and a
+///     non-object `data` cannot be merged into.
+///   - neither: hard error — a config must carry some payload.
+fn resolve_config_data(
+    key: &str,
+    def: &mut ConfigDefinition,
+    manifest_dir: &Path,
+) -> Result<(), ApplyError> {
+    if def.data.is_none() && def.files.is_empty() {
+        return Err(ApplyError::Validation(format!(
+            "config '{}': either 'data' or 'files' must be set",
+            key
+        )));
+    }
+
+    // Fast path: inline data only, no files to merge — leave it untouched so
+    // arbitrary (even non-JSON-object) inline payloads keep working.
+    if def.files.is_empty() {
+        return Ok(());
+    }
+
+    // Start from the inline `data` if present, else an empty object.
+    let mut merged: serde_json::Map<String, serde_json::Value> = match &def.data {
+        Some(raw) => serde_json::from_str(raw).map_err(|_| {
+            ApplyError::Validation(format!(
+                "config '{}': 'data' must be a JSON object to merge with 'files'",
+                key
+            ))
+        })?,
+        None => serde_json::Map::new(),
+    };
+
+    for (name, rel_path) in &def.files {
+        if merged.contains_key(name) {
+            return Err(ApplyError::Validation(format!(
+                "config '{}': key '{}' is defined in both 'data' and 'files'",
+                key, name
+            )));
+        }
+        let full_path = manifest_dir.join(rel_path);
+        let contents = fs::read_to_string(&full_path).map_err(|e| {
+            ApplyError::Validation(format!(
+                "config '{}': failed to read file '{}' for key '{}': {}",
+                key,
+                full_path.display(),
+                name,
+                e
+            ))
+        })?;
+        merged.insert(name.clone(), serde_json::Value::String(contents));
+    }
+
+    def.data = Some(serde_json::Value::Object(merged).to_string());
+    def.files.clear();
+    Ok(())
 }
 
 fn check_auth(config_dir: &str) -> Result<(), ApplyError> {
@@ -679,7 +755,11 @@ async fn apply_internal(
     for (key, mut config) in config_file.configs {
         config.namespace = env_resolver(&config.namespace, &env_vars);
         config.name = env_resolver(&config.name, &env_vars);
-        config.data = env_resolver(&config.data, &env_vars);
+        // `data` is always `Some` here: `resolve_config_data` (run at load time)
+        // errors out when neither `data` nor `files` is set.
+        if let Some(data) = &config.data {
+            config.data = Some(env_resolver(data, &env_vars));
+        }
 
         if is_dry_run {
             println!(
@@ -1154,9 +1234,143 @@ deployments:
         let entry = &config.configs["entrypoints"];
         assert_eq!(entry.namespace, "ring");
         assert_eq!(entry.name, "test-config2");
-        assert_eq!(entry.data, r#"{"test.conf":"server {}"}"#);
+        assert_eq!(entry.data.as_deref(), Some(r#"{"test.conf":"server {}"}"#));
         assert_eq!(entry.labels, None);
         assert_eq!(config.deployments.len(), 1);
+    }
+
+    fn config_def(data: Option<&str>, files: &[(&str, &str)]) -> ConfigDefinition {
+        ConfigDefinition {
+            namespace: "ns".to_string(),
+            name: "n".to_string(),
+            data: data.map(|s| s.to_string()),
+            files: files
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            labels: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_config_data_files_only() {
+        let dir = std::env::temp_dir().join("ring_cfg_files_only");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("config.yaml"), "providers:\n  docker: true\n").unwrap();
+
+        let mut def = config_def(None, &[("config.yaml", "config.yaml")]);
+        resolve_config_data("c", &mut def, &dir).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["config.yaml"], "providers:\n  docker: true\n");
+        assert!(def.files.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_config_data_merge() {
+        let dir = std::env::temp_dir().join("ring_cfg_merge");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("big.yaml"), "k: v\n").unwrap();
+
+        let mut def = config_def(Some(r#"{"inline.txt":"hi"}"#), &[("big.yaml", "big.yaml")]);
+        resolve_config_data("c", &mut def, &dir).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["inline.txt"], "hi");
+        assert_eq!(parsed["big.yaml"], "k: v\n");
+    }
+
+    #[test]
+    fn test_resolve_config_data_key_collision() {
+        let dir = std::env::temp_dir().join("ring_cfg_collision");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("dup.yaml"), "x: 1\n").unwrap();
+
+        let mut def = config_def(
+            Some(r#"{"dup.yaml":"already here"}"#),
+            &[("dup.yaml", "dup.yaml")],
+        );
+        let err = resolve_config_data("c", &mut def, &dir).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("both 'data' and 'files'")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_non_object_data_with_files() {
+        let dir = std::env::temp_dir().join("ring_cfg_nonobj");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("f.yaml"), "x: 1\n").unwrap();
+
+        let mut def = config_def(Some("just plain text"), &[("f.yaml", "f.yaml")]);
+        let err = resolve_config_data("c", &mut def, &dir).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("must be a JSON object")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_missing_file() {
+        let dir = std::env::temp_dir().join("ring_cfg_missing");
+        let _ = fs::create_dir_all(&dir);
+
+        let mut def = config_def(None, &[("config.yaml", "./does-not-exist.yaml")]);
+        let err = resolve_config_data("c", &mut def, &dir).unwrap_err();
+        assert!(matches!(
+            err,
+            ApplyError::Validation(m)
+                if m.contains("failed to read file") && m.contains("does-not-exist.yaml")
+        ));
+    }
+
+    #[test]
+    fn test_resolve_config_data_neither_set() {
+        let mut def = config_def(None, &[]);
+        let err = resolve_config_data("c", &mut def, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("either 'data' or 'files'")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_inline_only_untouched() {
+        let mut def = config_def(Some("arbitrary non-json payload"), &[]);
+        resolve_config_data("c", &mut def, Path::new(".")).unwrap();
+        assert_eq!(def.data.as_deref(), Some("arbitrary non-json payload"));
+    }
+
+    // End-to-end through `load_config_file`: a real manifest on disk with a
+    // `files:` reference resolved relative to the manifest's own directory.
+    #[test]
+    fn test_load_config_file_resolves_files_relative_to_manifest() {
+        let dir = std::env::temp_dir().join("ring_cfg_loadfile");
+        let _ = fs::create_dir_all(dir.join("sozune"));
+        fs::write(
+            dir.join("sozune/config.yaml"),
+            "providers:\n  docker:\n    enabled: true\n",
+        )
+        .unwrap();
+        let manifest = dir.join("manifest.yaml");
+        fs::write(
+            &manifest,
+            r#"
+configs:
+  sozune-config:
+    namespace: proxy
+    name: "sozune-config"
+    files:
+      config.yaml: ./sozune/config.yaml
+deployments:
+  app:
+    name: app
+    image: myapp:latest
+"#,
+        )
+        .unwrap();
+
+        let config = load_config_file(manifest.to_str().unwrap()).unwrap();
+        let entry = &config.configs["sozune-config"];
+        let parsed: serde_json::Value =
+            serde_json::from_str(entry.data.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            parsed["config.yaml"],
+            "providers:\n  docker:\n    enabled: true\n"
+        );
+        assert!(entry.files.is_empty());
     }
 
     #[test]
