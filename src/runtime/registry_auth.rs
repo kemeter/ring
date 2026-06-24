@@ -26,6 +26,16 @@ use std::io::BufReader;
 
 use docker_credential::{CredentialRetrievalError, DockerCredential};
 
+/// Per-runtime server-side settings for host registry auth, carried from
+/// `[server.runtime.*]` down to the pull site. `authorized` gates whether a
+/// deployment may use host credentials at all; `config_path` optionally pins
+/// the host config file (else standard Docker resolution applies).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HostAuthSettings {
+    pub(crate) authorized: bool,
+    pub(crate) config_path: Option<String>,
+}
+
 /// Why resolving host registry credentials failed. Each variant maps to an
 /// actionable operator-facing message at the runtime boundary.
 #[derive(Debug)]

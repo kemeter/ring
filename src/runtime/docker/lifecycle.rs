@@ -4,6 +4,7 @@ use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::types::InstanceStatus;
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::volume::ResolvedMount;
+use crate::runtime::registry_auth::HostAuthSettings;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use bollard::Docker;
 use bollard::query_parameters::InspectContainerOptions;
@@ -16,6 +17,7 @@ pub(crate) async fn apply(
     resolved_mounts: Vec<ResolvedMount>,
     intentional_shutdowns: IntentionalShutdowns,
     events_driven: bool,
+    host_auth: HostAuthSettings,
 ) -> Deployment {
     let status_filter = if deployment.status == DeploymentStatus::Deleted {
         "all"
@@ -25,7 +27,14 @@ pub(crate) async fn apply(
     deployment.instances = list_instances(&docker, deployment.id.to_string(), status_filter).await;
 
     if deployment.kind == "job" {
-        handle_job_deployment(deployment, docker, resolved_mounts, intentional_shutdowns).await
+        handle_job_deployment(
+            deployment,
+            docker,
+            resolved_mounts,
+            intentional_shutdowns,
+            host_auth,
+        )
+        .await
     } else {
         handle_worker_deployment(
             deployment,
@@ -33,6 +42,7 @@ pub(crate) async fn apply(
             resolved_mounts,
             intentional_shutdowns,
             events_driven,
+            host_auth,
         )
         .await
     }
@@ -231,6 +241,7 @@ async fn handle_job_deployment(
     docker: Docker,
     resolved_mounts: Vec<ResolvedMount>,
     intentional_shutdowns: IntentionalShutdowns,
+    host_auth: HostAuthSettings,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
@@ -277,7 +288,7 @@ async fn handle_job_deployment(
         // create_container_error after Docker rejected `start`). Either
         // way, try again — the retry path is what eventually grows
         // restart_count past MAX_RESTART_COUNT and converges to Failed.
-        match create_container(&mut deployment, &docker, &resolved_mounts).await {
+        match create_container(&mut deployment, &docker, &resolved_mounts, &host_auth).await {
             Ok(_) => {
                 deployment.status = DeploymentStatus::Running;
             }
@@ -300,6 +311,7 @@ async fn handle_worker_deployment(
     resolved_mounts: Vec<ResolvedMount>,
     intentional_shutdowns: IntentionalShutdowns,
     events_driven: bool,
+    host_auth: HostAuthSettings,
 ) -> Deployment {
     if deployment.status == DeploymentStatus::Deleted {
         debug!("{} marked as deleted. Remove all instances", deployment.id);
@@ -349,7 +361,8 @@ async fn handle_worker_deployment(
                     current_count, target_count
                 );
 
-                match create_container(&mut deployment, &docker, &resolved_mounts).await {
+                match create_container(&mut deployment, &docker, &resolved_mounts, &host_auth).await
+                {
                     Ok(_) => {
                         deployment.emit_event(
                             "info",

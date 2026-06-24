@@ -339,10 +339,48 @@ async fn ensure_named_volume(
     }
 }
 
+/// Resolve the `(server, username, password)` to pull with, honoring the
+/// `use_host_auth` opt-in. When the deployment activates host auth, credentials
+/// come from the host's Docker config (gated by the server's authorization);
+/// otherwise the inline `config.server`/`username`/`password` path is used. A
+/// host-auth failure is a typed `RuntimeError` so the deployment lands in a
+/// clear errored state instead of silently falling back to an anonymous pull.
+fn resolve_registry_auth(
+    deployment: &Deployment,
+    host_auth: &crate::runtime::registry_auth::HostAuthSettings,
+) -> Result<Option<(String, String, String)>, RuntimeError> {
+    use crate::runtime::registry_auth::{decide_host_auth, registry_host_for, resolve_host_auth};
+
+    let activated = deployment
+        .config
+        .as_ref()
+        .map(|c| c.use_host_auth)
+        .unwrap_or(false);
+
+    if decide_host_auth(host_auth.authorized, activated)
+        .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))?
+    {
+        let host = registry_host_for(&deployment.image);
+        let (username, password) = resolve_host_auth(&host, host_auth.config_path.as_deref())
+            .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))?;
+        return Ok(Some((host, username, password)));
+    }
+
+    if let Some(config) = &deployment.config
+        && let (Some(server), Some(username), Some(password)) =
+            (&config.server, &config.username, &config.password)
+    {
+        return Ok(Some((server.clone(), username.clone(), password.clone())));
+    }
+
+    Ok(None)
+}
+
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
     resolved_mounts: &[crate::models::volume::ResolvedMount],
+    host_auth: &crate::runtime::registry_auth::HostAuthSettings,
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
 
@@ -354,18 +392,11 @@ pub(crate) async fn create_container(
 
     let (name, reference) = parse_image_reference(&deployment.image);
 
-    let mut image_config = DockerImage {
+    let image_config = DockerImage {
         name,
         reference,
-        auth: None,
+        auth: resolve_registry_auth(deployment, host_auth)?,
     };
-
-    if let Some(config) = &deployment.config
-        && let (Some(server), Some(username), Some(password)) =
-            (&config.server, &config.username, &config.password)
-    {
-        image_config.auth = Some((server.clone(), username.clone(), password.clone()));
-    }
 
     let policy = deployment
         .config
