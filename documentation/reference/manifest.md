@@ -51,8 +51,9 @@ configs:
 | --- | --- | --- | --- |
 | `namespace` | string | yes | Namespace the config lives in. Must match the namespace of any deployment mounting it. |
 | `name` | string | yes | Config name. This is what a `type: config` volume's `source` references. |
-| `data` | string | conditional | JSON object mapping keys to payloads, e.g. `{"site.conf":"..."}`. A `type: config` volume's `key` selects which entry to mount. Subject to `$VAR` interpolation like deployment fields. Required unless `files` is set. |
-| `files` | map | conditional | Map of `key -> path`. Each referenced file is read at apply time and its raw contents become the value for `key` in the config's JSON payload. Paths are relative to the manifest. Required unless `data` is set. |
+| `data` | string | conditional | JSON object mapping keys to payloads, e.g. `{"site.conf":"..."}`. A `type: config` volume's `key` selects which entry to mount. Subject to `$VAR` interpolation by default (see `interpolate`). Required unless `files` is set. |
+| `files` | map | conditional | Map of `key -> path`. Each referenced file is read at apply time and its raw contents become the value for `key` in the config's JSON payload. Paths are relative to the manifest. File contents are **verbatim** by default (not interpolated). Required unless `data` is set. |
+| `interpolate` | bool | no | Controls `$VAR` interpolation on this config's payload. Unset: inline `data` is interpolated, `files` contents stay verbatim. `true`: both are interpolated. `false`: the whole payload (inline + files) is verbatim. |
 | `labels` | string | no | Free-form labels. |
 
 At least one of `data` or `files` must be present; a config with neither is rejected.
@@ -85,6 +86,34 @@ configs:
 ```
 
 The two are merged into a single JSON object. Defining the **same key** in both `data` and `files` is an error, and when `files` is used a non-object `data` (anything that isn't a `{...}` JSON object) is rejected.
+
+#### `$VAR` interpolation and file contents
+
+By default, `$VAR` interpolation runs on inline `data` (it's a template you write by hand) but **not** on `files` contents. This matters: an Nginx site, a Prometheus rule, or a Grafana dashboard is full of literal `$host`, `$labels`, `$remote_addr` — interpolating them would silently mangle the file (or worse, splice a host env var's value into the payload). So a referenced file ships verbatim.
+
+The `interpolate` field overrides this per config:
+
+| `interpolate` | inline `data` | `files` contents |
+| --- | --- | --- |
+| unset (default) | interpolated | verbatim |
+| `true` | interpolated | interpolated |
+| `false` | verbatim | verbatim |
+
+```yaml
+configs:
+  nginx:
+    namespace: proxy
+    name: "nginx"
+    files:
+      site.conf: ./site.conf      # $host etc. kept verbatim
+
+  templated:
+    namespace: proxy
+    name: "templated"
+    interpolate: true             # opt in: $VAR substituted in the file too
+    files:
+      app.conf: ./app.conf
+```
 
 > A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass — no out-of-band `ring config create` needed.
 
