@@ -422,15 +422,28 @@ impl ContainerdLifecycle {
 
         let ns = &self.config.namespace;
 
-        // 1. Image + rootfs chain id.
-        let auth =
-            deployment
-                .config
-                .as_ref()
-                .and_then(|c| match (&c.server, &c.username, &c.password) {
-                    (Some(s), Some(u), Some(p)) => Some((s.clone(), u.clone(), p.clone())),
-                    _ => None,
-                });
+        // 1. Image + rootfs chain id. Credentials come either from the host's
+        // Docker config (when the deployment opts into `use_host_auth` and the
+        // runtime authorizes it) or from the inline config fields.
+        let config = deployment.config.as_ref();
+        let activated = config.map(|c| c.use_host_auth).unwrap_or(false);
+        let inline = config.and_then(|c| {
+            match (
+                c.server.as_deref(),
+                c.username.as_deref(),
+                c.password.as_deref(),
+            ) {
+                (Some(s), Some(u), Some(p)) => Some((s, u, p)),
+                _ => None,
+            }
+        });
+        let auth = crate::runtime::registry_auth::resolve_deployment_auth(
+            &deployment.image,
+            activated,
+            inline,
+            &self.config.host_auth,
+        )
+        .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))?;
         let image = ContainerdImage::from_deployment(&deployment.image, auth);
         let policy = deployment
             .config

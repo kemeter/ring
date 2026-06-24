@@ -349,31 +349,26 @@ fn resolve_registry_auth(
     deployment: &Deployment,
     host_auth: &crate::runtime::registry_auth::HostAuthSettings,
 ) -> Result<Option<(String, String, String)>, RuntimeError> {
-    use crate::runtime::registry_auth::{decide_host_auth, registry_host_for, resolve_host_auth};
+    let config = deployment.config.as_ref();
+    let activated = config.map(|c| c.use_host_auth).unwrap_or(false);
+    let inline = config.and_then(|c| {
+        match (
+            c.server.as_deref(),
+            c.username.as_deref(),
+            c.password.as_deref(),
+        ) {
+            (Some(s), Some(u), Some(p)) => Some((s, u, p)),
+            _ => None,
+        }
+    });
 
-    let activated = deployment
-        .config
-        .as_ref()
-        .map(|c| c.use_host_auth)
-        .unwrap_or(false);
-
-    if decide_host_auth(host_auth.authorized, activated)
-        .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))?
-    {
-        let host = registry_host_for(&deployment.image);
-        let (username, password) = resolve_host_auth(&host, host_auth.config_path.as_deref())
-            .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))?;
-        return Ok(Some((host, username, password)));
-    }
-
-    if let Some(config) = &deployment.config
-        && let (Some(server), Some(username), Some(password)) =
-            (&config.server, &config.username, &config.password)
-    {
-        return Ok(Some((server.clone(), username.clone(), password.clone())));
-    }
-
-    Ok(None)
+    crate::runtime::registry_auth::resolve_deployment_auth(
+        &deployment.image,
+        activated,
+        inline,
+        host_auth,
+    )
+    .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))
 }
 
 pub(crate) async fn create_container(

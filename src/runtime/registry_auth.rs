@@ -81,6 +81,31 @@ impl std::fmt::Display for HostAuthError {
     }
 }
 
+/// Resolve the `(server, username, password)` a deployment should pull with,
+/// honoring the `use_host_auth` opt-in. When the deployment activates host auth,
+/// credentials come from the host config (gated by the server's authorization);
+/// otherwise the inline `config.server`/`username`/`password` path is used.
+///
+/// Shared by every container runtime so the two-flag handshake and the inline
+/// fallback behave identically. Returns `Ok(None)` when no credentials apply (an
+/// anonymous pull), and a typed [`HostAuthError`] when host auth was requested
+/// but couldn't be honored — the runtime turns that into a deployment error
+/// rather than silently degrading to an anonymous pull.
+pub(crate) fn resolve_deployment_auth(
+    image: &str,
+    activated: bool,
+    inline: Option<(&str, &str, &str)>,
+    settings: &HostAuthSettings,
+) -> Result<Option<(String, String, String)>, HostAuthError> {
+    if decide_host_auth(settings.authorized, activated)? {
+        let host = registry_host_for(image);
+        let (username, password) = resolve_host_auth(&host, settings.config_path.as_deref())?;
+        return Ok(Some((host, username, password)));
+    }
+
+    Ok(inline.map(|(s, u, p)| (s.to_string(), u.to_string(), p.to_string())))
+}
+
 /// Decide whether host auth should be used, given the server authorization and
 /// the per-deployment activation. Returns `Ok(true)` to resolve host creds,
 /// `Ok(false)` to keep the inline path, and `Err(NotAuthorized)` when the

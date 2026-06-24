@@ -7,6 +7,7 @@
 
 use crate::config::server::ContainerdConfig;
 use crate::hypervisor::error::RuntimeError;
+use crate::runtime::registry_auth::HostAuthSettings;
 use containerd_client::Client;
 use containerd_client::services::v1::version_client::VersionClient;
 
@@ -26,6 +27,8 @@ pub(crate) struct ContainerdRuntimeConfig {
     pub(crate) socket: String,
     /// containerd metadata namespace Ring operates under.
     pub(crate) namespace: String,
+    /// Server-side host registry auth settings for this runtime.
+    pub(crate) host_auth: HostAuthSettings,
 }
 
 impl ContainerdRuntimeConfig {
@@ -36,6 +39,10 @@ impl ContainerdRuntimeConfig {
         Self {
             socket: cfg.socket.clone(),
             namespace: cfg.namespace.clone(),
+            host_auth: HostAuthSettings {
+                authorized: cfg.use_host_registry_auth,
+                config_path: cfg.host_registry_config.clone(),
+            },
         }
     }
 }
