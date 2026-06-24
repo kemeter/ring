@@ -120,8 +120,13 @@ pub(crate) async fn exec_uds(
         READ_TIMEOUT
     );
 
-    let port_path = format!("{}_{}", uds_path, VSOCK_PORT);
-    let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&port_path))
+    // Host-to-guest goes through the device's BASE multiplexing socket, then the
+    // `CONNECT <port>` handshake below selects the guest listener. The
+    // `<uds_path>_<port>` form is the *guest-to-host* socket (created only when
+    // the guest dials out on that port), so connecting to it for an inbound call
+    // fails intermittently with ENOENT. Use the base socket and let the
+    // handshake do the port routing.
+    let mut stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(uds_path))
         .await
         .map_err(|_| VsockError::Connect {
             cid,
