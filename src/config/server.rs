@@ -68,6 +68,19 @@ pub(crate) struct DockerConfig {
     /// - "tcp://192.168.1.100:2376" (with TLS)
     #[serde(default = "default_docker_host")]
     pub(crate) host: String,
+    /// Authorize deployments to pull with credentials resolved from the host's
+    /// Docker config instead of inlining them. Off by default. A deployment must
+    /// *also* set `config.use_host_auth` to activate it: the server authorizes,
+    /// the manifest activates.
+    #[serde(default)]
+    pub(crate) use_host_registry_auth: bool,
+    /// Explicit path to the host registry config (Docker `config.json` schema).
+    /// When unset, the standard Docker resolution applies (`$DOCKER_CONFIG` then
+    /// `~/.docker/config.json`). Set this when the Ring daemon runs as a
+    /// different user than the one that ran `docker login`, or to point at a
+    /// Podman `containers/auth.json`.
+    #[serde(default)]
+    pub(crate) host_registry_config: Option<String>,
 }
 
 fn default_docker_host() -> String {
@@ -79,6 +92,8 @@ impl Default for DockerConfig {
         DockerConfig {
             enabled: false,
             host: default_docker_host(),
+            use_host_registry_auth: false,
+            host_registry_config: None,
         }
     }
 }
@@ -96,6 +111,17 @@ pub(crate) struct PodmanConfig {
     /// → `unix:///run/podman/podman.sock`). Override here to pin a specific socket.
     #[serde(default = "default_podman_host")]
     pub(crate) host: String,
+    /// Authorize host-resolved registry credentials. See
+    /// [`DockerConfig::use_host_registry_auth`]. Podman's `login` writes to
+    /// `containers/auth.json` (same schema as Docker's `config.json`); point at
+    /// it with `host_registry_config` when it isn't picked up by the default
+    /// Docker resolution.
+    #[serde(default)]
+    pub(crate) use_host_registry_auth: bool,
+    /// Explicit path to the host registry config. See
+    /// [`DockerConfig::host_registry_config`].
+    #[serde(default)]
+    pub(crate) host_registry_config: Option<String>,
 }
 
 fn default_podman_host() -> String {
@@ -107,6 +133,8 @@ impl Default for PodmanConfig {
         PodmanConfig {
             enabled: false,
             host: default_podman_host(),
+            use_host_registry_auth: false,
+            host_registry_config: None,
         }
     }
 }
@@ -130,6 +158,16 @@ pub(crate) struct ContainerdConfig {
     /// avoids colliding with Kubernetes or Docker on a shared host.
     #[serde(default = "default_containerd_namespace")]
     pub(crate) namespace: String,
+    /// Authorize host-resolved registry credentials. See
+    /// [`DockerConfig::use_host_registry_auth`]. containerd has no `login` of
+    /// its own; tools like `nerdctl` write to `~/.docker/config.json`, which is
+    /// the default this resolves.
+    #[serde(default)]
+    pub(crate) use_host_registry_auth: bool,
+    /// Explicit path to the host registry config. See
+    /// [`DockerConfig::host_registry_config`].
+    #[serde(default)]
+    pub(crate) host_registry_config: Option<String>,
 }
 
 fn default_containerd_socket() -> String {
@@ -146,6 +184,8 @@ impl Default for ContainerdConfig {
             enabled: false,
             socket: default_containerd_socket(),
             namespace: default_containerd_namespace(),
+            use_host_registry_auth: false,
+            host_registry_config: None,
         }
     }
 }
