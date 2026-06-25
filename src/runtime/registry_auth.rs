@@ -153,6 +153,29 @@ pub(crate) fn resolve_host_auth(
     registry_host: &str,
     config_path: Option<&str>,
 ) -> Result<(String, String), HostAuthError> {
+    resolve_with(registry_host, |server| get_credential(server, config_path))
+}
+
+/// Resolve `(username, password)` for `registry_host` from an in-memory Docker
+/// `config.json` payload (e.g. the decrypted contents of an image-pull Secret),
+/// rather than a file on disk. Same Hub-key handling and error mapping as
+/// [`resolve_host_auth`].
+pub(crate) fn resolve_auth_from_payload(
+    registry_host: &str,
+    payload: &str,
+) -> Result<(String, String), HostAuthError> {
+    resolve_with(registry_host, |server| {
+        docker_credential::get_credential_from_reader(std::io::Cursor::new(payload), server)
+    })
+}
+
+/// Shared lookup core: try the registry host (plus the legacy Hub key for
+/// `docker.io`), turn an identity token into an error, and map crate errors to
+/// [`HostAuthError`]. `lookup` performs one credential read for a given key.
+fn resolve_with<F>(registry_host: &str, lookup: F) -> Result<(String, String), HostAuthError>
+where
+    F: Fn(&str) -> Result<DockerCredential, CredentialRetrievalError>,
+{
     // Docker Hub creds are conventionally keyed under the legacy v1 endpoint,
     // not the bare `docker.io` host, so try both forms for Hub.
     let lookups: Vec<String> = if registry_host == "docker.io" {
@@ -166,7 +189,7 @@ pub(crate) fn resolve_host_auth(
 
     let mut last_err = HostAuthError::NoEntryForRegistry(registry_host.to_string());
     for key in &lookups {
-        match get_credential(key, config_path) {
+        match lookup(key) {
             Ok(DockerCredential::UsernamePassword(user, pass)) => return Ok((user, pass)),
             Ok(DockerCredential::IdentityToken(_)) => {
                 return Err(HostAuthError::HelperFailed(
@@ -256,6 +279,39 @@ mod tests {
         assert!(matches!(
             decide_host_auth(false, true),
             Err(HostAuthError::NotAuthorized)
+        ));
+    }
+
+    #[test]
+    fn payload_auth_decodes_dockerconfigjson_for_private_registry() {
+        use base64::Engine as _;
+        let auth = base64::engine::general_purpose::STANDARD.encode("alice:s3cr3t");
+        let payload = format!(r#"{{"auths":{{"registry.example:5000":{{"auth":"{auth}"}}}}}}"#);
+        let (user, pass) =
+            resolve_auth_from_payload("registry.example:5000", &payload).expect("should resolve");
+        assert_eq!(user, "alice");
+        assert_eq!(pass, "s3cr3t");
+    }
+
+    #[test]
+    fn payload_auth_uses_legacy_hub_key_for_docker_io() {
+        use base64::Engine as _;
+        let auth = base64::engine::general_purpose::STANDARD.encode("bob:hunter2");
+        // Hub creds are keyed under the legacy v1 endpoint, not bare docker.io.
+        let payload =
+            format!(r#"{{"auths":{{"https://index.docker.io/v1/":{{"auth":"{auth}"}}}}}}"#);
+        let (user, pass) =
+            resolve_auth_from_payload("docker.io", &payload).expect("should resolve");
+        assert_eq!(user, "bob");
+        assert_eq!(pass, "hunter2");
+    }
+
+    #[test]
+    fn payload_auth_errors_when_no_entry_for_registry() {
+        let payload = r#"{"auths":{"other.io":{"auth":"eA=="}}}"#;
+        assert!(matches!(
+            resolve_auth_from_payload("registry.example:5000", payload),
+            Err(HostAuthError::NoEntryForRegistry(_))
         ));
     }
 }
