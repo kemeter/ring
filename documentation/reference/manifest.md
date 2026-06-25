@@ -393,12 +393,12 @@ Supported on Docker, Podman and containerd. The host config follows the standard
 
 The portable, declarative alternative to `use_host_auth`: store the registry credentials in an **encrypted `Secret`** (AES-256-GCM at rest) and reference it by name. The credentials never appear in the manifest, the database row, or the API response — only the secret's name does.
 
-The Secret's value is a Docker `config.json` payload (`dockerconfigjson`), the same format `docker login` writes and `kubectl create secret docker-registry` produces:
+The Secret's value is a Docker `config.json` payload (`dockerconfigjson`) — the exact format `docker login` writes. The simplest way to create it is to log in once and store the resulting file:
 
 ```bash
-# one-time: store the credentials as an encrypted Secret
+docker login rg.fr-par.scw.cloud
 ring secret create scaleway-registry -n production \
-  -v '{"auths":{"rg.fr-par.scw.cloud":{"auth":"'"$(printf 'nologin:%s' "$SCW_SECRET_KEY" | base64 -w0)"'"}}}'
+  --value "$(cat ~/.docker/config.json)"
 ```
 
 ```yaml
@@ -407,6 +407,8 @@ config:
   image_pull_policy: "Always"
   image_pull_secret: "scaleway-registry"
 ```
+
+> **Credential helpers.** This works when `docker login` stores the credential **inline** in `config.json` (an `"auth": "..."` entry — the common case on Linux servers). If Docker is configured with a credential helper (`credsStore`/`credHelpers`, e.g. Docker Desktop), the file holds no usable credential — it's in the OS keychain instead. In that case either write the `auths` entry by hand, or use [`use_host_auth`](#use_host_auth-credentials-from-the-host), which resolves helpers on the host.
 
 At deploy time the scheduler decrypts the Secret, picks the `auths` entry matching the image's registry host, and pulls with it. If the Secret is missing or has no entry for the registry, the deployment fails fast with an `image_pull_secret_resolution_error` event (the value is never logged). It must reference a Secret in the **same namespace** as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
 

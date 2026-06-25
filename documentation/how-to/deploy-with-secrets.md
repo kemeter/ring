@@ -63,11 +63,12 @@ Inside the container, `secretRef` values are indistinguishable from plain values
 
 ## Pull a private image with a secret
 
-To pull from a private registry without inlining the credentials in your manifest, store them in a Secret and reference it with `config.image_pull_secret`. The Secret's value is a Docker `config.json` payload (the same format `docker login` writes):
+To pull from a private registry without inlining the credentials in your manifest, store them in a Secret and reference it with `config.image_pull_secret`. The Secret's value is a Docker `config.json` — log in once, then store the file:
 
 ```bash
+docker login rg.fr-par.scw.cloud
 ring secret create scaleway-registry -n production \
-  -v '{"auths":{"rg.fr-par.scw.cloud":{"auth":"'"$(printf 'nologin:%s' "$SCW_SECRET_KEY" | base64 -w0)"'"}}}'
+  --value "$(cat ~/.docker/config.json)"
 ```
 
 ```yaml
@@ -81,7 +82,9 @@ deployments:
       image_pull_secret: scaleway-registry
 ```
 
-The scheduler decrypts the Secret and pulls with it; the credentials never reach the deployment row or the API. It must live in the same namespace as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`. See the [`image_pull_secret` reference](/documentation/reference/manifest#image_pull_secret-credentials-from-an-encrypted-secret).
+The scheduler decrypts the Secret and pulls with it; the credentials never reach the deployment row or the API. It must live in the same namespace as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
+
+> If your `docker login` uses a credential helper (`credsStore`), `config.json` won't contain the credential — see the [`image_pull_secret` reference](/documentation/reference/manifest#image_pull_secret-credentials-from-an-encrypted-secret) for the alternatives. The simplest path when you're already logged in on the host is [`use_host_auth`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host), which needs no Secret at all.
 
 ## Mount a secret as a file
 
