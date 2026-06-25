@@ -61,6 +61,28 @@ Inside the container, `secretRef` values are indistinguishable from plain values
 
 **If a referenced secret does not exist in the namespace:** Ring emits an `error` event with `reason: SecretResolutionError`, the scheduler skips the deployment on that tick, and the deployment stays in `creating`. Inspect with `ring deployment events <id> --level error`.
 
+## Pull a private image with a secret
+
+To pull from a private registry without inlining the credentials in your manifest, store them in a Secret and reference it with `config.image_pull_secret`. The Secret's value is a Docker `config.json` payload (the same format `docker login` writes):
+
+```bash
+ring secret create scaleway-registry -n production \
+  -v '{"auths":{"rg.fr-par.scw.cloud":{"auth":"'"$(printf 'nologin:%s' "$SCW_SECRET_KEY" | base64 -w0)"'"}}}'
+```
+
+```yaml
+deployments:
+  api:
+    name: api
+    namespace: production
+    runtime: docker
+    image: rg.fr-par.scw.cloud/my-namespace/api:v1
+    config:
+      image_pull_secret: scaleway-registry
+```
+
+The scheduler decrypts the Secret and pulls with it; the credentials never reach the deployment row or the API. It must live in the same namespace as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`. See the [`image_pull_secret` reference](/documentation/reference/manifest#image_pull_secret-credentials-from-an-encrypted-secret).
+
 ## Mount a secret as a file
 
 Some apps will not read credentials from an environment variable — they want a file path. Prometheus is a typical example: its `authorization.credentials_file` only takes a path, not the credential itself. For those cases, declare the secret as a `volume` of `type: secret`:
