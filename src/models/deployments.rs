@@ -158,6 +158,13 @@ pub(crate) struct DeploymentConfig {
     /// their byte-for-byte shape (no DB migration, no API surface change).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) use_host_auth: bool,
+    /// Name of a `Secret` (same namespace) holding registry credentials as a
+    /// Docker `config.json` payload (`dockerconfigjson`). The scheduler decrypts
+    /// it and fills `server`/`username`/`password` before the runtime pulls, so
+    /// the secret is never inlined in the manifest, the database, or the API.
+    /// Mutually exclusive with inline credentials and `use_host_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) image_pull_secret: Option<String>,
 }
 
 /// Transport protocol for a published port. TCP is the default, preserving the

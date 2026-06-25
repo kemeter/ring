@@ -809,6 +809,7 @@ mod tests {
                 privileged: Some(false),
             }),
             use_host_auth: false,
+            image_pull_secret: None,
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -826,6 +827,7 @@ mod tests {
                 privileged: Some(false),
             }),
             use_host_auth: false,
+            image_pull_secret: None,
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -894,6 +896,7 @@ mod tests {
                 privileged: Some(true),
             }),
             use_host_auth: false,
+            image_pull_secret: None,
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }

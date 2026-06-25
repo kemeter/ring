@@ -112,6 +112,11 @@ struct DeploymentConfig {
     /// inlining `server`/`username`/`password`. Mutually exclusive with them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     use_host_auth: bool,
+
+    /// Name of a Secret holding registry credentials (`dockerconfigjson`).
+    /// Mutually exclusive with inline credentials and `use_host_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    image_pull_secret: Option<String>,
 }
 
 /// Numeric uid/gid the container runs as (forwarded to Docker's `User`).
