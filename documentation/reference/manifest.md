@@ -363,6 +363,7 @@ config:
 | `server` | Private-registry hostname (only for non-Docker-Hub registries). |
 | `username`, `password` | Registry credentials. Sent to the runtime on `pull`. |
 | `use_host_auth` | `true` to resolve registry credentials from the **host's** Docker config instead of inlining them. Mutually exclusive with `server`/`username`/`password`. See below. |
+| `image_pull_secret` | Name of a `Secret` (same namespace) holding registry credentials as a `dockerconfigjson` payload. Resolved and decrypted server-side before the pull. Mutually exclusive with inline credentials and `use_host_auth`. See below. |
 | `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
@@ -387,6 +388,31 @@ It is a **two-flag handshake**:
 If a deployment sets `use_host_auth` on a runtime that did not authorize it, the deployment fails fast with an actionable error (no silent fallback to an anonymous pull). Combining `use_host_auth` with inline `server`/`username`/`password` is rejected at apply time.
 
 Supported on Docker, Podman and containerd. The host config follows the standard Docker resolution (`$DOCKER_CONFIG`, then `~/.docker/config.json`), honoring `credHelpers`/`credsStore`. When the Ring daemon runs as a different user than the one who logged in — or for a Podman `containers/auth.json` — pin the file explicitly with `host_registry_config` in the server config.
+
+### `image_pull_secret` — credentials from an encrypted Secret
+
+The portable, declarative alternative to `use_host_auth`: store the registry credentials in an **encrypted `Secret`** (AES-256-GCM at rest) and reference it by name. The credentials never appear in the manifest, the database row, or the API response — only the secret's name does.
+
+The Secret's value is a Docker `config.json` payload (`dockerconfigjson`) — the exact format `docker login` writes. The simplest way to create it is to log in once and store the resulting file:
+
+```bash
+docker login rg.fr-par.scw.cloud
+ring secret create scaleway-registry -n production \
+  --value "$(cat ~/.docker/config.json)"
+```
+
+```yaml
+# deployment — references the Secret by name, no credentials inline
+config:
+  image_pull_policy: "Always"
+  image_pull_secret: "scaleway-registry"
+```
+
+> **Credential helpers.** This works when `docker login` stores the credential **inline** in `config.json` (an `"auth": "..."` entry — the common case on Linux servers). If Docker is configured with a credential helper (`credsStore`/`credHelpers`, e.g. Docker Desktop), the file holds no usable credential — it's in the OS keychain instead. In that case either write the `auths` entry by hand, or use [`use_host_auth`](#use_host_auth-credentials-from-the-host), which resolves helpers on the host.
+
+At deploy time the scheduler decrypts the Secret, picks the `auths` entry matching the image's registry host, and pulls with it. If the Secret is missing or has no entry for the registry, the deployment fails fast with an `image_pull_secret_resolution_error` event (the value is never logged). It must reference a Secret in the **same namespace** as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
+
+Supported on Docker, Podman and containerd.
 
 ## Full example
 

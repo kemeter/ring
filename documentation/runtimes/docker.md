@@ -53,6 +53,7 @@ ring apply -f web.yaml
 - **Event-driven crash detection.** Ring listens to the Docker event stream, so a crash is noticed sub-second (the other runtimes detect crashes on the scheduler tick instead).
 - **Full feature set.** Everything in the [manifest reference](/documentation/reference/manifest) works on Docker — it's the baseline the other runtimes are compared against.
 - **Registry auth from the host.** Already `docker login`-ed on the host? Set `use_host_registry_auth = true` here, then `config.use_host_auth: true` on the deployment, to pull private images without putting the secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
+- **Registry auth from an encrypted Secret.** The portable alternative: store credentials in a `Secret` and reference it with `config.image_pull_secret`. See [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
 
 ## See also
 

@@ -57,6 +57,76 @@ async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> 
     Ok(())
 }
 
+/// Resolve `config.image_pull_secret` into inline registry credentials before
+/// the runtime pulls. The named `Secret` (same namespace) holds a Docker
+/// `config.json` payload (`dockerconfigjson`); we decrypt it, pick the entry for
+/// the image's registry host, and fill `config.server`/`username`/`password` on
+/// the deployment. The runtime's existing inline-credentials path then consumes
+/// them — so no runtime change and no DB access at pull time, mirroring how
+/// `resolve_environment` resolves env `secretRef`s here in the scheduler.
+///
+/// A no-op when `image_pull_secret` is unset. Errors (secret missing, decrypt
+/// failure, no entry for the registry) are returned as a message — never the
+/// decrypted value — so the caller can surface them as a deployment event.
+async fn resolve_image_pull_secret(
+    deployment: &mut Deployment,
+    pool: &SqlitePool,
+) -> Result<(), String> {
+    let Some(secret_name) = deployment
+        .config
+        .as_ref()
+        .and_then(|c| c.image_pull_secret.clone())
+    else {
+        return Ok(());
+    };
+
+    let payload = match SecretModel::find_by_namespace_name(
+        pool,
+        &deployment.namespace,
+        &secret_name,
+    )
+    .await
+    {
+        Ok(Some(secret)) => secret.get_decrypted_value().map_err(|e| {
+            format!(
+                "Failed to decrypt image_pull_secret '{}': {}",
+                secret_name, e
+            )
+        })?,
+        Ok(None) => {
+            return Err(format!(
+                "image_pull_secret '{}' not found in namespace '{}'",
+                secret_name, deployment.namespace
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "Failed to fetch image_pull_secret '{}': {}",
+                secret_name, e
+            ));
+        }
+    };
+
+    // The payload is a Docker config.json. Reuse the same lookup the host-auth
+    // path uses, reading from memory instead of a file on disk.
+    let host = crate::runtime::registry_auth::registry_host_for(&deployment.image);
+    let (username, password) =
+        crate::runtime::registry_auth::resolve_auth_from_payload(&host, &payload).map_err(|e| {
+            format!(
+                "image_pull_secret '{}' has no usable credential for registry '{}': {}",
+                secret_name, host, e
+            )
+        })?;
+
+    if let Some(config) = deployment.config.as_mut() {
+        config.server = Some(host);
+        config.username = Some(username);
+        config.password = Some(password);
+    }
+
+    Ok(())
+}
+
 async fn load_configs(
     pool: &SqlitePool,
     deployment: &Deployment,
@@ -1244,10 +1314,37 @@ pub(crate) async fn schedule(
                 None => continue,
             };
 
-            let resolved = match prepare_deployment(&pool, &deployment).await {
+            let mut resolved = match prepare_deployment(&pool, &deployment).await {
                 Some(d) => d,
                 None => continue,
             };
+
+            // Resolve config.image_pull_secret into inline credentials before
+            // the runtime pulls. Like volume/env secret resolution above, a
+            // failure skips this tick and surfaces a deployment event (naming
+            // only the secret, never its value), so the operator can fix it.
+            if let Err(e) = resolve_image_pull_secret(&mut resolved, &pool).await {
+                error!(
+                    "Failed to resolve image_pull_secret for deployment {}: {}",
+                    deployment.id, e
+                );
+                if let Err(log_err) = deployment_event::log_event(
+                    &pool,
+                    deployment.id.clone(),
+                    "error",
+                    e,
+                    "scheduler",
+                    Some("image_pull_secret_resolution_error"),
+                )
+                .await
+                {
+                    warn!(
+                        "Failed to log image_pull_secret resolution error event: {}",
+                        log_err
+                    );
+                }
+                continue;
+            }
 
             let resolved_mounts = match crate::models::volume::resolve_volumes(
                 &deployment.volumes,

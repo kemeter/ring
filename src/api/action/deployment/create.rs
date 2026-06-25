@@ -172,6 +172,23 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
             "deployment.config.use_host_auth.conflict",
         ));
     }
+
+    // `image_pull_secret` is a third, mutually exclusive credential source: the
+    // scheduler resolves it into server/username/password before the pull, so
+    // combining it with inline credentials or `use_host_auth` is contradictory.
+    if config.image_pull_secret.is_some()
+        && (config.server.is_some()
+            || config.username.is_some()
+            || config.password.is_some()
+            || config.use_host_auth)
+    {
+        errors.push(Violation::new(
+            "config.image_pull_secret",
+            "image_pull_secret cannot be combined with inline server/username/password \
+             or use_host_auth — pick a single credential source",
+            "deployment.config.image_pull_secret.conflict",
+        ));
+    }
 }
 
 /// Per-port rules. The `DeploymentPort` struct already constrains
@@ -3238,6 +3255,103 @@ mod tests {
                 "namespace": "ring",
                 "image": "private.io/nginx:latest",
                 "config": { "use_host_auth": true }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_image_pull_secret_with_inline_credentials() {
+        // image_pull_secret is resolved into credentials by the scheduler, so
+        // combining it with inline server/username/password is contradictory.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx-pull-secret-conflict",
+                "namespace": "ring",
+                "image": "private.io/nginx:latest",
+                "config": {
+                    "image_pull_secret": "dockercfg",
+                    "username": "u",
+                    "password": "p"
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.config.image_pull_secret.conflict".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_image_pull_secret_with_use_host_auth() {
+        // image_pull_secret and use_host_auth are two mutually exclusive
+        // credential sources.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx-two-sources",
+                "namespace": "ring",
+                "image": "private.io/nginx:latest",
+                "config": { "image_pull_secret": "dockercfg", "use_host_auth": true }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.config.image_pull_secret.conflict".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_image_pull_secret_alone() {
+        // image_pull_secret on its own (no inline creds, no host auth) is the
+        // supported shape.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx-pull-secret",
+                "namespace": "ring",
+                "image": "private.io/nginx:latest",
+                "config": { "image_pull_secret": "dockercfg" }
             }))
             .await;
 

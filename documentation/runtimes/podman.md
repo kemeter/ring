@@ -50,6 +50,7 @@ ring apply -f web.yaml
 - **Rootless remaps UID/GID.** A file written inside the container has a different owner on the host. Bind-mount and named-volume ownership behave differently than under Docker-root — mind permissions on mounts.
 - **Host networking** (`network.mode: host`) is not yet supported on Podman.
 - **Registry auth from the host.** `podman login` writes to `containers/auth.json`. Authorize it with `use_host_registry_auth = true` (point `host_registry_config` at the auth file) and pull with `config.use_host_auth: true` — no secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
+- **Registry auth from an encrypted Secret.** Or store credentials in a `Secret` and reference it with `config.image_pull_secret`. See [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
 - Otherwise the feature set matches Docker — same images, same health checks, same labels.
 
 ## See also
