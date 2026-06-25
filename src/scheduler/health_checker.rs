@@ -46,6 +46,7 @@ impl HealthChecker {
     pub(crate) async fn execute_checks(
         &self,
         deployment: &Deployment,
+        old_status: &DeploymentStatus,
         runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
     ) -> HealthCheckOutcome {
         let mut outcome = HealthCheckOutcome {
@@ -70,7 +71,17 @@ impl HealthChecker {
         //
         // Jobs never run health checks: they go straight to
         // `completed`/`failed` and never sit in a readiness-gated `Running`.
-        let creating_phase = match deployment.status {
+        //
+        // The phase is keyed on `old_status` — the status *entering* the cycle —
+        // not `deployment.status`, which `handle_status_transitions` has already
+        // flipped `Creating → Running` optimistically (the moment an instance
+        // exists, before `gate_running_on_readiness` validates readiness later in
+        // the same cycle). Reading the current status here would treat a still-
+        // booting deployment as `Running` and fire liveness `on_failure` against
+        // an app that isn't ready yet — restarting it in a loop. `old_status`
+        // stays `Creating` until a gate-validated `Running` is persisted, so
+        // liveness checks only act once the deployment is genuinely established.
+        let creating_phase = match old_status {
             DeploymentStatus::Running => false,
             DeploymentStatus::Creating if deployment.kind != "job" => true,
             _ => return outcome,
@@ -406,7 +417,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -437,7 +450,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -479,7 +494,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -509,7 +526,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -540,17 +559,23 @@ mod tests {
         );
 
         // Call 1: failure count = 1/3, no action
-        let outcome1 = checker.execute_checks(&deployment, &runtime).await;
+        let outcome1 = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
         assert!(outcome1.instances_to_remove.is_empty());
         assert!(outcome1.events.is_empty());
 
         // Call 2: failure count = 2/3, no action
-        let outcome2 = checker.execute_checks(&deployment, &runtime).await;
+        let outcome2 = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
         assert!(outcome2.instances_to_remove.is_empty());
         assert!(outcome2.events.is_empty());
 
         // Call 3: failure count = 3/3, triggers restart
-        let outcome3 = checker.execute_checks(&deployment, &runtime).await;
+        let outcome3 = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
         assert_eq!(outcome3.instances_to_remove, vec!["instance-1".to_string()]);
         assert!(
             outcome3
@@ -580,7 +605,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.proposed_status, Some(DeploymentStatus::Deleted));
         assert!(
@@ -612,7 +639,9 @@ mod tests {
             }],
         );
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert!(outcome.proposed_status.is_none());
         assert!(outcome.instances_to_remove.is_empty());
@@ -698,7 +727,9 @@ mod tests {
         );
         deployment.status = DeploymentStatus::Creating;
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -723,10 +754,46 @@ mod tests {
         );
         deployment.status = DeploymentStatus::Creating;
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         // Only the readiness check ran (one result), the liveness was skipped.
         assert_eq!(outcome.results.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn liveness_skipped_when_old_status_creating_despite_running_flip() {
+        // Regression: the scheduler flips `Creating → Running` optimistically
+        // (the instant an instance exists) *before* health checks run and before
+        // the readiness gate validates it. So `deployment.status` can read
+        // `Running` while the deployment is still booting. The phase must key on
+        // `old_status` (the status entering the cycle), not the flipped current
+        // one — otherwise a liveness check fires `on_failure: restart` against a
+        // not-yet-ready app and restarts it in an endless loop.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        let mut deployment = make_deployment(
+            "optimistic-flip",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp(), liveness_tcp()],
+        );
+        // Current status is the optimistic `Running`; the status entering the
+        // cycle was still `Creating`.
+        deployment.status = DeploymentStatus::Running;
+        let old_status = DeploymentStatus::Creating;
+
+        let outcome = checker
+            .execute_checks(&deployment, &old_status, &runtime)
+            .await;
+
+        // Treated as the creating phase: only readiness ran, liveness skipped,
+        // and crucially no restart was queued despite the failing runtime.
+        assert_eq!(outcome.results.len(), 1);
+        assert!(outcome.instances_to_remove.is_empty());
+        assert!(outcome.health_check_failures.is_empty());
     }
 
     #[tokio::test]
@@ -744,7 +811,9 @@ mod tests {
         );
         deployment.status = DeploymentStatus::Creating;
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert_eq!(outcome.results.len(), 1);
         assert!(matches!(
@@ -777,7 +846,9 @@ mod tests {
         deployment.status = DeploymentStatus::Creating;
         deployment.kind = "job".to_string();
 
-        let outcome = checker.execute_checks(&deployment, &runtime).await;
+        let outcome = checker
+            .execute_checks(&deployment, &deployment.status, &runtime)
+            .await;
 
         assert!(outcome.results.is_empty(), "jobs run no checks in creating");
     }

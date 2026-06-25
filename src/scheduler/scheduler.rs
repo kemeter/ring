@@ -417,6 +417,7 @@ async fn publish_status_change(
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
+    old_status: &DeploymentStatus,
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
 ) {
@@ -437,7 +438,9 @@ async fn run_health_checks(
 
     debug!("Executing health checks for deployment {}", deployment.id);
 
-    let outcome = health_checker.execute_checks(deployment, runtime).await;
+    let outcome = health_checker
+        .execute_checks(deployment, old_status, runtime)
+        .await;
 
     for result in &outcome.results {
         health_checker.store_result(result).await;
@@ -1454,7 +1457,14 @@ pub(crate) async fn schedule(
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
-            run_health_checks(&pool, &mut result, &health_checker, runtime.as_ref()).await;
+            run_health_checks(
+                &pool,
+                &mut result,
+                &old_status,
+                &health_checker,
+                runtime.as_ref(),
+            )
+            .await;
             gate_running_on_readiness(&pool, &old_status, &mut result).await;
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
 
