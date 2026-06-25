@@ -51,8 +51,69 @@ configs:
 | --- | --- | --- | --- |
 | `namespace` | string | yes | Namespace the config lives in. Must match the namespace of any deployment mounting it. |
 | `name` | string | yes | Config name. This is what a `type: config` volume's `source` references. |
-| `data` | string | yes | JSON object mapping keys to payloads, e.g. `{"site.conf":"..."}`. A `type: config` volume's `key` selects which entry to mount. Subject to `$VAR` interpolation like deployment fields. |
+| `data` | string | conditional | JSON object mapping keys to payloads, e.g. `{"site.conf":"..."}`. A `type: config` volume's `key` selects which entry to mount. Subject to `$VAR` interpolation by default (see `interpolate`). Required unless `files` is set. |
+| `files` | map | conditional | Map of `key -> path`. Each referenced file is read at apply time and its raw contents become the value for `key` in the config's JSON payload. Paths are relative to the manifest. File contents are **verbatim** by default (not interpolated). Required unless `data` is set. |
+| `interpolate` | bool | no | Controls `$VAR` interpolation on this config's payload. Unset: inline `data` is interpolated, `files` contents stay verbatim. `true`: both are interpolated. `false`: the whole payload (inline + files) is verbatim. |
 | `labels` | string | no | Free-form labels. |
+
+At least one of `data` or `files` must be present; a config with neither is rejected.
+
+#### `files:` — keep large payloads in their own file
+
+Inlining a big config (an Nginx site, a full `config.yaml`, an HTML error page) into `data` means hand-escaping a string-of-JSON-inside-YAML — newlines become `\n`, quotes get doubled, and the manifest becomes unreadable. `files:` avoids that: keep the payload as a normal file next to the manifest and reference it.
+
+```yaml
+configs:
+  sozune-config:
+    namespace: proxy
+    name: "sozune-config"
+    files:
+      config.yaml: ./sozune/config.yaml   # relative to this manifest
+```
+
+At apply time Ring reads `./sozune/config.yaml` verbatim and builds `data = {"config.yaml": "<file contents>"}`. The file stays a real, editable YAML file — no escaping.
+
+`data` and `files` can be combined to merge an inline entry with file-backed ones:
+
+```yaml
+configs:
+  app-config:
+    namespace: production
+    name: "app-config"
+    data: '{"feature.flag":"on"}'   # small inline entry
+    files:
+      config.yaml: ./config.yaml     # large file-backed entry
+```
+
+The two are merged into a single JSON object. Defining the **same key** in both `data` and `files` is an error, and when `files` is used a non-object `data` (anything that isn't a `{...}` JSON object) is rejected.
+
+#### `$VAR` interpolation and file contents
+
+By default, `$VAR` interpolation runs on inline `data` (it's a template you write by hand) but **not** on `files` contents. This matters: an Nginx site, a Prometheus rule, or a Grafana dashboard is full of literal `$host`, `$labels`, `$remote_addr` — interpolating them would silently mangle the file (or worse, splice a host env var's value into the payload). So a referenced file ships verbatim.
+
+The `interpolate` field overrides this per config:
+
+| `interpolate` | inline `data` | `files` contents |
+| --- | --- | --- |
+| unset (default) | interpolated | verbatim |
+| `true` | interpolated | interpolated |
+| `false` | verbatim | verbatim |
+
+```yaml
+configs:
+  nginx:
+    namespace: proxy
+    name: "nginx"
+    files:
+      site.conf: ./site.conf      # $host etc. kept verbatim
+
+  templated:
+    namespace: proxy
+    name: "templated"
+    interpolate: true             # opt in: $VAR substituted in the file too
+    files:
+      app.conf: ./app.conf
+```
 
 > A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass — no out-of-band `ring config create` needed.
 

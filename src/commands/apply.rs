@@ -257,7 +257,22 @@ struct NamespaceDefinition {
 struct ConfigDefinition {
     namespace: String,
     name: String,
-    data: String,
+    // The JSON payload sent to the server: a `{"<filename>": "<contents>"}`
+    // object. May be written inline, built from `files`, or both — see
+    // `resolve_config_data`. Always `Some` once resolution has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+    // Map of `filename -> path` (relative to the manifest) whose contents are
+    // read at load time and merged into `data`. Never sent to the server.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    files: HashMap<String, String>,
+    // Whether `$VAR` interpolation runs on this config's payload. When unset,
+    // inline `data` is interpolated (backwards compatible) but `files` contents
+    // stay verbatim — so an nginx/Prometheus file full of `$host`/`$labels`
+    // isn't mangled. `true` forces interpolation on files too; `false` keeps the
+    // whole payload (inline + files) verbatim. Never sent to the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    interpolate: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     labels: Option<String>,
 }
@@ -388,12 +403,118 @@ pub(crate) fn command_config() -> Command {
         )
 }
 
-fn load_config_file(file_path: &str) -> Result<ConfigFile, ApplyError> {
+fn load_config_file(
+    file_path: &str,
+    env_vars: &HashMap<String, String>,
+) -> Result<ConfigFile, ApplyError> {
     let contents = fs::read_to_string(file_path).map_err(ApplyError::FileRead)?;
 
-    let config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
+    let mut config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
+
+    // `files` references are relative to the manifest's directory, so resolve
+    // them while we still know where the manifest lives.
+    let manifest_dir = Path::new(file_path).parent().unwrap_or(Path::new("."));
+    for (key, def) in config.configs.iter_mut() {
+        resolve_config_data(key, def, manifest_dir, env_vars)?;
+    }
 
     Ok(config)
+}
+
+/// Turn a config's `data` (inline JSON) and `files` (filename -> path) into a
+/// single JSON object string stored back into `data`. Rules:
+///   - `data` alone: kept as-is (backwards compatible).
+///   - `files` alone: builds `{"<name>": "<contents>", ...}`.
+///   - both: merged, but a filename present in *both* is a hard error, and a
+///     non-object `data` cannot be merged into.
+///   - neither: hard error — a config must carry some payload.
+///
+/// `$VAR` interpolation is applied here, per-value, according to `interpolate`:
+///   - unset: inline `data` values are interpolated, `files` contents stay
+///     verbatim (so an nginx/Prometheus file full of `$host`/`$labels` survives).
+///   - `true`: everything is interpolated, including `files` contents.
+///   - `false`: nothing is interpolated — the whole payload is verbatim.
+fn resolve_config_data(
+    key: &str,
+    def: &mut ConfigDefinition,
+    manifest_dir: &Path,
+    env_vars: &HashMap<String, String>,
+) -> Result<(), ApplyError> {
+    if def.data.is_none() && def.files.is_empty() {
+        return Err(ApplyError::Validation(format!(
+            "config '{}': either 'data' or 'files' must be set",
+            key
+        )));
+    }
+
+    let interpolate = def.interpolate.unwrap_or(false);
+    let interpolate_inline = def.interpolate.unwrap_or(true);
+
+    // Fast path: inline data only, no files to merge — keep it untouched so
+    // arbitrary (even non-JSON-object) inline payloads keep working. Inline
+    // data is interpolated unless `interpolate: false` opts out.
+    if def.files.is_empty() {
+        if let Some(raw) = &def.data
+            && interpolate_inline
+        {
+            def.data = Some(env_resolver(raw, env_vars));
+        }
+        return Ok(());
+    }
+
+    // Start from the inline `data` if present, else an empty object. Inline
+    // values follow `interpolate_inline`; file-backed values follow
+    // `interpolate` (verbatim by default).
+    let mut merged: serde_json::Map<String, serde_json::Value> = match &def.data {
+        Some(raw) => {
+            let mut obj: serde_json::Map<String, serde_json::Value> = serde_json::from_str(raw)
+                .map_err(|_| {
+                    ApplyError::Validation(format!(
+                        "config '{}': 'data' must be a JSON object to merge with 'files'",
+                        key
+                    ))
+                })?;
+            if interpolate_inline {
+                for value in obj.values_mut() {
+                    if let serde_json::Value::String(s) = value {
+                        *value = serde_json::Value::String(env_resolver(s, env_vars));
+                    }
+                }
+            }
+            obj
+        }
+        None => serde_json::Map::new(),
+    };
+
+    for (name, rel_path) in &def.files {
+        if merged.contains_key(name) {
+            return Err(ApplyError::Validation(format!(
+                "config '{}': key '{}' is defined in both 'data' and 'files'",
+                key, name
+            )));
+        }
+        let full_path = manifest_dir.join(rel_path);
+        let raw = fs::read_to_string(&full_path).map_err(|e| {
+            ApplyError::Validation(format!(
+                "config '{}': failed to read file '{}' for key '{}': {}",
+                key,
+                full_path.display(),
+                name,
+                e
+            ))
+        })?;
+        // File contents are verbatim by default; `interpolate: true` opts in.
+        let contents = if interpolate {
+            env_resolver(&raw, env_vars)
+        } else {
+            raw
+        };
+        merged.insert(name.clone(), serde_json::Value::String(contents));
+    }
+
+    def.data = Some(serde_json::Value::Object(merged).to_string());
+    def.files.clear();
+    Ok(())
 }
 
 fn check_auth(config_dir: &str) -> Result<(), ApplyError> {
@@ -639,15 +760,18 @@ async fn apply_internal(
 ) -> Result<(), ApplyError> {
     debug!("Apply configuration");
 
+    // Env vars are resolved before loading the manifest: `load_config_file`
+    // needs them to interpolate `$VAR` per-value while it knows which values
+    // come from inline `data` versus file-backed `files`.
+    let env_binding = String::new();
+    let env_file = args.get_one::<String>("env-file").unwrap_or(&env_binding);
+    let env_vars = parse_env_file(env_file);
+
     let binding = "ring.yaml".to_string();
     let file = args.get_one::<String>("file").unwrap_or(&binding);
-    let config_file = load_config_file(file)?;
+    let config_file = load_config_file(file, &env_vars)?;
 
     check_auth(&get_config_dir())?;
-
-    let binding = String::new();
-    let env_file = args.get_one::<String>("env-file").unwrap_or(&binding);
-    let env_vars = parse_env_file(env_file);
 
     let api_url = configuration.get_api_url();
     let auth_config = load_auth_config(configuration.name);
@@ -679,7 +803,9 @@ async fn apply_internal(
     for (key, mut config) in config_file.configs {
         config.namespace = env_resolver(&config.namespace, &env_vars);
         config.name = env_resolver(&config.name, &env_vars);
-        config.data = env_resolver(&config.data, &env_vars);
+        // `data` is already resolved and interpolated by `resolve_config_data`
+        // at load time (which is where the inline-vs-files interpolation policy
+        // lives), so the payload is sent as-is here.
 
         if is_dry_run {
             println!(
@@ -1154,9 +1280,247 @@ deployments:
         let entry = &config.configs["entrypoints"];
         assert_eq!(entry.namespace, "ring");
         assert_eq!(entry.name, "test-config2");
-        assert_eq!(entry.data, r#"{"test.conf":"server {}"}"#);
+        assert_eq!(entry.data.as_deref(), Some(r#"{"test.conf":"server {}"}"#));
         assert_eq!(entry.labels, None);
         assert_eq!(config.deployments.len(), 1);
+    }
+
+    fn config_def(data: Option<&str>, files: &[(&str, &str)]) -> ConfigDefinition {
+        config_def_interp(data, files, None)
+    }
+
+    fn config_def_interp(
+        data: Option<&str>,
+        files: &[(&str, &str)],
+        interpolate: Option<bool>,
+    ) -> ConfigDefinition {
+        ConfigDefinition {
+            namespace: "ns".to_string(),
+            name: "n".to_string(),
+            data: data.map(|s| s.to_string()),
+            files: files
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            interpolate,
+            labels: None,
+        }
+    }
+
+    fn no_env() -> HashMap<String, String> {
+        HashMap::new()
+    }
+
+    #[test]
+    fn test_resolve_config_data_files_only() {
+        let dir = std::env::temp_dir().join("ring_cfg_files_only");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("config.yaml"), "providers:\n  docker: true\n").unwrap();
+
+        let mut def = config_def(None, &[("config.yaml", "config.yaml")]);
+        resolve_config_data("c", &mut def, &dir, &no_env()).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["config.yaml"], "providers:\n  docker: true\n");
+        assert!(def.files.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_config_data_merge() {
+        let dir = std::env::temp_dir().join("ring_cfg_merge");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("big.yaml"), "k: v\n").unwrap();
+
+        let mut def = config_def(Some(r#"{"inline.txt":"hi"}"#), &[("big.yaml", "big.yaml")]);
+        resolve_config_data("c", &mut def, &dir, &no_env()).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["inline.txt"], "hi");
+        assert_eq!(parsed["big.yaml"], "k: v\n");
+    }
+
+    #[test]
+    fn test_resolve_config_data_key_collision() {
+        let dir = std::env::temp_dir().join("ring_cfg_collision");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("dup.yaml"), "x: 1\n").unwrap();
+
+        let mut def = config_def(
+            Some(r#"{"dup.yaml":"already here"}"#),
+            &[("dup.yaml", "dup.yaml")],
+        );
+        let err = resolve_config_data("c", &mut def, &dir, &no_env()).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("both 'data' and 'files'")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_non_object_data_with_files() {
+        let dir = std::env::temp_dir().join("ring_cfg_nonobj");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("f.yaml"), "x: 1\n").unwrap();
+
+        let mut def = config_def(Some("just plain text"), &[("f.yaml", "f.yaml")]);
+        let err = resolve_config_data("c", &mut def, &dir, &no_env()).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("must be a JSON object")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_missing_file() {
+        let dir = std::env::temp_dir().join("ring_cfg_missing");
+        let _ = fs::create_dir_all(&dir);
+
+        let mut def = config_def(None, &[("config.yaml", "./does-not-exist.yaml")]);
+        let err = resolve_config_data("c", &mut def, &dir, &no_env()).unwrap_err();
+        assert!(matches!(
+            err,
+            ApplyError::Validation(m)
+                if m.contains("failed to read file") && m.contains("does-not-exist.yaml")
+        ));
+    }
+
+    #[test]
+    fn test_resolve_config_data_neither_set() {
+        let mut def = config_def(None, &[]);
+        let err = resolve_config_data("c", &mut def, Path::new("."), &no_env()).unwrap_err();
+        assert!(matches!(err, ApplyError::Validation(m) if m.contains("either 'data' or 'files'")));
+    }
+
+    #[test]
+    fn test_resolve_config_data_inline_only_untouched() {
+        let mut def = config_def(Some("arbitrary non-json payload"), &[]);
+        resolve_config_data("c", &mut def, Path::new("."), &no_env()).unwrap();
+        assert_eq!(def.data.as_deref(), Some("arbitrary non-json payload"));
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_resolve_config_data_files_verbatim_by_default() {
+        // A file full of `$VAR` (nginx/Prometheus style) stays verbatim: file
+        // contents are not interpolated unless the config opts in.
+        let dir = std::env::temp_dir().join("ring_cfg_files_verbatim");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("site.conf"), "server_name $RING_TEST_HOST;\n").unwrap();
+
+        let mut def = config_def(None, &[("site.conf", "site.conf")]);
+        resolve_config_data(
+            "c",
+            &mut def,
+            &dir,
+            &env(&[("RING_TEST_HOST", "example.com")]),
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["site.conf"], "server_name $RING_TEST_HOST;\n");
+    }
+
+    #[test]
+    fn test_resolve_config_data_files_interpolated_when_opted_in() {
+        // `interpolate: true` runs `$VAR` substitution on file contents too.
+        let dir = std::env::temp_dir().join("ring_cfg_files_interp");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("site.conf"), "server_name $RING_TEST_HOST2;\n").unwrap();
+
+        let mut def = config_def_interp(None, &[("site.conf", "site.conf")], Some(true));
+        resolve_config_data(
+            "c",
+            &mut def,
+            &dir,
+            &env(&[("RING_TEST_HOST2", "example.com")]),
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["site.conf"], "server_name example.com;\n");
+    }
+
+    #[test]
+    fn test_resolve_config_data_inline_interpolated_by_default() {
+        // Inline `data` is interpolated even when files keep their contents
+        // verbatim — the frontier between manifest template and file payload.
+        let dir = std::env::temp_dir().join("ring_cfg_frontier");
+        let _ = fs::create_dir_all(&dir);
+        fs::write(dir.join("f.conf"), "raw $RING_TEST_KEEP\n").unwrap();
+
+        let mut def = config_def(
+            Some(r#"{"inline":"hi $RING_TEST_SUB"}"#),
+            &[("f.conf", "f.conf")],
+        );
+        resolve_config_data(
+            "c",
+            &mut def,
+            &dir,
+            &env(&[("RING_TEST_SUB", "there"), ("RING_TEST_KEEP", "NOPE")]),
+        )
+        .unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(def.data.as_deref().unwrap()).unwrap();
+        assert_eq!(parsed["inline"], "hi there"); // inline interpolated
+        assert_eq!(parsed["f.conf"], "raw $RING_TEST_KEEP\n"); // file verbatim
+    }
+
+    #[test]
+    fn test_resolve_config_data_interpolate_false_keeps_inline_verbatim() {
+        // `interpolate: false` opts the whole payload out, inline included.
+        let mut def =
+            config_def_interp(Some(r#"{"inline":"hi $RING_TEST_OFF"}"#), &[], Some(false));
+        resolve_config_data(
+            "c",
+            &mut def,
+            Path::new("."),
+            &env(&[("RING_TEST_OFF", "x")]),
+        )
+        .unwrap();
+        assert_eq!(
+            def.data.as_deref(),
+            Some(r#"{"inline":"hi $RING_TEST_OFF"}"#)
+        );
+    }
+
+    // End-to-end through `load_config_file`: a real manifest on disk with a
+    // `files:` reference resolved relative to the manifest's own directory.
+    #[test]
+    fn test_load_config_file_resolves_files_relative_to_manifest() {
+        let dir = std::env::temp_dir().join("ring_cfg_loadfile");
+        let _ = fs::create_dir_all(dir.join("sozune"));
+        fs::write(
+            dir.join("sozune/config.yaml"),
+            "providers:\n  docker:\n    enabled: true\n",
+        )
+        .unwrap();
+        let manifest = dir.join("manifest.yaml");
+        fs::write(
+            &manifest,
+            r#"
+configs:
+  sozune-config:
+    namespace: proxy
+    name: "sozune-config"
+    files:
+      config.yaml: ./sozune/config.yaml
+deployments:
+  app:
+    name: app
+    image: myapp:latest
+"#,
+        )
+        .unwrap();
+
+        let config = load_config_file(manifest.to_str().unwrap(), &no_env()).unwrap();
+        let entry = &config.configs["sozune-config"];
+        let parsed: serde_json::Value =
+            serde_json::from_str(entry.data.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            parsed["config.yaml"],
+            "providers:\n  docker:\n    enabled: true\n"
+        );
+        assert!(entry.files.is_empty());
     }
 
     #[test]
