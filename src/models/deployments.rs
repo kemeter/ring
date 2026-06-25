@@ -150,6 +150,14 @@ pub(crate) struct DeploymentConfig {
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
     pub(crate) user: Option<UserConfig>,
+    /// Opt into resolving registry credentials from the host's Docker config
+    /// (`~/.docker/config.json`) instead of inlining `server`/`username`/
+    /// `password`. The server must also authorize it via
+    /// `use_host_registry_auth`; this flag only *activates* it per-deployment.
+    /// Skipped from serialization when `false` so existing config payloads keep
+    /// their byte-for-byte shape (no DB migration, no API surface change).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) use_host_auth: bool,
 }
 
 /// Transport protocol for a published port. TCP is the default, preserving the

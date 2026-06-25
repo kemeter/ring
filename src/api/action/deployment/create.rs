@@ -157,6 +157,21 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
             "deployment.config.image_pull_policy.unsupported",
         ));
     }
+
+    // `use_host_auth` resolves credentials from the host's Docker config, so
+    // inlining `server`/`username`/`password` alongside it is contradictory —
+    // it would silently be ignored at pull time. Reject upfront so the operator
+    // fixes the manifest rather than wondering which credentials won.
+    if config.use_host_auth
+        && (config.server.is_some() || config.username.is_some() || config.password.is_some())
+    {
+        errors.push(Violation::new(
+            "config.use_host_auth",
+            "use_host_auth cannot be combined with inline server/username/password \
+             — remove the inline credentials or unset use_host_auth",
+            "deployment.config.use_host_auth.conflict",
+        ));
+    }
 }
 
 /// Per-port rules. The `DeploymentPort` struct already constrains
@@ -3165,6 +3180,68 @@ mod tests {
             "got {:?}",
             codes
         );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_use_host_auth_with_inline_credentials() {
+        // use_host_auth resolves credentials from the host Docker config, so
+        // inlining server/username/password alongside it is contradictory.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "ring",
+                "image": "private.io/nginx:latest",
+                "config": {
+                    "use_host_auth": true,
+                    "server": "private.io",
+                    "username": "u",
+                    "password": "p"
+                }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            codes.contains(&"deployment.config.use_host_auth.conflict".to_string()),
+            "got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_use_host_auth_without_inline_credentials() {
+        // use_host_auth on its own (no inline creds) is the supported shape.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx-host-auth",
+                "namespace": "ring",
+                "image": "private.io/nginx:latest",
+                "config": { "use_host_auth": true }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     // ────────────────────────────────────────────────────────────────────────

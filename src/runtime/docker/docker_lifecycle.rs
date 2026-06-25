@@ -3,6 +3,7 @@ use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, ex
 use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
 use crate::models::volume::ResolvedMount;
+use crate::runtime::registry_auth::HostAuthSettings;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use async_trait::async_trait;
 use axum::response::sse::Event;
@@ -34,24 +35,37 @@ pub struct DockerLifecycle {
     /// crash-looping container is silently recreated forever and never reaches
     /// `CrashLoopBackOff`. `true` for Docker, `false` for Podman.
     events_driven: bool,
+    /// Server-side host registry auth settings for this runtime, from
+    /// `[server.runtime.docker]` / `[server.runtime.podman]`.
+    host_auth: HostAuthSettings,
 }
 
 impl DockerLifecycle {
     /// Docker: an event listener drives crash counting.
-    pub fn new(docker: Docker, intentional_shutdowns: IntentionalShutdowns) -> Self {
+    pub fn new(
+        docker: Docker,
+        intentional_shutdowns: IntentionalShutdowns,
+        host_auth: HostAuthSettings,
+    ) -> Self {
         Self {
             docker,
             intentional_shutdowns,
             events_driven: true,
+            host_auth,
         }
     }
 
     /// Podman: no event listener — the reconcile pass detects crashes instead.
-    pub fn new_podman(docker: Docker, intentional_shutdowns: IntentionalShutdowns) -> Self {
+    pub fn new_podman(
+        docker: Docker,
+        intentional_shutdowns: IntentionalShutdowns,
+        host_auth: HostAuthSettings,
+    ) -> Self {
         Self {
             docker,
             intentional_shutdowns,
             events_driven: false,
+            host_auth,
         }
     }
 }
@@ -69,6 +83,7 @@ impl RuntimeLifecycle for DockerLifecycle {
             resolved_mounts,
             self.intentional_shutdowns.clone(),
             self.events_driven,
+            self.host_auth.clone(),
         )
         .await
     }

@@ -6,6 +6,7 @@ use crate::runtime::containerd::{ContainerdLifecycle, ContainerdRuntimeConfig};
 use crate::runtime::docker;
 use crate::runtime::docker::docker_lifecycle::DockerLifecycle;
 use crate::runtime::firecracker::{FirecrackerLifecycle, FirecrackerRuntimeConfig};
+use crate::runtime::registry_auth::HostAuthSettings;
 use clap::ArgMatches;
 use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
@@ -96,12 +97,25 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // Keep a second client for the event listener, only when Docker is on.
     let docker_for_events = if configuration.server.runtime.docker.enabled {
         let host = configuration.server.runtime.docker.host.clone();
+        let host_auth = HostAuthSettings {
+            authorized: configuration.server.runtime.docker.use_host_registry_auth,
+            config_path: configuration
+                .server
+                .runtime
+                .docker
+                .host_registry_config
+                .clone(),
+        };
         match docker::connect_and_verify(&host).await {
             Ok(docker) => {
                 info!("Connected to Docker at {}", host);
                 runtimes_map.insert(
                     "docker".to_string(),
-                    Arc::new(DockerLifecycle::new(docker, intentional_shutdowns.clone())),
+                    Arc::new(DockerLifecycle::new(
+                        docker,
+                        intentional_shutdowns.clone(),
+                        host_auth,
+                    )),
                 );
                 docker::connect_with_host(&host).ok()
             }
@@ -124,6 +138,15 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // reaper stays Docker-only for now.
     if configuration.server.runtime.podman.enabled {
         let host = configuration.server.runtime.podman.host.clone();
+        let host_auth = HostAuthSettings {
+            authorized: configuration.server.runtime.podman.use_host_registry_auth,
+            config_path: configuration
+                .server
+                .runtime
+                .podman
+                .host_registry_config
+                .clone(),
+        };
         match docker::connect_and_verify(&host).await {
             Ok(podman) => {
                 info!("Connected to Podman at {}", host);
@@ -135,6 +158,7 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
                     Arc::new(DockerLifecycle::new_podman(
                         podman,
                         intentional_shutdowns.clone(),
+                        host_auth,
                     )),
                 );
             }

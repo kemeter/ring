@@ -339,10 +339,43 @@ async fn ensure_named_volume(
     }
 }
 
+/// Resolve the `(server, username, password)` to pull with, honoring the
+/// `use_host_auth` opt-in. When the deployment activates host auth, credentials
+/// come from the host's Docker config (gated by the server's authorization);
+/// otherwise the inline `config.server`/`username`/`password` path is used. A
+/// host-auth failure is a typed `RuntimeError` so the deployment lands in a
+/// clear errored state instead of silently falling back to an anonymous pull.
+fn resolve_registry_auth(
+    deployment: &Deployment,
+    host_auth: &crate::runtime::registry_auth::HostAuthSettings,
+) -> Result<Option<(String, String, String)>, RuntimeError> {
+    let config = deployment.config.as_ref();
+    let activated = config.map(|c| c.use_host_auth).unwrap_or(false);
+    let inline = config.and_then(|c| {
+        match (
+            c.server.as_deref(),
+            c.username.as_deref(),
+            c.password.as_deref(),
+        ) {
+            (Some(s), Some(u), Some(p)) => Some((s, u, p)),
+            _ => None,
+        }
+    });
+
+    crate::runtime::registry_auth::resolve_deployment_auth(
+        &deployment.image,
+        activated,
+        inline,
+        host_auth,
+    )
+    .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))
+}
+
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
     resolved_mounts: &[crate::models::volume::ResolvedMount],
+    host_auth: &crate::runtime::registry_auth::HostAuthSettings,
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
 
@@ -354,18 +387,11 @@ pub(crate) async fn create_container(
 
     let (name, reference) = parse_image_reference(&deployment.image);
 
-    let mut image_config = DockerImage {
+    let image_config = DockerImage {
         name,
         reference,
-        auth: None,
+        auth: resolve_registry_auth(deployment, host_auth)?,
     };
-
-    if let Some(config) = &deployment.config
-        && let (Some(server), Some(username), Some(password)) =
-            (&config.server, &config.username, &config.password)
-    {
-        image_config.auth = Some((server.clone(), username.clone(), password.clone()));
-    }
 
     let policy = deployment
         .config
@@ -782,6 +808,7 @@ mod tests {
                 group: Some(1000),
                 privileged: Some(false),
             }),
+            use_host_auth: false,
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -798,6 +825,7 @@ mod tests {
                 group: None,
                 privileged: Some(false),
             }),
+            use_host_auth: false,
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -865,6 +893,7 @@ mod tests {
                 group: Some(0),
                 privileged: Some(true),
             }),
+            use_host_auth: false,
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }

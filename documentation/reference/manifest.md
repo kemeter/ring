@@ -84,7 +84,7 @@ A map of deployment declarations. The map key is internal — Ring keys the depl
 | `labels` | map | `{}` | Key/value labels. **Docker only** — forwarded to Docker container labels. CH silently ignores them. |
 | `resources` | object | unset | CPU / memory limits and requests. Semantics differ between runtimes. See [resources](#resources). |
 | `health_checks` | object list | `[]` | TCP / HTTP / command health probes. See [health checks](#health-checks). |
-| `config` | object | `{}` | Runtime config: image pull policy, registry credentials. **Docker only** — every field of `config` is silently ignored on the CH runtime, since there is no image to pull. |
+| `config` | object | `{}` | Runtime config: image pull policy, registry credentials. **Container runtimes only** — every field of `config` is silently ignored on the CH runtime, since there is no image to pull. |
 | `network` | object | `{ mode: bridge }` | Network mode. See [network](#network). **Docker only.** |
 
 ## `environment`
@@ -347,7 +347,7 @@ See [how-to: configure health checks](/documentation/how-to/configure-health-che
 
 Runtime-level configuration: image pull policy, registry credentials.
 
-> **Docker-only.** Every field of `config` is consumed by the Docker runtime exclusively. On Cloud Hypervisor, the entire block is silently ignored — there is no image to pull, the disk image at `image:` is read from the local filesystem.
+> **Container runtimes only.** Every field of `config` is consumed by the container runtimes (Docker, Podman, containerd). On Cloud Hypervisor, the entire block is silently ignored — there is no image to pull, the disk image at `image:` is read from the local filesystem.
 
 ```yaml
 config:
@@ -361,12 +361,32 @@ config:
 |---|---|
 | `image_pull_policy` | `Always` (default) or `IfNotPresent`. The third historical value `Never` skips the pull entirely. |
 | `server` | Private-registry hostname (only for non-Docker-Hub registries). |
-| `username`, `password` | Registry credentials. Sent to Docker on `pull`. |
+| `username`, `password` | Registry credentials. Sent to the runtime on `pull`. |
+| `use_host_auth` | `true` to resolve registry credentials from the **host's** Docker config instead of inlining them. Mutually exclusive with `server`/`username`/`password`. See below. |
 | `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
 
-The `password` field is **not** an encrypted secret — it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`.
+The `password` field is **not** an encrypted secret — it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
+
+### `use_host_auth` — credentials from the host
+
+Instead of inlining `server`/`username`/`password`, a deployment can pull using the credentials the operator already configured on the host (e.g. via `docker login`). The secret then never reaches the deployment manifest, the database, or the API.
+
+```yaml
+config:
+  image_pull_policy: "Always"
+  use_host_auth: true        # read ~/.docker/config.json on the host
+```
+
+It is a **two-flag handshake**:
+
+1. The **server** must authorize it — set `use_host_registry_auth = true` under the runtime's `[server.runtime.*]` section (see [config-toml](/documentation/reference/config-toml)).
+2. The **deployment** activates it with `use_host_auth: true`.
+
+If a deployment sets `use_host_auth` on a runtime that did not authorize it, the deployment fails fast with an actionable error (no silent fallback to an anonymous pull). Combining `use_host_auth` with inline `server`/`username`/`password` is rejected at apply time.
+
+Supported on Docker, Podman and containerd. The host config follows the standard Docker resolution (`$DOCKER_CONFIG`, then `~/.docker/config.json`), honoring `credHelpers`/`credsStore`. When the Ring daemon runs as a different user than the one who logged in — or for a Podman `containers/auth.json` — pin the file explicitly with `host_registry_config` in the server config.
 
 ## Full example
 

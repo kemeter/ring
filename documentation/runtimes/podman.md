@@ -19,6 +19,8 @@ Verify it exists: `ls -l /run/user/$(id -u)/podman/podman.sock`.
 [server.runtime.podman]
 enabled = true
 # host = "unix:///run/user/1000/podman/podman.sock"   # rootless default
+# use_host_registry_auth = true                        # pull private images using the host auth file
+# host_registry_config = "/run/user/1000/containers/auth.json"  # podman login writes here
 ```
 
 Ring resolves the rootless socket first. If `enabled = true` but the socket is unreachable, Ring logs a warning and skips Podman (the node still starts if another runtime is usable).
@@ -47,6 +49,7 @@ ring apply -f web.yaml
 - **Crash detection is reconcile-based.** Podman has no Docker-style event listener, so a crashed container is noticed on the next scheduler tick rather than sub-second. A crash loop still converges to `crash_loop_back_off` (bounded), it's just tick-paced.
 - **Rootless remaps UID/GID.** A file written inside the container has a different owner on the host. Bind-mount and named-volume ownership behave differently than under Docker-root — mind permissions on mounts.
 - **Host networking** (`network.mode: host`) is not yet supported on Podman.
+- **Registry auth from the host.** `podman login` writes to `containers/auth.json`. Authorize it with `use_host_registry_auth = true` (point `host_registry_config` at the auth file) and pull with `config.use_host_auth: true` — no secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
 - Otherwise the feature set matches Docker — same images, same health checks, same labels.
 
 ## See also
