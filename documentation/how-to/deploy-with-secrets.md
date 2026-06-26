@@ -19,7 +19,7 @@ ring secret create database-password -n production -v "s3cret!"
 ring secret create api-key -n production -v "$(cat ./api-key.txt)"
 ```
 
-The value goes through the API and is encrypted server-side before insertion. The response is metadata only — Ring never returns the plaintext.
+The value goes through the API and is encrypted server-side before insertion. The response is metadata only; Ring never returns the plaintext.
 
 Same operation via the API:
 
@@ -34,7 +34,7 @@ curl -X POST http://localhost:3030/secrets \
   }'
 ```
 
-**`409 Conflict`** — a secret with this name already exists in this namespace. Names are unique per namespace; the same name can coexist across `staging` and `production` with different values.
+**`409 Conflict`**: a secret with this name already exists in this namespace. Names are unique per namespace; the same name can coexist across `staging` and `production` with different values.
 
 ## Reference a secret in a deployment
 
@@ -57,13 +57,13 @@ deployments:
 
 At apply time, Ring decrypts each `secretRef` and injects the plaintext into the container's environment. Plain values pass through unchanged.
 
-Inside the container, `secretRef` values are indistinguishable from plain values — `echo $DATABASE_URL` works as expected.
+Inside the container, `secretRef` values are indistinguishable from plain values, so `echo $DATABASE_URL` works as expected.
 
 **If a referenced secret does not exist in the namespace:** Ring emits an `error` event with `reason: SecretResolutionError`, the scheduler skips the deployment on that tick, and the deployment stays in `creating`. Inspect with `ring deployment events <id> --level error`.
 
 ## Pull a private image with a secret
 
-To pull from a private registry without inlining the credentials in your manifest, store them in a Secret and reference it with `config.image_pull_secret`. The Secret's value is a Docker `config.json` — log in once, then store the file:
+To pull from a private registry without inlining the credentials in your manifest, store them in a Secret and reference it with `config.image_pull_secret`. The Secret's value is a Docker `config.json`: log in once, then store the file:
 
 ```bash
 docker login rg.fr-par.scw.cloud
@@ -84,11 +84,11 @@ deployments:
 
 The scheduler decrypts the Secret and pulls with it; the credentials never reach the deployment row or the API. It must live in the same namespace as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
 
-> If your `docker login` uses a credential helper (`credsStore`), `config.json` won't contain the credential — see the [`image_pull_secret` reference](/documentation/reference/manifest#image_pull_secret-credentials-from-an-encrypted-secret) for the alternatives. The simplest path when you're already logged in on the host is [`use_host_auth`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host), which needs no Secret at all.
+> If your `docker login` uses a credential helper (`credsStore`), `config.json` won't contain the credential; see the [`image_pull_secret` reference](/documentation/reference/manifest#image_pull_secret-credentials-from-an-encrypted-secret) for the alternatives. The simplest path when you're already logged in on the host is [`use_host_auth`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host), which needs no Secret at all.
 
 ## Mount a secret as a file
 
-Some apps will not read credentials from an environment variable — they want a file path. Prometheus is a typical example: its `authorization.credentials_file` only takes a path, not the credential itself. For those cases, declare the secret as a `volume` of `type: secret`:
+Some apps will not read credentials from an environment variable; they want a file path. Prometheus is a typical example: its `authorization.credentials_file` only takes a path, not the credential itself. For those cases, declare the secret as a `volume` of `type: secret`:
 
 ```yaml
 deployments:
@@ -128,7 +128,7 @@ scrape_configs:
 
 Ring decrypts the secret at reconciliation time, writes the plaintext to a per-deployment temp file, and mounts that file at `destination` inside the container. The mount is always read-only.
 
-A secret has **no `key:` field** — its single decrypted value becomes the entire file contents. If you need to mount multiple files, declare one `type: secret` volume per file.
+A secret has **no `key:` field**, so its single decrypted value becomes the entire file contents. If you need to mount multiple files, declare one `type: secret` volume per file.
 
 **Rotating a secret mounted as a file** follows the same pattern as env-var secrets: delete + recreate the secret, then `ring apply` to trigger a rolling restart. The running container keeps the old file contents until it is recreated.
 
@@ -184,7 +184,7 @@ If you currently have `DATABASE_URL: "postgres://..."` in your manifest:
 2. Replace the line in the manifest with `DATABASE_URL: { secretRef: "database-url" }`
 3. Re-apply
 
-Existing containers keep the plain-text value until recreated — bump a field to force a rolling restart.
+Existing containers keep the plain-text value until recreated, so bump a field to force a rolling restart.
 
 ## CI / GitOps pattern
 
@@ -196,7 +196,7 @@ ring secret create jwt-key -n production -v "$JWT_KEY"
 ring apply -f production.yaml
 ```
 
-The manifest contains only `secretRef: database-url` — safe to commit. The values come from the pipeline's environment.
+The manifest contains only `secretRef: database-url`, which is safe to commit. The values come from the pipeline's environment.
 
 ## Private registry credentials are different
 
@@ -218,18 +218,18 @@ export REGISTRY_PASSWORD="$(cat ~/.registry-password)"
 ring apply -f app.yaml
 ```
 
-This is **not** an encrypted secret — it lives in the deployment row in the database. Treat the database file as sensitive.
+This is **not** an encrypted secret; it lives in the deployment row in the database. Treat the database file as sensitive.
 
 ## Limits
 
 - **No multi-line `-v`.** For PEM keys, JSON blobs, use the API directly with `--data-binary @file.json`, or shell-escape.
-- **Practical size limit.** Keep secrets under a few KB. Big binary blobs (keystores, full TLS chains) work, but consider whether a `ring config` mounted as a file is a better fit — configs are larger and don't carry the AES-GCM overhead.
+- **Practical size limit.** Keep secrets under a few KB. Big binary blobs (keystores, full TLS chains) work, but consider whether a `ring config` mounted as a file is a better fit, since configs are larger and don't carry the AES-GCM overhead.
 - **No expiration / rotation reminders.** Track rotation cadence externally.
 - **No value-read audit log.** Ring logs `secret create` and `secret delete` events but not which deployment resolved which secret on a given tick.
 
 ## See also
 
-- [Secrets and encryption](/documentation/concepts/secrets-encryption) — algorithm, key management, threat model
+- [Secrets and encryption](/documentation/concepts/secrets-encryption): algorithm, key management, threat model
 - [Manifest reference: `environment`](/documentation/reference/manifest#environment)
 - [CLI reference: `ring secret`](/documentation/reference/cli#secrets)
 - [API reference: `/secrets`](/documentation/reference/api#secrets)

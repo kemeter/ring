@@ -23,7 +23,7 @@ ring login --username admin --password "your-new-password"
 ring user create --username alice --password "alice-strong-password"
 ```
 
-The password is bcrypt-hashed server-side before insertion. The plaintext is sent over the API — front Ring with TLS in production (see [how-to: isolate namespaces and route traffic → TLS](/documentation/how-to/isolate-namespaces-network#tls-termination-for-rings-api-itself)).
+The password is bcrypt-hashed server-side before insertion. The plaintext is sent over the API, so front Ring with TLS in production (see [how-to: isolate namespaces and route traffic → TLS](/documentation/how-to/isolate-namespaces-network#tls-termination-for-rings-api-itself)).
 
 ## List users
 
@@ -98,11 +98,11 @@ TOKEN=$(jq -r '.default.token' ~/.config/kemeter/ring/auth.json)
 
 ## What Ring's auth is not
 
-- **Not RBAC.** Ring users currently have a single, uniform set of permissions — anyone with a valid token can do anything (apply, delete, manage other users, read secrets metadata). There are no roles, no per-namespace scoping, no read-only tokens.
+- **Not RBAC.** Ring users currently have a single, uniform set of permissions: anyone with a valid token can do anything (apply, delete, manage other users, read secrets metadata). There are no roles, no per-namespace scoping, no read-only tokens.
 - **Not OAuth / OIDC.** No external identity provider integration. Users live in Ring's SQLite database.
 - **Not session-based.** Tokens are long-lived bearer credentials. Treat them like passwords.
 
-For multi-tenant scenarios where you need real RBAC, Ring isn't the right tool — that's Kubernetes territory. For small teams where everyone trusts everyone, a few accounts behind TLS is the model Ring is designed for.
+For multi-tenant scenarios where you need real RBAC, Ring isn't the right tool; that's Kubernetes territory. For small teams where everyone trusts everyone, a few accounts behind TLS is the model Ring is designed for.
 
 ## Recipes
 
@@ -117,7 +117,7 @@ Both have full API access; the separation is for audit and rotation purposes onl
 
 ### Rotating a user's password
 
-There's no CLI shortcut to rotate another user's password from your own session — `ring user update` only touches the current user. Two options:
+There's no CLI shortcut to rotate another user's password from your own session, since `ring user update` only touches the current user. Two options:
 
 - **Have the user rotate it themselves** after they log in: `ring user update --password "$NEW"`
 - **Use the API** (see [Update your own password](#update-your-own-password) above for the curl pattern)
@@ -144,4 +144,4 @@ ring user delete "$USER_ID"
 
 - [Reference: CLI → `ring user`](/documentation/reference/cli#users)
 - [Reference: API → `/users`](/documentation/reference/api#users)
-- [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) — TLS termination in front of the API
+- [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network): TLS termination in front of the API

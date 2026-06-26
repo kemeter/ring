@@ -32,7 +32,7 @@ Status transitions:
 | Container exits non-zero | `failed` |
 | Container is OOM-killed or signalled | `failed` |
 
-`completed` and `failed` jobs stay in the database — they're history, not active deployments. Prune them with `ring namespace prune <namespace>`.
+`completed` and `failed` jobs stay in the database: they're history, not active deployments. Prune them with `ring namespace prune <namespace>`.
 
 ## Inject configuration and secrets
 
@@ -91,7 +91,7 @@ ring deployment logs "$JOB_ID" --follow
 
 Two patterns work:
 
-**Same name, delete first** — simplest if you only care about the latest run:
+**Same name, delete first**, simplest if you only care about the latest run:
 
 ```bash
 JOB_ID=$(ring deployment list --type job -o json | jq -r '.[] | select(.name=="migrate-v123") | .id')
@@ -99,7 +99,7 @@ ring deployment delete "$JOB_ID"
 ring apply -f migrate.yaml
 ```
 
-**Unique name per run** — preserves an audit trail and is the right shape in CI:
+**Unique name per run**, which preserves an audit trail and is the right shape in CI:
 
 ```yaml
 deployments:
@@ -154,7 +154,7 @@ deployments:
 ring apply -f release.yaml
 ```
 
-> **No ordering guarantee.** Ring creates both deployments in parallel — the migration job is **not** a barrier in front of the API rollout. If the migration must finish first, either apply the manifests in two steps (with the poll loop above), or fold the migration into the app's startup command:
+> **No ordering guarantee.** Ring creates both deployments in parallel, so the migration job is **not** a barrier in front of the API rollout. If the migration must finish first, either apply the manifests in two steps (with the poll loop above), or fold the migration into the app's startup command:
 >
 > ```yaml
 > command: ["sh", "-c", "npm run migrate && exec npm start"]

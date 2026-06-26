@@ -1,11 +1,11 @@
 # config.toml reference
 
-Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. To load a different file — e.g. to keep `config_dev.toml` and `config_prod.toml` side by side — pass `--config <path>` or set `RING_CONFIG_FILE` (see [CLI reference](cli.md#--config)). It is split in two:
+Ring reads `~/.config/kemeter/ring/config.toml` (or `$RING_CONFIG_DIR/config.toml`) at startup. To load a different file (e.g. to keep `config_dev.toml` and `config_prod.toml` side by side), pass `--config <path>` or set `RING_CONFIG_FILE` (see [CLI reference](cli.md#--config)). It is split in two:
 
-- **`[contexts.<name>]`** — *client* config: how a CLI reaches a server (host, API, auth). There can be several (e.g. `local`, `staging`, `prod`), like kubectl contexts.
-- **`[server]`** — *daemon* config: what the Ring **server** does (which runtimes it enables, scheduler interval, dashboard). One shared table, outside `[contexts.*]`.
+- **`[contexts.<name>]`** is the *client* config: how a CLI reaches a server (host, API, auth). There can be several (e.g. `local`, `staging`, `prod`), like kubectl contexts.
+- **`[server]`** is the *daemon* config: what the Ring **server** does (which runtimes it enables, scheduler interval, dashboard). One shared table, outside `[contexts.*]`.
 
-A context describes one client→server connection; it has no business deciding which runtimes that server enables — that's why daemon settings live under their own top-level `[server]` table.
+A context describes one client→server connection; it has no business deciding which runtimes that server enables, which is why daemon settings live under their own top-level `[server]` table.
 
 `ring init` writes this file with the runtimes you select enabled. Ring falls back to a sensible `default` context if no file exists.
 
@@ -33,7 +33,7 @@ No container runtime is enabled by default. Ring registers a runtime **only** wh
 Two rules follow:
 
 - **At least one runtime must be enabled.** With none, Ring refuses to start (it could not deploy anything).
-- **An enabled-but-unreachable runtime is a hard error.** Enable Docker but the daemon doesn't answer, or enable Cloud Hypervisor but its binary can't be found, and Ring fails fast at startup with a clear message — rather than starting and returning a 500 on the first deployment.
+- **An enabled-but-unreachable runtime is a hard error.** Enable Docker but the daemon doesn't answer, or enable Cloud Hypervisor but its binary can't be found, and Ring fails fast at startup with a clear message, rather than starting and returning a 500 on the first deployment.
 
 ## Fields
 
@@ -41,19 +41,19 @@ Two rules follow:
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
-| `current` | bool | yes | — | Mark this context as the default. Exactly one context should be `true` per file |
-| `host` | string | yes | — | The IP or hostname the server binds to. Set `"127.0.0.1"` for loopback-only; `"0.0.0.0"` to listen on every interface. The CLI uses the same value to reach the server |
-| `api` | inline table | yes | — | See [`api`](#contextsnameapi) |
-| `user` | inline table | yes | — | See [`user`](#contextsnameuser) |
+| `current` | bool | yes | none | Mark this context as the default. Exactly one context should be `true` per file |
+| `host` | string | yes | none | The IP or hostname the server binds to. Set `"127.0.0.1"` for loopback-only; `"0.0.0.0"` to listen on every interface. The CLI uses the same value to reach the server |
+| `api` | inline table | yes | none | See [`api`](#contextsnameapi) |
+| `user` | inline table | yes | none | See [`user`](#contextsnameuser) |
 
-> Daemon settings (runtimes, scheduler, dashboard) are **not** under the context — see [`[server]`](#server) below.
+> Daemon settings (runtimes, scheduler, dashboard) are **not** under the context; see [`[server]`](#server) below.
 
 ### `[contexts.<name>.api]`
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
-| `scheme` | string | yes | — | `"http"` or `"https"`. Used to build the API URL the CLI talks to. Ring itself does not terminate TLS — set `"https"` only when fronted by a reverse proxy |
-| `port` | int | yes | — | TCP port. Default in the auto-fallback context is `3030`; explicit configs must set it |
+| `scheme` | string | yes | none | `"http"` or `"https"`. Used to build the API URL the CLI talks to. Ring itself does not terminate TLS, so set `"https"` only when fronted by a reverse proxy |
+| `port` | int | yes | none | TCP port. Default in the auto-fallback context is `3030`; explicit configs must set it |
 | `cors_origins` | array of string | no | `[]` | List of `Origin` values allowed by the API's CORS layer. Leave empty to disallow browser cross-origin calls |
 
 > **No password salt to configure.** Earlier versions required a `[contexts.<name>.user]` table with a global `salt`. Ring now generates a unique random salt for every password hash, so there is nothing to set or keep secret. A leftover `user.salt` line in an existing config is ignored.
@@ -93,11 +93,11 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 | `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring fails fast |
 | `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
 | `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)) |
-| `host_registry_config` | string | no | unset | Explicit path to the host registry config. Podman's `login` writes to `containers/auth.json` — point at it here when the default Docker resolution doesn't pick it up |
+| `host_registry_config` | string | no | unset | Explicit path to the host registry config. Podman's `login` writes to `containers/auth.json`, so point at it here when the default Docker resolution doesn't pick it up |
 
 ### `[server.runtime.containerd]`
 
-containerd speaks its own native gRPC API on a Unix socket — no Docker daemon in between. CNI plugins (`/opt/cni/bin`) must be present for container networking.
+containerd speaks its own native gRPC API on a Unix socket, with no Docker daemon in between. CNI plugins (`/opt/cni/bin`) must be present for container networking.
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
@@ -109,14 +109,14 @@ containerd speaks its own native gRPC API on a Unix socket — no Docker daemon 
 
 ### Host registry auth
 
-`use_host_registry_auth` lets a deployment pull private images using the credentials the operator already configured on the host (e.g. via `docker login`), instead of inlining `server`/`username`/`password` in the manifest — which would otherwise be stored in cleartext in the database and returned by the API.
+`use_host_registry_auth` lets a deployment pull private images using the credentials the operator already configured on the host (e.g. via `docker login`), instead of inlining `server`/`username`/`password` in the manifest, which would otherwise be stored in cleartext in the database and returned by the API.
 
 It is a deliberate **two-flag handshake**:
 
 1. The server authorizes it per runtime with `use_host_registry_auth = true`.
 2. The deployment activates it with `config.use_host_auth: true` (see [manifest `config`](/documentation/reference/manifest#config)).
 
-Both are required — a deployment requesting host auth on a runtime that did not authorize it fails fast, with no silent fallback to an anonymous pull. The credential lookup honors `credHelpers`/`credsStore`. Set `host_registry_config` when the Ring daemon runs as a different user than the one who logged in (its `~` would otherwise resolve to the daemon's home, not yours).
+Both are required: a deployment requesting host auth on a runtime that did not authorize it fails fast, with no silent fallback to an anonymous pull. The credential lookup honors `credHelpers`/`credsStore`. Set `host_registry_config` when the Ring daemon runs as a different user than the one who logged in (its `~` would otherwise resolve to the daemon's home, not yours).
 
 ### `[server.runtime.cloud_hypervisor]`
 
@@ -136,7 +136,7 @@ Both are required — a deployment requesting host auth on a runtime that did no
 |---|---|---|---|
 | `enabled` | bool | `false` | Register the Firecracker runtime. Must be `true` for Ring to use it. When `true` and `binary_path` can't be resolved at startup, Ring fails fast |
 | `binary_path` | string | `firecracker` (from `$PATH`) | Absolute path to the `firecracker` binary |
-| `kernel_path` | string | `$RING_CONFIG_DIR/firecracker/vmlinux` | Path to the uncompressed kernel image. Firecracker boots a kernel directly — there is no firmware step |
+| `kernel_path` | string | `$RING_CONFIG_DIR/firecracker/vmlinux` | Path to the uncompressed kernel image. Firecracker boots a kernel directly, so there is no firmware step |
 | `socket_dir` | string | `$RING_CONFIG_DIR/firecracker/sockets` | Where Ring puts per-VM API sockets and per-instance rootfs copies |
 | `boot_args` | string | `console=ttyS0 reboot=k panic=1 pci=off` | Kernel command line passed to every microVM |
 | `max_console_log_bytes` | int | `10485760` (10 MiB) | Size at which a per-VM console log is rotated. `0` disables rotation. Firecracker rotates by copy-truncate (it holds the log by inode), so the live file keeps its path across rotations |
@@ -231,5 +231,5 @@ Mode should be `0600`. The file is created and updated by `ring login`; you gene
 ## See also
 
 - [Reference: environment variables](/documentation/reference/environment-variables)
-- [How-to: run as a service](/documentation/how-to/run-as-service) — production layout
+- [How-to: run as a service](/documentation/how-to/run-as-service) for the production layout
 - [Reference: CLI → contexts](/documentation/reference/cli)

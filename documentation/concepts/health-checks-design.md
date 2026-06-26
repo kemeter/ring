@@ -4,13 +4,13 @@ How Ring's health-check system works under the hood: where probes run, how failu
 
 ## What a health check tells Ring
 
-Without a health check, Ring only knows whether the **container process** is alive. A container with a wedged application, a dead listener, or an unreachable downstream still looks "Running" to the runtime — Ring has no signal to act on.
+Without a health check, Ring only knows whether the **container process** is alive. A container with a wedged application, a dead listener, or an unreachable downstream still looks "Running" to the runtime, leaving Ring with no signal to act on.
 
 With a health check, Ring sees whether the **service inside** the container is working. That single signal feeds three behaviors:
 
-- **Self-healing** — restart a stuck instance, stop a deployment, or raise an alert
-- **Safe rollouts** — gate the rolling-update drain on per-instance readiness
-- **Observability** — record per-instance probe history in SQLite
+- **Self-healing**: restart a stuck instance, stop a deployment, or raise an alert
+- **Safe rollouts**: gate the rolling-update drain on per-instance readiness
+- **Observability**: record per-instance probe history in SQLite
 
 A deployment with **at least one** health check enables the rolling-update path. Without one, `ring apply` falls back to immediate replacement (brief downtime).
 
@@ -24,7 +24,7 @@ A deployment with **at least one** health check enables the rolling-update path.
 
 ### Caveats
 
-- **`http` redirects (3xx)** are not followed — they count as failures. Point the URL at the redirect target.
+- **`http` redirects (3xx)** are not followed; they count as failures. Point the URL at the redirect target.
 - **`command` exit code** is checked: `0` is `success`, non-zero is `failed`. Output is drained so the exit status is finalized before the probe records its result.
 - **`command` on Cloud Hypervisor** is supported via the in-guest `ring-agent` daemon. The guest image must ship the agent.
 
@@ -32,7 +32,7 @@ A deployment with **at least one** health check enables the rolling-update path.
 
 The scheduler executes every declared check **once per scheduler tick** (default: 10s, override with `RING_SCHEDULER_INTERVAL`) for every running instance. The pipeline is wrapped in `tokio::time::timeout(timeout)`; if it doesn't return within that duration, the result is recorded as `timeout`.
 
-**`interval` is currently advisory** — the actual cadence is driven by the scheduler tick, not the per-check `interval`. To probe more often, lower the tick; to probe less often, keep `timeout` short and accept that the tick is the floor.
+**`interval` is currently advisory**: the actual cadence is driven by the scheduler tick, not the per-check `interval`. To probe more often, lower the tick; to probe less often, keep `timeout` short and accept that the tick is the floor.
 
 Each result becomes a row in the `health_check` table:
 
@@ -44,13 +44,13 @@ Retention: 50 results per deployment, 7-day window.
 
 ## Failure counter and `on_failure`
 
-For each `(deployment, instance, check_type)` triple, Ring keeps an **in-memory** consecutive-failure counter. **Caveat:** the key is the check **type** (`tcp` / `http` / `command`), not a per-check index — declaring two `http` checks on the same deployment makes them share a counter. Use one check per type (cheap + deep variants of the same type require a workaround):
+For each `(deployment, instance, check_type)` triple, Ring keeps an **in-memory** consecutive-failure counter. **Caveat:** the key is the check **type** (`tcp` / `http` / `command`), not a per-check index, so declaring two `http` checks on the same deployment makes them share a counter. Use one check per type (cheap + deep variants of the same type require a workaround):
 
 - A `success` resets it to zero
 - A `failed` or `timeout` increments it
 - Once it reaches `threshold`, the `on_failure` action fires **once** and the counter resets
 
-Counters live only in memory — restarting `ring server` clears them. After a server restart, every check starts back at zero failures.
+Counters live only in memory, so restarting `ring server` clears them. After a server restart, every check starts back at zero failures.
 
 | Action | Effect | Event reason | When to use |
 |---|---|---|---|
@@ -64,12 +64,12 @@ Pick `restart` unless you have a specific reason not to. `stop` and `alert` are 
 
 `readiness: true` makes a check gate two things:
 
-1. **The deployment's own `Running` status** — a deployment with at least one readiness check stays `Creating` until every readiness check has been green for `min_healthy_time`. `Running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `Running` as soon as the container is up.
-2. **The rolling-update drain** — during an update, Ring drains the old (parent) deployment only once the new (child) deployment's readiness gate has opened.
+1. **The deployment's own `Running` status**: a deployment with at least one readiness check stays `Creating` until every readiness check has been green for `min_healthy_time`. `Running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `Running` as soon as the container is up.
+2. **The rolling-update drain**: during an update, Ring drains the old (parent) deployment only once the new (child) deployment's readiness gate has opened.
 
-Readiness probes are evaluated even while a deployment is `Creating` (readiness-only, record-only: no `on_failure` action fires during boot — a probe that isn't green yet isn't a failure). Liveness checks run only once `Running`.
+Readiness probes are evaluated even while a deployment is `Creating` (readiness-only, record-only: no `on_failure` action fires during boot, since a probe that isn't green yet isn't a failure). Liveness checks run only once `Running`.
 
-**Deadline.** A simple deployment whose readiness never turns green would otherwise sit in `Creating` forever. Past `RING_ROLLOUT_DEADLINE` (default 600s — the same knob as the rolling-update drain, mirroring Kubernetes' `progressDeadlineSeconds`) Ring marks it `failed` with a `readiness_deadline_exceeded` event. A rolling-update child is exempt: its deadline is the forced parent drain below, which keeps the old version serving.
+**Deadline.** A simple deployment whose readiness never turns green would otherwise sit in `Creating` forever. Past `RING_ROLLOUT_DEADLINE` (default 600s, the same knob as the rolling-update drain, mirroring Kubernetes' `progressDeadlineSeconds`) Ring marks it `failed` with a `readiness_deadline_exceeded` event. A rolling-update child is exempt: its deadline is the forced parent drain below, which keeps the old version serving.
 
 By default (no readiness check) Ring drains the parent deployment as soon as the new child container reaches `Running`. That's fast, but ignores application-level boot time (warmup, migrations, cache priming).
 
@@ -90,7 +90,7 @@ With at least one `readiness: true` check, the rolling-update sequence becomes:
 
 1. Child boots, reaches `Running`
 2. Ring waits for **at least one `success` result** from **every** readiness check
-3. Each readiness check must stay green for at least its **`min_healthy_time`** (default `10s`, configurable per check — see below). The concept and name are borrowed from Nomad.
+3. Each readiness check must stay green for at least its **`min_healthy_time`** (default `10s`, configurable per check; see below). The concept and name are borrowed from Nomad.
 4. Any `failed` or `timeout` on a readiness check resets the gate
 5. Once the gate is open, Ring drains one parent instance and the cycle continues
 
@@ -115,34 +115,34 @@ Semantics:
 
 - Same duration syntax as `interval` / `timeout` (`"500ms"`, `"30s"`).
 - Only honored when `readiness: true`. On non-readiness checks the field parses but is ignored.
-- When several readiness checks declare different `min_healthy_time` values, the scheduler takes the **maximum** — the most-cautious one wins, so the gate honors the slowest probe.
+- When several readiness checks declare different `min_healthy_time` values, the scheduler takes the **maximum**: the most-cautious one wins, so the gate honors the slowest probe.
 - An unparseable value is logged at `warn` and the scheduler falls back to the 10 s default; a typo never blocks a rollout.
 
 ## Proxy integration
 
-A `readiness: true` check of `type: command` is **also translated** into a native Docker `HEALTHCHECK` on the container. Proxies that read Docker labels gate traffic on `Status: healthy` automatically — they won't route to the new container while the readiness command is failing.
+A `readiness: true` check of `type: command` is **also translated** into a native Docker `HEALTHCHECK` on the container. Proxies that read Docker labels gate traffic on `Status: healthy` automatically, so they won't route to the new container while the readiness command is failing.
 
 This is the integration designed into [Sozune](https://sozune.kemeter.io), the companion proxy: it reads `State.Health.Status` and only routes to `healthy` containers. Traefik, Caddy and other label-aware proxies offer similar behaviour with their own configuration. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the end-to-end recipe.
 
 | Check type | Ring drain gate | Docker `HEALTHCHECK` (proxy gate) |
 |---|---|---|
 | `command` + `readiness: true` | ✅ | ✅ |
-| `tcp` + `readiness: true` | ✅ | ❌ — Docker has no native TCP probe |
-| `http` + `readiness: true` | ✅ | ❌ — Docker has no native HTTP probe |
+| `tcp` + `readiness: true` | ✅ | ❌ (Docker has no native TCP probe) |
+| `http` + `readiness: true` | ✅ | ❌ (Docker has no native HTTP probe) |
 | any without `readiness: true` | ❌ (legacy drain on `Running`) | ❌ |
 
 For HTTP readiness with proxy-aware behavior, wrap the probe in a shell command that calls `curl -fsS http://localhost:<port>/health` and use `type: command` with `readiness: true`. The image needs `curl` (or `wget`/`busybox`).
 
-On **Cloud Hypervisor**, there is no equivalent to Docker's `HEALTHCHECK` — VMs don't expose container-style labels, so a proxy can't read readiness from the runtime. The Ring scheduler-side gate works the same way (`tcp`, `http`, and `command` via `ring-agent` all gate the drain) but proxy traffic gating on VM workloads requires application-level logic.
+On **Cloud Hypervisor**, there is no equivalent to Docker's `HEALTHCHECK`: VMs don't expose container-style labels, so a proxy can't read readiness from the runtime. The Ring scheduler-side gate works the same way (`tcp`, `http`, and `command` via `ring-agent` all gate the drain) but proxy traffic gating on VM workloads requires application-level logic.
 
 ## Why per-instance probing
 
-Health checks run **per running container/VM**, not per deployment, and they use the runtime-private IP — not the published host port:
+Health checks run **per running container/VM**, not per deployment, and they use the runtime-private IP, not the published host port:
 
 - Docker: Ring inspects each container to get its bridge IP (e.g. `172.17.0.3`) and probes that
 - CH: Ring uses the deterministic /30 guest IP
 
-This means a deployment with 3 replicas runs 3× the probes per check definition. The trade-off: each replica is verified independently, so `restart` only kills the actually-broken instance instead of taking the whole deployment down. Probing the published host port couldn't distinguish replicas — the kernel would just round-robin one of them.
+This means a deployment with 3 replicas runs 3× the probes per check definition. The trade-off: each replica is verified independently, so `restart` only kills the actually-broken instance instead of taking the whole deployment down. Probing the published host port couldn't distinguish replicas, since the kernel would just round-robin one of them.
 
 ## Tuning
 
@@ -157,16 +157,16 @@ A few rules of thumb that hold up in practice:
 ## Limits
 
 - **`interval` is advisory** (see above)
-- **Counters are in memory** — server restart resets them
-- **No per-instance disable** — can't pause probes on one container for debugging
-- **No per-probe startup delay** — slow-booting services must absorb cold-start failures within `threshold`. A readiness check does give a deployment-level grace period (it stays `Creating` until green, up to `RING_ROLLOUT_DEADLINE`), but there's no per-check `start_period` / `initialDelaySeconds` yet; it's on the roadmap.
+- **Counters are in memory**: server restart resets them
+- **No per-instance disable**: can't pause probes on one container for debugging
+- **No per-probe startup delay**: slow-booting services must absorb cold-start failures within `threshold`. A readiness check does give a deployment-level grace period (it stays `Creating` until green, up to `RING_ROLLOUT_DEADLINE`), but there's no per-check `start_period` / `initialDelaySeconds` yet; it's on the roadmap.
 - **Cloud Hypervisor `command`** requires the in-guest `ring-agent` daemon
-- **Duration suffixes:** only `ms` and `s` parse. `1m` does not — write `60s`.
+- **Duration suffixes:** only `ms` and `s` parse. `1m` does not, so write `60s`.
 
 ## See also
 
-- [How-to: configure health checks](/documentation/how-to/configure-health-checks) — setup recipes and patterns
-- [How-to: perform a rolling update](/documentation/how-to/perform-rolling-update) — the operator's view
-- [Reconciliation](/documentation/concepts/reconciliation) — the loop that runs the probes
-- [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) — how readiness gates the `running` status
+- [How-to: configure health checks](/documentation/how-to/configure-health-checks): setup recipes and patterns
+- [How-to: perform a rolling update](/documentation/how-to/perform-rolling-update): the operator's view
+- [Reconciliation](/documentation/concepts/reconciliation): the loop that runs the probes
+- [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle): how readiness gates the `running` status
 - [Manifest reference: `health_checks`](/documentation/reference/manifest#health-checks)

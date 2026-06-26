@@ -85,7 +85,7 @@ Leave `seccomp` unset in production unless you've actually hit this.
 
 ### "Invalid credentials" right after `ring init`
 
-The default credentials are `admin` / `changeme`, **but only on the first server start before the password is changed**. If you've changed the password and forgotten it, the only path forward is to delete the user from the database and recreate it via `ring user create` — Ring has no password-reset workflow.
+The default credentials are `admin` / `changeme`, **but only on the first server start before the password is changed**. If you've changed the password and forgotten it, the only path forward is to delete the user from the database and recreate it via `ring user create`, since Ring has no password-reset workflow.
 
 ### "Unauthorized" on every command
 
@@ -119,13 +119,13 @@ ring deployment events <DEPLOYMENT_ID> --level error
 
 Most common causes:
 
-- **`SecretResolutionError`** — a `secretRef` in `environment:` refers to a secret that doesn't exist in the deployment's namespace. Create the secret, or fix the manifest
-- **`ImagePullBackOff`** — Docker can't pull the image. Wrong tag, missing credentials, network problem. Verify with `docker pull <image>` from the host
-- **`InstanceCreationFailed`** — Docker rejected the container creation. Common subreasons: port conflict (`bind: address already in use`), invalid bind mount (source path missing), unsupported runtime option
+- **`SecretResolutionError`**: a `secretRef` in `environment:` refers to a secret that doesn't exist in the deployment's namespace. Create the secret, or fix the manifest
+- **`ImagePullBackOff`**: Docker can't pull the image. Wrong tag, missing credentials, network problem. Verify with `docker pull <image>` from the host
+- **`InstanceCreationFailed`**: Docker rejected the container creation. Common subreasons: port conflict (`bind: address already in use`), invalid bind mount (source path missing), unsupported runtime option
 
 ### Stuck in `deleted`
 
-A deployment shown as `deleted` should disappear within a scheduler cycle or two once its containers are gone — the row is purged automatically. If it lingers and `ring deployment events <ID>` keeps logging `secret_resolution_error` / `config_load_error` / `volume_resolution_error`, you are on a build prior to the fix where the scheduler tried to resolve a deployment's secrets/configs/volumes *before* tearing it down. A resource deleted alongside the deployment (e.g. the secret a `secretRef` pointed at) then made resolution fail every tick, so cleanup was never reached.
+A deployment shown as `deleted` should disappear within a scheduler cycle or two once its containers are gone, because the row is purged automatically. If it lingers and `ring deployment events <ID>` keeps logging `secret_resolution_error` / `config_load_error` / `volume_resolution_error`, you are on a build prior to the fix where the scheduler tried to resolve a deployment's secrets/configs/volumes *before* tearing it down. A resource deleted alongside the deployment (e.g. the secret a `secretRef` pointed at) then made resolution fail every tick, so cleanup was never reached.
 
 Current builds reconcile a `deleted` deployment straight to teardown and purge, ignoring secret/config/volume resolution. If you hit this on an older server, upgrade; the stuck row clears on the next cycle after restart.
 
@@ -137,9 +137,9 @@ ring deployment events <DEPLOYMENT_ID> --level error --limit 20
 
 The event message names the likely cause and the fix, and keeps Docker's exact rejection in `(original error: …)` for the full detail. Three cases are distinguished:
 
-- **`… not found …`** — the tag or digest doesn't exist in the registry (or `image_pull_policy: Never` and the image isn't cached locally). Check the image reference.
-- **`registry authentication failed … — check config.server, config.username and config.password`** — the registry refused the credentials (or required some and none were sent). Fix the credentials below.
-- **`cannot reach the registry … — is it up and the registry host correct?`** — a transport failure (connection refused, host not found, timeout). The registry host is wrong or down; verify with `docker pull <image>` from the host.
+- **`… not found …`**: the tag or digest doesn't exist in the registry (or `image_pull_policy: Never` and the image isn't cached locally). Check the image reference.
+- **`registry authentication failed … — check config.server, config.username and config.password`**: the registry refused the credentials (or required some and none were sent). Fix the credentials below.
+- **`cannot reach the registry … — is it up and the registry host correct?`**: a transport failure (connection refused, host not found, timeout). The registry host is wrong or down; verify with `docker pull <image>` from the host.
 
 For private registries, set `config.server` / `config.username` / `config.password` in the manifest:
 
@@ -166,19 +166,19 @@ After fixing the root cause, re-apply the manifest. Ring resets the counter on a
 
 ### `insufficient_resources`
 
-The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it — *before* creating any container or booting any VM. The event names the gap:
+The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it, *before* creating any container or booting any VM. The event names the gap:
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> --level error --limit 5
 # insufficient host memory for 'web': needs 4096 MiB but only 1800 MiB is available — …
 ```
 
-This status is **terminal** — Ring does not retry, because the memory isn't going to reappear on its own. Two ways out:
+This status is **terminal**: Ring does not retry, because the memory isn't going to reappear on its own. Two ways out:
 
 - Free memory on the host (stop other workloads), then re-apply the manifest.
 - Lower the deployment's `resources.requests.memory` (or `resources.limits.memory` if no request is set) to fit, then re-apply.
 
-The check compares against memory available *at that moment*; it's a guard against gross over-asks, not a precise reservation system. CPU is not gated — CPU overcommit is allowed.
+The check compares against memory available *at that moment*; it's a guard against gross over-asks, not a precise reservation system. CPU is not gated; CPU overcommit is allowed.
 
 ### Health checks flap
 
@@ -189,10 +189,10 @@ ring deployment health-checks <DEPLOYMENT_ID> --latest   # one row per check
 
 Common causes:
 
-- **`timeout`** — the probe's `timeout` is shorter than the application's actual response time. Increase, or fix the slow path
-- **`failed`** with HTTP — a 3xx response counts as failure (Ring doesn't follow redirects). Point the URL at the redirect target
-- **`failed`** with TCP — the port isn't open inside the container yet. Either bump `threshold`, or use a TCP/HTTP check on an endpoint that signals real readiness
-- **`failed`** flapping between hosts — `interval` is currently advisory; probes actually run once per scheduler tick (default 10s). Lower the tick (`RING_SCHEDULER_INTERVAL=2`) for tighter cadence
+- **`timeout`**: the probe's `timeout` is shorter than the application's actual response time. Increase, or fix the slow path
+- **`failed`** with HTTP: a 3xx response counts as failure (Ring doesn't follow redirects). Point the URL at the redirect target
+- **`failed`** with TCP: the port isn't open inside the container yet. Either bump `threshold`, or use a TCP/HTTP check on an endpoint that signals real readiness
+- **`failed`** flapping between hosts: `interval` is currently advisory; probes actually run once per scheduler tick (default 10s). Lower the tick (`RING_SCHEDULER_INTERVAL=2`) for tighter cadence
 
 ### Rolling update stuck on the new version
 
@@ -205,7 +205,7 @@ ring deployment logs <CHILD_ID> --tail 200
 
 If the child never goes healthy, Ring leaves the parent running. Fix the manifest and re-apply (creates a new child, ignores the failed one), or `ring deployment delete <CHILD_ID>` to clear it explicitly.
 
-To roll back, set the image tag to the previous version and re-apply — Ring rolls forward to the older tag through the same rolling-update path.
+To roll back, set the image tag to the previous version and re-apply; Ring rolls forward to the older tag through the same rolling-update path.
 
 ### "Multiple active deployments share name+namespace"
 
@@ -228,7 +228,7 @@ sudo setcap cap_net_admin,cap_net_raw+ep $(which cloud-hypervisor)
 getcap $(which cloud-hypervisor)
 ```
 
-Re-run after every CH upgrade — `setcap` doesn't survive a new binary.
+Re-run after every CH upgrade, since `setcap` doesn't survive a new binary.
 
 ### VM boots but is unreachable on its published port
 
@@ -256,7 +256,7 @@ Either the in-guest `ring-agent` isn't running, or the agent's `cap_net_admin` /
 
 ## Generic diagnostic flow
 
-`ring doctor` is the first-line check — it verifies Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites (binary, KVM, firmware, virtiofsd, xorriso, socat).
+`ring doctor` is the first-line check: it verifies Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites (binary, KVM, firmware, virtiofsd, xorriso, socat).
 
 ```bash
 ring doctor

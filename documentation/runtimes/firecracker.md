@@ -1,6 +1,6 @@
 # Firecracker
 
-A minimal KVM-backed **micro-VM** — the technology behind AWS Lambda. A tiny device model (virtio-net, virtio-block, virtio-vsock, a serial console) and a ~1 s boot. Status: **experimental**.
+A minimal KVM-backed **micro-VM**, the technology behind AWS Lambda. A tiny device model (virtio-net, virtio-block, virtio-vsock, a serial console) and a ~1 s boot. Status: **experimental**.
 
 ## Prerequisites
 
@@ -11,7 +11,7 @@ A minimal KVM-backed **micro-VM** — the technology behind AWS Lambda. A tiny d
    firecracker --version
    ```
 
-2. **A kernel and a rootfs** on the host. Firecracker boots an uncompressed kernel (`vmlinux`) plus an ext4 rootfs directly — there is **no image pull**.
+2. **A kernel and a rootfs** on the host. Firecracker boots an uncompressed kernel (`vmlinux`) plus an ext4 rootfs directly, with **no image pull**.
 
    ```bash
    # example assets from the Firecracker CI bucket
@@ -57,7 +57,7 @@ What Ring does: copies the rootfs per instance, spawns a `firecracker` process, 
 
 ## Logs
 
-The guest serial console (kernel, init, and anything the workload writes to the console) is persisted per instance and readable with the standard commands — same as every other runtime:
+The guest serial console (kernel, init, and anything the workload writes to the console) is persisted per instance and readable with the standard commands, same as every other runtime:
 
 ```bash
 ring deployment logs <deployment-id>            # whole console
@@ -65,11 +65,11 @@ ring deployment logs <deployment-id> --tail 50  # last 50 lines
 ring deployment logs <deployment-id> --follow   # stream as the guest writes
 ```
 
-Console logs are rotated once they cross `max_console_log_bytes` (10 MiB by default; see [config reference](/documentation/reference/config-toml)). Because Firecracker holds the log open by inode — it's the VM process' stdout — rotation is done by **copy-truncate**: the content is copied to `<id>.console.log.1` and the live file is truncated in place, so the VM keeps writing to the same path without a sparse hole. `ring deployment logs` reads back through the rotated backups.
+Console logs are rotated once they cross `max_console_log_bytes` (10 MiB by default; see [config reference](/documentation/reference/config-toml)). Because Firecracker holds the log open by inode (it's the VM process' stdout), rotation is done by **copy-truncate**: the content is copied to `<id>.console.log.1` and the live file is truncated in place, so the VM keeps writing to the same path without a sparse hole. `ring deployment logs` reads back through the rotated backups.
 
 ## Metrics
 
-Per-instance CPU, memory, network, disk I/O, and thread counts are exposed at `GET /deployments/{id}/metrics`, the same as every other runtime. Ring reads them host-side from the `firecracker` process (`/proc/<pid>/{stat,status,io}`) and the per-VM tap counters — no in-guest agent required. Memory `usage_percent` is reported against the deployment's memory limit; network counters read zero for deployments that publish no ports (no tap is created).
+Per-instance CPU, memory, network, disk I/O, and thread counts are exposed at `GET /deployments/{id}/metrics`, the same as every other runtime. Ring reads them host-side from the `firecracker` process (`/proc/<pid>/{stat,status,io}`) and the per-VM tap counters, with no in-guest agent required. Memory `usage_percent` is reported against the deployment's memory limit; network counters read zero for deployments that publish no ports (no tap is created).
 
 ## Jobs (`kind: job`)
 
@@ -81,7 +81,7 @@ Completed jobs are sticky (never rebooted) and their per-instance artifacts (soc
 
 ## Volumes
 
-Firecracker has no virtio-fs (the Cloud Hypervisor mechanism — its maintainers declined it on attack-surface grounds), so a volume is realised as a separate **ext4 image attached as a virtio-block device**. Ring builds the image on the host, attaches it after the root device (`/dev/vdb`, `/dev/vdc`, … in declaration order), and cloud-init in the guest mounts it at the destination.
+Firecracker has no virtio-fs (the Cloud Hypervisor mechanism, which its maintainers declined on attack-surface grounds), so a volume is realised as a separate **ext4 image attached as a virtio-block device**. Ring builds the image on the host, attaches it after the root device (`/dev/vdb`, `/dev/vdc`, … in declaration order), and cloud-init in the guest mounts it at the destination.
 
 ```yaml
 volumes:
@@ -90,20 +90,20 @@ volumes:
   - { type: config, source: nginx-conf, key: nginx.conf, destination: /etc/nginx/nginx.conf }
 ```
 
-- **bind** — a fresh ext4 image seeded from the host source directory.
-- **volume** (named) — a persistent ext4 image under `<socket_dir>/volumes/<namespace>/<name>.ext4`, created once (256 MiB) and reused; it survives deployment deletion (it *is* the data).
-- **config** / **secret** — a fresh ext4 image holding the rendered file, mounted read-only.
+- **bind**: a fresh ext4 image seeded from the host source directory.
+- **volume** (named): a persistent ext4 image under `<socket_dir>/volumes/<namespace>/<name>.ext4`, created once (256 MiB) and reused; it survives deployment deletion (it *is* the data).
+- **config** / **secret**: a fresh ext4 image holding the rendered file, mounted read-only.
 
 Bind and config/secret images are ephemeral and reaped when the instance stops; only named volumes persist.
 
-> Volume mounting requires **cloud-init** (and `mount`/`mkdir`) in the guest rootfs — the same requirement as the static network config. A rootfs without cloud-init attaches the block device but won't mount it.
+> Volume mounting requires **cloud-init** (and `mount`/`mkdir`) in the guest rootfs, the same requirement as the static network config. A rootfs without cloud-init attaches the block device but won't mount it.
 
 ## Known gaps (experimental)
 
-- `image:` must be a host rootfs file — no registry pull.
+- `image:` must be a host rootfs file, with no registry pull.
 
 ## See also
 
 - [Runtimes overview](/documentation/runtimes)
-- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor) — the more complete micro-VM runtime
+- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor): the more complete micro-VM runtime
 - [Concepts → Runtimes](/documentation/concepts/runtimes)

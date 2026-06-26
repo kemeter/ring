@@ -8,7 +8,7 @@ Instead of polling `GET /deployments/{id}` to find out when a deployment changes
 ring webhook create https://hooks.example.com/ring --event deployment.status_changed
 ```
 
-Ring prints the webhook id on stdout and, on stderr, the generated signing secret — **shown once**:
+Ring prints the webhook id on stdout and, on stderr, the generated signing secret, which is **shown once**:
 
 ```
 Webhook registered for https://hooks.example.com/ring
@@ -25,8 +25,8 @@ Managing webhooks needs an API token with the `webhooks:write` scope (see [API t
 
 Each delivery is a JSON POST with these headers:
 
-- `X-Ring-Event: deployment.status_changed` — the event kind
-- `X-Ring-Signature: sha256=<hmac>` — HMAC-SHA256 of the raw body, keyed by your secret (only when the webhook has a secret)
+- `X-Ring-Event: deployment.status_changed`: the event kind
+- `X-Ring-Signature: sha256=<hmac>`: HMAC-SHA256 of the raw body, keyed by your secret (only when the webhook has a secret)
 
 Verify the signature before trusting the body. In Python:
 
@@ -57,12 +57,12 @@ Respond with any `2xx` to acknowledge. A non-2xx (or a timeout) makes Ring retry
 
 ### Other event kinds
 
-`deployment.status_changed` is the headline event, but Ring emits more — subscribe to all of them by omitting `--event`, or pick specific ones (`--event` is repeatable):
+`deployment.status_changed` is the headline event, but Ring emits more. Subscribe to all of them by omitting `--event`, or pick specific ones (`--event` is repeatable):
 
-- `deployment.health_check_failed` — a probe failed and its `on_failure` action (restart / stop / alert) fired
-- `deployment.rolling_update` — a rollout drained an instance, completed, or failed
-- `deployment.scaled` — the reconciler added or removed an instance
-- `deployment.error` — the runtime couldn't bring a deployment up, with a `reason` and a `category` (`user` / `host` / `transient`)
+- `deployment.health_check_failed`: a probe failed and its `on_failure` action (restart / stop / alert) fired
+- `deployment.rolling_update`: a rollout drained an instance, completed, or failed
+- `deployment.scaled`: the reconciler added or removed an instance
+- `deployment.error`: the runtime couldn't bring a deployment up, with a `reason` and a `category` (`user` / `host` / `transient`)
 
 See [API reference → Webhooks](/documentation/reference/api#webhooks) for each payload, and [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) for how these relate to a deployment's status.
 

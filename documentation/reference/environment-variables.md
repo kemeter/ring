@@ -4,7 +4,7 @@ Variables Ring reads from the process environment. Set them in your shell, a sys
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `RING_SECRET_KEY` | **Yes** | — | 32-byte base64-encoded encryption key for secrets at rest. Server refuses to start if missing or malformed (exits with code 1). Generate with `openssl rand -base64 32`. **Losing it makes every encrypted secret unrecoverable.** |
+| `RING_SECRET_KEY` | **Yes** | none | 32-byte base64-encoded encryption key for secrets at rest. Server refuses to start if missing or malformed (exits with code 1). Generate with `openssl rand -base64 32`. **Losing it makes every encrypted secret unrecoverable.** |
 | `RING_DATABASE_PATH` | No | `./ring.db` | Path to the SQLite database file. The path is created on first start; parent directory must exist and be writable |
 | `RING_DB_POOL_SIZE` | No | `5` | Maximum SQLite connections in the pool |
 | `RING_CONFIG_DIR` | No | `~/.config/kemeter/ring` | Where Ring reads `config.toml` and `auth.json`. Also the default location for Cloud Hypervisor firmware/sockets |
@@ -67,6 +67,6 @@ This is **client-side interpolation** (the values are substituted before the req
 
 ## See also
 
-- [Reference: config.toml](/documentation/reference/config-toml) — file-based configuration
-- [Reference: CLI](/documentation/reference/cli) — every subcommand
-- [How-to: run as a service](/documentation/how-to/run-as-service) — production layout
+- [Reference: config.toml](/documentation/reference/config-toml) for file-based configuration
+- [Reference: CLI](/documentation/reference/cli) for every subcommand
+- [How-to: run as a service](/documentation/how-to/run-as-service) for the production layout

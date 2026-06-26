@@ -37,14 +37,14 @@ Ring exists because Kubernetes is the wrong shape for a lot of real workloads. T
 ## When Kubernetes is the right tool
 
 - **Multi-node.** You need workloads to schedule across more than one machine. Ring orchestrates one host, full stop.
-- **High availability.** Control-plane HA, multi-AZ workloads, automatic failover when a node dies. Ring's HA model is "restart the process" — if the host is down, your workloads are down.
+- **High availability.** Control-plane HA, multi-AZ workloads, automatic failover when a node dies. Ring's HA model is "restart the process": if the host is down, your workloads are down.
 - **Horizontal autoscaling.** Ring has fixed `replicas:`. Kubernetes has HPA / VPA / cluster autoscaler.
-- **Operator ecosystem.** Cert-manager, ingress controllers, service meshes (Istio, Linkerd), observability stacks (Prometheus operator). Ring runs containers — you wire up your own toolchain.
-- **Large teams with RBAC needs.** Kubernetes has fine-grained RBAC, namespaces, network policies, pod security standards. Ring authenticates with bearer tokens but has **no roles, no per-namespace scopes, no read-only tokens** — every valid token has full API access. Fine for small teams; insufficient for hundreds of developers.
+- **Operator ecosystem.** Cert-manager, ingress controllers, service meshes (Istio, Linkerd), observability stacks (Prometheus operator). Ring runs containers, and you wire up your own toolchain.
+- **Large teams with RBAC needs.** Kubernetes has fine-grained RBAC, namespaces, network policies, pod security standards. Ring authenticates with bearer tokens but has **no roles, no per-namespace scopes, no read-only tokens**: every valid token has full API access. Fine for small teams; insufficient for hundreds of developers.
 
 ## What Ring deliberately leaves out
 
-These omissions aren't oversights — they're choices that keep Ring a single process:
+These omissions aren't oversights; they're choices that keep Ring a single process:
 
 - **No multi-node scheduling.** Adding it would require leader election, gossip, a distributed state store. That's the Kubernetes shape, and Kubernetes already exists.
 - **No virtual IPs / `Service` resource.** Ring exposes Docker's DNS alias for a deployment name. Real L4/L7 load balancing is a proxy's job.
@@ -55,13 +55,13 @@ These omissions aren't oversights — they're choices that keep Ring a single pr
 
 ## Common pushback
 
-> "But Kubernetes can run on a single node — `k3s`, `minikube`, MicroK8s."
+> "But Kubernetes can run on a single node: `k3s`, `minikube`, MicroK8s."
 
 True, and that's a reasonable choice if you want the Kubernetes API and you're willing to operate the control plane (even a minimal one). Ring's value is being **not** Kubernetes: no etcd, no kubelet, no kube-proxy, no CNI plugin, no admission controllers. One process, one binary, one SQLite file.
 
 > "How do I scale beyond one machine when I outgrow Ring?"
 
-Migrate to Kubernetes. The manifests don't translate one-for-one (Ring's `health_check` block isn't a Kubernetes probe spec) but the concepts do — deployments, namespaces, secrets, rolling updates. The transition is the kind of work you do once when you actually need it, not architecture you precommit to.
+Migrate to Kubernetes. The manifests don't translate one-for-one (Ring's `health_check` block isn't a Kubernetes probe spec) but the concepts do: deployments, namespaces, secrets, rolling updates. The transition is the kind of work you do once when you actually need it, not architecture you precommit to.
 
 > "Is Ring production-ready?"
 
@@ -93,9 +93,9 @@ That covers 90% of what teams use Helm or Kustomize for: one manifest per servic
 
 It's a deliberate design choice, not an oversight:
 
-1. **`kubectl` is stateless and declarative.** The YAML is supposed to be a reproducible declaration of desired state — if `kubectl apply -f deploy.yaml` substitutes from the shell, the same file produces different results depending on who runs it. That breaks GitOps.
-2. **The API server only accepts JSON conforming to the OpenAPI schema.** Adding `$VAR` templating server-side would turn the core API into a template engine (security and semantic problems). Doing it client-side is exactly what Helm/Kustomize/envsubst already do — Kubernetes deliberately externalized that layer.
-3. **Multi-tenant ambiguity.** In a shared cluster, "the environment of whom?" matters. Multiple teams, CI jobs, and controllers apply manifests concurrently — there is no single shell environment to interpolate from.
+1. **`kubectl` is stateless and declarative.** The YAML is supposed to be a reproducible declaration of desired state, so if `kubectl apply -f deploy.yaml` substitutes from the shell, the same file produces different results depending on who runs it. That breaks GitOps.
+2. **The API server only accepts JSON conforming to the OpenAPI schema.** Adding `$VAR` templating server-side would turn the core API into a template engine (security and semantic problems). Doing it client-side is exactly what Helm/Kustomize/envsubst already do, since Kubernetes deliberately externalized that layer.
+3. **Multi-tenant ambiguity.** In a shared cluster, "the environment of whom?" matters. Multiple teams, CI jobs, and controllers apply manifests concurrently, so there is no single shell environment to interpolate from.
 
 Ring sidesteps all three: it's single-node, so "the shell environment of the process running `ring apply`" is unambiguous. We assume the single-node trade-off everywhere else; this is one of the wins.
 

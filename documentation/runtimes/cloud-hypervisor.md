@@ -1,6 +1,6 @@
 # Cloud Hypervisor
 
-The Cloud Hypervisor runtime is **alpha**. It runs each deployment as a dedicated microVM with full kernel isolation — a stronger security boundary than containers, at the cost of a narrower feature set. This page walks through the setup and the gotchas.
+The Cloud Hypervisor runtime is **alpha**. It runs each deployment as a dedicated microVM with full kernel isolation, a stronger security boundary than containers, at the cost of a narrower feature set. This page walks through the setup and the gotchas.
 
 For why you might want it instead of Docker, see [Runtimes](/documentation/concepts/runtimes).
 
@@ -25,7 +25,7 @@ You need all of these on the host:
    getcap $(which cloud-hypervisor)
    ```
 
-   Re-run after every CH upgrade — `setcap` doesn't survive a new binary. `ring doctor` flags this and prints the exact command if missing.
+   Re-run after every CH upgrade, since `setcap` doesn't survive a new binary. `ring doctor` flags this and prints the exact command if missing.
 
 4. **EFI firmware** at the default location:
 
@@ -54,11 +54,11 @@ You need all of these on the host:
 
    If you'd rather build it yourself: `cargo build -p ring-agent --release --target x86_64-unknown-linux-musl`. Either way, install it at `/usr/local/bin/ring-agent` in the guest and run it at boot via a systemd unit. It listens on AF_VSOCK port 2375.
 
-Run `ring doctor` to verify everything is in place — it checks each item and prints the missing pieces.
+Run `ring doctor` to verify everything is in place; it checks each item and prints the missing pieces.
 
 ## Configure Ring
 
-Enable the Cloud Hypervisor runtime under the `[server]` table in `~/.config/kemeter/ring/config.toml` (runtimes are opt-in — `enabled = true` is required):
+Enable the Cloud Hypervisor runtime under the `[server]` table in `~/.config/kemeter/ring/config.toml` (runtimes are opt-in, so `enabled = true` is required):
 
 ```toml
 [contexts.default]
@@ -135,15 +135,15 @@ What Ring does:
 1. Creates a sparse copy of the base image for each instance
 2. Spawns a `cloud-hypervisor` process with the configured firmware
 3. Boots the VM via Cloud Hypervisor's HTTP API
-4. Reconciles by scanning sockets (no event stream from CH — crash detection is bounded by the scheduler tick)
+4. Reconciles by scanning sockets (no event stream from CH, so crash detection is bounded by the scheduler tick)
 
 ## Environment variables (cloud-init)
 
 `environment:` entries are delivered via cloud-init's NoCloud datasource. Ring builds a small ISO with the env vars and attaches it as a second drive. At boot, cloud-init writes:
 
-- `/etc/ring/env` — `KEY=value` lines, mode 0600
-- `/etc/profile.d/ring-env.sh` — `export` lines for interactive shells
-- `/etc/systemd/system/service.d/ring-env.conf` — drop-in with `EnvironmentFile=-/etc/ring/env`
+- `/etc/ring/env`: `KEY=value` lines, mode 0600
+- `/etc/profile.d/ring-env.sh`: `export` lines for interactive shells
+- `/etc/systemd/system/service.d/ring-env.conf`: drop-in with `EnvironmentFile=-/etc/ring/env`
 
 **Requires** `xorriso` on the host and a guest image with cloud-init (every standard cloud image ships it). Custom images from scratch (e.g. Buildroot) won't pick the variables up unless you add cloud-init or read `/etc/ring/env` yourself.
 
@@ -175,9 +175,9 @@ volumes:
     permission: ro
 ```
 
-- **`bind`** — `virtiofsd --shared-dir <source>`, tagged `bind-<idx>`
-- **`volume`** — Ring creates `<socket_dir>/volumes/<namespace>/<name>` on first use and persists it across restarts/deletes. Tagged `vol-<idx>`.
-- **`config`** — Ring renders the config payload to `<socket_dir>/<instance>.shares/cfg-<idx>/<basename>` and shares the directory read-only. Tagged `cfg-<idx>`.
+- **`bind`**: `virtiofsd --shared-dir <source>`, tagged `bind-<idx>`
+- **`volume`**: Ring creates `<socket_dir>/volumes/<namespace>/<name>` on first use and persists it across restarts/deletes. Tagged `vol-<idx>`.
+- **`config`**: Ring renders the config payload to `<socket_dir>/<instance>.shares/cfg-<idx>/<basename>` and shares the directory read-only. Tagged `cfg-<idx>`.
 
 **Requires** `virtiofsd` on the host, `CONFIG_VIRTIO_FS=y` in the guest kernel (every standard cloud image has it), and cloud-init in the guest to apply the mounts at boot.
 
@@ -194,13 +194,13 @@ Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>`
 
 If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `PortAllocationFailed` event. After `MAX_RESTART_COUNT` failed attempts, the deployment lands in `crash_loop_back_off`.
 
-Both `tcp` (default) and `udp` are supported via the port's `protocol` field — `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
+Both `tcp` (default) and `udp` are supported via the port's `protocol` field; `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
 ## Health checks
 
-`tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375 — install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
+`tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375, so install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
 
-The readiness gate (`readiness: true`) works exactly as on Docker — the scheduler-side drain logic is runtime-agnostic. **But there is no CH equivalent of the native Docker `HEALTHCHECK` translation**, so a `readiness: true` check gates the Ring drain but is not exposed to external proxies.
+The readiness gate (`readiness: true`) works exactly as on Docker, since the scheduler-side drain logic is runtime-agnostic. **But there is no CH equivalent of the native Docker `HEALTHCHECK` translation**, so a `readiness: true` check gates the Ring drain but is not exposed to external proxies.
 
 ## Logs
 
@@ -212,7 +212,7 @@ To get application logs into the stream, redirect them to `/dev/console` from in
 
 Ring rotates the console log automatically. A background task sweeps the socket directory every 60 seconds and, for each `<instance>.console.log` whose size has crossed the threshold, shifts the existing backups (`.1` → `.2`, `.2` → `.3`, ...) and renames the live file to `.1`. Anything past the configured backup count is dropped.
 
-The defaults — 10 MiB per file, 3 backups kept — give roughly 40 MiB of history per VM and survive a typical noisy boot without churning. Override them in `config.toml` if you need more or less:
+The defaults (10 MiB per file, 3 backups kept) give roughly 40 MiB of history per VM and survive a typical noisy boot without churning. Override them in `config.toml` if you need more or less:
 
 ```toml
 [runtime.cloud_hypervisor]
@@ -228,9 +228,9 @@ Rotated files are cleaned up with the rest of the instance artifacts when a VM s
 
 Each line is tagged with a best-effort level (`error`, `warning`, `info`, `debug`, `unknown`) when you request the structured API response (`GET /deployments/{id}/logs` returns JSON; the CLI rendering currently shows the message body only). The classifier recognises:
 
-- **Kernel** — the `<N>` syslog priority prefix (`<0>`..`<3>` → error, `<4>` → warning, `<5>`/`<6>` → info, `<7>` → debug) and crash markers (`BUG:`, `Oops:`, `Kernel panic`).
-- **cloud-init / systemd** — uppercase level words (`ERROR`, `CRITICAL`, `WARNING`, `WARN`, `NOTICE`, `INFO`, `DEBUG`) as they appear in the journal stream piped to the console.
-- **Web apps & boot firmware** — bracketed markers in either case (`[error]` / `[ERROR]`, `[warning]` / `[WARN]`, `[notice]` / `[NOTICE]`, `[info]` / `[INFO]`, `[DEBUG]`, `info:`). `hypervisor-fw`'s own boot lines (`[INFO] Page tables setup`) fall under this rule.
+- **Kernel**: the `<N>` syslog priority prefix (`<0>`..`<3>` → error, `<4>` → warning, `<5>`/`<6>` → info, `<7>` → debug) and crash markers (`BUG:`, `Oops:`, `Kernel panic`).
+- **cloud-init / systemd**: uppercase level words (`ERROR`, `CRITICAL`, `WARNING`, `WARN`, `NOTICE`, `INFO`, `DEBUG`) as they appear in the journal stream piped to the console.
+- **Web apps & boot firmware**: bracketed markers in either case (`[error]` / `[ERROR]`, `[warning]` / `[WARN]`, `[notice]` / `[NOTICE]`, `[info]` / `[INFO]`, `[DEBUG]`, `info:`). `hypervisor-fw`'s own boot lines (`[INFO] Page tables setup`) fall under this rule.
 
 Anything that doesn't match falls back to `unknown`.
 
@@ -242,26 +242,26 @@ This is the canonical parity table. Other pages link here rather than restate it
 |---|---|
 | `tcp` / `http` health checks | **Supported.** Probes from the host against the VM's deterministic guest IP |
 | `command` health checks | **Supported** via in-guest `ring-agent` over AF_VSOCK port 2375. Requires the agent in the guest image. |
-| Custom `command: [...]` field | **Rejected at the API** — the VM boots whatever its image is configured to run |
-| Docker image references | **Rejected at the API** — `image:` must be an absolute path to a raw disk image |
-| `labels:` | **Stored and usable.** Not applied to the VM (no container-label equivalent), but persisted as Ring metadata — shown in `inspect` and filterable with `ring deployment list --label key=value`, same as Docker |
+| Custom `command: [...]` field | **Rejected at the API**, since the VM boots whatever its image is configured to run |
+| Docker image references | **Rejected at the API**: `image:` must be an absolute path to a raw disk image |
+| `labels:` | **Stored and usable.** Not applied to the VM (no container-label equivalent), but persisted as Ring metadata (shown in `inspect` and filterable with `ring deployment list --label key=value`), same as Docker |
 | `resources.limits.cpu` | Honored as **allocation, not cap**: rounded down to whole vCPU, floor 1 (`"500m"` → 1 vCPU) |
 | `resources.limits.memory` | Honored as **allocation, not cap**: VM RAM size, minimum 128 MiB |
-| `resources.requests.*` | Ignored (VM is sized from `limits`) — a **warning event** is recorded at create so it isn't silent |
-| `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull) — a **warning event** is recorded at create |
-| `config.user` (privileged / id / group) | Ignored — a **warning event** is recorded at create |
-| `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`. CH does not expose the workload's exit code — Ring sees VM state only. |
-| Inter-VM networking | Each VM is isolated — no shared bridge, no DNS between siblings. Cross-VM traffic goes through host-published ports |
+| `resources.requests.*` | Ignored (VM is sized from `limits`); a **warning event** is recorded at create so it isn't silent |
+| `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull); a **warning event** is recorded at create |
+| `config.user` (privileged / id / group) | Ignored; a **warning event** is recorded at create |
+| `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`. CH does not expose the workload's exit code, so Ring sees VM state only. |
+| Inter-VM networking | Each VM is isolated, with no shared bridge and no DNS between siblings. Cross-VM traffic goes through host-published ports |
 | Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
-| Port mapping | **Supported** via `socat` userspace forwarders — both `tcp` and `udp` |
+| Port mapping | **Supported** via `socat` userspace forwarders, for both `tcp` and `udp` |
 | Deployment logs | **Supported** via serial console with size-based rotation (10 MiB × 3 backups by default, configurable) |
 | Deployment metrics | **Supported.** CPU% and memory from `/proc/<vmm-pid>/{stat,status}`, network from `/sys/class/net/<tap>/statistics/*` (swapped host↔guest), threads from `/proc/<vmm-pid>/status`. Disk I/O reads `/proc/<vmm-pid>/io` when accessible but reports zeros on hardened hosts: CH clears `PR_SET_DUMPABLE` and `kernel.yama.ptrace_scope >= 1` then denies even the parent. PID `limit` reports as 0 (CH has no equivalent of cgroup `pids.max`) |
-| Runtime event stream | None — CH has no live event stream; crash detection is tick-bound |
-| Container DNS aliases between replicas | Not applicable — no shared bridge, no DNS |
+| Runtime event stream | None. CH has no live event stream; crash detection is tick-bound |
+| Container DNS aliases between replicas | Not applicable, since there is no shared bridge and no DNS |
 
 ## See also
 
-- [Runtimes](/documentation/concepts/runtimes) — Docker vs CH trade-offs
-- [Architecture](/documentation/concepts/architecture) — where the runtime adapter sits
-- [Manifest reference](/documentation/reference/manifest) — per-field per-runtime behavior
+- [Runtimes](/documentation/concepts/runtimes): Docker vs CH trade-offs
+- [Architecture](/documentation/concepts/architecture): where the runtime adapter sits
+- [Manifest reference](/documentation/reference/manifest): per-field per-runtime behavior

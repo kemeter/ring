@@ -13,7 +13,7 @@ Runtimes are **opt-in**: none is enabled by default. You turn one on in `config.
 enabled = true
 ```
 
-Enable just the runtimes a host actually runs — Docker-only, Podman-only, containerd-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
+Enable just the runtimes a host actually runs: Docker-only, Podman-only, containerd-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
 
 ## Quick comparison
 
@@ -43,12 +43,12 @@ The common choice. Containers, one per replica, attached to a per-namespace brid
 - You need labels (Traefik, observability tooling)
 
 **Caveats:**
-- Isolation boundary is the Linux kernel — a kernel exploit in one container can affect the host and other containers
+- Isolation boundary is the Linux kernel, so a kernel exploit in one container can affect the host and other containers
 - The Docker socket gives Ring full control; treat the Ring host as privileged
 
 ## Podman runtime (beta)
 
-Podman exposes a **Docker-compatible REST API** (`podman system service`), so Ring drives it with the same client it uses for Docker — same containers, images, exec-based health checks, labels, registry auth. The headline difference is **rootless by default**: containers run under your user namespace, no root daemon required.
+Podman exposes a **Docker-compatible REST API** (`podman system service`), so Ring drives it with the same client it uses for Docker: same containers, images, exec-based health checks, labels, registry auth. The headline difference is **rootless by default**: containers run under your user namespace, no root daemon required.
 
 Enable it and point Ring at the socket (rootless-first resolution is the default):
 
@@ -58,7 +58,7 @@ enabled = true
 # host = "unix:///run/user/1000/podman/podman.sock"   # rootless default
 ```
 
-The socket must be running — start it once with `systemctl --user start podman.socket` (rootless) or `systemctl start podman.socket` (root). Ring pings it at startup and fails fast if it's unreachable.
+The socket must be running; start it once with `systemctl --user start podman.socket` (rootless) or `systemctl start podman.socket` (root). Ring pings it at startup and fails fast if it's unreachable.
 
 **Good fit when:**
 - You want rootless containers (no privileged daemon on the host)
@@ -67,12 +67,12 @@ The socket must be running — start it once with `systemctl --user start podman
 
 **Caveats:**
 - **Crash detection is tick-bound.** Ring does not consume Podman's event stream, so a crashed container is noticed on the next scheduler reconcile pass (which still bumps `restart_count` and converges a crash loop to `CrashLoopBackOff`, bounded), not sub-second like Docker. The orphan-volume reaper, which *does* rely on live events, stays Docker-only.
-- **Host networking** (`network.mode: host`) is not yet allowed on Podman — Docker only.
-- Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root — mind file permissions on mounts.
+- **Host networking** (`network.mode: host`) is not yet allowed on Podman, only on Docker.
+- Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root, so mind file permissions on mounts.
 
 ## containerd runtime (beta)
 
-containerd is the OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is reached through a Docker-compatible API, containerd speaks its own native **gRPC** protocol on `/run/containerd/containerd.sock` — so Ring drives it directly, with no Docker daemon in the picture. This is the right choice on hosts that already run containerd for Kubernetes (k3s, RKE2, stock `containerd`) and don't want a second container engine.
+containerd is the OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is reached through a Docker-compatible API, containerd speaks its own native **gRPC** protocol on `/run/containerd/containerd.sock`, so Ring drives it directly, with no Docker daemon in the picture. This is the right choice on hosts that already run containerd for Kubernetes (k3s, RKE2, stock `containerd`) and don't want a second container engine.
 
 Enable it and (optionally) point Ring at a non-default socket or namespace:
 
@@ -83,9 +83,9 @@ enabled = true
 # namespace = "ring"
 ```
 
-Ring keeps all the objects it creates under its own containerd **namespace** (`ring` by default) so they don't collide with `k8s.io`, `moby` or `default`. This is containerd's metadata-partition concept and is unrelated to a Ring deployment namespace — deployments are still scoped the usual way, via the `ring_deployment` label.
+Ring keeps all the objects it creates under its own containerd **namespace** (`ring` by default) so they don't collide with `k8s.io`, `moby` or `default`. This is containerd's metadata-partition concept and is unrelated to a Ring deployment namespace; deployments are still scoped the usual way, via the `ring_deployment` label.
 
-Because containerd is lower-level than Docker, Ring assembles by hand what bollard would otherwise hide: images are pulled through the **transfer** service (resolve → fetch layers → unpack), the rootfs is a writable **snapshot** prepared from the image's layer chain, the container runs as a **task** under the `runc` shim, and networking is wired with **CNI** (a `bridge` + `host-local` IPAM chain, auto-written to `/etc/cni/net.d` if absent) so every container gets a routable IP — the same model Kubernetes and `nerdctl` use.
+Because containerd is lower-level than Docker, Ring assembles by hand what bollard would otherwise hide: images are pulled through the **transfer** service (resolve → fetch layers → unpack), the rootfs is a writable **snapshot** prepared from the image's layer chain, the container runs as a **task** under the `runc` shim, and networking is wired with **CNI** (a `bridge` + `host-local` IPAM chain, auto-written to `/etc/cni/net.d` if absent) so every container gets a routable IP, the same model Kubernetes and `nerdctl` use.
 
 **Good fit when:**
 - The host already runs containerd (Kubernetes nodes, k3s/RKE2) and you don't want Docker too
@@ -93,14 +93,14 @@ Because containerd is lower-level than Docker, Ring assembles by hand what bolla
 - You need exec-based health checks, labels and registry auth (all supported, like Docker)
 
 **Caveats:**
-- **CNI plugins must be installed** (`/opt/cni/bin`: `bridge`, `host-local`, `loopback`). They ship with most Kubernetes distros; on a bare host install the `containernetworking-plugins` package. Ring writes a default conflist but cannot supply the plugin binaries — without them a container boots with no CNI address.
+- **CNI plugins must be installed** (`/opt/cni/bin`: `bridge`, `host-local`, `loopback`). They ship with most Kubernetes distros; on a bare host install the `containernetworking-plugins` package. Ring writes a default conflist but cannot supply the plugin binaries; without them a container boots with no CNI address.
 - **Stats**: memory and pids come from cgroup v2; CPU% and per-interface network/disk I/O aren't derivable from a single cgroup sample, so they read as zero.
-- **Event stream**: containerd has one, but Ring does not consume it yet — crash detection is tick-bound, like Cloud Hypervisor.
-- **Host networking** (`network.mode: host`) is not yet allowed on containerd — Docker only.
+- **Event stream**: containerd has one, but Ring does not consume it yet, so crash detection is tick-bound, like Cloud Hypervisor.
+- **Host networking** (`network.mode: host`) is not yet allowed on containerd, only on Docker.
 
 ## Cloud Hypervisor runtime (alpha)
 
-Each deployment runs as a dedicated microVM. A VM means a separate kernel, a separate userland, separate memory — the only shared surface is the hypervisor itself (KVM + Cloud Hypervisor). It's the right tool when "container isolation" isn't strong enough: multi-tenant workloads, code from untrusted sources, security-sensitive batch jobs.
+Each deployment runs as a dedicated microVM. A VM means a separate kernel, a separate userland, separate memory; the only shared surface is the hypervisor itself (KVM + Cloud Hypervisor). It's the right tool when "container isolation" isn't strong enough: multi-tenant workloads, code from untrusted sources, security-sensitive batch jobs.
 
 The trade-off: the VM model has no native primitive for several things Docker gives you for free. Ring papers over the gap where it can (cloud-init for env vars, virtio-fs for volumes, `socat` for port forwarding, an in-guest `ring-agent` for command health checks) but several features are silently ignored or rejected.
 
@@ -112,15 +112,15 @@ The trade-off: the VM model has no native primitive for several things Docker gi
 **Caveats:**
 - Boot time is in seconds, not milliseconds
 - Memory overhead is larger
-- No inter-VM networking — each VM is on its own /30, cross-VM traffic goes through host-published ports
+- No inter-VM networking: each VM is on its own /30, cross-VM traffic goes through host-published ports
 - Crash detection is tick-bound (no event stream from CH)
-- Some manifest fields are silently ignored — see [Cloud Hypervisor limitations](/documentation/runtimes/cloud-hypervisor#limitations)
+- Some manifest fields are silently ignored; see [Cloud Hypervisor limitations](/documentation/runtimes/cloud-hypervisor#limitations)
 
 ## Firecracker runtime (experimental)
 
-Like Cloud Hypervisor, each deployment runs as a dedicated KVM-backed microVM with its own kernel — same isolation story, but a different VMM. Firecracker is the minimalist VMM behind AWS Lambda and Fargate: a tiny device model, a fast boot path, and a low memory footprint, at the cost of a smaller feature set than Cloud Hypervisor.
+Like Cloud Hypervisor, each deployment runs as a dedicated KVM-backed microVM with its own kernel: same isolation story, but a different VMM. Firecracker is the minimalist VMM behind AWS Lambda and Fargate: a tiny device model, a fast boot path, and a low memory footprint, at the cost of a smaller feature set than Cloud Hypervisor.
 
-The headline difference from Cloud Hypervisor is the image model. Firecracker boots an **uncompressed kernel** (`vmlinux`) directly — there is no firmware step — and mounts a **rootfs ext4 image** as the root device. Both live on the host filesystem:
+The headline difference from Cloud Hypervisor is the image model. Firecracker boots an **uncompressed kernel** (`vmlinux`) directly (there is no firmware step) and mounts a **rootfs ext4 image** as the root device. Both live on the host filesystem:
 
 ```toml
 [server.runtime.firecracker]
@@ -129,7 +129,7 @@ kernel_path = "/var/lib/ring/firecracker/vmlinux"   # uncompressed kernel
 # socket_dir = "/var/lib/ring/firecracker/sockets"  # per-VM API sockets + rootfs copies
 ```
 
-A deployment's `image` is the **host path to the rootfs** (not an OCI reference — there is no image pull):
+A deployment's `image` is the **host path to the rootfs** (not an OCI reference, since there is no image pull):
 
 ```yaml
 deployments:
@@ -139,9 +139,9 @@ deployments:
     replicas: 2
 ```
 
-Ring copies the rootfs per instance (so replicas and reboots don't share guest state), spawns one `firecracker` process per VM bound to a private API socket, then drives Firecracker's REST API — `boot-source`, `drives`, `machine-config`, `actions` — to configure and boot the microVM.
+Ring copies the rootfs per instance (so replicas and reboots don't share guest state), spawns one `firecracker` process per VM bound to a private API socket, then drives Firecracker's REST API (`boot-source`, `drives`, `machine-config`, `actions`) to configure and boot the microVM.
 
-**Networking.** A deployment that publishes `ports` gets a per-VM `/30` subnet (the same `10.42.x.y` scheme as Cloud Hypervisor), with host-port forwarding via `socat`. Unlike Cloud Hypervisor — which creates its own TAP — Firecracker expects the host TAP to already exist, so **Ring owns the TAP's whole lifecycle**: it creates the interface (via direct `ioctl`s, so the `CAP_NET_ADMIN` capability stays in-process), assigns the host side an IP, hands the device name to Firecracker, and deletes it on teardown. The guest IP is configured by cloud-init from a NoCloud datasource. Running `ring-server` therefore needs `CAP_NET_ADMIN` (or root) for any deployment with ports — grant it with `setcap cap_net_admin+ep $(command -v ring)`.
+**Networking.** A deployment that publishes `ports` gets a per-VM `/30` subnet (the same `10.42.x.y` scheme as Cloud Hypervisor), with host-port forwarding via `socat`. Unlike Cloud Hypervisor (which creates its own TAP), Firecracker expects the host TAP to already exist, so **Ring owns the TAP's whole lifecycle**: it creates the interface (via direct `ioctl`s, so the `CAP_NET_ADMIN` capability stays in-process), assigns the host side an IP, hands the device name to Firecracker, and deletes it on teardown. The guest IP is configured by cloud-init from a NoCloud datasource. Running `ring-server` therefore needs `CAP_NET_ADMIN` (or root) for any deployment with ports; grant it with `setcap cap_net_admin+ep $(command -v ring)`.
 
 **Good fit when:**
 - You want VM-grade isolation with a smaller footprint and faster boot than Cloud Hypervisor
@@ -156,7 +156,7 @@ checks via the in-guest `ring-agent` over vsock, `kind: job` run-to-completion, 
 **Current limitations (experimental):**
 - Crash detection is tick-bound (no event stream), and `labels` are silently ignored
 
-A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them — re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down — so a deployment keeps its guest state and its published ports across a restart.
+A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them (re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down) so a deployment keeps its guest state and its published ports across a restart.
 
 ## Choosing
 
@@ -166,7 +166,7 @@ If you do need stronger isolation (running untrusted code, multi-tenant where on
 
 ## See also
 
-- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor) — full setup including KVM, firmware, image prep
-- [Architecture](/documentation/concepts/architecture) — where the runtime sits in the process
-- [Namespaces and networking](/documentation/concepts/namespaces-and-networking) — per-runtime networking model
-- [Manifest reference](/documentation/reference/manifest) — per-field per-runtime behavior
+- [Cloud Hypervisor](/documentation/runtimes/cloud-hypervisor): full setup including KVM, firmware, image prep
+- [Architecture](/documentation/concepts/architecture): where the runtime sits in the process
+- [Namespaces and networking](/documentation/concepts/namespaces-and-networking): per-runtime networking model
+- [Manifest reference](/documentation/reference/manifest): per-field per-runtime behavior

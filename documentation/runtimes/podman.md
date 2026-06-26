@@ -1,6 +1,6 @@
 # Podman
 
-Docker semantics **without a privileged daemon**. Podman exposes a Docker-compatible API, so Ring drives it with the same client, the same manifest, the same health checks — containers, images, `exec`-based `command` checks, labels, registry auth. The headline difference is **rootless by default**: containers run in your user namespace, no root daemon required.
+Docker semantics **without a privileged daemon**. Podman exposes a Docker-compatible API, so Ring drives it with the same client, the same manifest, the same health checks: containers, images, `exec`-based `command` checks, labels, registry auth. The headline difference is **rootless by default**: containers run in your user namespace, no root daemon required.
 
 ## Prerequisites
 
@@ -47,14 +47,14 @@ ring apply -f web.yaml
 ## Good to know
 
 - **Crash detection is reconcile-based.** Podman has no Docker-style event listener, so a crashed container is noticed on the next scheduler tick rather than sub-second. A crash loop still converges to `crash_loop_back_off` (bounded), it's just tick-paced.
-- **Rootless remaps UID/GID.** A file written inside the container has a different owner on the host. Bind-mount and named-volume ownership behave differently than under Docker-root — mind permissions on mounts.
+- **Rootless remaps UID/GID.** A file written inside the container has a different owner on the host. Bind-mount and named-volume ownership behave differently than under Docker-root, so mind permissions on mounts.
 - **Host networking** (`network.mode: host`) is not yet supported on Podman.
-- **Registry auth from the host.** `podman login` writes to `containers/auth.json`. Authorize it with `use_host_registry_auth = true` (point `host_registry_config` at the auth file) and pull with `config.use_host_auth: true` — no secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
+- **Registry auth from the host.** `podman login` writes to `containers/auth.json`. Authorize it with `use_host_registry_auth = true` (point `host_registry_config` at the auth file) and pull with `config.use_host_auth: true`, with no secret in the manifest. See [manifest `config`](/documentation/reference/manifest#use_host_auth-credentials-from-the-host).
 - **Registry auth from an encrypted Secret.** Or store credentials in a `Secret` and reference it with `config.image_pull_secret`. See [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
-- Otherwise the feature set matches Docker — same images, same health checks, same labels.
+- Otherwise the feature set matches Docker: same images, same health checks, same labels.
 
 ## See also
 
 - [Runtimes overview](/documentation/runtimes)
-- [Docker](/documentation/runtimes/docker) — the daemon-based equivalent
+- [Docker](/documentation/runtimes/docker): the daemon-based equivalent
 - [Manifest reference](/documentation/reference/manifest)

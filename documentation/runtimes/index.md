@@ -1,6 +1,6 @@
 # Runtimes
 
-A **runtime** is the thing Ring uses to actually start your workload. Five sit behind the same manifest shape — you pick one per deployment with the `runtime:` field:
+A **runtime** is the thing Ring uses to actually start your workload. Five sit behind the same manifest shape, and you pick one per deployment with the `runtime:` field:
 
 ```yaml
 deployments:

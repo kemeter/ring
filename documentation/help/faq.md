@@ -89,7 +89,7 @@ Yes. Always pin to a specific tag in production:
 deployments:
   app:
     image: "nginx:1.25.3"   # good
-    # image: "nginx:latest" # bad — moving target
+    # image: "nginx:latest" # bad: moving target
 ```
 
 ### How do I manage sensitive secrets?
@@ -284,7 +284,7 @@ No. Ring is single-node. Multi-node clustering is not currently planned.
 
 ### How do I secure Ring in production?
 
-Network — front Ring with a reverse proxy doing TLS termination, and restrict the API port to trusted networks:
+Network: front Ring with a reverse proxy doing TLS termination, and restrict the API port to trusted networks:
 
 ```bash
 # UFW: allow only the LAN to reach 3030
@@ -293,7 +293,7 @@ sudo ufw allow from 192.168.1.0/24 to any port 3030 proto tcp
 
 > Don't add a blanket `sudo ufw deny 3030` after that. UFW evaluates rules in order, but a generic deny on the same port can mask the more specific allow depending on your policy. Use a default-deny policy and only allow trusted ranges.
 
-Authentication — change the default admin password as soon as you log in:
+Authentication: change the default admin password as soon as you log in:
 
 ```bash
 ring user update --password "new-strong-password"
@@ -357,7 +357,7 @@ deploy:
     - main
 ```
 
-When `RING_TOKEN` is set, the CLI ignores `auth.json` and uses the token directly — no need to run `ring login` from the pipeline.
+When `RING_TOKEN` is set, the CLI ignores `auth.json` and uses the token directly, with no need to run `ring login` from the pipeline.
 
 ### How do I monitor Ring?
 
@@ -371,10 +371,10 @@ Ring does not yet expose Prometheus-format metrics.
 
 ## Support and community
 
-- Documentation — this site
-- Issues — [github.com/kemeter/ring/issues](https://github.com/kemeter/ring/issues)
-- Discussions — [github.com/kemeter/ring/discussions](https://github.com/kemeter/ring/discussions)
-- Commercial support — [Alpacode](https://alpacode.fr)
+- Documentation: this site
+- Issues: [github.com/kemeter/ring/issues](https://github.com/kemeter/ring/issues)
+- Discussions: [github.com/kemeter/ring/discussions](https://github.com/kemeter/ring/discussions)
+- Commercial support: [Alpacode](https://alpacode.fr)
 
 ### How do I contribute?
 

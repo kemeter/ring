@@ -4,7 +4,7 @@ The complete schema for the YAML / JSON files you pass to `ring apply -f`. Every
 
 A manifest has three top-level keys: `namespaces:` (optional), `configs:` (optional) and `deployments:` (required).
 
-> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only — they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [Cloud Hypervisor → Limitations](/documentation/runtimes/cloud-hypervisor#limitations-parity-with-docker).
+> **Runtime parity.** Most fields below are honored by both runtimes. A handful are Docker-only: they are declared in the manifest, accepted by the API, and either silently ignored or rejected by the Cloud Hypervisor runtime. Each affected section flags this inline; the cross-cutting list lives on [Cloud Hypervisor → Limitations](/documentation/runtimes/cloud-hypervisor#limitations-parity-with-docker).
 
 ```yaml
 namespaces:
@@ -24,7 +24,7 @@ deployments:
 
 ### `namespaces:` (optional)
 
-A map of namespace declarations. When present, Ring creates them before processing deployments. Already-existing namespaces are silently skipped. Namespaces are also auto-created the first time a deployment lands in them, so this section is purely cosmetic — useful when you want all namespaces in a manifest to be self-documenting.
+A map of namespace declarations. When present, Ring creates them before processing deployments. Already-existing namespaces are silently skipped. Namespaces are also auto-created the first time a deployment lands in them, so this section is purely cosmetic, useful when you want all namespaces in a manifest to be self-documenting.
 
 ```yaml
 namespaces:
@@ -36,7 +36,7 @@ namespaces:
 
 ### `configs:` (optional)
 
-A map of config declarations. When present, Ring creates them after namespaces and before deployments, so a deployment that mounts one via a [`type: config` volume](#volumes) can resolve it on first apply. Already-existing configs (same `name` + `namespace`) are reported as "already exists, skipping" — re-applying an unchanged manifest is idempotent and never errors. The map key is internal; Ring keys the config by its `name` + `namespace`.
+A map of config declarations. When present, Ring creates them after namespaces and before deployments, so a deployment that mounts one via a [`type: config` volume](#volumes) can resolve it on first apply. Already-existing configs (same `name` + `namespace`) are reported as "already exists, skipping": re-applying an unchanged manifest is idempotent and never errors. The map key is internal; Ring keys the config by its `name` + `namespace`.
 
 ```yaml
 configs:
@@ -58,9 +58,9 @@ configs:
 
 At least one of `data` or `files` must be present; a config with neither is rejected.
 
-#### `files:` — keep large payloads in their own file
+#### `files:` for keeping large payloads in their own file
 
-Inlining a big config (an Nginx site, a full `config.yaml`, an HTML error page) into `data` means hand-escaping a string-of-JSON-inside-YAML — newlines become `\n`, quotes get doubled, and the manifest becomes unreadable. `files:` avoids that: keep the payload as a normal file next to the manifest and reference it.
+Inlining a big config (an Nginx site, a full `config.yaml`, an HTML error page) into `data` means hand-escaping a string-of-JSON-inside-YAML, where newlines become `\n`, quotes get doubled, and the manifest becomes unreadable. `files:` avoids that: keep the payload as a normal file next to the manifest and reference it.
 
 ```yaml
 configs:
@@ -71,7 +71,7 @@ configs:
       config.yaml: ./sozune/config.yaml   # relative to this manifest
 ```
 
-At apply time Ring reads `./sozune/config.yaml` verbatim and builds `data = {"config.yaml": "<file contents>"}`. The file stays a real, editable YAML file — no escaping.
+At apply time Ring reads `./sozune/config.yaml` verbatim and builds `data = {"config.yaml": "<file contents>"}`. The file stays a real, editable YAML file, with no escaping.
 
 `data` and `files` can be combined to merge an inline entry with file-backed ones:
 
@@ -89,7 +89,7 @@ The two are merged into a single JSON object. Defining the **same key** in both 
 
 #### `$VAR` interpolation and file contents
 
-By default, `$VAR` interpolation runs on inline `data` (it's a template you write by hand) but **not** on `files` contents. This matters: an Nginx site, a Prometheus rule, or a Grafana dashboard is full of literal `$host`, `$labels`, `$remote_addr` — interpolating them would silently mangle the file (or worse, splice a host env var's value into the payload). So a referenced file ships verbatim.
+By default, `$VAR` interpolation runs on inline `data` (it's a template you write by hand) but **not** on `files` contents. This matters: an Nginx site, a Prometheus rule, or a Grafana dashboard is full of literal `$host`, `$labels`, `$remote_addr`, and interpolating them would silently mangle the file (or worse, splice a host env var's value into the payload). So a referenced file ships verbatim.
 
 The `interpolate` field overrides this per config:
 
@@ -115,11 +115,11 @@ configs:
       app.conf: ./app.conf
 ```
 
-> A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass — no out-of-band `ring config create` needed.
+> A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass, with no out-of-band `ring config create` needed.
 
 ### `deployments:` (required)
 
-A map of deployment declarations. The map key is internal — Ring keys the deployment by its `name` + `namespace` fields, not by the YAML key. By convention the YAML key matches the `name`.
+A map of deployment declarations. The map key is internal; Ring keys the deployment by its `name` + `namespace` fields, not by the YAML key. By convention the YAML key matches the `name`.
 
 ## Deployment fields
 
@@ -138,22 +138,22 @@ A map of deployment declarations. The map key is internal — Ring keys the depl
 |---|---|---|---|
 | `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
 | `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. |
-| `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only** — rejected at the API on the CH runtime. |
-| `environment` | map | `{}` | Environment variables — plain values or `secretRef` references. See [environment](#environment). |
+| `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only**, rejected at the API on the CH runtime. |
+| `environment` | map | `{}` | Environment variables, either plain values or `secretRef` references. See [environment](#environment). |
 | `volumes` | object list | `[]` | Volume mounts. See [volumes](#volumes). |
 | `ports` | object list | `[]` | Host-port publishings. See [ports](#ports). |
-| `labels` | map | `{}` | Key/value labels. **Docker only** — forwarded to Docker container labels. CH silently ignores them. |
+| `labels` | map | `{}` | Key/value labels. **Docker only**: forwarded to Docker container labels. CH silently ignores them. |
 | `resources` | object | unset | CPU / memory limits and requests. Semantics differ between runtimes. See [resources](#resources). |
 | `health_checks` | object list | `[]` | TCP / HTTP / command health probes. See [health checks](#health-checks). |
-| `config` | object | `{}` | Runtime config: image pull policy, registry credentials. **Container runtimes only** — every field of `config` is silently ignored on the CH runtime, since there is no image to pull. |
+| `config` | object | `{}` | Runtime config: image pull policy, registry credentials. **Container runtimes only**: every field of `config` is silently ignored on the CH runtime, since there is no image to pull. |
 | `network` | object | `{ mode: bridge }` | Network mode. See [network](#network). **Docker only.** |
 
 ## `environment`
 
 Map of environment variables passed to the container. Values come in **two forms**:
 
-- **Plain string** — passed verbatim.
-- **Secret reference** — an object `{ secretRef: <name> }` that resolves to an encrypted secret in the same namespace at deployment time.
+- **Plain string**: passed verbatim.
+- **Secret reference**: an object `{ secretRef: <name> }` that resolves to an encrypted secret in the same namespace at deployment time.
 
 ```yaml
 environment:
@@ -182,7 +182,7 @@ export IMAGE_TAG="v1.2.3"
 ring apply -f deployment.yaml
 ```
 
-Interpolation also applies to `image`, `name`, `namespace`, and `command` arguments — anywhere a string lives in the manifest.
+Interpolation also applies to `image`, `name`, `namespace`, and `command` arguments, anywhere a string lives in the manifest.
 
 ## `volumes`
 
@@ -201,7 +201,7 @@ A list of volume objects. **Four** types are supported:
 |---|---|---|---|
 | `type` | yes | all | `bind`, `volume`, `config`, or `secret`. |
 | `source` | yes | all | Host path (bind), volume name (volume), config name (config), or secret name (secret). |
-| `key` | yes for `config`, ignored otherwise | `config` only | Selects which key inside the named config to mount. A config can carry multiple key/value entries; `key` picks one. The API rejects a `config` volume without `key` (or with empty `key`). Not used for `secret` — a secret has a single opaque value. |
+| `key` | yes for `config`, ignored otherwise | `config` only | Selects which key inside the named config to mount. A config can carry multiple key/value entries; `key` picks one. The API rejects a `config` volume without `key` (or with empty `key`). Not used for `secret`, which has a single opaque value. |
 | `destination` | yes | all | Path inside the container. For `config` and `secret` volumes, this is the file path the payload will be written to. |
 | `driver` | no (default `local`) | `volume` (otherwise informational) | `local` or `nfs`. Only meaningful for `volume`. |
 | `permission` | no | `bind` and `volume` | `ro` or `rw`. Defaults to `rw` for `bind` and `volume`. **For `config` and `secret`, the API forces `ro`** regardless of what you write. |
@@ -238,12 +238,12 @@ For `config` and `secret` volumes, the `source` is the config's or secret's `nam
 
 For `secret` volumes specifically:
 - The whole decrypted value becomes the file contents (no `key:` field).
-- Containers should treat the path as read-only — Ring forces `ro`.
+- Containers should treat the path as read-only, since Ring forces `ro`.
 - If you update the underlying `ring secret`, the running container keeps the old value until it is restarted. Trigger a redeploy to pick up the new value.
 
 > **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 
-> **A writable named volume cannot be shared across replicas.** A `type: volume` mount with `permission: rw` and `replicas > 1` is rejected at validation (`deployment.volumes.shared_rw_replicas`): every replica would mount the same volume read-write with no cross-writer coordination, which silently corrupts data (e.g. a database). Either drop `replicas` to `1`, or mount the volume `ro` — read-only sharing is allowed.
+> **A writable named volume cannot be shared across replicas.** A `type: volume` mount with `permission: rw` and `replicas > 1` is rejected at validation (`deployment.volumes.shared_rw_replicas`): every replica would mount the same volume read-write with no cross-writer coordination, which silently corrupts data (e.g. a database). Either drop `replicas` to `1`, or mount the volume `ro`, since read-only sharing is allowed.
 
 Named volumes a deployment mounts are auto-registered as first-class [volumes](/documentation/reference/api#volumes), so they are traceable and can be managed via the `/volumes` API. Anonymous volumes (from an image's `VOLUME` directive) are removed with their container; named volumes are never deleted by a deployment's deletion.
 
@@ -262,10 +262,10 @@ ports:
 |---|---|---|
 | `published` | integer | Host port |
 | `target` | integer | Container port |
-| `host_ip` | string | Optional. Host interface to bind `published` on. Defaults to `0.0.0.0` (all interfaces). Set to `127.0.0.1` to expose the port on loopback only — useful for a database that should reach a local reverse proxy but stay off the public network. Must be a valid IP address or `ring apply` rejects it. |
+| `host_ip` | string | Optional. Host interface to bind `published` on. Defaults to `0.0.0.0` (all interfaces). Set to `127.0.0.1` to expose the port on loopback only, which is useful for a database that should reach a local reverse proxy but stay off the public network. Must be a valid IP address or `ring apply` rejects it. |
 | `protocol` | string | Optional. `tcp` (default) or `udp`. The same `published` port may be declared once for each protocol. |
 
-Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime); `host_ip` and `protocol` are honored by both runtimes. If `published` is already in use on the host, the start fails — the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time. Note that the same `published` port number is a valid, non-conflicting pair across two **different** `host_ip` values (e.g. `0.0.0.0:8080` and `127.0.0.1:8080`) or across the two **protocols** (`8080/tcp` and `8080/udp`) — both are distinct bindings to the kernel.
+Ring forwards these to Docker's `HostConfig.PortBindings` (Docker runtime) or to a `socat` forwarder (Cloud Hypervisor runtime); `host_ip` and `protocol` are honored by both runtimes. If `published` is already in use on the host, the start fails, and the conflict is surfaced as an `error` event on the deployment, not at `ring apply` time. Note that the same `published` port number is a valid, non-conflicting pair across two **different** `host_ip` values (e.g. `0.0.0.0:8080` and `127.0.0.1:8080`) or across the two **protocols** (`8080/tcp` and `8080/udp`), since both are distinct bindings to the kernel.
 
 If you do **not** publish a port, the container is reachable only from inside its namespace. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network).
 
@@ -282,15 +282,15 @@ network:
 |---|---|---|---|
 | `mode` | enum | `bridge` | `bridge` (default) or `host`. |
 
-**`bridge`** — the deployment is attached to a per-namespace bridge network (`ring_{namespace}`). This is the standard Docker behavior and matches what Ring did before this field existed.
+**`bridge`**: the deployment is attached to a per-namespace bridge network (`ring_{namespace}`). This is the standard Docker behavior and matches what Ring did before this field existed.
 
-**`host`** — the container shares the host's network namespace directly. It can bind to host ports without `ports:` mapping, sees real client IPs, and can use multicast / broadcast. Useful for L4/L7 reverse proxies (HAProxy, Nginx as edge), packet-capture sidecars, VPN gateways (WireGuard, Tailscale), and service-discovery agents (mDNS, Consul gossip).
+**`host`**: the container shares the host's network namespace directly. It can bind to host ports without `ports:` mapping, sees real client IPs, and can use multicast / broadcast. Useful for L4/L7 reverse proxies (HAProxy, Nginx as edge), packet-capture sidecars, VPN gateways (WireGuard, Tailscale), and service-discovery agents (mDNS, Consul gossip).
 
 When `mode: host`, the API rejects the deployment if:
 
-- `ports:` is non-empty — host networking bypasses Docker's port bindings, so the mapping would be silently ignored. Remove `ports:` and let the container bind directly.
-- `replicas: > 1` — all replicas would compete for the same host ports.
-- `runtime: cloud-hypervisor` — host mode is Docker-only. The CH runtime has its own network model.
+- `ports:` is non-empty, because host networking bypasses Docker's port bindings, so the mapping would be silently ignored. Remove `ports:` and let the container bind directly.
+- `replicas: > 1`, because all replicas would compete for the same host ports.
+- `runtime: cloud-hypervisor`, because host mode is Docker-only. The CH runtime has its own network model.
 
 See [how-to: use host network mode](/documentation/how-to/use-host-network) for the full walk-through.
 
@@ -298,7 +298,7 @@ See [how-to: use host network mode](/documentation/how-to/use-host-network) for 
 
 A free-form key/value map forwarded to Docker container labels. Useful for service discovery (Traefik), monitoring (Prometheus relabel rules), or filtering (`docker ps --filter "label=key=value"`).
 
-> **Cloud Hypervisor:** the field is parsed but **silently ignored** — there is no equivalent of Docker container labels in the VM model.
+> **Cloud Hypervisor:** the field is parsed but **silently ignored**, since there is no equivalent of Docker container labels in the VM model.
 
 ```yaml
 labels:
@@ -309,9 +309,9 @@ labels:
   "traefik.http.routers.api.rule": "Host(`api.example.com`)"
 ```
 
-Quote keys that contain dots — YAML treats them as strings only when quoted.
+Quote keys that contain dots, since YAML treats them as strings only when quoted.
 
-In addition to user-supplied labels, Ring adds `ring_deployment=<deployment-id>` to every container. **Do not remove this label** — Ring uses it to discover the containers it owns.
+In addition to user-supplied labels, Ring adds `ring_deployment=<deployment-id>` to every container. **Do not remove this label**: Ring uses it to discover the containers it owns.
 
 ## `resources`
 
@@ -329,18 +329,18 @@ resources:
 
 | Field | Docker behavior | Cloud Hypervisor behavior |
 |---|---|---|
-| `limits.cpu` | Sets `HostConfig.NanoCpus` — hard cap, CPU is throttled when exceeded. Fractional values OK (`"500m"` = 0.5 core). | Number of vCPU at boot (`max(1, floor(cpu))`). Fractional values are rounded **down** to whole vCPU, with a floor of 1. `"500m"` becomes 1 vCPU. |
-| `limits.memory` | Sets `HostConfig.Memory` — hard cap, overage triggers an OOM kill. | Sets the VM's RAM size (`max(128, bytes / 1MiB)` MiB). Allocation, not a cap — the guest OS sees exactly this much RAM. |
+| `limits.cpu` | Sets `HostConfig.NanoCpus` (a hard cap, CPU is throttled when exceeded). Fractional values OK (`"500m"` = 0.5 core). | Number of vCPU at boot (`max(1, floor(cpu))`). Fractional values are rounded **down** to whole vCPU, with a floor of 1. `"500m"` becomes 1 vCPU. |
+| `limits.memory` | Sets `HostConfig.Memory` (a hard cap, overage triggers an OOM kill). | Sets the VM's RAM size (`max(128, bytes / 1MiB)` MiB). Allocation, not a cap: the guest OS sees exactly this much RAM. |
 | `requests.cpu` | **Silently ignored.** The doc previously claimed it set Docker CPU shares; the code never sets `cpu_shares`. | **Silently ignored.** |
-| `requests.memory` | Sets `HostConfig.MemoryReservation` — soft minimum (kernel tries to keep this much available, but doesn't enforce it strictly). | **Silently ignored.** |
+| `requests.memory` | Sets `HostConfig.MemoryReservation`, a soft minimum (kernel tries to keep this much available, but doesn't enforce it strictly). | **Silently ignored.** |
 
 Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are also optional.
 
-> **Memory admission control.** Before creating a container or booting a VM, Ring checks the deployment's requested memory against the host's currently-available memory. The figure it admits against is `requests.memory` if set, otherwise `limits.memory` (and, on Cloud Hypervisor, the 256 MiB default when neither is set). If the host can't hold it, the deployment goes to the terminal status `insufficient_resources` with an event naming the gap (`needs X MiB but only Y MiB is available`), instead of starting and getting OOM-killed (Docker) or failing the VM spawn opaquely (CH). The check is best-effort and point-in-time — it catches gross over-asks, not fine-grained contention — and it is *not* applied to CPU, since CPU overcommit is non-fatal. A deployment that declares no memory request or limit is not gated.
+> **Memory admission control.** Before creating a container or booting a VM, Ring checks the deployment's requested memory against the host's currently-available memory. The figure it admits against is `requests.memory` if set, otherwise `limits.memory` (and, on Cloud Hypervisor, the 256 MiB default when neither is set). If the host can't hold it, the deployment goes to the terminal status `insufficient_resources` with an event naming the gap (`needs X MiB but only Y MiB is available`), instead of starting and getting OOM-killed (Docker) or failing the VM spawn opaquely (CH). The check is best-effort and point-in-time (it catches gross over-asks, not fine-grained contention), and it is *not* applied to CPU, since CPU overcommit is non-fatal. A deployment that declares no memory request or limit is not gated.
 
 > **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot only; Ring does not use Cloud Hypervisor's `vm.resize` API to live-resize a running VM, so changing `resources` requires a redeploy.
 
-> **Firecracker sizing.** Reads `limits` (falling back to `requests`): the memory becomes the microVM's RAM and the CPU becomes its vCPU count, **rounded up** to whole vCPUs (Firecracker can't allocate fractional cores) with a floor of 1. When neither is set, a microVM defaults to **1 vCPU and 512 MiB** — enough headroom to boot systemd plus a real service rather than OOMing at boot. Sizing is at-boot only; changing `resources` requires a redeploy.
+> **Firecracker sizing.** Reads `limits` (falling back to `requests`): the memory becomes the microVM's RAM and the CPU becomes its vCPU count, **rounded up** to whole vCPUs (Firecracker can't allocate fractional cores) with a floor of 1. When neither is set, a microVM defaults to **1 vCPU and 512 MiB**, enough headroom to boot systemd plus a real service rather than OOMing at boot. Sizing is at-boot only; changing `resources` requires a redeploy.
 
 ### CPU values
 
@@ -385,7 +385,7 @@ health_checks:
 | Field | Required | Description |
 |---|---|---|
 | `type` | yes | `tcp`, `http`, or `command`. |
-| `interval` | yes | Currently advisory — see [health checks (design) → the probe cycle](/documentation/concepts/health-checks-design#the-probe-cycle). Only `ms` and `s` suffixes parse. |
+| `interval` | yes | Currently advisory (see [health checks (design) → the probe cycle](/documentation/concepts/health-checks-design#the-probe-cycle)). Only `ms` and `s` suffixes parse. |
 | `timeout` | yes | Probe timeout. Only `ms` and `s` suffixes parse. |
 | `threshold` | no (default `3`) | Consecutive failures before `on_failure` triggers. |
 | `on_failure` | yes | `restart` (recreate the instance), `stop` (delete the deployment), or `alert` (log only). |
@@ -398,7 +398,7 @@ health_checks:
 |---|---|---|
 | `tcp` | `port` | TCP port inside the container/VM. Probe succeeds if the kernel accepts the SYN within `timeout`. |
 | `http` | `url` | Full URL. `localhost` is rewritten to the instance's runtime-private IP. Probe succeeds on a 2xx response within `timeout`. Redirects (3xx) are not followed and count as failures. |
-| `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. **Current behavior:** the probe succeeds as soon as `docker exec` *starts the command without an API error*; the command's actual **exit code is not checked**. So a command that runs but exits non-zero will report `success`. This is a known limitation — track the [code source](https://github.com/kemeter/ring/blob/main/src/runtime/docker/health_check.rs) for the fix. |
+| `command` | `command` | Shell-tokenized command run **inside** the container via `docker exec`. **Current behavior:** the probe succeeds as soon as `docker exec` *starts the command without an API error*; the command's actual **exit code is not checked**. So a command that runs but exits non-zero will report `success`. This is a known limitation; track the [code source](https://github.com/kemeter/ring/blob/main/src/runtime/docker/health_check.rs) for the fix. |
 
 **Cloud Hypervisor caveat:** `tcp` and `http` are supported (probes run from the host against the VM's deterministic guest IP). `command` is supported via the in-guest `ring-agent` daemon. See [Cloud Hypervisor → Health checks](/documentation/runtimes/cloud-hypervisor#health-checks).
 
@@ -408,7 +408,7 @@ See [how-to: configure health checks](/documentation/how-to/configure-health-che
 
 Runtime-level configuration: image pull policy, registry credentials.
 
-> **Container runtimes only.** Every field of `config` is consumed by the container runtimes (Docker, Podman, containerd). On Cloud Hypervisor, the entire block is silently ignored — there is no image to pull, the disk image at `image:` is read from the local filesystem.
+> **Container runtimes only.** Every field of `config` is consumed by the container runtimes (Docker, Podman, containerd). On Cloud Hypervisor, the entire block is silently ignored: there is no image to pull, and the disk image at `image:` is read from the local filesystem.
 
 ```yaml
 config:
@@ -429,9 +429,9 @@ config:
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
 
-The `password` field is **not** an encrypted secret — it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
+The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
 
-### `use_host_auth` — credentials from the host
+### `use_host_auth`: credentials from the host
 
 Instead of inlining `server`/`username`/`password`, a deployment can pull using the credentials the operator already configured on the host (e.g. via `docker login`). The secret then never reaches the deployment manifest, the database, or the API.
 
@@ -443,18 +443,18 @@ config:
 
 It is a **two-flag handshake**:
 
-1. The **server** must authorize it — set `use_host_registry_auth = true` under the runtime's `[server.runtime.*]` section (see [config-toml](/documentation/reference/config-toml)).
+1. The **server** must authorize it by setting `use_host_registry_auth = true` under the runtime's `[server.runtime.*]` section (see [config-toml](/documentation/reference/config-toml)).
 2. The **deployment** activates it with `use_host_auth: true`.
 
 If a deployment sets `use_host_auth` on a runtime that did not authorize it, the deployment fails fast with an actionable error (no silent fallback to an anonymous pull). Combining `use_host_auth` with inline `server`/`username`/`password` is rejected at apply time.
 
-Supported on Docker, Podman and containerd. The host config follows the standard Docker resolution (`$DOCKER_CONFIG`, then `~/.docker/config.json`), honoring `credHelpers`/`credsStore`. When the Ring daemon runs as a different user than the one who logged in — or for a Podman `containers/auth.json` — pin the file explicitly with `host_registry_config` in the server config.
+Supported on Docker, Podman and containerd. The host config follows the standard Docker resolution (`$DOCKER_CONFIG`, then `~/.docker/config.json`), honoring `credHelpers`/`credsStore`. When the Ring daemon runs as a different user than the one who logged in (or for a Podman `containers/auth.json`), pin the file explicitly with `host_registry_config` in the server config.
 
-### `image_pull_secret` — credentials from an encrypted Secret
+### `image_pull_secret`: credentials from an encrypted Secret
 
-The portable, declarative alternative to `use_host_auth`: store the registry credentials in an **encrypted `Secret`** (AES-256-GCM at rest) and reference it by name. The credentials never appear in the manifest, the database row, or the API response — only the secret's name does.
+The portable, declarative alternative to `use_host_auth`: store the registry credentials in an **encrypted `Secret`** (AES-256-GCM at rest) and reference it by name. The credentials never appear in the manifest, the database row, or the API response; only the secret's name does.
 
-The Secret's value is a Docker `config.json` payload (`dockerconfigjson`) — the exact format `docker login` writes. The simplest way to create it is to log in once and store the resulting file:
+The Secret's value is a Docker `config.json` payload (`dockerconfigjson`), the exact format `docker login` writes. The simplest way to create it is to log in once and store the resulting file:
 
 ```bash
 docker login rg.fr-par.scw.cloud
@@ -463,13 +463,13 @@ ring secret create scaleway-registry -n production \
 ```
 
 ```yaml
-# deployment — references the Secret by name, no credentials inline
+# deployment: references the Secret by name, no credentials inline
 config:
   image_pull_policy: "Always"
   image_pull_secret: "scaleway-registry"
 ```
 
-> **Credential helpers.** This works when `docker login` stores the credential **inline** in `config.json` (an `"auth": "..."` entry — the common case on Linux servers). If Docker is configured with a credential helper (`credsStore`/`credHelpers`, e.g. Docker Desktop), the file holds no usable credential — it's in the OS keychain instead. In that case either write the `auths` entry by hand, or use [`use_host_auth`](#use_host_auth-credentials-from-the-host), which resolves helpers on the host.
+> **Credential helpers.** This works when `docker login` stores the credential **inline** in `config.json` (an `"auth": "..."` entry, the common case on Linux servers). If Docker is configured with a credential helper (`credsStore`/`credHelpers`, e.g. Docker Desktop), the file holds no usable credential, because it's in the OS keychain instead. In that case either write the `auths` entry by hand, or use [`use_host_auth`](#use_host_auth-credentials-from-the-host), which resolves helpers on the host.
 
 At deploy time the scheduler decrypts the Secret, picks the `auths` entry matching the image's registry host, and pulls with it. If the Secret is missing or has no entry for the registry, the deployment fails fast with an `image_pull_secret_resolution_error` event (the value is never logged). It must reference a Secret in the **same namespace** as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
 
