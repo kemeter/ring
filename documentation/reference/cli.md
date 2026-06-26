@@ -27,7 +27,7 @@ ring -c staging deployment list
 
 Load a specific `config.toml` instead of the default `$RING_CONFIG_DIR/config.toml`. Useful for keeping several explicitly-named files (`config_dev.toml`, `config_prod.toml`) and switching between them. Overrides the `RING_CONFIG_FILE` environment variable.
 
-This overrides **only** the config file — `auth.json`, Cloud Hypervisor firmware, and other assets still come from `$RING_CONFIG_DIR`. If the given file does not exist, Ring logs an error rather than silently falling back to the default.
+This overrides **only** the config file: `auth.json`, Cloud Hypervisor firmware, and other assets still come from `$RING_CONFIG_DIR`. If the given file does not exist, Ring logs an error rather than silently falling back to the default.
 
 ```bash
 ring --config ~/.config/kemeter/ring/config_dev.toml deployment list
@@ -46,13 +46,13 @@ ring init
 
 Interactive on a TTY (prompts for runtime and API port); scriptable via flags otherwise:
 
-- `--runtime` — `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor). `both` never enables Firecracker.
-- `--port` — the API port (default `3030`).
-- `--force` — overwrite an existing `config.toml` / `secret-key`. Regenerates the key, making every secret stored under the old one undecryptable.
+- `--runtime`: `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor). `both` never enables Firecracker.
+- `--port`: the API port (default `3030`).
+- `--force`: overwrite an existing `config.toml` / `secret-key`. Regenerates the key, making every secret stored under the old one undecryptable.
 
 Flags win over prompts and over the non-interactive defaults (Docker, port `3030`), and compose per-field. When stdin is not a TTY and no flags are given, `init` uses the defaults instead of hanging on a prompt.
 
-After writing the files, `init` runs the same diagnostics as [`ring doctor`](#ring-doctor) on the selected runtime as a **pre-flight check**. Failing checks are surfaced as warnings but do **not** change the exit code — `init` already succeeded. Only the selected runtime is checked.
+After writing the files, `init` runs the same diagnostics as [`ring doctor`](#ring-doctor) on the selected runtime as a **pre-flight check**. Failing checks are surfaced as warnings but do **not** change the exit code, since `init` already succeeded. Only the selected runtime is checked.
 
 > `ring init` does **not** create the SQLite database or seed the admin user. That happens automatically the first time `ring server start` runs the migrations.
 
@@ -60,10 +60,10 @@ After writing the files, `init` runs the same diagnostics as [`ring doctor`](#ri
 
 Run diagnostic checks against the host. Runtime checks only run for runtimes enabled in `config.toml`; with no runtime enabled, all of them run.
 
-- **Server-side env** — `RING_SECRET_KEY` is set, decodes to base64, and is exactly 32 bytes.
-- **Docker / Podman** — `docker --version` succeeds (the binary is present and the daemon is reachable). Podman reuses this check since it speaks the Docker API.
-- **Cloud Hypervisor** — the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `xorriso` is on `$PATH` (needed for the cloud-init NoCloud ISO when a CH deployment ships `environment`), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
-- **Firecracker** (experimental, only when enabled) — the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set, the kernel image at the configured `kernel_path` (an uncompressed `vmlinux`, not a firmware blob) exists, and `socat` is on `$PATH` for port forwarding.
+- **Server-side env**: `RING_SECRET_KEY` is set, decodes to base64, and is exactly 32 bytes.
+- **Docker / Podman**: `docker --version` succeeds (the binary is present and the daemon is reachable). Podman reuses this check since it speaks the Docker API.
+- **Cloud Hypervisor**: the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `xorriso` is on `$PATH` (needed for the cloud-init NoCloud ISO when a CH deployment ships `environment`), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
+- **Firecracker** (experimental, only when enabled): the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set, the kernel image at the configured `kernel_path` (an uncompressed `vmlinux`, not a firmware blob) exists, and `socat` is on `$PATH` for port forwarding.
 
 ```bash
 ring doctor
@@ -87,7 +87,7 @@ On first start the server runs SQLite migrations, creates `ring.db` in the worki
 
 ### `ring login`
 
-Log in to a Ring server. Each login mints a fresh session token (a `ring_pat_…` value, full access) saved in `~/.config/kemeter/ring/auth.json` and reused by subsequent commands. The session does not expire; end it with `ring logout`. Logging in again creates an independent session — earlier ones stay valid until they are logged out.
+Log in to a Ring server. Each login mints a fresh session token (a `ring_pat_…` value, full access) saved in `~/.config/kemeter/ring/auth.json` and reused by subsequent commands. The session does not expire; end it with `ring logout`. Logging in again creates an independent session, and earlier ones stay valid until they are logged out.
 
 ```bash
 ring login --username <USERNAME> --password <PASSWORD>
@@ -106,7 +106,7 @@ ring login -u alice -p secret
 ```
 
 If the server is unreachable (down, wrong host/port), the CLI prints a
-single actionable line and exits non-zero — not the underlying transport
+single actionable line and exits non-zero, not the underlying transport
 trace:
 
 ```
@@ -125,7 +125,7 @@ Revoke the current context's session on the server and remove its token from `au
 ring logout
 ```
 
-The server-side revocation is best-effort: if the server is unreachable the local token is still removed, so the command never leaves you "stuck logged in" locally. Only the current context's entry is touched — other contexts in `auth.json` are left intact. Revoking a PAT (rather than a login session) is done with `ring token revoke <id>`, not this command.
+The server-side revocation is best-effort: if the server is unreachable the local token is still removed, so the command never leaves you "stuck logged in" locally. Only the current context's entry is touched; other contexts in `auth.json` are left intact. Revoking a PAT (rather than a login session) is done with `ring token revoke <id>`, not this command.
 
 ## Deployments
 
@@ -139,11 +139,11 @@ ring apply -f <FILE> [OPTIONS]
 
 **Options:**
 
-- `-f <FILE>` / `--file <FILE>` — YAML or JSON manifest
-- `-e <FILE>` / `--env-file <FILE>` — load `KEY=VALUE` pairs from a file and use them to interpolate `$VAR` references in the manifest
-- `-d` / `--dry-run` — print what would be sent, without contacting the API
-- `--verbose` — print the full JSON of every deployment that will be sent
-- `--force` — skip the rolling-update path; do an immediate replacement even when health checks are configured
+- `-f <FILE>` / `--file <FILE>`: YAML or JSON manifest
+- `-e <FILE>` / `--env-file <FILE>`: load `KEY=VALUE` pairs from a file and use them to interpolate `$VAR` references in the manifest
+- `-d` / `--dry-run`: print what would be sent, without contacting the API
+- `--verbose`: print the full JSON of every deployment that will be sent
+- `--force`: skip the rolling-update path; do an immediate replacement even when health checks are configured
 
 **Examples:**
 
@@ -167,11 +167,11 @@ ring deployment list [OPTIONS]
 
 **Options:**
 
-- `-n` / `--namespace <NAMESPACE>` — filter by namespace
-- `-s` / `--status <STATUS>` — filter by status (repeatable). Values: `pending`, `creating`, `running`, `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `insufficient_resources`, `error` — see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle)
-- `--type <TYPE>` — filter by deployment kind: `worker` or `job`
-- `-l` / `--label <SELECTOR>` — filter by label, `key=value` or just `key` (repeatable; a deployment must match **all** selectors). Works the same across runtimes (Docker and Cloud Hypervisor) since labels are matched on Ring's stored metadata.
-- `-o` / `--output <FORMAT>` — `table` (default) or `json`
+- `-n` / `--namespace <NAMESPACE>`: filter by namespace
+- `-s` / `--status <STATUS>`: filter by status (repeatable). Values: `pending`, `creating`, `running`, `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `insufficient_resources`, `error` (see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle))
+- `--type <TYPE>`: filter by deployment kind: `worker` or `job`
+- `-l` / `--label <SELECTOR>`: filter by label, `key=value` or just `key` (repeatable; a deployment must match **all** selectors). Works the same across runtimes (Docker and Cloud Hypervisor) since labels are matched on Ring's stored metadata.
+- `-o` / `--output <FORMAT>`: `table` (default) or `json`
 
 **Output (table):**
 
@@ -179,7 +179,7 @@ The table has ten columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namesp
 
 Timestamps are rendered to the second (`2026-05-03 22:22:21`); sub-second
 digits and the `UTC` suffix are dropped from the cells since every Ring
-timestamp is UTC — the column header says so. The `json` output keeps the
+timestamp is UTC, as the column header says. The `json` output keeps the
 raw timestamp untouched, so scripts that parse it are unaffected.
 
 **Examples:**
@@ -223,10 +223,10 @@ ring deployment logs <DEPLOYMENT_ID> [OPTIONS]
 
 **Options:**
 
-- `-f` / `--follow` — stream new lines (polls every 2 s)
-- `--tail <N>` — last N lines (default: 100)
-- `--since <DURATION>` — relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
-- `-c` / `--container <NAME>` — filter to one instance/container name
+- `-f` / `--follow`: stream new lines (polls every 2 s)
+- `--tail <N>`: last N lines (default: 100)
+- `--since <DURATION>`: relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
+- `-c` / `--container <NAME>`: filter to one instance/container name
 
 **Examples:**
 
@@ -248,9 +248,9 @@ ring deployment events <DEPLOYMENT_ID> [OPTIONS]
 
 **Options:**
 
-- `-f` / `--follow` — stream new events
-- `-l` / `--level <LEVEL>` — filter by `info`, `warning`, or `error`
-- `--limit <N>` — maximum number of events (default: 50)
+- `-f` / `--follow`: stream new events
+- `-l` / `--level <LEVEL>`: filter by `info`, `warning`, or `error`
+- `--limit <N>`: maximum number of events (default: 50)
 
 **Examples:**
 
@@ -281,8 +281,8 @@ ring deployment health-checks <DEPLOYMENT_ID> [OPTIONS]
 
 **Options:**
 
-- `--latest` — only the most recent result per instance
-- `--limit <N>` — maximum number of results
+- `--latest`: only the most recent result per instance
+- `--limit <N>`: maximum number of results
 
 ## Users
 
@@ -331,9 +331,9 @@ ring user delete <ID>
 
 Scoped API tokens (Personal Access Tokens) let scripts, CI and external agents call the API without using a human's login session. A token carries a set of `verb:resource` scopes, an optional namespace boundary and an optional expiry, and can be revoked or rotated individually.
 
-The clear token (`ring_pat_…`) is shown **once**, at creation, and never again — only its prefix is stored in clear for display. Present it as `Authorization: Bearer ring_pat_…`.
+The clear token (`ring_pat_…`) is shown **once**, at creation, and never again; only its prefix is stored in clear for display. Present it as `Authorization: Bearer ring_pat_…`.
 
-Login sessions (`ring login`) use the same storage and format — a session is a token scoped `admin`, created automatically on login and revoked on `ring logout`. It is distinguished from a PAT by its **kind** (not by its name), so naming a PAT `session` is fine and has no special effect. Sessions are **not** shown by `ring token list` and cannot be managed by id (`ring token revoke`/`rotate`); that command lists and acts only on the PATs you created. End a session with `ring logout`.
+Login sessions (`ring login`) use the same storage and format: a session is a token scoped `admin`, created automatically on login and revoked on `ring logout`. It is distinguished from a PAT by its **kind** (not by its name), so naming a PAT `session` is fine and has no special effect. Sessions are **not** shown by `ring token list` and cannot be managed by id (`ring token revoke`/`rotate`); that command lists and acts only on the PATs you created. End a session with `ring logout`.
 
 **Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (grants everything).
 
@@ -345,13 +345,13 @@ ring token create <NAME> --scope <SCOPE> [--scope <SCOPE>...] [OPTIONS]
 
 **Required:**
 
-- `<NAME>` — token label (positional)
-- `-s` / `--scope <SCOPE>` — at least one; repeatable
+- `<NAME>`: token label (positional)
+- `-s` / `--scope <SCOPE>`: at least one; repeatable
 
 **Options:**
 
-- `-n` / `--namespace <NS>` — restrict to a namespace; repeatable. Omit for all namespaces.
-- `-e` / `--expires <DURATION>` — `30d`, `12h` or `90m`. Omit for no expiry.
+- `-n` / `--namespace <NS>`: restrict to a namespace; repeatable. Omit for all namespaces.
+- `-e` / `--expires <DURATION>`: `30d`, `12h` or `90m`. Omit for no expiry.
 
 The clear token is printed on **stdout** (so it can be captured); the summary and the "won't be shown again" notice go to **stderr**.
 
@@ -403,12 +403,12 @@ ring webhook create <URL> [--event <KIND>...] [--secret <SECRET>]
 
 **Required:**
 
-- `<URL>` — target URL receiving the signed POSTs (positional)
+- `<URL>`: target URL receiving the signed POSTs (positional)
 
 **Options:**
 
-- `-e` / `--event <KIND>` — subscribe to an event kind; repeatable. Accepts an exact kind (`deployment.scaled`), a family wildcard (`deployment.*`), or `*` for everything. Omit to receive **all** kinds. A malformed value (e.g. `deployment*` without the dot) is rejected at creation.
-- `-s` / `--secret <SECRET>` — HMAC secret. If omitted, Ring generates one and prints it once.
+- `-e` / `--event <KIND>`: subscribe to an event kind; repeatable. Accepts an exact kind (`deployment.scaled`), a family wildcard (`deployment.*`), or `*` for everything. Omit to receive **all** kinds. A malformed value (e.g. `deployment*` without the dot) is rejected at creation.
+- `-s` / `--secret <SECRET>`: HMAC secret. If omitted, Ring generates one and prints it once.
 
 The webhook id is printed on stdout; the generated secret (if any) is printed on stderr and shown only once.
 
@@ -438,7 +438,7 @@ ring webhook delete <ID>
 
 ## Secrets
 
-Secrets are AES-256-GCM-encrypted values stored per-namespace. `RING_SECRET_KEY` (a base64-encoded 32-byte key) must be exported before `ring server start` — the server refuses to start otherwise. Run `ring doctor` to confirm the variable is set and decodes correctly.
+Secrets are AES-256-GCM-encrypted values stored per-namespace. `RING_SECRET_KEY` (a base64-encoded 32-byte key) must be exported before `ring server start`, or the server refuses to start. Run `ring doctor` to confirm the variable is set and decodes correctly.
 
 ### `ring secret create`
 
@@ -448,7 +448,7 @@ ring secret create <NAME> -n <NAMESPACE> -v <VALUE>
 
 **Required:**
 
-- `<NAME>` — secret name (positional)
+- `<NAME>`: secret name (positional)
 - `-n` / `--namespace <NAMESPACE>`
 - `-v` / `--value <VALUE>`
 
@@ -469,7 +469,7 @@ ring secret list [OPTIONS]
 
 **Options:**
 
-- `-n` / `--namespace <NAMESPACE>` — filter by namespace
+- `-n` / `--namespace <NAMESPACE>`: filter by namespace
 
 ### `ring secret delete`
 
@@ -479,7 +479,7 @@ ring secret delete <ID> [OPTIONS]
 
 **Options:**
 
-- `-f` / `--force` — delete even if referenced by active deployments
+- `-f` / `--force`: delete even if referenced by active deployments
 
 If the secret is referenced and `--force` is not set, Ring lists the referencing deployments and aborts.
 
@@ -537,7 +537,7 @@ ring namespace prune <NAMESPACE> [--all]
 
 **Options:**
 
-- `-a` / `--all` — delete every deployment in the namespace, including running ones. Destructive.
+- `-a` / `--all`: delete every deployment in the namespace, including running ones. Destructive.
 
 **Prunable statuses (default):** `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `error`.
 
@@ -574,9 +574,9 @@ ring context [SUBCOMMAND]
 
 **Subcommands:**
 
-- `configs` (default) — list all contexts
-- `current-context` — print the currently active context name
-- `user-token` — print the authentication token for the current context
+- `configs` (default): list all contexts
+- `current-context`: print the currently active context name
+- `user-token`: print the authentication token for the current context
 
 **Examples:**
 
@@ -591,8 +591,8 @@ ring context user-token
 
 Contexts and tokens live in `~/.config/kemeter/ring/` (or `$RING_CONFIG_DIR`):
 
-- `config.toml` — context definitions
-- `auth.json` — authentication tokens per context
+- `config.toml`: context definitions
+- `auth.json`: authentication tokens per context
 
 **`config.toml` example:**
 
@@ -626,18 +626,18 @@ The default context (the one with `current = true`) is used when no `--context` 
 
 ### Server
 
-- `RING_DATABASE_PATH` — path to the SQLite file (default: `./ring.db`)
-- `RING_DB_POOL_SIZE` — max SQLite connections (default: `5`)
-- `RING_CONFIG_DIR` — config directory (default: `~/.config/kemeter/ring`)
-- `RING_SECRET_KEY` — base64-encoded 32-byte key for secret encryption. **Required**: the server refuses to start without it (validated up front; see `ring doctor`).
-- `RING_SCHEDULER_INTERVAL` — scheduler tick in seconds (overrides `server.scheduler.interval` in `config.toml`)
-- `RING_APPLY_TIMEOUT` — single-deployment apply timeout in seconds (default: `300`)
-- `RUST_LOG` — log level (e.g. `info`, `debug`, `ring=debug`)
+- `RING_DATABASE_PATH`: path to the SQLite file (default: `./ring.db`)
+- `RING_DB_POOL_SIZE`: max SQLite connections (default: `5`)
+- `RING_CONFIG_DIR`: config directory (default: `~/.config/kemeter/ring`)
+- `RING_SECRET_KEY`: base64-encoded 32-byte key for secret encryption. **Required**: the server refuses to start without it (validated up front; see `ring doctor`).
+- `RING_SCHEDULER_INTERVAL`: scheduler tick in seconds (overrides `server.scheduler.interval` in `config.toml`)
+- `RING_APPLY_TIMEOUT`: single-deployment apply timeout in seconds (default: `300`)
+- `RUST_LOG`: log level (e.g. `info`, `debug`, `ring=debug`)
 
 ### CLI
 
-- `RING_TOKEN` — bearer token used for API requests. When set and non-empty, the CLI ignores `auth.json`. Useful for CI pipelines that should not depend on `ring login`.
-- `RING_CONFIG_FILE` — path to a specific `config.toml` to load (default: `$RING_CONFIG_DIR/config.toml`). The `--config` flag takes precedence.
+- `RING_TOKEN`: bearer token used for API requests. When set and non-empty, the CLI ignores `auth.json`. Useful for CI pipelines that should not depend on `ring login`.
+- `RING_CONFIG_FILE`: path to a specific `config.toml` to load (default: `$RING_CONFIG_DIR/config.toml`). The `--config` flag takes precedence.
 
 ```bash
 # Generate a server-side key
@@ -682,21 +682,21 @@ Notes:
 **Required deployment fields:**
 
 - `name`
-- `runtime` — `docker` or `cloud-hypervisor`
+- `runtime`: `docker` or `cloud-hypervisor`
 - `image`
 - `namespace`
 
 **Optional fields:**
 
-- `kind` — `worker` (default) or `job`
-- `replicas` — default `1`; jobs always run a single instance
-- `environment` — map of plain values or `{ secretRef: <name> }` references
-- `volumes` — list of volume objects (see below)
-- `labels` — key/value map (or list of single-key objects)
-- `command` — list of arguments overriding the image entrypoint
-- `resources` — `limits` / `requests` for CPU and memory
-- `health_checks` — list of `tcp`, `http`, or `command` checks
-- `config` — image pull policy, registry auth, optional `user`
+- `kind`: `worker` (default) or `job`
+- `replicas`: default `1`; jobs always run a single instance
+- `environment`: map of plain values or `{ secretRef: <name> }` references
+- `volumes`: list of volume objects (see below)
+- `labels`: key/value map (or list of single-key objects)
+- `command`: list of arguments overriding the image entrypoint
+- `resources`: `limits` / `requests` for CPU and memory
+- `health_checks`: list of `tcp`, `http`, or `command` checks
+- `config`: image pull policy, registry auth, optional `user`
 
 ### YAML example
 
@@ -766,11 +766,11 @@ deployments:
 
 Three `type` values are supported:
 
-- `bind` — host path mount
-- `volume` — named Docker volume
-- `config` — file rendered from a Ring config and mounted at `destination`. Requires a `key` field that selects which entry in the config to mount; `permission` is forced to `ro`.
+- `bind`: host path mount
+- `volume`: named Docker volume
+- `config`: file rendered from a Ring config and mounted at `destination`. Requires a `key` field that selects which entry in the config to mount; `permission` is forced to `ro`.
 
-Required fields: `type`, `source`, `destination`. `key` is required for `type: config`. `driver` and `permission` have defaults via `ring apply` (`local` and `rw` respectively, except `config` which is `ro`); they are required at the API level — see [manifest reference → volumes](/documentation/reference/manifest#volumes).
+Required fields: `type`, `source`, `destination`. `key` is required for `type: config`. `driver` and `permission` have defaults via `ring apply` (`local` and `rw` respectively, except `config` which is `ro`); they are required at the API level (see [manifest reference → volumes](/documentation/reference/manifest#volumes)).
 
 ```yaml
 volumes:
@@ -796,21 +796,21 @@ volumes:
 
 ### Resources
 
-- `limits` — hard cap on Docker (CPU throttled via `nano_cpus`, OOM-killed on memory overage). Allocation, not a cap, on Cloud Hypervisor (vCPU count + RAM size).
-- `requests` — only `requests.memory` is honored on Docker (mapped to `memory_reservation`, a soft minimum). `requests.cpu` is currently ignored on both runtimes.
+- `limits`: hard cap on Docker (CPU throttled via `nano_cpus`, OOM-killed on memory overage). Allocation, not a cap, on Cloud Hypervisor (vCPU count + RAM size).
+- `requests`: only `requests.memory` is honored on Docker (mapped to `memory_reservation`, a soft minimum). `requests.cpu` is currently ignored on both runtimes.
 - CPU values: millicores (`"500m"`) or whole cores (`"1"`, `"0.5"`). On Cloud Hypervisor, fractional values are rounded down to whole vCPU (floor of 1).
 - Memory values: raw bytes or `Ki` / `Mi` / `Gi` suffixes.
 - Both `limits` and `requests` are optional; within each, `cpu` and `memory` are also optional.
 
 ### Health checks
 
-- `type: tcp` — checks a TCP port is open. Requires `port`. Probe runs from the host against the runtime-private IP (Docker bridge IP / CH guest IP).
-- `type: http` — issues an HTTP GET, expects a 2xx response. Requires `url`. `localhost` in the URL is rewritten to the runtime-private IP.
-- `type: command` — runs a shell command inside the container via `docker exec`. Requires `command`. **Currently the probe only checks that exec started without error — the command's exit code is not inspected** (so a script that exits non-zero will still report success). Docker only.
+- `type: tcp`: checks a TCP port is open. Requires `port`. Probe runs from the host against the runtime-private IP (Docker bridge IP / CH guest IP).
+- `type: http`: issues an HTTP GET, expects a 2xx response. Requires `url`. `localhost` in the URL is rewritten to the runtime-private IP.
+- `type: command`: runs a shell command inside the container via `docker exec`. Requires `command`. **Currently the probe only checks that exec started without error; the command's exit code is not inspected** (so a script that exits non-zero will still report success). Docker only.
 - `interval` and `timeout` use duration suffixes `ms` and `s`. `m` and `h` are **not** supported in this context (write `60s`, not `1m`). The `--since` flag on logs is a separate parser that does accept `m`/`h`.
-- `interval` is currently advisory — the actual cadence is one probe per scheduler tick (default 10s).
-- `threshold` — consecutive failures before `on_failure` triggers (default: 3).
-- `on_failure` — `restart` (recreate the instance), `stop` (mark the deployment `deleted`), or `alert` (emit an `error` event only).
+- `interval` is currently advisory: the actual cadence is one probe per scheduler tick (default 10s).
+- `threshold`: consecutive failures before `on_failure` triggers (default: 3).
+- `on_failure`: `restart` (recreate the instance), `stop` (mark the deployment `deleted`), or `alert` (emit an `error` event only).
 - **Cloud Hypervisor:** `tcp` and `http` are supported; `command` is rejected at the API.
 
 ### Namespaces in YAML
@@ -913,7 +913,7 @@ ring <command> --help
 
 When a command fails, the CLI prints a single human line to `stderr`,
 prefixed with `error:`, and exits non-zero. It does **not** echo the raw
-HTTP status — the status code is a category, and the message is composed
+HTTP status: the status code is a category, and the message is composed
 from what the command already knows (the resource and the name you typed).
 
 ```bash
@@ -954,7 +954,7 @@ Output is colourised only when **stdout is a real terminal** and the
   `create_container_error`, …). Unknown values are left uncoloured.
 
 When the output is piped, redirected to a file, run under CI, or
-`NO_COLOR=1` is set, **no ANSI escape is emitted at all** — the bytes are
+`NO_COLOR=1` is set, **no ANSI escape is emitted at all**, and the bytes are
 identical to a plain run. `--output json` is never colourised. This means
 `ring deployment list | grep`, `... -o json | jq`, and existing scripts
 keep working unchanged. There is no `--color` flag; the automatic

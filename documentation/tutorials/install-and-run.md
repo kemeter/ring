@@ -56,7 +56,7 @@ sudo install -m 0755 target/release/ring /usr/local/bin/ring
 ring --version
 ```
 
-The release build takes a few minutes the first time. If `ring --version` doesn't work after install, the binary isn't on your `PATH` — check `which ring`.
+The release build takes a few minutes the first time. If `ring --version` doesn't work after install, the binary isn't on your `PATH`; check `which ring`.
 
 ## 2. Initialize the config
 
@@ -66,8 +66,8 @@ ring init
 
 Ring will prompt you for two things:
 
-- **Which runtime to use** — Docker, Podman, Cloud Hypervisor, Firecracker (experimental), or both (Docker + Cloud Hypervisor)
-- **Which port the API should listen on** — defaults to `3030`
+- **Which runtime to use**: Docker, Podman, Cloud Hypervisor, Firecracker (experimental), or both (Docker + Cloud Hypervisor)
+- **Which port the API should listen on**, which defaults to `3030`
 
 It then writes `~/.config/kemeter/ring/config.toml`, persists a freshly generated `RING_SECRET_KEY` to `~/.config/kemeter/ring/secret-key` (mode `0600`), and prints the same key on stdout for convenience:
 
@@ -105,11 +105,11 @@ Docker
   4. ring user update --password "<your password>"  # rotate the default password
 ```
 
-At the end, `ring init` runs the same diagnostics as [`ring doctor`](/documentation/reference/cli) on the runtime you just selected — so you find out *now* that Docker isn't running, KVM is missing, or a kernel image is absent, instead of at your first `ring apply`. A failing check (`[-]`) is only a warning: `init` already wrote your config, so it still exits `0`. Fix the flagged items and re-run `ring doctor` to confirm. Only the selected runtime is checked, so a Docker-only init won't nag about Cloud Hypervisor dependencies.
+At the end, `ring init` runs the same diagnostics as [`ring doctor`](/documentation/reference/cli) on the runtime you just selected, so you find out *now* that Docker isn't running, KVM is missing, or a kernel image is absent, instead of at your first `ring apply`. A failing check (`[-]`) is only a warning: `init` already wrote your config, so it still exits `0`. Fix the flagged items and re-run `ring doctor` to confirm. Only the selected runtime is checked, so a Docker-only init won't nag about Cloud Hypervisor dependencies.
 
-Copy the `export RING_SECRET_KEY=...` line into your shell, or pin it to a `systemd EnvironmentFile=` for a production install. The on-disk copy under `~/.config/kemeter/ring/secret-key` is a recovery aid if the terminal scrolls past or the install is interrupted — **it is not a substitute for setting the environment variable**, since `ring server start` only reads `RING_SECRET_KEY` from the environment. Lose the key (file deleted *and* env forgotten) and every secret you store becomes unrecoverable; leak it and every secret is compromised. See [Secrets and encryption](/documentation/concepts/secrets-encryption) for the threat model.
+Copy the `export RING_SECRET_KEY=...` line into your shell, or pin it to a `systemd EnvironmentFile=` for a production install. The on-disk copy under `~/.config/kemeter/ring/secret-key` is a recovery aid if the terminal scrolls past or the install is interrupted (**it is not a substitute for setting the environment variable**), since `ring server start` only reads `RING_SECRET_KEY` from the environment. Lose the key (file deleted *and* env forgotten) and every secret you store becomes unrecoverable; leak it and every secret is compromised. See [Secrets and encryption](/documentation/concepts/secrets-encryption) for the threat model.
 
-If `config.toml` or `secret-key` already exists, `ring init` refuses to overwrite without `--force`. Re-running with `--force` generates a brand-new key — every secret stored under the old one becomes undecryptable, so use it only for fresh installs you don't mind wiping.
+If `config.toml` or `secret-key` already exists, `ring init` refuses to overwrite without `--force`. Re-running with `--force` generates a brand-new key, so every secret stored under the old one becomes undecryptable, so use it only for fresh installs you don't mind wiping.
 
 In CI or any non-interactive shell, `ring init` skips the prompts and falls back to defaults (Docker, port 3030).
 
@@ -121,8 +121,8 @@ To configure a non-default runtime or port without a prompt (CI, Ansible, etc.),
 ring init --runtime cloud-hypervisor --port 4030
 ```
 
-- `--runtime` — `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor).
-- `--port` — the API port (default `3030`).
+- `--runtime`: `docker`, `podman`, `cloud-hypervisor`, `firecracker` (experimental), or `both` (Docker + Cloud Hypervisor).
+- `--port`: the API port (default `3030`).
 
 Flags take precedence over prompts and over the non-interactive defaults, and compose per-field: passing only `--port` still prompts for the runtime on a TTY (or defaults to Docker when there's no TTY), and vice versa.
 
@@ -149,7 +149,7 @@ It prints a short banner telling you where it's reachable:
   ➜  Runtimes:  cloud-hypervisor, docker
 ```
 
-- **Local** is the loopback address; **Network** is your machine's LAN IP, resolved automatically — share it to reach Ring from another host.
+- **Local** is the loopback address; **Network** is your machine's LAN IP, resolved automatically. Share it to reach Ring from another host.
 - With `--dashboard`, the `Dashboard` line shows its URL (default `http://127.0.0.1:3031`).
 - When `host` is set to a specific address (not `0.0.0.0`), only the matching line is shown.
 
@@ -173,7 +173,7 @@ Expected output:
 {"state":"UP"}
 ```
 
-If you get a connection refused, check the server's startup log — Ring prints the actual bind address (which might be your LAN IP, not `localhost`).
+If you get a connection refused, check the server's startup log, where Ring prints the actual bind address (which might be your LAN IP, not `localhost`).
 
 ## 5. Log in
 
@@ -197,7 +197,7 @@ The default `admin/changeme` credentials only work until the password is changed
 ring deployment list
 ```
 
-You should see an empty list — no deployments yet, but the command worked, which proves the CLI is authenticated against your server.
+You should see an empty list: no deployments yet, but the command worked, which proves the CLI is authenticated against your server.
 
 ## What's next
 
@@ -208,13 +208,13 @@ You have a working Ring installation:
 - ✅ Server running
 - ✅ Admin user authenticated
 
-Continue with [Your first deployment](/documentation/tutorials/first-deployment) to actually run a workload — we'll deploy nginx and curl it on `localhost:8080` in about 10 minutes.
+Continue with [Your first deployment](/documentation/tutorials/first-deployment) to actually run a workload: we'll deploy nginx and curl it on `localhost:8080` in about 10 minutes.
 
 ## Troubleshooting
 
-**`Failed to connect to Docker daemon`** — the daemon isn't running, or your user isn't in the `docker` group. Run `sudo systemctl start docker`, and if needed `sudo usermod -aG docker $USER` then log out and back in.
+**`Failed to connect to Docker daemon`**: the daemon isn't running, or your user isn't in the `docker` group. Run `sudo systemctl start docker`, and if needed `sudo usermod -aG docker $USER` then log out and back in.
 
-**`Port 3030 already in use`** — another process owns the port. Either stop it (`sudo ss -tlnp | grep 3030` to find the PID) or change Ring's port in `~/.config/kemeter/ring/config.toml`. The file requires `current`, `host`, and `api`:
+**`Port 3030 already in use`**: another process owns the port. Either stop it (`sudo ss -tlnp | grep 3030` to find the PID) or change Ring's port in `~/.config/kemeter/ring/config.toml`. The file requires `current`, `host`, and `api`:
 
 ```toml
 [contexts.default]
@@ -227,6 +227,6 @@ api.port = 3031
 
 See [reference: config.toml](/documentation/reference/config-toml) for every field.
 
-**Anything else** — run `ring doctor`. It checks Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites if you've configured that runtime.
+**Anything else**: run `ring doctor`. It checks Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites if you've configured that runtime.
 
 For running Ring as a managed service (systemd, Docker Compose), see [how-to: run Ring as a service](/documentation/how-to/run-as-service).

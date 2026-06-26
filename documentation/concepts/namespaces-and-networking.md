@@ -1,6 +1,6 @@
 # Namespaces and networking
 
-A **namespace** in Ring is a logical group of deployments — typically one per environment (`development`, `staging`, `production`) or per team. On the Docker runtime, namespaces are also a **network boundary**. On Cloud Hypervisor, they're organizational only.
+A **namespace** in Ring is a logical group of deployments, typically one per environment (`development`, `staging`, `production`) or per team. On the Docker runtime, namespaces are also a **network boundary**. On Cloud Hypervisor, they're organizational only.
 
 ## What a namespace does
 
@@ -51,7 +51,7 @@ network:
   mode: host
 ```
 
-The container then bypasses the bridge entirely — it sees the host's interfaces, can bind privileged ports without a NAT hop, and observes real client IPs. The trade-off is no network isolation and no `ports:` mapping (the process binds the host directly). Ring restricts host mode to a single replica and rejects deployments that combine it with `ports:`.
+The container then bypasses the bridge entirely: it sees the host's interfaces, can bind privileged ports without a NAT hop, and observes real client IPs. The trade-off is no network isolation and no `ports:` mapping (the process binds the host directly). Ring restricts host mode to a single replica and rejects deployments that combine it with `ports:`.
 
 This is the right tool for L4/L7 reverse proxies, VPN gateways, mDNS / multicast workloads, and packet-capture sidecars. For everything else, keep the default `bridge`. See [how-to: use host network mode](/documentation/how-to/use-host-network).
 
@@ -65,7 +65,7 @@ What this means in practice:
 
 - **No inter-VM DNS, no shared network.** Two VMs in the same namespace can't reach each other by name. They can only talk through the host: one VM publishes on a host port, the other connects to the host's IP.
 - **Namespaces have no networking effect.** They're a database row and a listing filter, nothing more.
-- **Each VM is its own network island.** Sidecar patterns, service meshes, multi-replica gossip — none of that works on CH out of the box.
+- **Each VM is its own network island.** Sidecar patterns, service meshes, and multi-replica gossip: none of that works on CH out of the box.
 
 If your workload needs inter-instance discovery, the Docker runtime is currently the only working answer.
 
@@ -77,7 +77,7 @@ By design, Ring doesn't route between namespaces. Three patterns work:
 2. **External reverse proxy.** [Sozune](https://sozune.kemeter.io) (the Ring companion proxy) or Traefik / Caddy / nginx in front of Ring, attached to multiple Docker networks (`docker network connect ring_<other-namespace> <proxy>`).
 3. **Move the dependency into the consumer's namespace.** If `api` in `production` needs `redis-cache`, deploy `redis-cache` to `production`.
 
-Pattern 3 is usually the right answer. Namespaces are isolation boundaries — crossing them deliberately should be the exception.
+Pattern 3 is usually the right answer. Namespaces are isolation boundaries, so crossing them deliberately should be the exception.
 
 ## What Ring doesn't do
 
@@ -86,11 +86,11 @@ Pattern 3 is usually the right answer. Namespaces are isolation boundaries — c
 - **No service mesh.** No sidecars, no mTLS injection, no traffic policy.
 - **No multi-host networking.** Ring is single-node by design.
 
-For production-grade routing, run a reverse proxy as a Ring deployment in front of your services — [Sozune](https://sozune.kemeter.io) is the recommended path (see [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic)), or use Traefik / Caddy / nginx. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) for the cross-namespace details.
+For production-grade routing, run a reverse proxy as a Ring deployment in front of your services. [Sozune](https://sozune.kemeter.io) is the recommended path (see [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic)), or use Traefik / Caddy / nginx. See [how-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) for the cross-namespace details.
 
 ## See also
 
-- [Architecture](/documentation/concepts/architecture) — where the runtime sits
-- [Runtimes](/documentation/concepts/runtimes) — Docker vs CH trade-offs
+- [Architecture](/documentation/concepts/architecture): where the runtime sits
+- [Runtimes](/documentation/concepts/runtimes): Docker vs CH trade-offs
 - [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
 - [Manifest reference: namespace](/documentation/reference/manifest#namespace)

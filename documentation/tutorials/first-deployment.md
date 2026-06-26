@@ -22,11 +22,11 @@ deployments:
 
 What each field does:
 
-- `name`, `namespace` — together they identify this deployment. Same name in a different namespace is a different deployment.
-- `runtime: docker` — use the Docker runtime
-- `image: "nginx:1.25"` — the Docker image to run. Pin to a specific tag in production
-- `replicas: 1` — one running container
-- `ports` — publish container port 80 on host port 8080
+- `name`, `namespace`: together they identify this deployment. Same name in a different namespace is a different deployment.
+- `runtime: docker` uses the Docker runtime
+- `image: "nginx:1.25"` is the Docker image to run. Pin to a specific tag in production
+- `replicas: 1` means one running container
+- `ports` publishes container port 80 on host port 8080
 
 ## 2. Apply
 
@@ -67,9 +67,9 @@ Hit the running container:
 curl http://localhost:8080
 ```
 
-You should see the nginx welcome page HTML. If you get a connection refused, the scheduler hasn't ticked yet — wait 10 seconds.
+You should see the nginx welcome page HTML. If you get a connection refused, the scheduler hasn't ticked yet, so wait 10 seconds.
 
-> **Important — IDs vs names.** Most `ring deployment` subcommands (`events`, `logs`, `delete`, …) take the deployment's **ID** (the UUID in the first column above), not its name. Copy the ID from `ring deployment list` and use it in the commands below. We'll write `<ID>` as a placeholder.
+> **Important: IDs vs names.** Most `ring deployment` subcommands (`events`, `logs`, `delete`, …) take the deployment's **ID** (the UUID in the first column above), not its name. Copy the ID from `ring deployment list` and use it in the commands below. We'll write `<ID>` as a placeholder.
 
 To watch the lifecycle as it happens:
 
@@ -99,7 +99,7 @@ Re-apply:
 ring apply -f nginx.yaml
 ```
 
-> **Note**: with `replicas > 1` and a `ports:` entry, only one container can actually bind host port 8080. Docker rejects the others with `bind: address already in use`. That's expected — for production, you'd put a reverse proxy in front. For this tutorial, we'll accept the noise; the test below still works.
+> **Note**: with `replicas > 1` and a `ports:` entry, only one container can actually bind host port 8080. Docker rejects the others with `bind: address already in use`. That's expected; for production, you'd put a reverse proxy in front. For this tutorial, we'll accept the noise; the test below still works.
 
 Wait one scheduler tick, then check:
 
@@ -145,13 +145,13 @@ Both should be empty.
 - `ring apply` submits, the scheduler executes
 - Status flows: `creating` → `running` (workers stay there) or `completed` / `failed` (jobs)
 - Deleting a deployment tears down its containers
-- Replicas with a single published port hit Docker's port conflict — real production routing belongs to a reverse proxy
+- Replicas with a single published port hit Docker's port conflict, since real production routing belongs to a reverse proxy
 
 ## What's next
 
 You now know Ring's core workflow. Pick a how-to guide for whatever feature you need next:
 
-- [Deploy with secrets](/documentation/how-to/deploy-with-secrets) — encrypted env-var injection
-- [Configure health checks](/documentation/how-to/configure-health-checks) — TCP / HTTP / command probes
-- [Perform a rolling update](/documentation/how-to/perform-rolling-update) — zero-downtime deploys
-- [Run a job](/documentation/how-to/run-a-job) — one-shot tasks like migrations
+- [Deploy with secrets](/documentation/how-to/deploy-with-secrets): encrypted env-var injection
+- [Configure health checks](/documentation/how-to/configure-health-checks): TCP / HTTP / command probes
+- [Perform a rolling update](/documentation/how-to/perform-rolling-update): zero-downtime deploys
+- [Run a job](/documentation/how-to/run-a-job): one-shot tasks like migrations

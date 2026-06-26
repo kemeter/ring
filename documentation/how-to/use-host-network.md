@@ -1,6 +1,6 @@
 # Use host network mode
 
-By default Ring attaches every Docker container to a per-namespace bridge network. Some workloads need to bypass that and run directly on the host's network stack — this page covers when, how, and the constraints Ring enforces.
+By default Ring attaches every Docker container to a per-namespace bridge network. Some workloads need to bypass that and run directly on the host's network stack. This page covers when, how, and the constraints Ring enforces.
 
 For the underlying model, see [Namespaces and networking](/documentation/concepts/namespaces-and-networking). For the field schema, see [Manifest reference → `network`](/documentation/reference/manifest#network).
 
@@ -8,14 +8,14 @@ For the underlying model, see [Namespaces and networking](/documentation/concept
 
 Host networking trades isolation for visibility into the host's stack. It is the right choice when the workload needs **any** of:
 
-- To bind privileged ports (80/443) and see real client IPs without a NAT hop — L4/L7 reverse proxies, ingress controllers.
-- The host's network namespace itself — `tcpdump`-style sidecars, eBPF probes, IDS.
-- To manage host-level routing or TUN devices — VPN gateways (WireGuard, Tailscale, OpenVPN).
-- Broadcast / multicast on the host LAN — mDNS responders, Consul gossip, SSDP.
+- To bind privileged ports (80/443) and see real client IPs without a NAT hop, as with L4/L7 reverse proxies and ingress controllers.
+- The host's network namespace itself, as with `tcpdump`-style sidecars, eBPF probes, and IDS.
+- To manage host-level routing or TUN devices, as with VPN gateways (WireGuard, Tailscale, OpenVPN).
+- Broadcast / multicast on the host LAN, as with mDNS responders, Consul gossip, and SSDP.
 
 If none of those apply, **keep the default `bridge`**. Host mode bypasses Docker's port mappings and removes container-level network isolation.
 
-## Minimal example — HAProxy on 80/443
+## Minimal example: HAProxy on 80/443
 
 ```yaml
 deployments:
@@ -41,7 +41,7 @@ Apply it:
 ring apply -f edge-haproxy.yaml
 ```
 
-The container shares the host's network namespace. HAProxy binds 80/443 on the host directly — no `ports:` mapping. Client connections show real source IPs in HAProxy logs.
+The container shares the host's network namespace. HAProxy binds 80/443 on the host directly, with no `ports:` mapping. Client connections show real source IPs in HAProxy logs.
 
 ## Constraints Ring enforces
 
@@ -49,11 +49,11 @@ The API rejects the deployment up front if any of these hold:
 
 | You wrote… | Why Ring rejects it |
 |---|---|
-| `ports:` is non-empty | Host networking bypasses Docker's port bindings — `ports:` would be silently ignored. |
+| `ports:` is non-empty | Host networking bypasses Docker's port bindings, so `ports:` would be silently ignored. |
 | `replicas: 2` or more | All replicas would compete for the same host ports. |
 | `runtime: cloud-hypervisor` | Host mode is Docker-only. The CH runtime has its own network model (per-VM /30 subnet under `10.42.0.0/16`). |
 
-The rejection happens at `ring apply` time with a 400 response — no half-deployed state to clean up.
+The rejection happens at `ring apply` time with a 400 response, so there is no half-deployed state to clean up.
 
 Example rejection:
 
@@ -96,7 +96,7 @@ deployments:
         permission: rw
 ```
 
-`privileged: true` is needed for `/dev/net/tun` access. The auth key is stored as a Ring secret — see [how-to: deploy with secrets](/documentation/how-to/deploy-with-secrets).
+`privileged: true` is needed for `/dev/net/tun` access. The auth key is stored as a Ring secret (see [how-to: deploy with secrets](/documentation/how-to/deploy-with-secrets)).
 
 ### mDNS responder
 
@@ -112,7 +112,7 @@ deployments:
       mode: host       # required: mDNS uses 224.0.0.251 multicast on the host LAN
 ```
 
-Bridge networking would put Avahi on a virtual network that has no path to the LAN's multicast group — clients on the LAN would never see the broadcasts.
+Bridge networking would put Avahi on a virtual network that has no path to the LAN's multicast group, so clients on the LAN would never see the broadcasts.
 
 ### Packet-capture sidecar
 
@@ -148,8 +148,8 @@ deployments:
 | Aspect | `bridge` (default) | `host` |
 |---|---|---|
 | Network namespace | Per-namespace bridge `ring_{namespace}` | Host's |
-| Port mapping | `ports:` forwarded to Docker `PortBindings` | `ports:` rejected — the process binds the host directly |
-| Service discovery (same namespace) | Docker DNS resolves deployment name | None — use the host's loopback / LAN |
+| Port mapping | `ports:` forwarded to Docker `PortBindings` | `ports:` rejected (the process binds the host directly) |
+| Service discovery (same namespace) | Docker DNS resolves deployment name | None; use the host's loopback / LAN |
 | Client source IP visibility | NAT'd to bridge gateway | Real client IP |
 | Multicast / broadcast | Trapped on the bridge | Sees host LAN traffic |
 | Replicas | Multiple replicas share the namespace via Docker DNS | One replica per deployment (port conflicts) |
@@ -174,7 +174,7 @@ The probe runs from the host network stack (same as the workload), so anything t
 
 ## When you also want a reverse proxy in front
 
-A common pattern: the proxy uses host mode (privileged ports, real client IPs), and the backends stay on bridge networking. The proxy reaches backends by their `ring_<namespace>` bridge — but **only if you connect the proxy's container to that bridge yourself**, since host-mode containers don't join Docker networks.
+A common pattern: the proxy uses host mode (privileged ports, real client IPs), and the backends stay on bridge networking. The proxy reaches backends by their `ring_<namespace>` bridge, but **only if you connect the proxy's container to that bridge yourself**, since host-mode containers don't join Docker networks.
 
 Three workable shapes:
 
@@ -186,13 +186,13 @@ See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for
 
 ## Limits
 
-- **Docker-only.** The Cloud Hypervisor runtime rejects `network.mode=host` — its network model is different (per-VM /30, no shared bridge).
+- **Docker-only.** The Cloud Hypervisor runtime rejects `network.mode=host`, since its network model is different (per-VM /30, no shared bridge).
 - **One replica.** Port conflicts make `replicas > 1` impossible; Ring rejects it at the API.
 - **No isolation.** Host-mode containers can bind to any free port on the host and see all host network traffic. Treat them like a host-level daemon for security purposes.
 
 ## See also
 
 - [Manifest reference → `network`](/documentation/reference/manifest#network)
-- [Namespaces and networking](/documentation/concepts/namespaces-and-networking) — bridge / CH models
-- [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network) — bridge-mode recipes
-- [How-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) — Sozune in front of backends
+- [Namespaces and networking](/documentation/concepts/namespaces-and-networking): bridge / CH models
+- [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network): bridge-mode recipes
+- [How-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic): Sozune in front of backends

@@ -2,7 +2,7 @@
 
 Add at least one health check to enable rolling updates and self-healing. Three probe types, three failure actions, one optional readiness gate.
 
-For the runtime behavior — when probes run, how counters work, why probes are per-instance — see [Health checks (design)](/documentation/concepts/health-checks-design).
+For the runtime behavior (when probes run, how counters work, why probes are per-instance), see [Health checks (design)](/documentation/concepts/health-checks-design).
 
 ## Minimal HTTP check
 
@@ -61,7 +61,7 @@ health_checks:
     on_failure: restart
 ```
 
-The command must exist **inside** the container — Ring does not run it on the host. Distroless or `scratch` images need a static binary they can exec, or use HTTP/TCP instead.
+The command must exist **inside** the container; Ring does not run it on the host. Distroless or `scratch` images need a static binary they can exec, or use HTTP/TCP instead.
 
 Exit `0` is success; any non-zero exit is a failure. Output is drained before the probe records its result so the exit status is final.
 
@@ -91,7 +91,7 @@ deployments:
     replicas: 3
 
     health_checks:
-      # Cheap and frequent — restart on hard failure
+      # Cheap and frequent: restart on hard failure
       - type: tcp
         port: 8080
         interval: "5s"
@@ -99,7 +99,7 @@ deployments:
         threshold: 3
         on_failure: restart
 
-      # Deeper but lighter cadence — only alert
+      # Deeper but lighter cadence: only alert
       - type: http
         url: "http://localhost:8080/internal/db-readiness"
         interval: "30s"
@@ -108,7 +108,7 @@ deployments:
         on_failure: alert
 ```
 
-Each row writes to the `health_check` table independently, but **counters are tracked per `(deployment, instance, check_type)`** — *not* per individual check. Two checks of the **same type** on one deployment share a counter, which means a failure on one resets the other. To run "cheap + deep" probes of the same type, declare one and let it cover both responsibilities (or use different types).
+Each row writes to the `health_check` table independently, but **counters are tracked per `(deployment, instance, check_type)`**, *not* per individual check. Two checks of the **same type** on one deployment share a counter, which means a failure on one resets the other. To run "cheap + deep" probes of the same type, declare one and let it cover both responsibilities (or use different types).
 
 ## Gate a rolling update on real readiness
 
@@ -129,7 +129,7 @@ With at least one `readiness: true` check, Ring:
 
 1. Boots the new container
 2. Waits for at least one `success` on every readiness check
-3. Requires each check to stay green for its `min_healthy_time` (default `10s`, configurable per check — see below)
+3. Requires each check to stay green for its `min_healthy_time` (default `10s`, configurable per check; see below)
 4. Then drains one old instance
 
 Any `failed` / `timeout` resets the gate. Non-readiness checks keep their existing role.
@@ -150,10 +150,10 @@ For services that need longer than 10 s to be truly ready (JVM cold start, big i
 
 - Same duration syntax as `interval` / `timeout` (`"500ms"`, `"30s"`).
 - Only matters when `readiness: true`.
-- When several readiness checks declare different values, the **maximum** wins — the gate waits on the slowest probe.
+- When several readiness checks declare different values, the **maximum** wins, so the gate waits on the slowest probe.
 - A typo (unparseable value) logs a warning and falls back to the 10 s default; rollouts aren't blocked.
 
-**Proxy bonus:** a `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK`. [Sozune](https://sozune.kemeter.io) (the companion proxy) and other label-aware proxies gate on `Status: healthy` — they won't route traffic to the new container while the readiness command fails. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the integration, or [Health checks design → proxy integration](/documentation/concepts/health-checks-design#proxy-integration) for the why.
+**Proxy bonus:** a `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK`. [Sozune](https://sozune.kemeter.io) (the companion proxy) and other label-aware proxies gate on `Status: healthy`, so they won't route traffic to the new container while the readiness command fails. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the integration, or [Health checks design → proxy integration](/documentation/concepts/health-checks-design#proxy-integration) for the why.
 
 For HTTP readiness with proxy gating, wrap the probe in a shell command:
 
@@ -223,7 +223,7 @@ Look for `reason`: `HealthCheckInstanceRestart`, `HealthCheckStop`, `HealthCheck
 
 ```yaml
 health_checks:
-  # Liveness — restart if listener is dead
+  # Liveness: restart if listener is dead
   - type: tcp
     port: 8080
     interval: "5s"
@@ -231,7 +231,7 @@ health_checks:
     threshold: 3
     on_failure: restart
 
-  # Deep readiness — alert only, don't auto-restart on backend blips
+  # Deep readiness: alert only, don't auto-restart on backend blips
   - type: http
     url: "http://localhost:8080/health/deep"
     interval: "30s"
@@ -282,6 +282,6 @@ The application creates `/var/run/kemeter/ready` at the end of its boot sequence
 
 ## See also
 
-- [Health checks (design)](/documentation/concepts/health-checks-design) — runtime behavior, readiness gate, failure model
+- [Health checks (design)](/documentation/concepts/health-checks-design): runtime behavior, readiness gate, failure model
 - [How-to: perform a rolling update](/documentation/how-to/perform-rolling-update)
 - [Manifest reference: `health_checks`](/documentation/reference/manifest#health-checks)

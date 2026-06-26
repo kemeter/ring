@@ -56,18 +56,18 @@ curl -N -H "Authorization: Bearer $TOKEN" \
   "http://localhost:3030/deployments/$ID/logs?follow=true"
 ```
 
-`-N` disables curl's output buffering. The streaming endpoint is exempt from the API's 10-second timeout — SSE connections can stay open indefinitely.
+`-N` disables curl's output buffering. The streaming endpoint is exempt from the API's 10-second timeout, so SSE connections can stay open indefinitely.
 
 ### Per-runtime notes
 
-- **Docker** — sourced from `docker logs`. Each line gets an `instance`, an inferred `level` from substring matches (`info` / `warning` / `error` / `unknown`), and a timestamp.
-- **Cloud Hypervisor** — read from `<socket_dir>/<instance>.console.log`, the per-instance serial console capture. Kernel boot + cloud-init + anything redirected to `/dev/console`. The file is **append-only**; Ring doesn't rotate. To get app logs into the stream, point your service at the console (`StandardOutput=tty TTYPath=/dev/console` for systemd).
+- **Docker**: sourced from `docker logs`. Each line gets an `instance`, an inferred `level` from substring matches (`info` / `warning` / `error` / `unknown`), and a timestamp.
+- **Cloud Hypervisor**: read from `<socket_dir>/<instance>.console.log`, the per-instance serial console capture. Kernel boot + cloud-init + anything redirected to `/dev/console`. The file is **append-only**; Ring doesn't rotate. To get app logs into the stream, point your service at the console (`StandardOutput=tty TTYPath=/dev/console` for systemd).
 
 What you don't get: structured-log parsing, per-deployment retention, server-side `grep`. Pipe to `grep` / `jq`.
 
 ## Events
 
-Ring's scheduler decisions. **Read these before logs** when something looks off — events tell you what Ring decided; logs tell you what the application then did.
+Ring's scheduler decisions. **Read these before logs** when something looks off: events tell you what Ring decided; logs tell you what the application then did.
 
 ```bash
 ring deployment events <DEPLOYMENT_ID>
@@ -79,9 +79,9 @@ ring deployment events <DEPLOYMENT_ID> --limit 100
 
 Levels:
 
-- **`info`** — routine progress (deployment created, replica scaled, rolling-update step)
-- **`warning`** — Ring took a corrective action or noticed something (health-check restart, OOM kill, unexpected exit)
-- **`error`** — Ring couldn't do what was asked (config load, secret resolution, container start, `HealthCheckAlert`)
+- **`info`**: routine progress (deployment created, replica scaled, rolling-update step)
+- **`warning`**: Ring took a corrective action or noticed something (health-check restart, OOM kill, unexpected exit)
+- **`error`**: Ring couldn't do what was asked (config load, secret resolution, container start, `HealthCheckAlert`)
 
 ### Reason strings to grep for
 
@@ -149,10 +149,10 @@ ring deployment metrics <DEPLOYMENT_ID> -o json
 
 Returns CPU% (one core = 100), memory (`usage_bytes`, `limit_bytes`, `usage_percent`), network bytes/packets cumulative, disk I/O, PIDs, and a per-instance breakdown.
 
-- **Docker** — all five categories populated, sourced from the Docker stats endpoint
-- **Cloud Hypervisor** — CPU% and memory from `/proc/<pid>/*` of the VMM process; `network`, `disk_io`, `pids` reported as zero pending host-side wiring
+- **Docker**: all five categories populated, sourced from the Docker stats endpoint
+- **Cloud Hypervisor**: CPU% and memory from `/proc/<pid>/*` of the VMM process; `network`, `disk_io`, `pids` reported as zero pending host-side wiring
 
-**Snapshot, not history.** `ring deployment metrics` returns the current sample only — Ring does not retain a time-series. For trends, scrape the Prometheus endpoint below into your monitoring stack.
+**Snapshot, not history.** `ring deployment metrics` returns the current sample only; Ring does not retain a time-series. For trends, scrape the Prometheus endpoint below into your monitoring stack.
 
 ## Prometheus
 
@@ -173,10 +173,10 @@ scrape_configs:
 
 Two families of series:
 
-- **Inventory** — `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` = outbound-queue depth, `dead` = dead-lettered), `ring_health_checks_by_status{status=…}`, plus counts for namespaces, secrets, volumes, users, webhooks, configs.
-- **Per-deployment resource usage** — `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_network_*_bytes_total`, `ring_deployment_restarts_total`, … labelled `deployment` / `namespace` / `runtime`.
+- **Inventory**: `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` = outbound-queue depth, `dead` = dead-lettered), `ring_health_checks_by_status{status=…}`, plus counts for namespaces, secrets, volumes, users, webhooks, configs.
+- **Per-deployment resource usage**: `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_network_*_bytes_total`, `ring_deployment_restarts_total`, … labelled `deployment` / `namespace` / `runtime`.
 
-Resource usage is refreshed in the background on the scheduler interval, not per scrape, so scraping is cheap regardless of how many deployments are running. `ring_runtime_last_refresh_seconds` exposes the last refresh time — values are at most one interval stale.
+Resource usage is refreshed in the background on the scheduler interval, not per scrape, so scraping is cheap regardless of how many deployments are running. `ring_runtime_last_refresh_seconds` exposes the last refresh time; values are at most one interval stale.
 
 Useful alerts:
 

@@ -44,8 +44,8 @@ Every login mints a **new** session token (they are not shared across logins), s
 
 **Errors** (all in `application/problem+json`):
 
-- `401 Unauthorized` — `{"title": "Unauthorized", "detail": "invalid credentials"}` for both unknown username and wrong password.
-- `500 Internal Server Error` — session persistence or credential verification failure.
+- `401 Unauthorized`: `{"title": "Unauthorized", "detail": "invalid credentials"}` for both unknown username and wrong password.
+- `500 Internal Server Error`: session persistence or credential verification failure.
 
 ### Log out
 
@@ -54,7 +54,7 @@ POST /logout
 Authorization: Bearer <token>
 ```
 
-Revokes the token presented in the `Authorization` header — a caller can only revoke the credential it is currently holding. Always returns `204 No Content`, whether or not the token existed (it never reveals token state). After logout the token is rejected with `401`. This works for any token, but is primarily how a login session is ended; to revoke a PAT, use `DELETE /tokens/{id}` or `ring token revoke`.
+Revokes the token presented in the `Authorization` header; a caller can only revoke the credential it is currently holding. Always returns `204 No Content`, whether or not the token existed (it never reveals token state). After logout the token is rejected with `401`. This works for any token, but is primarily how a login session is ended; to revoke a PAT, use `DELETE /tokens/{id}` or `ring token revoke`.
 
 ## CORS
 
@@ -87,7 +87,7 @@ Content-Type: application/problem+json
 Key points for clients:
 
 - **All violations are reported.** Every rule that applies to the input is evaluated; the response lists every failure in one shot rather than stopping at the first. A single field can produce multiple violations (e.g. `username: "@"` trips both length and format).
-- **Stable `code` slugs.** `user.username.length`, `user.username.format`, `user.password.length`, etc. Branch on `code` rather than parsing `message` — `message` is human text and may change for clarity.
+- **Stable `code` slugs.** `user.username.length`, `user.username.format`, `user.password.length`, etc. Branch on `code` rather than parsing `message`, which is human text and may change for clarity.
 - **`detail`** mirrors what a CLI tool prints: one line per violation, `<property_path>: <message>`. Useful for logging without parsing the structured `violations` array.
 - A malformed request body (invalid JSON, missing required field) returns `400 Bad Request` instead, with a plain-text reason.
 
@@ -119,7 +119,7 @@ Two families of series are exposed:
 - **Inventory** (read from the database on each scrape): `ring_deployments`, `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` is the outbound-queue depth, `dead` the dead-letter count), `ring_health_checks_by_status{status=…}`, and counts for `ring_namespaces` / `ring_secrets` / `ring_volumes` / `ring_users` / `ring_webhooks` / `ring_configs`. Every known status is emitted even at `0`, so a series never disappears between scrapes (which would break alerts written against it).
 - **Per-deployment resource usage** (labelled `deployment` / `namespace` / `runtime`): gauges `ring_deployment_instances`, `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_memory_limit_bytes`, `ring_deployment_pids`; counters `ring_deployment_network_rx_bytes_total`, `ring_deployment_network_tx_bytes_total`, `ring_deployment_disk_read_bytes_total`, `ring_deployment_disk_write_bytes_total`, `ring_deployment_restarts_total`.
 
-Resource usage is refreshed in the background on the scheduler interval, not at request time, so a scrape never blocks on the runtimes. `ring_runtime_last_refresh_seconds` carries the Unix time of the last successful refresh — alert on `time() - ring_runtime_last_refresh_seconds` to catch a stalled refresh. Values are therefore at most one interval stale; for a fresh point-in-time read of one deployment use [`GET /deployments/{id}/metrics`](#get-deploymentsidmetrics).
+Resource usage is refreshed in the background on the scheduler interval, not at request time, so a scrape never blocks on the runtimes. `ring_runtime_last_refresh_seconds` carries the Unix time of the last successful refresh; alert on `time() - ring_runtime_last_refresh_seconds` to catch a stalled refresh. Values are therefore at most one interval stale; for a fresh point-in-time read of one deployment use [`GET /deployments/{id}/metrics`](#get-deploymentsidmetrics).
 
 The per-deployment series carry one time series per running deployment (`deployment` / `namespace` labels). Series count grows with the number of deployments, so on nodes that churn through many short-lived deployments keep an eye on your Prometheus cardinality.
 
@@ -131,16 +131,16 @@ List deployments.
 
 **Query parameters:**
 
-- `namespace` or `namespace[]` — filter by one or more namespaces
-- `status` or `status[]` — filter by one or more statuses (values below)
-- `kind` or `kind[]` — filter by `worker` or `job` (the CLI flag `--type` maps to this)
+- `namespace` or `namespace[]`: filter by one or more namespaces
+- `status` or `status[]`: filter by one or more statuses (values below)
+- `kind` or `kind[]`: filter by `worker` or `job` (the CLI flag `--type` maps to this)
 
 **`status` values.** The `status` field on every deployment is one of these (all `snake_case`). See [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) for transitions and meaning.
 
 | Status | Meaning | Terminal? |
 |---|---|---|
 | `pending` | Created, no instance started yet (short-lived) | No |
-| `creating` | Instances coming up — or held by the readiness gate until ready | No |
+| `creating` | Instances coming up, or held by the readiness gate until ready | No |
 | `running` | Up, and ready when readiness checks are declared | No |
 | `completed` | Job exited `0` (jobs only) | Yes |
 | `failed` | Job failed, or readiness deadline exceeded, or firmware not found | Yes |
@@ -197,7 +197,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Each entry in `instances` is an object with the instance `id` and, when the
 instance has a reachable network, its routable guest `address`. The `address`
-field is **omitted** when the instance has no reachable endpoint — for example a
+field is **omitted** when the instance has no reachable endpoint, for example a
 deployment with no published ports, where no network is allocated. This mirrors
 the Nomad/Consul "service instance = address" model, so service-discovery
 providers and proxies can route to a specific instance.
@@ -208,7 +208,7 @@ Create a new deployment, or trigger a rolling update if one with the same `name`
 
 **Query parameters:**
 
-- `force=true` — bypass the rolling-update path; immediately replace existing instances even when health checks are configured.
+- `force=true`: bypass the rolling-update path; immediately replace existing instances even when health checks are configured.
 
 **Body:**
 
@@ -249,8 +249,8 @@ Each port entry maps a host port (`published`) to a container port (`target`). O
 
 Environment values support two forms:
 
-- **Plain value** — `"KEY": "value"`, passed as-is to the container.
-- **Secret reference** — `"KEY": { "secretRef": "secret-name" }`, looks up an encrypted secret in the same namespace and injects it at deployment time. If the secret does not exist, the deployment is marked failed and an `error` event is emitted.
+- **Plain value**: `"KEY": "value"`, passed as-is to the container.
+- **Secret reference**: `"KEY": { "secretRef": "secret-name" }`, looks up an encrypted secret in the same namespace and injects it at deployment time. If the secret does not exist, the deployment is marked failed and an `error` event is emitted.
 
 **Job example:**
 
@@ -340,10 +340,10 @@ Tail or stream container logs.
 
 **Query parameters:**
 
-- `tail` — last N lines (default: 100)
-- `since` — relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
-- `container` — filter to one container/instance name
-- `follow=true` — return a Server-Sent Events (SSE) stream instead of a JSON array
+- `tail`: last N lines (default: 100)
+- `since`: relative duration (`30s`, `10m`, `2h`) or RFC3339 timestamp
+- `container`: filter to one container/instance name
+- `follow=true`: return a Server-Sent Events (SSE) stream instead of a JSON array
 
 **Examples:**
 
@@ -370,7 +370,7 @@ curl -H "Authorization: Bearer $TOKEN" \
   }
 ]
 
-The `instance` field is the Docker container name (`<namespace>_<name>_<8-hex>`) for Docker deployments, or the CH instance ID (`ch-<8-hex>-<8-hex>`) for Cloud Hypervisor deployments. The `level` is a heuristic — Ring infers it from substring matches on the line (`[error]`, `[warning]`, `[info]`, `[notice]`, `info:`); structured-log levels are not preserved.
+The `instance` field is the Docker container name (`<namespace>_<name>_<8-hex>`) for Docker deployments, or the CH instance ID (`ch-<8-hex>-<8-hex>`) for Cloud Hypervisor deployments. The `level` is a heuristic: Ring infers it from substring matches on the line (`[error]`, `[warning]`, `[info]`, `[notice]`, `info:`); structured-log levels are not preserved.
 ```
 
 When `follow=true`, the response is an SSE stream (`Content-Type: text/event-stream`) where each `data:` line carries the same JSON shape as a single log entry.
@@ -379,12 +379,12 @@ This route is mounted without the 10-second API timeout so streams can stay open
 
 ### `GET /deployments/{id}/events`
 
-Retrieve scheduler events for a deployment. **Not a stream** — only `/logs?follow=true` supports SSE today; this endpoint is plain JSON. Poll periodically if you need to forward events into another system.
+Retrieve scheduler events for a deployment. **Not a stream**: only `/logs?follow=true` supports SSE today; this endpoint is plain JSON. Poll periodically if you need to forward events into another system.
 
 **Query parameters:**
 
-- `level` — filter by `info`, `warning`, or `error`
-- `limit` — maximum number of events (default: 50)
+- `level`: filter by `info`, `warning`, or `error`
+- `limit`: maximum number of events (default: 50)
 
 **Response:**
 
@@ -408,8 +408,8 @@ Retrieve recent health-check results.
 
 **Query parameters:**
 
-- `limit` — maximum number of results
-- `latest=true` — only the most recent result per check
+- `limit`: maximum number of results
+- `latest=true`: only the most recent result per check
 
 **Response:**
 
@@ -434,8 +434,8 @@ Live resource usage for a deployment and each of its instances.
 
 Coverage by runtime:
 
-- **Docker** — every field populated from the Docker stats endpoint (CPU, memory, network, disk I/O, PIDs).
-- **Cloud Hypervisor** — `cpu_usage_percent` and `memory.usage_bytes` / `memory.limit_bytes` are populated by sampling `/proc/<pid>/stat` and `/proc/<pid>/status` of the cloud-hypervisor process. `network`, `disk_io` and `pids` are reported as zero in this first pass; full parity with Docker is tracked separately.
+- **Docker**: every field populated from the Docker stats endpoint (CPU, memory, network, disk I/O, PIDs).
+- **Cloud Hypervisor**: `cpu_usage_percent` and `memory.usage_bytes` / `memory.limit_bytes` are populated by sampling `/proc/<pid>/stat` and `/proc/<pid>/status` of the cloud-hypervisor process. `network`, `disk_io` and `pids` are reported as zero in this first pass; full parity with Docker is tracked separately.
 
 **Response:**
 
@@ -493,9 +493,9 @@ Coverage by runtime:
 
 ## Secrets
 
-Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exposes the decrypted value — only metadata is returned.
+Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exposes the decrypted value; only metadata is returned.
 
-`RING_SECRET_KEY` (a base64-encoded 32-byte key) must be set before `ring server start` — the server refuses to start without it. `ring doctor` validates the variable.
+`RING_SECRET_KEY` (a base64-encoded 32-byte key) must be set before `ring server start`; the server refuses to start without it. `ring doctor` validates the variable.
 
 ### `POST /secrets`
 
@@ -528,9 +528,9 @@ Secrets are AES-256-GCM-encrypted values stored per-namespace. The API never exp
 
 **Errors** (all in `application/problem+json`):
 
-- `404 Not Found` — the namespace doesn't exist yet (POST /secrets does not auto-create it).
-- `409 Conflict` — a secret with this name already exists in this namespace.
-- `500 Internal Server Error` — encryption failed (typically a misconfigured `RING_SECRET_KEY` somehow surviving startup validation).
+- `404 Not Found`: the namespace doesn't exist yet (POST /secrets does not auto-create it).
+- `409 Conflict`: a secret with this name already exists in this namespace.
+- `500 Internal Server Error`: encryption failed (typically a misconfigured `RING_SECRET_KEY` somehow surviving startup validation).
 
 ### `GET /secrets`
 
@@ -560,14 +560,14 @@ Returns the same shape as a list entry. Values are never returned.
 
 **Query parameters:**
 
-- `force=true` — delete even if referenced by active deployments
+- `force=true`: delete even if referenced by active deployments
 
 **Response:** `204 No Content`
 
 **Errors:**
 
-- `404 Not Found` — secret does not exist
-- `409 Conflict` — secret is referenced by active deployments. Body lists them:
+- `404 Not Found`: secret does not exist
+- `409 Conflict`: secret is referenced by active deployments. Body lists them:
 
 ```json
 {
@@ -581,7 +581,7 @@ Returns the same shape as a list entry. Values are never returned.
 
 Volumes are first-class, per-namespace storage entities. A deployment that mounts a named volume auto-registers it, so every volume is traceable to the namespace and deployment that own it. Volumes are provisioned with Ring labels (`ring.managed`, `ring.namespace`, `ring.deployment`) on the underlying driver.
 
-Durability of a named volume is a property of the host filesystem (for the Docker `local` driver, `/var/lib/docker/volumes`) and the workload's own fsync discipline — Ring sets no per-volume sync option. On Cloud Hypervisor, a writable named volume is served by virtiofsd with `--cache never` so guest writes are not held in the daemon cache.
+Durability of a named volume is a property of the host filesystem (for the Docker `local` driver, `/var/lib/docker/volumes`) and the workload's own fsync discipline, since Ring sets no per-volume sync option. On Cloud Hypervisor, a writable named volume is served by virtiofsd with `--cache never` so guest writes are not held in the daemon cache.
 
 ### `POST /volumes`
 
@@ -619,8 +619,8 @@ Durability of a named volume is a property of the host filesystem (for the Docke
 
 **Errors** (`application/problem+json`):
 
-- `404 Not Found` — the namespace doesn't exist yet (POST /volumes does not auto-create it).
-- `409 Conflict` — a volume with this name already exists in this namespace.
+- `404 Not Found`: the namespace doesn't exist yet (POST /volumes does not auto-create it).
+- `409 Conflict`: a volume with this name already exists in this namespace.
 
 ### `GET /volumes`
 
@@ -652,14 +652,14 @@ Returns the same shape as a list entry.
 
 **Query parameters:**
 
-- `force=true` — delete even if referenced by active deployments
+- `force=true`: delete even if referenced by active deployments
 
 **Response:** `204 No Content`
 
 **Errors:**
 
-- `404 Not Found` — volume does not exist
-- `409 Conflict` — volume is referenced by active deployments. Body lists them:
+- `404 Not Found`: volume does not exist
+- `409 Conflict`: volume is referenced by active deployments. Body lists them:
 
 ```json
 {
@@ -719,7 +719,7 @@ Returns the user attached to the bearer token.
 
 ### `PUT /users/{id}`
 
-Update a user. Both fields are optional — sending an empty body is a no-op that returns `200 OK`.
+Update a user. Both fields are optional, so sending an empty body is a no-op that returns `200 OK`.
 
 ```json
 {
@@ -738,13 +738,13 @@ Update a user. Both fields are optional — sending an empty body is a no-op tha
 
 ## Tokens
 
-Scoped API tokens (Personal Access Tokens). A token authenticates like a session — `Authorization: Bearer ring_pat_…` — but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
+Scoped API tokens (Personal Access Tokens). A token authenticates like a session (`Authorization: Bearer ring_pat_…`) but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
 
 **Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
 
-Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`) — otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
+Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`), otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
 
-All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) and `POST /auth/stream-ticket` require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation — a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
+All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) and `POST /auth/stream-ticket` require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation: a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
 
 ### `POST /tokens`
 
@@ -761,7 +761,7 @@ Creates a token. Requires a full-access session or an `admin`-scoped token.
 
 `namespaces` may be omitted or `[]` (all namespaces). `expire_at` is an optional RFC 3339 timestamp (omit for no expiry).
 
-**Response:** `201 Created` — the only response that includes the clear `token`:
+**Response:** `201 Created`, the only response that includes the clear `token`:
 
 ```json
 {
@@ -809,7 +809,7 @@ Lists the caller's own tokens (never the secret).
 
 ### `GET /tokens/{id}`
 
-Returns a single token you own (without the secret). A token you don't own returns `404 Not Found` — the endpoint never confirms another user's token exists.
+Returns a single token you own (without the secret). A token you don't own returns `404 Not Found`, since the endpoint never confirms another user's token exists.
 
 ### `DELETE /tokens/{id}`
 
@@ -821,7 +821,7 @@ Revokes the token and mints a new one carrying the same name, scopes, namespaces
 
 ## Webhooks
 
-Webhook subscribers receive Ring events by HTTP POST. Ring publishes events to a durable queue; a worker delivers each to every webhook subscribed to its kind, with exponential backoff and dead-lettering after repeated failures. Deliveries are **at-least-once** — receivers must be idempotent.
+Webhook subscribers receive Ring events by HTTP POST. Ring publishes events to a durable queue; a worker delivers each to every webhook subscribed to its kind, with exponential backoff and dead-lettering after repeated failures. Deliveries are **at-least-once**, so receivers must be idempotent.
 
 Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`).
 
@@ -835,11 +835,11 @@ Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`)
 | `deployment.scaled`             | The reconciler added or removed an instance to reach `replicas`      |
 | `deployment.error`              | The runtime failed to bring a deployment up (image, network, …)      |
 
-Every payload shares a common envelope — `schema_version`, `deployment_id`, `namespace`, `name`, `kind` — plus the per-kind fields below.
+Every payload shares a common envelope (`schema_version`, `deployment_id`, `namespace`, `name`, `kind`) plus the per-kind fields below.
 
 ### Delivery format
 
-Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and — when the webhook has a secret — `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body).
+Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and (when the webhook has a secret) `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body).
 
 `deployment.status_changed`:
 
@@ -856,7 +856,7 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`deployment.health_check_failed` — `action` is the `on_failure` that fired (`restart` / `stop` / `alert`):
+For `deployment.health_check_failed`, `action` is the `on_failure` that fired (`restart` / `stop` / `alert`):
 
 ```json
 {
@@ -871,7 +871,7 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`deployment.rolling_update` — `phase` is `step` / `complete` / `failed`; `drained_instance_id` is set on `step`:
+For `deployment.rolling_update`, `phase` is `step` / `complete` / `failed`, and `drained_instance_id` is set on `step`:
 
 ```json
 {
@@ -886,7 +886,7 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`deployment.scaled` — `direction` is `up` / `down`; `instance_count` is the live count after the change:
+For `deployment.scaled`, `direction` is `up` / `down`, and `instance_count` is the live count after the change:
 
 ```json
 {
@@ -901,7 +901,7 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`deployment.error` — `reason` is the runtime discriminant, `category` its triage class (`user` / `host` / `transient`):
+For `deployment.error`, `reason` is the runtime discriminant and `category` its triage class (`user` / `host` / `transient`):
 
 ```json
 {
@@ -926,11 +926,11 @@ Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event:
 }
 ```
 
-`events` may be omitted or `[]` to subscribe to all kinds. Each entry is an exact kind (`deployment.scaled`), a family wildcard (`deployment.*` — every kind in that family), or `*` (every kind). `secret` is optional — when omitted, Ring generates one. **Response:** `201 Created` — the only response carrying the `secret` (shown once).
+`events` may be omitted or `[]` to subscribe to all kinds. Each entry is an exact kind (`deployment.scaled`), a family wildcard (`deployment.*`, meaning every kind in that family), or `*` (every kind). `secret` is optional; when omitted, Ring generates one. **Response:** `201 Created`, the only response carrying the `secret` (shown once).
 
 A malformed filter is rejected at creation rather than silently never matching: `deployment*` (missing dot), `deployement.*` (unknown family), or an unknown exact kind all return a `422` with a message pointing at the correct form.
 
-The secret keys the HMAC signature your receiver verifies, so its strength is your security boundary: **use a long, high-entropy value** (a random 32+ character string). Ring does not impose a minimum — a weak secret is forgeable — so unless you need to match an existing secret on the receiver, omit `secret` and let Ring generate a strong one for you.
+The secret keys the HMAC signature your receiver verifies, so its strength is your security boundary: **use a long, high-entropy value** (a random 32+ character string). Ring does not impose a minimum, and a weak secret is forgeable, so unless you need to match an existing secret on the receiver, omit `secret` and let Ring generate a strong one for you.
 
 **Validation** (see [Validation errors](#validation-errors)):
 
@@ -939,7 +939,7 @@ The secret keys the HMAC signature your receiver verifies, so its strength is yo
 | `url`    | must be an http/https URL that does not target loopback (`localhost`, `127.0.0.1`, `::1`) or link-local (`169.254.0.0/16`, incl. `169.254.169.254`) | `webhook.url.format`     |
 | `events` | every entry is a known event kind | `webhook.events.unknown` |
 
-The URL restriction is an SSRF guard: Ring POSTs to the URL server-side, so a subscriber cannot point it at the host's own admin services or the cloud metadata endpoint. Private/internal cluster addresses (RFC-1918, e.g. `10.x`, `192.168.x`, `172.16–31.x`) **are** allowed — they're the normal target for an internal subscriber. Redirects are not followed during delivery, so a subscriber can't bounce the request to a blocked target either.
+The URL restriction is an SSRF guard: Ring POSTs to the URL server-side, so a subscriber cannot point it at the host's own admin services or the cloud metadata endpoint. Private/internal cluster addresses (RFC-1918, e.g. `10.x`, `192.168.x`, `172.16–31.x`) **are** allowed, since they're the normal target for an internal subscriber. Redirects are not followed during delivery, so a subscriber can't bounce the request to a blocked target either.
 
 ### `GET /webhooks`
 
@@ -989,7 +989,7 @@ A config is a named blob (typically a config file or JSON document) attached to 
 
 **Errors** (all in `application/problem+json`):
 
-- `409 Conflict` — a configuration with the same name already exists in this namespace.
+- `409 Conflict`: a configuration with the same name already exists in this namespace.
 
 ### `GET /configs/{id}`
 
@@ -1027,7 +1027,7 @@ Full replacement (not partial). All fields must be provided.
 
 **Errors** (all in `application/problem+json`):
 
-- `404 Not Found` — no configuration with that id.
+- `404 Not Found`: no configuration with that id.
 
 ### `DELETE /configs/{id}`
 
@@ -1087,7 +1087,7 @@ Full replacement (not partial). All fields must be provided.
 
 **Errors** (all in `application/problem+json`):
 
-- `409 Conflict` — a namespace with the same name already exists.
+- `409 Conflict`: a namespace with the same name already exists.
 
 > Namespaces are also auto-created when a deployment is applied to a non-existent namespace; calling `POST /namespaces` upfront is optional.
 
@@ -1114,16 +1114,16 @@ Returns information about the host running the Ring server.
 
 ## HTTP status codes
 
-- `200 OK` — successful request returning a body
-- `201 Created` — resource created
-- `204 No Content` — successful `DELETE`
-- `400 Bad Request` — invalid request body or query parameters
-- `401 Unauthorized` — missing or invalid bearer token
-- `403 Forbidden` — authenticated but not allowed
-- `404 Not Found` — resource does not exist
-- `408 Request Timeout` — handler exceeded the 10-second API timeout
-- `409 Conflict` — duplicate resource or conflicting state
-- `500 Internal Server Error` — server-side failure (database, runtime communication)
+- `200 OK`: successful request returning a body
+- `201 Created`: resource created
+- `204 No Content`: successful `DELETE`
+- `400 Bad Request`: invalid request body or query parameters
+- `401 Unauthorized`: missing or invalid bearer token
+- `403 Forbidden`: authenticated but not allowed
+- `404 Not Found`: resource does not exist
+- `408 Request Timeout`: handler exceeded the 10-second API timeout
+- `409 Conflict`: duplicate resource or conflicting state
+- `500 Internal Server Error`: server-side failure (database, runtime communication)
 
 ## Error format
 

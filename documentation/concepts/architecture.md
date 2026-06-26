@@ -33,15 +33,15 @@ A tick-driven loop (default: every 10 seconds, override with `RING_SCHEDULER_INT
 
 Two implementations behind one trait:
 
-- **Docker** — the default. Containers, per-namespace bridge networks, live Docker events for fast crash detection.
-- **Cloud Hypervisor (alpha)** — microVMs with full kernel isolation. Stronger boundary, narrower feature set. See [Runtimes](/documentation/concepts/runtimes).
+- **Docker**, the default: containers, per-namespace bridge networks, live Docker events for fast crash detection.
+- **Cloud Hypervisor (alpha)**: microVMs with full kernel isolation. Stronger boundary, narrower feature set. See [Runtimes](/documentation/concepts/runtimes).
 
 A deployment picks its runtime with `runtime: docker` or `runtime: cloud-hypervisor` in the manifest. Both runtimes share the same manifest shape; per-field semantics differ where the underlying primitive forces it.
 
 ## What Ring is not
 
 - **Not multi-node.** One Ring process orchestrates one host. There is no cluster mode, no leader election, no cross-host scheduling.
-- **Not a load balancer.** Ring publishes ports and exposes Docker DNS aliases. Real L7 routing, health-aware load balancing, and TLS termination are jobs for a reverse proxy in front of Ring — [Sozune](https://sozune.kemeter.io) is the companion project for that role (see [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic)), or use Traefik / Caddy / nginx if you prefer.
+- **Not a load balancer.** Ring publishes ports and exposes Docker DNS aliases. Real L7 routing, health-aware load balancing, and TLS termination are jobs for a reverse proxy in front of Ring. [Sozune](https://sozune.kemeter.io) is the companion project for that role (see [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic)), or use Traefik / Caddy / nginx if you prefer.
 - **Not a service mesh.** No sidecars, no automatic mTLS, no traffic policy. Containers in the same namespace share a Docker bridge; everything else is on the operator.
 
 ## Failure surfaces

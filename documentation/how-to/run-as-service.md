@@ -83,7 +83,7 @@ services:
       - RING_SECRET_KEY=${RING_SECRET_KEY}
 ```
 
-> **Docker socket warning.** Mounting `/var/run/docker.sock` gives the Ring container full control over the host's Docker daemon — equivalent to root on the host. Treat the Ring container as privileged.
+> **Docker socket warning.** Mounting `/var/run/docker.sock` gives the Ring container full control over the host's Docker daemon, equivalent to root on the host. Treat the Ring container as privileged.
 
 Set `RING_SECRET_KEY` in your shell or a `.env` file (`.env` next to `compose.yaml`, gitignored).
 
@@ -101,7 +101,7 @@ sudo cp target/release/ring /usr/local/bin/ring
 sudo systemctl start ring
 ```
 
-If you've changed the binary in a way that adds new SQLite migrations, they run automatically on the next start. The database is opened in WAL mode — a normal restart doesn't lose any committed state.
+If you've changed the binary in a way that adds new SQLite migrations, they run automatically on the next start. The database is opened in WAL mode, so a normal restart doesn't lose any committed state.
 
 ## Uninstall
 
@@ -118,6 +118,6 @@ rm -rf ~/.config/kemeter/ring
 
 ## See also
 
-- [Tutorial: install and run](/documentation/tutorials/install-and-run) — first install
-- [How-to: observe and debug](/documentation/help/observe-and-debug) — logs and event streams
+- [Tutorial: install and run](/documentation/tutorials/install-and-run): first install
+- [How-to: observe and debug](/documentation/help/observe-and-debug): logs and event streams
 - [Reference: environment variables](/documentation/reference/environment-variables)
