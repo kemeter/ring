@@ -609,13 +609,54 @@ pub(crate) async fn create(
 
 pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE deployment SET status = ?, updated_at = datetime('now'), restart_count = ?, image_digest = ?, parent_id = ? WHERE id = ?"
+        "UPDATE deployment SET status = ?, updated_at = datetime('now'), image_digest = ?, parent_id = ? WHERE id = ?"
     )
     .bind(deployment.status.to_string())
-    .bind(deployment.restart_count as i32)
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
     .bind(&deployment.id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Atomically add `delta` to a deployment's `restart_count` in the database and
+/// return the new value. Uses a read-modify-write *in SQL*
+/// (`restart_count = restart_count + ?`) so a concurrent writer's increment is
+/// never clobbered by a stale full-row `update` (last-writer-wins). The crash
+/// counter is the one field two code paths can touch in the same window, so it
+/// gets its own targeted statement instead of riding the blind row write.
+pub(crate) async fn increment_restart_count(
+    pool: &SqlitePool,
+    id: &str,
+    delta: u32,
+) -> Result<u32, sqlx::Error> {
+    sqlx::query(
+        "UPDATE deployment SET restart_count = restart_count + ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(delta as i32)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    let row: (i32,) = sqlx::query_as("SELECT restart_count FROM deployment WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+
+    Ok(row.0 as u32)
+}
+
+/// Atomically reset a deployment's `restart_count` to 0 (the crash budget
+/// refill from the healthy-window logic). Targeted like
+/// [`increment_restart_count`] so it can't lose a concurrent increment to a
+/// stale full-row write.
+pub(crate) async fn reset_restart_count(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE deployment SET restart_count = 0, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(id)
     .execute(pool)
     .await?;
 
@@ -710,6 +751,107 @@ pub(crate) async fn delete_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    async fn test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    fn worker(id: &str, restart_count: u32) -> Deployment {
+        Deployment {
+            id: id.to_string(),
+            created_at: chrono::Utc::now().to_string(),
+            updated_at: None,
+            status: DeploymentStatus::Running,
+            restart_count,
+            namespace: "test".to_string(),
+            name: format!("w-{id}"),
+            image: "busybox".to_string(),
+            config: None,
+            runtime: "docker".to_string(),
+            kind: "worker".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: HashMap::new(),
+            environment: HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+            network: None,
+        }
+    }
+
+    async fn count_in_db(pool: &SqlitePool, id: &str) -> u32 {
+        let row: (i32,) = sqlx::query_as("SELECT restart_count FROM deployment WHERE id = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        row.0 as u32
+    }
+
+    #[tokio::test]
+    async fn increment_returns_new_value_and_persists() {
+        let pool = test_pool().await;
+        create(&pool, &worker("d1", 0)).await.unwrap();
+
+        assert_eq!(
+            increment_restart_count(&pool, "d1", 1).await.unwrap(),
+            1,
+            "increment returns the post-increment value"
+        );
+        assert_eq!(count_in_db(&pool, "d1").await, 1);
+
+        assert_eq!(increment_restart_count(&pool, "d1", 2).await.unwrap(), 3);
+        assert_eq!(count_in_db(&pool, "d1").await, 3);
+    }
+
+    #[tokio::test]
+    async fn reset_zeroes_the_counter() {
+        let pool = test_pool().await;
+        create(&pool, &worker("d1", 4)).await.unwrap();
+        reset_restart_count(&pool, "d1").await.unwrap();
+        assert_eq!(count_in_db(&pool, "d1").await, 0);
+    }
+
+    /// The core race the atomic fns guard against: a stale full-row `update`
+    /// (which no longer carries restart_count) interleaved with an increment must
+    /// NOT clobber the counter. Simulate it by loading a deployment, having a
+    /// second path increment the counter, then writing the stale row back — the
+    /// increment must survive.
+    #[tokio::test]
+    async fn stale_update_does_not_clobber_increment() {
+        let pool = test_pool().await;
+        create(&pool, &worker("d1", 0)).await.unwrap();
+
+        // Path A loads the row (restart_count == 0 in memory).
+        let stale = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stale.restart_count, 0);
+
+        // Path B increments the counter atomically in the DB.
+        increment_restart_count(&pool, "d1", 1).await.unwrap();
+        assert_eq!(count_in_db(&pool, "d1").await, 1);
+
+        // Path A now writes its stale row back through the blind full-row update.
+        // Because `update` no longer carries restart_count, the increment stands.
+        update(&pool, &stale).await.unwrap();
+        assert_eq!(
+            count_in_db(&pool, "d1").await,
+            1,
+            "the concurrent increment must not be lost to a stale full-row write"
+        );
+    }
 
     #[test]
     fn mounts_named_volume_matches_volume_type() {

@@ -973,8 +973,22 @@ impl FirecrackerLifecycle {
         }
 
         deployment.instances = self.scan_instances(&deployment.id);
-        if deployment.status != DeploymentStatus::CreateContainerError {
-            deployment.status = DeploymentStatus::Running;
+
+        // Promote to Running only after confirming at least one instance is
+        // genuinely alive (API socket on disk AND a live firecracker process).
+        // `start_vm` returning Ok means the boot was *accepted*, not that the
+        // guest stayed up — a VM that crashes right after boot leaves a stale
+        // socket, which `scan_instances` alone would mistake for a healthy
+        // instance and wrongly report Running. Gating on `instance_alive` closes
+        // that window; if nothing is alive we leave the prior status (typically
+        // Creating) so the deployment reconciles again next tick instead of
+        // flapping through a false Running.
+        let any_alive = deployment
+            .instances
+            .iter()
+            .any(|id| self.instance_alive(id));
+        if let Some(status) = liveness_confirmed_status(&deployment.status, any_alive) {
+            deployment.status = status;
         }
         deployment
     }
@@ -1111,6 +1125,24 @@ fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'sta
         ),
         _ => (None, "VmStartFailed"),
     }
+}
+
+/// Decide the post-scale worker status from the current status and whether any
+/// instance is genuinely alive. Returns `Some(Running)` only when liveness is
+/// confirmed; `None` leaves the status untouched (so a VM that booted then died
+/// is not falsely reported Running, and an existing status — including a prior
+/// `CreateContainerError` from a failed `start_vm` — is preserved).
+///
+/// `start_vm` returning Ok means the boot was *accepted*, not that the guest
+/// stayed up; this gate is what makes "Running" mean "actually running".
+fn liveness_confirmed_status(
+    current: &DeploymentStatus,
+    any_alive: bool,
+) -> Option<DeploymentStatus> {
+    if *current == DeploymentStatus::CreateContainerError {
+        return None;
+    }
+    any_alive.then_some(DeploymentStatus::Running)
 }
 
 /// Find the PID of the `firecracker` process bound to `socket_path`, by scanning
@@ -1515,6 +1547,35 @@ impl FirecrackerLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A confirmed-alive instance promotes a fresh deployment to Running.
+    #[test]
+    fn liveness_confirmed_promotes_to_running() {
+        assert_eq!(
+            liveness_confirmed_status(&DeploymentStatus::Creating, true),
+            Some(DeploymentStatus::Running)
+        );
+    }
+
+    /// A VM that booted then died (nothing alive) must NOT be reported Running:
+    /// the status is left untouched so the deployment reconciles again.
+    #[test]
+    fn no_live_instance_does_not_promote() {
+        assert_eq!(
+            liveness_confirmed_status(&DeploymentStatus::Creating, false),
+            None
+        );
+    }
+
+    /// A failed `start_vm` (CreateContainerError) is never overwritten by the
+    /// liveness gate, even if a stale socket made `any_alive` look true.
+    #[test]
+    fn create_error_is_preserved() {
+        assert_eq!(
+            liveness_confirmed_status(&DeploymentStatus::CreateContainerError, true),
+            None
+        );
+    }
 
     #[test]
     fn scan_instances_reads_disk_not_memory() {

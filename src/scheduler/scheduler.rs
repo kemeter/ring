@@ -11,6 +11,7 @@ use crate::models::volume::ResolvedMount;
 use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
+use crate::scheduler::healthy_window::HealthyWindow;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -1030,9 +1031,8 @@ async fn apply_docker_event(
         } => {
             // Operator-initiated shutdowns (scale-down, delete, rolling update,
             // health-check kill) are pre-marked in `IntentionalShutdowns` by the
-            // runtime before it issues the stop. The matching `die` event must
-            // therefore NOT bump `restart_count` — otherwise we'd flip a healthy
-            // deployment into CrashLoopBackOff just for being scaled down.
+            // runtime before it issues the stop. The matching `die` event for
+            // those is consumed here so it never reaches the crash trace below.
             if intentional_shutdowns.take(&container_id).await {
                 debug!(
                     "Ignoring die event for {} (intentional shutdown)",
@@ -1040,9 +1040,18 @@ async fn apply_docker_event(
                 );
                 return;
             }
-            bump_restart_count(
+            // The reconcile loop owns `restart_count` for worker exits: it reads
+            // the deployment at the start of a tick and writes the full row back
+            // at the end, so a bump issued here would be lost to that write (the
+            // race that let crash loops recreate forever and never reach
+            // CrashLoopBackOff). `detect_and_count_crashes` now counts the same
+            // exited container in-tick for both Docker and Podman. This branch is
+            // therefore log-only — it records the crash cause for traceability
+            // without mutating the counter.
+            if let Err(e) = deployment_event::log_event(
                 pool,
-                &deployment_id,
+                deployment_id,
+                "warning",
                 format!(
                     "Container {} died (exit_code={})",
                     container_id,
@@ -1050,9 +1059,13 @@ async fn apply_docker_event(
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "?".to_string()),
                 ),
-                "ContainerDied",
+                "docker-events",
+                Some("container_died"),
             )
-            .await;
+            .await
+            {
+                warn!("Failed to log die event: {}", e);
+            }
         }
         DockerEvent::ContainerOom {
             deployment_id,
@@ -1105,52 +1118,6 @@ async fn apply_docker_event(
     }
 }
 
-async fn bump_restart_count(pool: &SqlitePool, deployment_id: &str, message: String, reason: &str) {
-    let mut deployment = match deployments::find(pool, deployment_id).await {
-        Ok(Some(d)) => d,
-        Ok(None) => {
-            // Container belonged to a deployment that has since been deleted — ignore.
-            debug!("Ignoring event for unknown deployment {}", deployment_id);
-            return;
-        }
-        Err(e) => {
-            error!(
-                "Failed to load deployment {} on event: {}",
-                deployment_id, e
-            );
-            return;
-        }
-    };
-
-    // Don't keep counting once we've already given up — saves DB writes when a
-    // doomed deployment keeps emitting events.
-    if deployment.status == DeploymentStatus::CrashLoopBackOff {
-        return;
-    }
-
-    deployment.restart_count += 1;
-    if let Err(e) = deployments::update(pool, &deployment).await {
-        error!(
-            "Failed to persist restart_count for deployment {}: {}",
-            deployment_id, e
-        );
-        return;
-    }
-
-    if let Err(e) = deployment_event::log_event(
-        pool,
-        deployment_id.to_string(),
-        "warning",
-        format!("{} — restart_count={}", message, deployment.restart_count),
-        "docker-events",
-        Some(reason),
-    )
-    .await
-    {
-        warn!("Failed to log crash event for {}: {}", deployment_id, e);
-    }
-}
-
 pub(crate) async fn schedule(
     pool: SqlitePool,
     config: crate::config::config::Config,
@@ -1183,6 +1150,11 @@ pub(crate) async fn schedule(
     // (Docker, Cloud Hypervisor, future Firecracker, ...) automatically gets
     // exponential backoff on transient failures without duplicating the logic.
     let mut backoff = RetryBackoff::new();
+
+    // Per-deployment "continuously healthy since" clock. Resets a worker's
+    // restart_count once it has run uninterrupted for the anti-flap window, so
+    // the crash budget is "N crashes within a window", not "N crashes for life".
+    let mut healthy_window = HealthyWindow::new();
 
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
@@ -1270,6 +1242,7 @@ pub(crate) async fn schedule(
             // deployment and go straight to cleanup.
             if deployment.status == DeploymentStatus::Deleted {
                 backoff.clear(&deployment.id);
+                healthy_window.clear(&deployment.id);
                 let mut result = match apply_runtime(
                     &pool,
                     &deployment,
@@ -1422,6 +1395,25 @@ pub(crate) async fn schedule(
                 None => continue,
             };
 
+            // Persist any restart_count bump the runtime made through a targeted
+            // atomic `+= delta` rather than the blind full-row `update` below.
+            // The blind write reads the row at tick start and rewrites it whole,
+            // so two paths touching the counter would clobber each other
+            // (last-writer-wins). The atomic statement folds the delta into the
+            // DB's current value, so no increment is ever lost. The in-memory
+            // count is then realigned to the persisted truth for the backoff and
+            // healthy-window decisions below.
+            if result.restart_count > restart_count_before {
+                let delta = result.restart_count - restart_count_before;
+                match deployments::increment_restart_count(&pool, &result.id, delta).await {
+                    Ok(persisted) => result.restart_count = persisted,
+                    Err(e) => error!(
+                        "Failed to increment restart_count for deployment {}: {}",
+                        result.id, e
+                    ),
+                }
+            }
+
             // Translate the runtime's outcome into a backoff decision.
             // A bumped restart_count means the runtime hit a transient
             // failure — arm the next retry. Otherwise (success, terminal
@@ -1471,6 +1463,45 @@ pub(crate) async fn schedule(
             // Log the creating -> running transition only now that the status
             // for this cycle is settled (the gate above may have reverted it).
             log_running_transition(&pool, &old_status, &result).await;
+
+            // Refill the crash budget: once a worker has run continuously
+            // healthy for the anti-flap window, forgive its accrued
+            // restart_count. Without this the count is monotonic for life, so a
+            // worker that crashed a few times months ago trips CrashLoopBackOff
+            // on its next single crash. Crashes *within* the window still bump
+            // the count and converge (the window restarts on every fresh crash),
+            // so this never masks a real crash loop. Scoped to workers — jobs
+            // converge to Failed, not a windowed budget.
+            if result.kind == "worker"
+                && healthy_window.observe(
+                    &result.id,
+                    result.status == DeploymentStatus::Running,
+                    result.restart_count,
+                    min_healthy_time_for(&result),
+                )
+            {
+                info!(
+                    "Deployment {} healthy for the anti-flap window; resetting restart_count from {} to 0",
+                    result.id, result.restart_count
+                );
+                // Targeted reset, same reasoning as the atomic increment above:
+                // never let a stale full-row write resurrect the old count.
+                if let Err(e) = deployments::reset_restart_count(&pool, &result.id).await {
+                    error!(
+                        "Failed to reset restart_count for deployment {}: {}",
+                        result.id, e
+                    );
+                } else {
+                    result.restart_count = 0;
+                    result.emit_event(
+                        "info",
+                        "restart_count reset to 0 after staying healthy".to_string(),
+                        "scheduler",
+                        Some("restart_count_reset"),
+                    );
+                    persist_pending_events(&pool, &mut result).await;
+                }
+            }
 
             if let Err(e) = deployments::update(&pool, &result).await {
                 error!("Failed to update deployment {}: {}", result.id, e);
