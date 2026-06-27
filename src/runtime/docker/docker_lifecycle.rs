@@ -28,20 +28,16 @@ fn filter_instances(
 pub struct DockerLifecycle {
     docker: Docker,
     intentional_shutdowns: IntentionalShutdowns,
-    /// Whether crash detection comes from a Docker event listener (`die`/`oom`/
-    /// `kill` → `restart_count`). Docker runs one; Podman does not (its event
-    /// stream only flows while `podman system service` is up), so for Podman the
-    /// reconcile pass must detect exited containers itself — otherwise a
-    /// crash-looping container is silently recreated forever and never reaches
-    /// `CrashLoopBackOff`. `true` for Docker, `false` for Podman.
-    events_driven: bool,
     /// Server-side host registry auth settings for this runtime, from
     /// `[server.runtime.docker]` / `[server.runtime.podman]`.
     host_auth: HostAuthSettings,
 }
 
 impl DockerLifecycle {
-    /// Docker: an event listener drives crash counting.
+    /// Crash counting is reconcile-driven for every runtime: the reconcile loop
+    /// owns `restart_count` and detects exited containers in-tick, so Docker and
+    /// Podman converge to `CrashLoopBackOff` the same way. The Docker event
+    /// listener is observational only (it logs crash causes, never the count).
     pub fn new(
         docker: Docker,
         intentional_shutdowns: IntentionalShutdowns,
@@ -50,23 +46,18 @@ impl DockerLifecycle {
         Self {
             docker,
             intentional_shutdowns,
-            events_driven: true,
             host_auth,
         }
     }
 
-    /// Podman: no event listener — the reconcile pass detects crashes instead.
+    /// Podman registers under its own key but shares the Docker-compatible
+    /// lifecycle; crash detection is identical, so this delegates to `new`.
     pub fn new_podman(
         docker: Docker,
         intentional_shutdowns: IntentionalShutdowns,
         host_auth: HostAuthSettings,
     ) -> Self {
-        Self {
-            docker,
-            intentional_shutdowns,
-            events_driven: false,
-            host_auth,
-        }
+        Self::new(docker, intentional_shutdowns, host_auth)
     }
 }
 
@@ -82,7 +73,6 @@ impl RuntimeLifecycle for DockerLifecycle {
             self.docker.clone(),
             resolved_mounts,
             self.intentional_shutdowns.clone(),
-            self.events_driven,
             self.host_auth.clone(),
         )
         .await

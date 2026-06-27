@@ -3,6 +3,7 @@
 //! types, health probes, resource checks). Kept out of [`crate::runtime`] so
 //! that `runtime` holds only the concrete runtime implementations.
 
+pub(crate) mod classifier;
 pub(crate) mod cloud_init;
 pub(crate) mod console_logs;
 pub(crate) mod error;
