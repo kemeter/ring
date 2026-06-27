@@ -1,0 +1,15 @@
+deployments:
+  command-not-found:
+    name: command-not-found
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Phase 3 fast-fail. The image and the `sh` entrypoint exist, so Docker
+    # `create` and `start` both succeed and the container actually RUNS — but
+    # the program it tries to exec does not exist, so the container EXITS with
+    # code 127 (command not found) at the crash boundary. 127 is Terminal in the
+    # classifier, so this must fail fast onto a terminal status without burning
+    # all MAX_RESTART_COUNT restart cycles. This is distinct from t23, where
+    # Docker `start` itself fails (a create/start-boundary error, not an exit).
+    command: ["sh", "-c", "exec this-binary-truly-does-not-exist"]
+    replicas: 1
