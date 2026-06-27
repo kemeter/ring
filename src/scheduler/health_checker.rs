@@ -48,6 +48,7 @@ impl HealthChecker {
         deployment: &Deployment,
         old_status: &DeploymentStatus,
         runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
+        suppress_liveness_action: bool,
     ) -> HealthCheckOutcome {
         let mut outcome = HealthCheckOutcome {
             results: Vec::new(),
@@ -104,9 +105,29 @@ impl HealthChecker {
                     )
                     .await;
 
-                // In the creating phase we only persist the result for the
-                // gate to read; no failure counting, no `on_failure` action.
-                if !creating_phase {
+                // Liveness grace window: right after a deployment first becomes
+                // `Running`, suppress the liveness `on_failure` action for a
+                // settle period. A single brief probe flap in that window would
+                // otherwise fire `on_failure: restart`, tearing down an instance
+                // that is merely still settling (e.g. a slow in-container build
+                // behind a proxy) and looping the whole startup until the
+                // rollout deadline marks it failed. We still run the probe and
+                // record its result; we just hold back the action and reset the
+                // failure counter so the post-grace threshold starts from a
+                // settled baseline. Readiness checks are unaffected (they never
+                // drive `on_failure` here), and a container that actually EXITS
+                // is recreated by the exit-based crash path, which this grace
+                // never touches — so real crashes are not masked.
+                let suppress_this = suppress_liveness_action && !health_check.is_readiness();
+
+                // In the creating phase we only persist the result for the gate
+                // to read; no failure counting, no `on_failure` action. In the
+                // running phase, a suppressed liveness check records its result
+                // and clears its counter, but fires no action this tick.
+                if !creating_phase && suppress_this {
+                    let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
+                    self.reset_failure_count(&key).await;
+                } else if !creating_phase {
                     let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
                     if matches!(
                         result.status,
@@ -414,11 +435,12 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -447,11 +469,12 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -491,11 +514,12 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -523,11 +547,12 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -555,26 +580,27 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         // Call 1: failure count = 1/3, no action
         let outcome1 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
         assert!(outcome1.instances_to_remove.is_empty());
         assert!(outcome1.events.is_empty());
 
         // Call 2: failure count = 2/3, no action
         let outcome2 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
         assert!(outcome2.instances_to_remove.is_empty());
         assert!(outcome2.events.is_empty());
 
         // Call 3: failure count = 3/3, triggers restart
         let outcome3 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
         assert_eq!(outcome3.instances_to_remove, vec!["instance-1".to_string()]);
         assert!(
@@ -602,11 +628,12 @@ mod tests {
                 on_failure: FailureAction::Stop,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.proposed_status, Some(DeploymentStatus::Deleted));
@@ -636,11 +663,12 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert!(outcome.proposed_status.is_none());
@@ -697,6 +725,7 @@ mod tests {
             on_failure: FailureAction::Restart,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -709,6 +738,7 @@ mod tests {
             on_failure: FailureAction::Restart,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -728,7 +758,7 @@ mod tests {
         deployment.status = DeploymentStatus::Creating;
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -755,7 +785,7 @@ mod tests {
         deployment.status = DeploymentStatus::Creating;
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         // Only the readiness check ran (one result), the liveness was skipped.
@@ -786,7 +816,7 @@ mod tests {
         let old_status = DeploymentStatus::Creating;
 
         let outcome = checker
-            .execute_checks(&deployment, &old_status, &runtime)
+            .execute_checks(&deployment, &old_status, &runtime, false)
             .await;
 
         // Treated as the creating phase: only readiness ran, liveness skipped,
@@ -812,7 +842,7 @@ mod tests {
         deployment.status = DeploymentStatus::Creating;
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -831,6 +861,152 @@ mod tests {
         assert!(outcome.proposed_status.is_none());
     }
 
+    // ---- liveness grace window ----
+
+    #[tokio::test]
+    async fn liveness_failure_suppressed_within_grace() {
+        // A worker just promoted to Running (old_status == Running) with a
+        // failing liveness probe must NOT be restarted while inside the grace
+        // window. The probe still runs and its result is recorded; only the
+        // restart action is held back.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        let deployment = make_deployment(
+            "grace-suppress",
+            vec!["instance-1".to_string()],
+            vec![HealthCheck::Tcp {
+                port: 9999,
+                interval: "5s".to_string(),
+                timeout: "5s".to_string(),
+                threshold: 1,
+                on_failure: FailureAction::Restart,
+                readiness: false,
+                min_healthy_time: None,
+                start_period: None,
+            }],
+        );
+
+        // suppress_liveness_action = true (still inside the grace window).
+        let outcome = checker
+            .execute_checks(&deployment, &DeploymentStatus::Running, &runtime, true)
+            .await;
+
+        // The probe ran and recorded a failure...
+        assert_eq!(outcome.results.len(), 1);
+        assert!(matches!(
+            outcome.results[0].status,
+            HealthCheckStatus::Failed
+        ));
+        // ...but no restart was queued and no failure action fired.
+        assert!(
+            outcome.instances_to_remove.is_empty(),
+            "liveness restart must be suppressed during the grace window"
+        );
+        assert!(outcome.health_check_failures.is_empty());
+        assert!(outcome.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn liveness_failure_restarts_after_grace() {
+        // The SAME failing liveness probe, once the grace window has elapsed
+        // (suppress_liveness_action == false), DOES restart the instance.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        let deployment = make_deployment(
+            "grace-elapsed",
+            vec!["instance-1".to_string()],
+            vec![HealthCheck::Tcp {
+                port: 9999,
+                interval: "5s".to_string(),
+                timeout: "5s".to_string(),
+                threshold: 1,
+                on_failure: FailureAction::Restart,
+                readiness: false,
+                min_healthy_time: None,
+                start_period: None,
+            }],
+        );
+
+        let outcome = checker
+            .execute_checks(&deployment, &DeploymentStatus::Running, &runtime, false)
+            .await;
+
+        assert_eq!(outcome.instances_to_remove, vec!["instance-1".to_string()]);
+        assert_eq!(outcome.health_check_failures.len(), 1);
+        assert_eq!(outcome.health_check_failures[0].action, "restart");
+    }
+
+    #[tokio::test]
+    async fn grace_does_not_suppress_readiness_results() {
+        // The grace only gates the *liveness action*; readiness probes still
+        // run and record (they never fire on_failure here anyway), so the
+        // readiness gate keeps the data it needs even during the grace window.
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::healthy();
+
+        let deployment = make_deployment(
+            "grace-readiness",
+            vec!["instance-1".to_string()],
+            vec![readiness_tcp(), liveness_tcp()],
+        );
+
+        // Running phase, suppression on.
+        let outcome = checker
+            .execute_checks(&deployment, &DeploymentStatus::Running, &runtime, true)
+            .await;
+
+        // Both checks ran and recorded results (readiness + liveness probe),
+        // and with a healthy runtime nothing is removed.
+        assert_eq!(outcome.results.len(), 2);
+        assert!(outcome.instances_to_remove.is_empty());
+    }
+
+    #[tokio::test]
+    async fn grace_does_not_mask_an_exited_container() {
+        // Real-crash guarantee at the health-check layer: the grace suppresses
+        // only the *probe-driven* liveness action. An instance that has exited
+        // is removed from `deployment.instances` by the exit-based crash path
+        // *before* health checks run, so there's no instance left to probe —
+        // execute_checks simply has nothing to suppress, and the crash path has
+        // already queued the recreation. We model that here: with the dead
+        // instance already gone, even an in-grace running-phase check produces
+        // no results and removes nothing (the recreation is the crash path's
+        // job, untouched by the grace).
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool);
+        let runtime = MockRuntime::unhealthy("connection refused");
+
+        // No instances: the dead one was already reaped by the exit path.
+        let deployment = make_deployment(
+            "grace-exited",
+            vec![],
+            vec![HealthCheck::Tcp {
+                port: 9999,
+                interval: "5s".to_string(),
+                timeout: "5s".to_string(),
+                threshold: 1,
+                on_failure: FailureAction::Restart,
+                readiness: false,
+                min_healthy_time: None,
+                start_period: None,
+            }],
+        );
+
+        let outcome = checker
+            .execute_checks(&deployment, &DeploymentStatus::Running, &runtime, true)
+            .await;
+
+        // The grace never touched the exit path: no probe ran, nothing removed
+        // here — recreation is driven separately by the crash path.
+        assert!(outcome.results.is_empty());
+        assert!(outcome.instances_to_remove.is_empty());
+    }
+
     #[tokio::test]
     async fn jobs_skip_health_checks_during_creating() {
         // Jobs never gate on readiness; they go straight to completed/failed.
@@ -847,7 +1023,7 @@ mod tests {
         deployment.kind = "job".to_string();
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, &deployment.status, &runtime, false)
             .await;
 
         assert!(outcome.results.is_empty(), "jobs run no checks in creating");

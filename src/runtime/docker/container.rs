@@ -110,7 +110,11 @@ fn build_health_config(health_checks: &[HealthCheck]) -> Option<HealthConfig> {
         interval: Some(to_nanos(hc.interval())),
         timeout: Some(to_nanos(hc.timeout())),
         retries: Some(hc.threshold() as i64),
-        start_period: None,
+        // Grace period before Docker counts failures, so a slow-to-boot app
+        // (e.g. an in-container build) isn't mis-marked `unhealthy` while it is
+        // still starting. Same nanosecond encoding as the other fields; absent
+        // or malformed leaves it unset (Docker's own default applies).
+        start_period: hc.start_period().map(to_nanos),
         start_interval: None,
     })
 }
@@ -993,6 +997,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1009,6 +1014,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1023,6 +1029,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1037,6 +1044,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         let cfg = build_health_config(&hcs).expect("should translate");
         assert_eq!(
@@ -1062,6 +1070,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: true,
                 min_healthy_time: None,
+                start_period: None,
             },
             HealthCheck::Command {
                 command: "/usr/local/bin/ready.sh".to_string(),
@@ -1071,10 +1080,48 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: true,
                 min_healthy_time: None,
+                start_period: None,
             },
         ];
         let cfg = build_health_config(&hcs).expect("should translate the command HC");
         assert_eq!(cfg.test.as_ref().unwrap()[1], "/usr/local/bin/ready.sh");
+    }
+
+    #[test]
+    fn build_health_config_carries_start_period_to_docker() {
+        // A `start_period` on the command readiness HC must reach the Docker
+        // `HealthConfig` as nanoseconds, so the container isn't mis-marked
+        // `unhealthy` while a slow startup (e.g. an in-container build) runs.
+        let hcs = vec![HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: Some("180s".to_string()),
+        }];
+        let cfg = build_health_config(&hcs).expect("should translate");
+        assert_eq!(cfg.start_period, Some(180_000_000_000));
+    }
+
+    #[test]
+    fn build_health_config_leaves_start_period_unset_when_absent() {
+        // No `start_period` configured → leave it unset so Docker's own default
+        // applies (rather than pinning it to 0).
+        let hcs = vec![HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: None,
+        }];
+        let cfg = build_health_config(&hcs).expect("should translate");
+        assert_eq!(cfg.start_period, None);
     }
 
     // --- prefer_local_cache: without credentials, the non-Always policies

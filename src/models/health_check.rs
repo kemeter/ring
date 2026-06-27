@@ -36,6 +36,14 @@ pub(crate) enum HealthCheck {
         /// to the scheduler's built-in window when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        /// Grace period before the Docker-native `HEALTHCHECK` starts counting
+        /// failures against the container (Docker `HealthConfig.start_period`).
+        /// Lets a slow-to-boot app (e.g. an in-container build behind a proxy)
+        /// avoid being marked `unhealthy` while it is still starting up. Parsed
+        /// by `parse_duration` (e.g. `"180s"`). Only affects the Docker-native
+        /// healthcheck — Ring's scheduler-side gating is unaffected.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     #[serde(rename = "http")]
     Http {
@@ -49,6 +57,8 @@ pub(crate) enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     #[serde(rename = "command")]
     Command {
@@ -62,6 +72,8 @@ pub(crate) enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
 }
 
@@ -174,6 +186,17 @@ impl HealthCheck {
             } => min_healthy_time.as_deref(),
         }
     }
+
+    /// Grace period for the Docker-native `HEALTHCHECK` (`start_period`), if
+    /// configured. Only meaningful for the translated `command` readiness check
+    /// — see `runtime::docker::container::build_health_config`.
+    pub(crate) fn start_period(&self) -> Option<&str> {
+        match self {
+            HealthCheck::Tcp { start_period, .. }
+            | HealthCheck::Http { start_period, .. }
+            | HealthCheck::Command { start_period, .. } => start_period.as_deref(),
+        }
+    }
 }
 
 impl Default for HealthCheck {
@@ -186,6 +209,7 @@ impl Default for HealthCheck {
             on_failure: FailureAction::Restart,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 }
@@ -294,6 +318,35 @@ mod tests {
         let result = HealthCheck::parse_duration("500ms");
         assert!(result.is_ok());
         assert_eq!(result.unwrap().as_millis(), 500);
+    }
+
+    #[test]
+    fn start_period_serde_round_trips() {
+        // The optional `start_period` rides inside the existing JSON (no DB
+        // column / migration) and must survive a serialize → deserialize round
+        // trip on each variant, defaulting to None when absent.
+        let with = HealthCheck::Command {
+            command: "test -f /ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Restart,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: Some("180s".to_string()),
+        };
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("\"start_period\":\"180s\""));
+        let back: HealthCheck = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.start_period(), Some("180s"));
+
+        // Absent in the JSON → deserializes to None (serde default), and is
+        // skipped on serialize.
+        let without_json = r#"{"type":"command","command":"true","interval":"10s","timeout":"5s","on_failure":"restart"}"#;
+        let parsed: HealthCheck = serde_json::from_str(without_json).unwrap();
+        assert_eq!(parsed.start_period(), None);
+        let reserialized = serde_json::to_string(&parsed).unwrap();
+        assert!(!reserialized.contains("start_period"));
     }
 
     #[test]

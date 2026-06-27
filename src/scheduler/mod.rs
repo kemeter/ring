@@ -4,5 +4,6 @@ pub(crate) mod event_worker;
 pub(crate) mod health_checker;
 pub(crate) mod healthy_window;
 pub(crate) mod intentional_shutdowns;
+pub(crate) mod liveness_grace;
 pub(crate) mod scheduler;
 pub(crate) mod stats_cache;

@@ -13,6 +13,7 @@ use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
 use crate::scheduler::healthy_window::HealthyWindow;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
+use crate::scheduler::liveness_grace::{LivenessGrace, liveness_grace_from_env};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
@@ -421,6 +422,7 @@ async fn run_health_checks(
     old_status: &DeploymentStatus,
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
+    suppress_liveness_action: bool,
 ) {
     // Health checks run in `Running` (full set, drives `on_failure`) and, for
     // readiness gating, in `Creating` (readiness-only, record-only — see
@@ -440,7 +442,7 @@ async fn run_health_checks(
     debug!("Executing health checks for deployment {}", deployment.id);
 
     let outcome = health_checker
-        .execute_checks(deployment, old_status, runtime)
+        .execute_checks(deployment, old_status, runtime, suppress_liveness_action)
         .await;
 
     for result in &outcome.results {
@@ -1156,6 +1158,13 @@ pub(crate) async fn schedule(
     // the crash budget is "N crashes within a window", not "N crashes for life".
     let mut healthy_window = HealthyWindow::new();
 
+    // Per-deployment liveness grace clock. Suppresses liveness `on_failure`
+    // actions for a settle window after a deployment first becomes Running, so
+    // a brief probe flap right after promotion can't restart-loop a slow-to-
+    // settle startup. Exit-based crash detection is unaffected.
+    let mut liveness_grace = LivenessGrace::new();
+    let liveness_grace_window = liveness_grace_from_env();
+
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
         interval_seconds, apply_timeout_secs
@@ -1243,6 +1252,7 @@ pub(crate) async fn schedule(
             if deployment.status == DeploymentStatus::Deleted {
                 backoff.clear(&deployment.id);
                 healthy_window.clear(&deployment.id);
+                liveness_grace.clear(&deployment.id);
                 let mut result = match apply_runtime(
                     &pool,
                     &deployment,
@@ -1449,12 +1459,34 @@ pub(crate) async fn schedule(
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted).await;
+
+            // Liveness grace window. Liveness `on_failure` actions act only in
+            // the established-Running phase (keyed on `old_status == Running`,
+            // the same condition `execute_checks` uses to leave the
+            // creating/readiness-only phase). We arm a settle clock the first
+            // tick a deployment is established-Running and suppress the liveness
+            // *action* until it has been Running for at least `liveness_grace`.
+            // This stops a brief probe flap right after promotion from firing a
+            // restart and looping a slow-to-settle startup (e.g. an in-container
+            // build behind a proxy) until the rollout deadline fails it. The
+            // probe still runs and is recorded; only the restart/stop/alert
+            // action is held. A container that genuinely EXITS is recreated by
+            // the exit-based crash path, untouched by this grace, so real
+            // crashes are never masked. The clock resets whenever the deployment
+            // leaves Running (recreate / gate revert to Creating).
+            let suppress_liveness_action = liveness_grace.in_grace(
+                &result.id,
+                old_status == DeploymentStatus::Running,
+                liveness_grace_window,
+            );
+
             run_health_checks(
                 &pool,
                 &mut result,
                 &old_status,
                 &health_checker,
                 runtime.as_ref(),
+                suppress_liveness_action,
             )
             .await;
             gate_running_on_readiness(&pool, &old_status, &mut result).await;
@@ -1685,6 +1717,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1697,6 +1730,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1709,6 +1743,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1723,6 +1758,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness,
                 min_healthy_time: raw.map(|s| s.to_string()),
+                start_period: None,
             })
             .collect();
         child_with_health_checks(id, hcs)
@@ -1860,6 +1896,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false, // not a readiness HC
             min_healthy_time: None,
+            start_period: None,
         });
         let child = child_with_health_checks("child-7", hcs);
         insert_hc_result(&pool, "child-7", "command", "success", 30).await;
