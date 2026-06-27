@@ -1,0 +1,64 @@
+deployments:
+  slow-ready:
+    name: slow-ready
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Faithful reproduction of the bun+Caddy slow-ready bug, simplified to a
+    # single self-contained container (no registry, no real build):
+    #
+    #   1. The app is slow to become ready: it sleeps ~12s before creating the
+    #      ready-file (longer than the readiness threshold*interval = 6s, so the
+    #      deployment is correctly held in `creating` during the "build").
+    #   2. The ready-file appears; after the anti-flap window the deployment is
+    #      promoted `creating -> running` (~t+22s).
+    #   3. Shortly AFTER promotion the ready-file FLAPS off for a sustained ~8s
+    #      (4 liveness intervals, longer than threshold*interval = 6s, so it
+    #      forces 3 consecutive liveness failures) — the exact condition that,
+    #      with zero settle margin, fired the liveness `on_failure: restart`,
+    #      tore the instance down and restarted the whole "build" from scratch,
+    #      looping to `failed` at the rollout deadline.
+    #   4. The ready-file is restored and the app sleeps forever.
+    #
+    # With the liveness grace window (RING_LIVENESS_GRACE) covering the flap,
+    # the deployment must reach `running` and STAY there — restart_count stays 0
+    # and it never reaches `failed`. With the grace disabled, the same flap
+    # restart-loops it (the negative control).
+    command:
+      - "sh"
+      - "-c"
+      - |
+        sleep 12
+        touch /tmp/ready
+        # Let the deployment promote to `running` and settle (anti-flap window
+        # ~10s + scheduler ticks), then flap the ready-file off for a sustained
+        # window long enough to trip the liveness threshold (3 consecutive
+        # fails). This lands inside the post-promotion grace window.
+        sleep 18
+        rm -f /tmp/ready
+        sleep 8
+        touch /tmp/ready
+        # Stable from here on.
+        exec sleep 3600
+    replicas: 1
+    health_checks:
+      # Readiness: holds the deployment in `creating` until the ready-file
+      # exists. on_failure: alert — a not-yet-ready app during the slow start
+      # must not be restarted.
+      - type: command
+        command: "test -f /tmp/ready"
+        readiness: true
+        interval: 2s
+        timeout: 2s
+        threshold: 3
+        on_failure: alert
+      # Liveness: once running, restart an instance whose app has died. This is
+      # the check whose post-promotion flap caused the restart loop; the grace
+      # window must suppress it until the deployment has settled.
+      - type: command
+        command: "test -f /tmp/ready"
+        readiness: false
+        interval: 2s
+        timeout: 2s
+        threshold: 3
+        on_failure: restart
