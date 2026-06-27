@@ -7,10 +7,12 @@ use async_trait::async_trait;
 use axum::response::sse::Event;
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::time::Duration;
 
 pub(crate) struct MockRuntime {
     health_check_result: (HealthCheckStatus, Option<String>),
     instance_stats: Vec<InstanceStatsOutput>,
+    stats_delay: Duration,
 }
 
 impl MockRuntime {
@@ -18,6 +20,7 @@ impl MockRuntime {
         Self {
             health_check_result: (HealthCheckStatus::Success, None),
             instance_stats: Vec::new(),
+            stats_delay: Duration::ZERO,
         }
     }
 
@@ -25,6 +28,7 @@ impl MockRuntime {
         Self {
             health_check_result: (HealthCheckStatus::Failed, Some(message.to_string())),
             instance_stats: Vec::new(),
+            stats_delay: Duration::ZERO,
         }
     }
 
@@ -32,6 +36,14 @@ impl MockRuntime {
     /// stats-cache refresh path can be exercised with deterministic numbers.
     pub(crate) fn with_instance_stats(mut self, stats: Vec<InstanceStatsOutput>) -> Self {
         self.instance_stats = stats;
+        self
+    }
+
+    /// Make `get_instance_stats` sleep before returning, simulating a slow
+    /// runtime round-trip. Lets tests assert the refresh queries deployments
+    /// concurrently rather than one after another.
+    pub(crate) fn with_stats_delay(mut self, delay: Duration) -> Self {
+        self.stats_delay = delay;
         self
     }
 }
@@ -83,6 +95,9 @@ impl RuntimeLifecycle for MockRuntime {
     }
 
     async fn get_instance_stats(&self, _deployment_id: &str) -> Vec<InstanceStatsOutput> {
+        if !self.stats_delay.is_zero() {
+            tokio::time::sleep(self.stats_delay).await;
+        }
         self.instance_stats.clone()
     }
 }

@@ -19,6 +19,7 @@
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::api::server::RuntimeMap;
 use crate::models::deployments;
+use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -66,6 +67,13 @@ pub(crate) fn new_cache() -> StatsCache {
 /// must not hold the whole refresh; its deployment is dropped from this round.
 const PER_DEPLOYMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Max number of `get_instance_stats` calls in flight at once. The calls are
+/// independent socket round-trips, so running them concurrently makes the
+/// refresh duration depend on the number of *waves* (deployments / this) rather
+/// than the total deployment count. Bounded so a node with hundreds of
+/// deployments doesn't open hundreds of runtime sockets at once.
+const REFRESH_CONCURRENCY: usize = 24;
+
 /// Run the refresh loop forever, polling on `interval_secs` (the scheduler
 /// interval). Each tick recomputes the snapshot and swaps it in.
 pub(crate) async fn run(
@@ -101,43 +109,49 @@ pub(crate) async fn refresh(
         }
     };
 
-    let mut out = Vec::with_capacity(active.len());
-    for deployment in active {
-        let Some(runtime) = runtimes.get(&deployment.runtime) else {
-            // Deployment references a runtime not registered on this node
-            // (e.g. disabled at boot). Nothing to read; skip quietly.
-            continue;
-        };
+    // Query the runtimes concurrently: each `get_instance_stats` is an
+    // independent socket round-trip, and doing them in series made the refresh
+    // duration grow linearly with the deployment count (hundreds of
+    // deployments → minutes per cycle). `buffer_unordered` keeps at most
+    // `REFRESH_CONCURRENCY` in flight, so the cycle scales with the number of
+    // waves instead. Order is irrelevant: the snapshot is an unordered set.
+    let out: Vec<DeploymentRuntimeStats> = stream::iter(active)
+        .map(|deployment| async move {
+            let runtime = runtimes.get(&deployment.runtime)?;
 
-        let stats = match timeout(
-            PER_DEPLOYMENT_TIMEOUT,
-            runtime.get_instance_stats(&deployment.id),
-        )
-        .await
-        {
-            Ok(stats) => stats,
-            Err(_) => {
-                warn!(
-                    "stats cache: get_instance_stats timed out for {} ({}), skipping this round",
-                    deployment.id, deployment.runtime
-                );
-                continue;
+            let stats = match timeout(
+                PER_DEPLOYMENT_TIMEOUT,
+                runtime.get_instance_stats(&deployment.id),
+            )
+            .await
+            {
+                Ok(stats) => stats,
+                Err(_) => {
+                    warn!(
+                        "stats cache: get_instance_stats timed out for {} ({}), skipping this round",
+                        deployment.id, deployment.runtime
+                    );
+                    return None;
+                }
+            };
+
+            if stats.is_empty() {
+                // No live instances (or the runtime reports none) — omit rather
+                // than emit an all-zero series for a deployment with no data.
+                return None;
             }
-        };
 
-        if stats.is_empty() {
-            // No live instances (or the runtime reports none) — omit rather
-            // than emit an all-zero series for a deployment with no data.
-            continue;
-        }
-
-        out.push(aggregate(
-            &deployment.name,
-            &deployment.namespace,
-            &deployment.runtime,
-            &stats,
-        ));
-    }
+            Some(aggregate(
+                &deployment.name,
+                &deployment.namespace,
+                &deployment.runtime,
+                &stats,
+            ))
+        })
+        .buffer_unordered(REFRESH_CONCURRENCY)
+        .filter_map(|row| async move { row })
+        .collect()
+        .await;
 
     match cache.write() {
         Ok(mut guard) => {
@@ -284,6 +298,47 @@ mod tests {
         assert_eq!(row.runtime, "docker");
         assert_eq!(row.cpu_usage_percent, 10.0);
         assert_eq!(row.memory_usage_bytes, 100);
+    }
+
+    #[tokio::test]
+    async fn refresh_queries_deployments_concurrently() {
+        // With a per-call delay and many deployments, a sequential refresh would
+        // take roughly count * delay. The concurrent refresh finishes in about
+        // one wave (ceil(count / REFRESH_CONCURRENCY) * delay). We use a short
+        // real delay and assert the wall-clock time stays far below the
+        // sequential cost, which proves the calls overlap.
+        let pool = test_pool().await;
+        let count = REFRESH_CONCURRENCY + 5;
+        for i in 0..count {
+            insert_deployment(&pool, &format!("d-{i}"), &format!("web-{i}"), "running").await;
+        }
+
+        let delay = Duration::from_millis(50);
+        let runtime: Arc<dyn RuntimeLifecycle> = Arc::new(
+            MockRuntime::healthy()
+                .with_instance_stats(vec![instance(10.0, 100, 5)])
+                .with_stats_delay(delay),
+        );
+        let mut map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
+        map.insert("docker".to_string(), runtime);
+        let runtimes: RuntimeMap = Arc::new(map);
+
+        let cache = new_cache();
+        let start = std::time::Instant::now();
+        refresh(&cache, &pool, &runtimes, 1_700_000_000).await;
+        let elapsed = start.elapsed();
+
+        // Sequential would be count * delay (~1450ms); two waves are ~100ms.
+        // A generous ceiling keeps the test robust on slow CI while still
+        // failing loudly if the refresh ever goes back to serial.
+        let sequential = delay * count as u32;
+        assert!(
+            elapsed < sequential / 3,
+            "refresh took {elapsed:?}; sequential would be ~{sequential:?}, so the calls are not overlapping",
+        );
+
+        let guard = cache.read().unwrap();
+        assert_eq!(guard.deployments.len(), count, "every deployment is cached");
     }
 
     #[tokio::test]
