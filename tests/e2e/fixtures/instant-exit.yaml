@@ -1,0 +1,15 @@
+deployments:
+  instant-exit:
+    name: instant-exit
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Phase 4 liveness-confirmed Running. The container starts and exits almost
+    # immediately (exit 1). Docker returns Ok from `start` the instant the
+    # daemon accepts the container, before the entrypoint has had a chance to
+    # crash — so without the liveness re-inspect this deployment was reported
+    # `running` for a full tick before flipping. The deployment must NEVER be
+    # observed as `running`: it should only ever be creating/pending or, once it
+    # has crashed enough, crash_loop_back_off.
+    command: ["sh", "-c", "exit 1"]
+    replicas: 1

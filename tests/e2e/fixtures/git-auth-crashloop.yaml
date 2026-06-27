@@ -1,0 +1,14 @@
+deployments:
+  git-auth-crashloop:
+    name: git-auth-crashloop
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Reproduces the production case: an entrypoint that fails like a git clone
+    # against a repo it can't authenticate to. `git` exits 128 on an auth
+    # failure, and 128 is RETRYABLE per the exit-code classifier, so the only
+    # way this converges is the restart-count path — exactly the prod bug:
+    # the container must reach CrashLoopBackOff after MAX_RESTART_COUNT and
+    # STOP being recreated, not loop forever.
+    command: ["sh", "-c", "echo 'fatal: Authentication failed for https://example.com/private.git' >&2; exit 128"]
+    replicas: 1

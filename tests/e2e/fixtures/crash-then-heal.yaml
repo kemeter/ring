@@ -1,0 +1,25 @@
+deployments:
+  crash-then-heal:
+    name: crash-then-heal
+    namespace: ring-e2e
+    runtime: docker
+    image: alpine:3.19
+    # Phase 1 windowed restart_count reset. Docker re-runs the SAME command on
+    # every (re)spawn, so the "crash a few times then stay healthy" behaviour is
+    # driven by state on a host bind mount: each start increments a counter in
+    # /state/count. While count <= 3 the container exits 1 (a crash Ring counts
+    # toward restart_count); on the 4th start it stops crashing and sleeps
+    # forever (stays Running). Once it has been continuously Running past the
+    # anti-flap window (DEFAULT_MIN_HEALTHY_TIME = 10s), the scheduler forgives
+    # the accrued restart_count and resets it to 0.
+    command:
+      - "sh"
+      - "-c"
+      - 'n=$(cat /state/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > /state/count; if [ "$n" -le 3 ]; then echo "crash #$n" >&2; exit 1; fi; echo "healthy after $n starts"; exec sleep 3600'
+    replicas: 1
+    volumes:
+      - type: bind
+        source: /tmp/ring-e2e-t40
+        destination: /state
+        driver: local
+        permission: rw

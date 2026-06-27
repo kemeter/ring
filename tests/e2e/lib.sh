@@ -108,10 +108,13 @@ cleanup_ring() {
   fi
 
   # Remove any Docker container created by this Ring instance. Ring labels all
-  # containers with "ring_deployment=<uuid>", so filter by the ring_namespace
-  # we used for the test (set by fixtures via the "ring" namespace).
+  # containers with "ring_deployment=<uuid>" and names them
+  # "<namespace>_<name>_<id>"; the fixtures all use the "ring-e2e" namespace, so
+  # scope the cleanup to that name prefix. (The previous filter used
+  # "^ring_e2e_" with an underscore, which never matched the hyphenated
+  # "ring-e2e_" prefix and leaked containers between runs.)
   if command -v docker > /dev/null 2>&1; then
-    docker ps -aq --filter "label=ring_deployment" --filter "name=^ring_e2e_" 2>/dev/null \
+    docker ps -aq --filter "label=ring_deployment" --filter "name=^ring-e2e_" 2>/dev/null \
       | xargs -r docker rm -f > /dev/null 2>&1 || true
   fi
 
