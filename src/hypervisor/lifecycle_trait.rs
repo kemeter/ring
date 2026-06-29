@@ -7,6 +7,7 @@ use axum::response::sse::Event;
 use futures::stream;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -152,6 +153,30 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
     ) -> Deployment;
 
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String>;
+
+    /// Resolve the running instance ids for many deployments at once, keyed by
+    /// deployment id.
+    ///
+    /// The default implementation loops over `list_instances` per deployment,
+    /// preserving the previous behaviour for runtimes with no cheaper bulk path.
+    /// Container runtimes (Docker) override this to issue a single host-wide
+    /// list and group in memory, turning an N-deployments fan-out into one call
+    /// — this is what keeps `GET /deployments` from timing out on busy hosts.
+    ///
+    /// Only ids are returned (no address): the deployment listing needs the
+    /// instance *count*, and resolving an address is a separate per-instance
+    /// inspect that callers opt into when they actually need it.
+    async fn list_running_instances_grouped(
+        &self,
+        deployment_ids: &[String],
+    ) -> HashMap<String, Vec<String>> {
+        let mut grouped = HashMap::new();
+        for deployment_id in deployment_ids {
+            let ids = self.list_instances(deployment_id.clone(), "running").await;
+            grouped.insert(deployment_id.clone(), ids);
+        }
+        grouped
+    }
 
     /// Fallback: uses instance ID as display name. Override for runtimes
     /// that assign human-readable names (e.g. Docker container names).

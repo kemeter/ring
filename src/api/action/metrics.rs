@@ -25,6 +25,7 @@
 use crate::api::server::AppState;
 use crate::models::deployments;
 use crate::models::deployments::DeploymentStatus;
+use crate::models::query::{group_count, table_count};
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -227,42 +228,6 @@ impl Snapshot {
         snap.configs = table_count(pool, "config").await;
 
         snap
-    }
-}
-
-/// `SELECT COUNT(*)` for a table. A query error logs and yields `0` rather than
-/// failing the whole scrape — a single broken series should never take the
-/// endpoint down for a scraper.
-async fn table_count(pool: &sqlx::SqlitePool, table: &str) -> u64 {
-    // `table` is a hard-coded literal at every call site, never user input, so
-    // the format!-built query carries no injection surface.
-    let sql = format!("SELECT COUNT(*) FROM {table}");
-    match sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await {
-        Ok(count) => count.max(0) as u64,
-        Err(e) => {
-            error!("metrics: counting {} failed: {}", table, e);
-            0
-        }
-    }
-}
-
-/// `SELECT col, COUNT(*) ... GROUP BY col` as a label→count map. Same
-/// fail-soft contract as [`table_count`].
-async fn group_count(pool: &sqlx::SqlitePool, table: &str, column: &str) -> BTreeMap<String, u64> {
-    // `table`/`column` are hard-coded literals at every call site.
-    let sql = format!("SELECT {column}, COUNT(*) FROM {table} GROUP BY {column}");
-    match sqlx::query_as::<_, (String, i64)>(&sql)
-        .fetch_all(pool)
-        .await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|(label, count)| (label, count.max(0) as u64))
-            .collect(),
-        Err(e) => {
-            error!("metrics: grouping {}.{} failed: {}", table, column, e);
-            BTreeMap::new()
-        }
     }
 }
 

@@ -82,6 +82,13 @@ impl RuntimeLifecycle for DockerLifecycle {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }
 
+    async fn list_running_instances_grouped(
+        &self,
+        deployment_ids: &[String],
+    ) -> std::collections::HashMap<String, Vec<String>> {
+        super::instances::list_running_instances_grouped(&self.docker, deployment_ids).await
+    }
+
     async fn list_instances_with_names(
         &self,
         deployment_id: String,

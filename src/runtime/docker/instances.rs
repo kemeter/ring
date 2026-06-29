@@ -60,6 +60,42 @@ pub(crate) async fn list_instances(docker: &Docker, id: String, status: &str) ->
     instances
 }
 
+/// Group running instance ids by deployment in a single host-wide list call,
+/// instead of one `list_containers` per deployment. Only deployments in
+/// `wanted` are kept. This is the bulk path behind the deployment listing: with
+/// many deployments it collapses N full container lists into one.
+pub(crate) async fn list_running_instances_grouped(
+    docker: &Docker,
+    wanted: &[String],
+) -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::{HashMap, HashSet};
+
+    let wanted: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
+
+    let options = build_list_options("running");
+    match docker.list_containers(Some(options)).await {
+        Ok(containers) => {
+            for container in containers {
+                if matches_status(container.state.as_ref(), "running")
+                    && let Some(labels) = &container.labels
+                    && let Some(deployment_id) = labels.get("ring_deployment")
+                    && wanted.contains(deployment_id.as_str())
+                    && let Some(container_id) = &container.id
+                {
+                    grouped
+                        .entry(deployment_id.clone())
+                        .or_default()
+                        .push(container_id.clone());
+                }
+            }
+        }
+        Err(e) => debug!("Docker list instances (grouped) error: {}", e),
+    }
+
+    grouped
+}
+
 pub(crate) async fn list_instances_with_names(
     docker: &Docker,
     id: String,
