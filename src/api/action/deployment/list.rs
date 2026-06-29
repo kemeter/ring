@@ -27,6 +27,12 @@ pub(crate) struct QueryParameters {
     /// filtered in memory rather than in SQL.
     #[serde(default)]
     labels: Vec<String>,
+    /// When true, resolve each deployment's live running instances (and their
+    /// addresses) from the runtime. This queries the runtime once per
+    /// deployment, so it is opt-in: a plain `list` stays a single cheap DB read
+    /// instead of an N-roundtrip fan-out to Docker.
+    #[serde(default)]
+    instances: bool,
 }
 
 impl<S> FromRequestParts<S> for QueryParameters
@@ -45,6 +51,7 @@ where
         let mut namespaces = Vec::new();
         let mut kind = Vec::new();
         let mut labels = Vec::new();
+        let mut instances = false;
 
         for (key, value) in parsed {
             match key.as_str() {
@@ -56,6 +63,7 @@ where
                 "kind" => kind.push(value),
                 "label[]" => labels.push(value),
                 "label" => labels.push(value),
+                "instances" => instances = matches!(value.as_str(), "true" | "1"),
                 _ => {}
             }
         }
@@ -65,6 +73,7 @@ where
             status,
             kind,
             labels,
+            instances,
         })
     }
 }
@@ -124,24 +133,55 @@ pub(crate) async fn list(
         })
     };
 
-    for deployment in list_deployments.into_iter() {
-        if !matches_labels(&deployment) {
-            continue;
+    let retained: Vec<deployments::Deployment> = list_deployments
+        .into_iter()
+        .filter(matches_labels)
+        .collect();
+
+    // Resolve running instances per runtime in a single bulk call each, rather
+    // than one runtime roundtrip per deployment. This keeps the instance count
+    // (the `x/y` replicas column) in the default listing without the previous
+    // N-deployments fan-out that timed out on busy hosts.
+    let mut ids_by_runtime: HashMap<String, Vec<String>> = HashMap::new();
+    for deployment in &retained {
+        ids_by_runtime
+            .entry(deployment.runtime.clone())
+            .or_default()
+            .push(deployment.id.clone());
+    }
+
+    let mut instance_ids: HashMap<String, Vec<String>> = HashMap::new();
+    for (runtime_name, ids) in &ids_by_runtime {
+        if let Some(rt) = runtimes.get(runtime_name) {
+            instance_ids.extend(rt.list_running_instances_grouped(ids).await);
         }
+    }
+
+    for deployment in retained.into_iter() {
         let id = deployment.id.clone();
         let runtime_name = deployment.runtime.clone();
         let mut output = DeploymentOutput::from_to_model(deployment);
 
-        if let Some(rt) = runtimes.get(&runtime_name) {
-            let ids = rt.list_instances(id, "running").await;
+        if let Some(ids) = instance_ids.get(&id) {
             let mut instances = Vec::with_capacity(ids.len());
             for instance_id in ids {
-                let address = rt
-                    .instance_address(&instance_id)
-                    .await
-                    .map(|ip| ip.to_string());
+                // Addresses require a per-instance inspect, so only resolve them
+                // when the caller explicitly asked (`?instances=true`). The
+                // default listing carries instance ids (hence the count) without
+                // that extra cost.
+                let address = if query_parameters.instances {
+                    if let Some(rt) = runtimes.get(&runtime_name) {
+                        rt.instance_address(instance_id)
+                            .await
+                            .map(|ip| ip.to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 instances.push(DeploymentInstance {
-                    id: instance_id,
+                    id: instance_id.clone(),
                     address,
                 });
             }
