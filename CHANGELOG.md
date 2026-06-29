@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Firecracker `kind: job`: boot one VM, mark `completed` when the guest reboots (which exits the VMM); artifacts reaped, terminal status sticky (#170)
 - Firecracker volumes via virtio-block: bind/named/config/secret mounts realised as ext4 images attached as extra drives and mounted by cloud-init; named volumes persist, ephemeral ones are reaped
 - Public Prometheus `/metrics` endpoint exposing inventory and queue gauges, plus background-refreshed per-deployment runtime resource usage (#164)
+- `ring_unhealthy_deployments` metric broken down by namespace and status (#179)
+- Pull private images using the server host's Docker credentials via `use_host_auth`, gated by a server-side `use_host_registry_auth` flag and `host_registry_config` path; resolved for Docker and containerd (#173)
+- Pull private images via `image_pull_secret`, resolving a stored secret into registry credentials at schedule time; mutually exclusive with other credential sources (#174)
+- `apply`: reference a config payload from an external file with `files:`, kept verbatim unless `interpolate` is set (#172)
 - Scoped API tokens (PAT) with per-scope and per-namespace enforcement, plus `ring token` CLI (#134)
 - Outbound webhooks with HMAC-signed delivery and a durable event queue, plus `ring webhook` CLI (#135)
 - First-class Volume entity: `/volumes` CRUD and `ring volume` CLI (#112)
@@ -31,8 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `apply` warns on fields the Cloud Hypervisor runtime silently ignores (#130)
 - Extracted `auth` into its own config module (#137)
 - Split `runtime`/`hypervisor` modules, migrated to `tracing`, dropped dead deps (#141, #143)
+- `deployment list` resolves instances in one bulk runtime call instead of one per deployment (#180)
 
 ### Fixed
+- Docker workers honour `MAX_RESTART_COUNT` and stop restarting once the bound is reached instead of looping indefinitely (#177)
+- Health-check phase is keyed on the pre-cycle status so liveness checks run on the right instance state (#175)
+- Firecracker allocates guest networking unconditionally (not only when a port is published) and connects to the base vsock socket for host-to-guest calls (#171)
+- `apply` updates existing configs instead of skipping them
 - Podman crash loops are now detected via reconciliation and reach `CrashLoopBackOff`; no more `event channel disconnected` log spam every tick (#159)
 - `apply` manifests can set `user`/`group` again (deployment config typed as a struct) (#161)
 - `Always` pull policy is honoured for credential-less (public) images (#162)
