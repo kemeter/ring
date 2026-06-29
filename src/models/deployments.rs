@@ -684,6 +684,29 @@ pub(crate) async fn find_referencing_secret(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
+/// Count deployments grouped by `(namespace, status)`, restricted to the given
+/// statuses. One row per non-empty bucket, ordered by `(namespace, status)`.
+/// Returns raw `(namespace, status, count)` tuples; callers decide how to
+/// present them. `statuses` must be non-empty.
+pub(crate) async fn count_by_namespace_and_status(
+    pool: &SqlitePool,
+    statuses: &[&str],
+) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
+    // Bind each status as a parameter (they are caller-provided literals today,
+    // but parameterising keeps the query injection-free regardless).
+    let placeholders = vec!["?"; statuses.len()].join(", ");
+    let sql = format!(
+        "SELECT namespace, status, COUNT(*) FROM deployment \
+         WHERE status IN ({placeholders}) \
+         GROUP BY namespace, status ORDER BY namespace, status"
+    );
+    let mut query = sqlx::query_as::<_, (String, String, i64)>(&sql);
+    for status in statuses {
+        query = query.bind(*status);
+    }
+    query.fetch_all(pool).await
+}
+
 /// True when `volumes_json` (a deployment's `volumes` column) contains a mount
 /// of `type == "volume"` whose `source` is `volume_name`. Distinguishes a real
 /// named-volume reference from a bind/config/secret that merely shares the name,
