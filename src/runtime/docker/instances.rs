@@ -2,17 +2,25 @@ use bollard::Docker;
 use bollard::models::ContainerSummaryStateEnum;
 use bollard::query_parameters::ListContainersOptionsBuilder;
 
-fn build_list_options(status: &str) -> bollard::query_parameters::ListContainersOptions {
-    // Always list every container and filter by state client-side (see
-    // `matches_status`). We deliberately do NOT push a server-side `status`
-    // filter:
-    // Podman's Docker-compatible API rejects `restarting` (it has no such
-    // state) and fails the whole request, which `list_*` then swallows into an
-    // empty Vec — making the scheduler believe a deployment has 0 live
-    // instances and spawn one new container every tick, unbounded. Listing all
-    // and filtering in-process behaves identically on Docker and Podman.
-    let all = !matches!(status, "all");
-    ListContainersOptionsBuilder::new().all(all).build()
+fn build_list_options(_status: &str) -> bollard::query_parameters::ListContainersOptions {
+    // Always list every container (`all = true`) and filter by state
+    // client-side (see `matches_status`). We deliberately do NOT push a
+    // server-side `status` filter: Podman's Docker-compatible API rejects
+    // `restarting` (it has no such state) and fails the whole request, which
+    // `list_*` then swallows into an empty Vec — making the scheduler believe a
+    // deployment has 0 live instances and spawn one new container every tick,
+    // unbounded. Listing all and filtering in-process behaves identically on
+    // Docker and Podman.
+    //
+    // `all` MUST be unconditional: with `all = false` Docker returns running
+    // containers only, so a `status = "all"` lookup misses every Exited
+    // container. The job path (`handle_job_deployment`) relies on
+    // `list_instances("all")` to find its finished container and converge to
+    // Completed; without exited containers it sees zero instances and recreates
+    // one every tick forever (a pg_dump job looping thousands of times). A
+    // previous change tied `all` to the filter, which silently reintroduced
+    // exactly that unbounded loop.
+    ListContainersOptionsBuilder::new().all(true).build()
 }
 
 /// Whether a container counts as a live instance for the given filter.
@@ -181,5 +189,22 @@ mod tests {
             "exited"
         ));
         assert!(!matches_status(None, "exited"));
+    }
+
+    // Regression guard for the unbounded job-recreation loop: the Docker list
+    // flag MUST be `all = true` for EVERY filter, including "all". With it tied
+    // to the filter, `list_instances("all")` returned running containers only,
+    // so a finished (Exited) job container was invisible — `handle_job_deployment`
+    // then saw zero instances and recreated one every tick, forever (thousands
+    // of pg_dump containers piled up in production). Listing is exhaustive;
+    // `matches_status` does the state filtering client-side.
+    #[test]
+    fn list_options_always_request_all_states() {
+        for filter in ["all", "active", "running", "exited", "created"] {
+            assert!(
+                build_list_options(filter).all,
+                "build_list_options({filter:?}) must set all=true so exited containers are visible",
+            );
+        }
     }
 }
