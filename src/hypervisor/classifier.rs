@@ -93,16 +93,23 @@ pub(crate) fn classify_create_error(err: &RuntimeError) -> Disposition {
 /// exception because they are *unambiguously* permanent under the standard shell
 /// convention, so a restart can never succeed:
 ///
+/// * `0` — the process ran to completion successfully. A worker that exits 0
+///   has *finished*, not crashed: it must converge to `Completed`, never be
+///   recreated. Treating it as retryable recreates the container every tick
+///   forever (re-pulling the image each time under the default `Always`
+///   policy) — a one-shot/`pg_dump`-style container declared as a worker would
+///   otherwise loop endlessly and starve the reconcile cycle.
 /// * `127` — command not found (the entrypoint/binary doesn't exist);
 /// * `126` — found but not executable (bad perms / not a binary).
 ///
-/// Both mean the container can never start its program, so we fail fast onto
+/// 126/127 mean the container can never start its program, so we fail fast onto
 /// `CreateContainerError` rather than burning the whole restart budget. Every
-/// other code (including `0`, generic `1`, and signal-kill `128+n`) stays
-/// retryable — those can be transient, and mislabelling them terminal would
-/// wrongly give up on a recoverable worker.
+/// other code (generic `1`, signal-kill `128+n`) stays retryable — those can be
+/// transient, and mislabelling them terminal would wrongly give up on a
+/// recoverable worker.
 pub(crate) fn classify_exit_code(exit_code: Option<i64>) -> Disposition {
     match exit_code {
+        Some(0) => Disposition::Terminal(DeploymentStatus::Completed),
         Some(126) | Some(127) => Disposition::Terminal(DeploymentStatus::CreateContainerError),
         _ => Disposition::Retry,
     }
@@ -184,8 +191,18 @@ mod tests {
     }
 
     #[test]
+    fn clean_exit_completes() {
+        // A successful exit (code 0) is terminal-Completed, never retried — a
+        // worker that finished must not be recreated in a loop.
+        assert_eq!(
+            classify_exit_code(Some(0)),
+            Disposition::Terminal(DeploymentStatus::Completed)
+        );
+    }
+
+    #[test]
     fn other_exit_codes_retry() {
-        assert_eq!(classify_exit_code(Some(0)), Disposition::Retry);
+        // Generic failures and signal kills stay retryable (could be transient).
         assert_eq!(classify_exit_code(Some(1)), Disposition::Retry);
         assert_eq!(classify_exit_code(Some(137)), Disposition::Retry);
         assert_eq!(classify_exit_code(None), Disposition::Retry);

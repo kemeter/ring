@@ -60,6 +60,26 @@ pub(crate) async fn apply(
 /// daemon — see the tests in this module.
 fn apply_unexpected_exits(deployment: &mut Deployment, exited: &[(String, Option<i64>)]) -> bool {
     for (container_id, exit_code) in exited {
+        let disposition = crate::hypervisor::classifier::classify_exit_code(*exit_code);
+
+        // A clean exit (code 0) is a *success*, not a crash: the worker finished
+        // its work. Converge to Completed without touching restart_count, so it
+        // is never recreated — recreating an exit-0 container every tick is the
+        // infinite pull/recreate loop this guards against.
+        if let Disposition::Terminal(status @ DeploymentStatus::Completed) = disposition {
+            deployment.emit_event(
+                "info",
+                format!(
+                    "Container {} exited cleanly (code 0); marking completed",
+                    &container_id[..container_id.len().min(12)]
+                ),
+                "docker",
+                Some("container_completed"),
+            );
+            deployment.status = status;
+            return true;
+        }
+
         deployment.restart_count += 1;
         deployment.emit_event(
             "error",
@@ -76,9 +96,7 @@ fn apply_unexpected_exits(deployment: &mut Deployment, exited: &[(String, Option
         // not-executable): the container can never start its program, so
         // retrying it up to MAX_RESTART_COUNT only delays the inevitable. Land
         // on the terminal status now.
-        if let Disposition::Terminal(status) =
-            crate::hypervisor::classifier::classify_exit_code(*exit_code)
-        {
+        if let Disposition::Terminal(status) = disposition {
             deployment.emit_event(
                 "error",
                 format!(
@@ -741,6 +759,27 @@ mod tests {
         assert!(!hit_bound);
         assert_eq!(deployment.restart_count, 1);
         assert_eq!(deployment.status, DeploymentStatus::Running);
+    }
+
+    /// A clean exit (code 0) is a success, not a crash: the worker is marked
+    /// Completed and `restart_count` is left untouched, so it is never recreated.
+    /// This is the production loop guard — a one-shot/`pg_dump`-style container
+    /// declared as a worker used to exit 0, get recreated, re-pull its image, and
+    /// loop forever, starving the reconcile cycle.
+    #[test]
+    fn clean_exit_completes_without_restart() {
+        let mut deployment = worker_running();
+        let exited = vec![("container-done".to_string(), Some(0))];
+        let stop = apply_unexpected_exits(&mut deployment, &exited);
+        assert!(
+            stop,
+            "a clean exit is terminal, reconciling stops this tick"
+        );
+        assert_eq!(deployment.status, DeploymentStatus::Completed);
+        assert_eq!(
+            deployment.restart_count, 0,
+            "a successful exit must not count as a crash"
+        );
     }
 
     /// Liveness gate: a container still running right after start may be
