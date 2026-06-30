@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "aplos server",
-    "build": "aplos build --static && node scripts/generate-seo.js"
+    "build": "aplos build --static && bun scripts/generate-seo.js"
   },
   "dependencies": {
     "aplos": "github:alpac0de/aplos",

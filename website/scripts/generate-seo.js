@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SITE_URL = process.env.SITE_URL || 'https://kemeter.github.io/ring';
-const distDir = path.resolve(__dirname, '..', 'public', 'dist');
+const distDir = path.resolve(__dirname, '..', 'dist');
 const docsDir = path.resolve(__dirname, '..', '..', 'documentation');
 
 function walkMdFiles(dir, prefix = '') {
