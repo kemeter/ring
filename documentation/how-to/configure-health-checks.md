@@ -153,6 +153,30 @@ For services that need longer than 10 s to be truly ready (JVM cold start, big i
 - When several readiness checks declare different values, the **maximum** wins, so the gate waits on the slowest probe.
 - A typo (unparseable value) logs a warning and falls back to the 10 s default; rollouts aren't blocked.
 
+### Services that build at boot: tune `start_period`
+
+Some containers build their app *after* they start (e.g. `bun run build` behind Caddy). Their readiness probe legitimately fails for the whole build, which would trip the rollout deadline (`RING_ROLLOUT_DEADLINE`, default `600s`) and fail a perfectly healthy deployment. Set `start_period` on the readiness check to grant a grace window before failures count:
+
+```yaml
+- type: command
+  command: test -f /var/run/kemeter/ready
+  interval: 5s
+  timeout: 2s
+  threshold: 3
+  on_failure: alert
+  readiness: true
+  start_period: "180s"     # 3 min of build/boot before failures count
+```
+
+- The rollout deadline only starts counting **after** the grace period. Effective budget = `start_period + RING_ROLLOUT_DEADLINE`.
+- Same duration syntax as `interval` / `timeout` (`"500ms"`, `"180s"`).
+- Only matters when `readiness: true`.
+- When several readiness checks declare different values, the **maximum** wins.
+- For `command` checks on Docker, the value is also forwarded to the native `HEALTHCHECK start_period`, so Docker won't mark the container `unhealthy` during the build.
+- A typo (unparseable value) logs a warning and is ignored; the grace falls back to zero rather than blocking a slow build.
+
+`start_period` differs from `min_healthy_time`: `start_period` is a grace *before* failures count (build/boot), while `min_healthy_time` is how long the check must stay green *after* it first succeeds (anti-flap).
+
 **Proxy bonus:** a `readiness: true` check of `type: command` is **also** translated into a native Docker `HEALTHCHECK`. [Sozune](https://sozune.kemeter.io) (the companion proxy) and other label-aware proxies gate on `Status: healthy`, so they won't route traffic to the new container while the readiness command fails. See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for the integration, or [Health checks design → proxy integration](/documentation/concepts/health-checks-design#proxy-integration) for the why.
 
 For HTTP readiness with proxy gating, wrap the probe in a shell command:

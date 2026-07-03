@@ -391,6 +391,7 @@ health_checks:
 | `on_failure` | yes | `restart` (recreate the instance), `stop` (delete the deployment), or `alert` (log only). |
 | `readiness` | no (default `false`) | When `true`, this check gates rolling updates and (for `command` on Docker) is translated into a native `HEALTHCHECK`. See [health checks (design) → the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate). |
 | `min_healthy_time` | no (default `10s`) | Anti-flap window for the readiness gate: the check must be green for this long before the parent is drained. Per-check; the scheduler takes the maximum across readiness checks. Ignored when `readiness: false`. Same syntax as `interval` / `timeout`. |
+| `start_period` | no (default none) | Build/boot grace period during which readiness failures don't count. The rollout deadline (`RING_ROLLOUT_DEADLINE`) only starts *after* this window, and it is forwarded to Docker's native `HEALTHCHECK start_period`. Per-check; the scheduler takes the maximum across readiness checks. A malformed value logs a warning and is ignored. Ignored when `readiness: false`. Same syntax as `interval` / `timeout`. |
 
 ### Type-specific fields
 

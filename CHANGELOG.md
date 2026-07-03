@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Readiness health checks accept a `start_period` grace window: readiness failures during a slow build/boot no longer trip the rollout deadline (effective budget becomes `start_period + RING_ROLLOUT_DEADLINE`), and the value is forwarded to Docker's native `HEALTHCHECK start_period` (#183)
 - containerd runtime over native gRPC: index/entrypoint resolution for multi-arch images, CNI networking, logs, command health checks (#144)
 - Podman runtime, opt-in under `[server.runtime.podman]` (#139)
 - Firecracker microVM runtime (experimental): boot, networking, outbound NAT, restart reconciliation (#142, #146, #147)
