@@ -4,7 +4,7 @@ use crate::models::config;
 use crate::models::config::Config;
 use crate::models::deployment_event;
 use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
-use crate::models::health_check::HealthCheckStatus;
+use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::models::volume::ResolvedMount;
@@ -515,8 +515,6 @@ const DEFAULT_MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
 /// nothing is set. Malformed values are logged at warn and ignored — the
 /// rollout shouldn't stall just because someone typo'd a duration.
 fn min_healthy_time_for(child: &Deployment) -> Duration {
-    use crate::models::health_check::HealthCheck;
-
     let mut window = DEFAULT_MIN_HEALTHY_TIME;
     let mut overridden = false;
 
@@ -542,6 +540,38 @@ fn min_healthy_time_for(child: &Deployment) -> Duration {
     window
 }
 
+/// Resolve the build/boot grace period for a deployment: the max of the per-HC
+/// `start_period` across readiness checks. Zero when nothing is set. Malformed
+/// values are logged at warn and ignored — a typo'd duration shouldn't shorten
+/// the grace to zero and fail a healthy slow-building app.
+///
+/// This is the window during which a readiness probe is expected to fail (the
+/// app is still building / booting and not serving yet), so the readiness
+/// deadline only starts counting *after* it.
+fn start_period_for(child: &Deployment) -> Duration {
+    let mut window = Duration::ZERO;
+
+    for hc in child.health_checks.iter().filter(|hc| hc.is_readiness()) {
+        if let Some(raw) = hc.start_period() {
+            match HealthCheck::parse_duration(raw) {
+                Ok(d) => {
+                    if d > window {
+                        window = d;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Invalid start_period '{}' on readiness HC for deployment {}: {} — ignoring",
+                        raw, child.id, e
+                    );
+                }
+            }
+        }
+    }
+
+    window
+}
+
 /// True when the child has been alive longer than the rollout deadline.
 ///
 /// Used as a safety valve: if a child's readiness probe never turns green, the
@@ -550,6 +580,13 @@ fn min_healthy_time_for(child: &Deployment) -> Duration {
 /// via RING_ROLLOUT_DEADLINE (seconds, default 600). A child with an
 /// unparseable created_at is treated as not-yet-expired (fail safe: never force
 /// a drain on bad data).
+///
+/// The deadline starts counting only *after* the readiness checks' grace period
+/// (`start_period`), not at `created_at`. A runtime that builds at boot (e.g.
+/// `bun run build` behind Caddy) legitimately fails readiness for the whole
+/// build; without honouring the grace, a short `RING_ROLLOUT_DEADLINE` fails a
+/// healthy app the instant its build outlasts the deadline. The effective
+/// budget is therefore `start_period + RING_ROLLOUT_DEADLINE`.
 fn rollout_deadline_exceeded(child: &Deployment) -> bool {
     let deadline_secs: i64 = std::env::var("RING_ROLLOUT_DEADLINE")
         .ok()
@@ -567,7 +604,9 @@ fn rollout_deadline_exceeded(child: &Deployment) -> bool {
         Err(_) => return false,
     };
 
-    (chrono::Utc::now() - created).num_seconds() >= deadline_secs
+    let grace_secs = start_period_for(child).as_secs() as i64;
+
+    (chrono::Utc::now() - created).num_seconds() >= grace_secs + deadline_secs
 }
 
 /// Evaluate the readiness state of a deployment from its recorded health-check
@@ -1648,6 +1687,75 @@ mod tests {
         assert!(!rollout_deadline_exceeded(&child));
     }
 
+    fn readiness_command_with_start_period(start_period: &str) -> HealthCheck {
+        HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: Some(start_period.to_string()),
+        }
+    }
+
+    #[test]
+    fn start_period_zero_without_readiness_start_period() {
+        // No readiness HC declares a start_period → no grace.
+        let child = child_with_health_checks("no-grace", vec![readiness_command("ready")]);
+        assert_eq!(start_period_for(&child), Duration::ZERO);
+    }
+
+    #[test]
+    fn start_period_uses_max_across_readiness_checks() {
+        let child = child_with_health_checks(
+            "max-grace",
+            vec![
+                readiness_command_with_start_period("60s"),
+                readiness_command_with_start_period("180s"),
+            ],
+        );
+        assert_eq!(start_period_for(&child), Duration::from_secs(180));
+    }
+
+    #[test]
+    fn start_period_ignores_malformed_value() {
+        // A typo'd duration must not shorten the grace to zero.
+        let child = child_with_health_checks(
+            "bad-grace",
+            vec![readiness_command_with_start_period("nope")],
+        );
+        assert_eq!(start_period_for(&child), Duration::ZERO);
+    }
+
+    #[test]
+    fn rollout_deadline_defers_by_start_period() {
+        // A slow-building app: 700s old, 180s build grace, default 600s
+        // deadline. Effective budget is 180 + 600 = 780s, so 700s is NOT yet
+        // past the deadline — without honouring start_period it would have
+        // failed at 600s.
+        let mut child = child_with_health_checks(
+            "slow-build",
+            vec![readiness_command_with_start_period("180s")],
+        );
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(700)).to_string();
+        assert!(!rollout_deadline_exceeded(&child));
+    }
+
+    #[test]
+    fn rollout_deadline_still_fires_past_grace_plus_deadline() {
+        // Same 180s grace, but now 800s old → past the 780s effective budget.
+        // The safety valve still fires so a genuinely broken probe can't pin
+        // the deployment forever.
+        let mut child = child_with_health_checks(
+            "stuck-build",
+            vec![readiness_command_with_start_period("180s")],
+        );
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(800)).to_string();
+        assert!(rollout_deadline_exceeded(&child));
+    }
+
     /// Insert a health_check row directly so the gate has something to read.
     /// `seconds_ago` is the offset from now() applied to all timestamps —
     /// makes the anti-flap window deterministic without sleeping.
@@ -1685,6 +1793,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1697,6 +1806,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1709,6 +1819,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -1723,6 +1834,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness,
                 min_healthy_time: raw.map(|s| s.to_string()),
+                start_period: None,
             })
             .collect();
         child_with_health_checks(id, hcs)
@@ -1860,6 +1972,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false, // not a readiness HC
             min_healthy_time: None,
+            start_period: None,
         });
         let child = child_with_health_checks("child-7", hcs);
         insert_hc_result(&pool, "child-7", "command", "success", 30).await;

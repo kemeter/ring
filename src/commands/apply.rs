@@ -188,6 +188,8 @@ enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     Http {
         url: String,
@@ -200,6 +202,8 @@ enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     Command {
         command: String,
@@ -212,6 +216,8 @@ enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
 }
 

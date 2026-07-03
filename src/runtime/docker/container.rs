@@ -110,7 +110,11 @@ fn build_health_config(health_checks: &[HealthCheck]) -> Option<HealthConfig> {
         interval: Some(to_nanos(hc.interval())),
         timeout: Some(to_nanos(hc.timeout())),
         retries: Some(hc.threshold() as i64),
-        start_period: None,
+        // Grace period before Docker's native HEALTHCHECK counts a failure —
+        // covers a slow in-container build (e.g. `bun run build` behind Caddy)
+        // that isn't serving yet. Mirrors the scheduler-side readiness deadline
+        // grace (`start_period_for`). None (Docker's default) when unset.
+        start_period: hc.start_period().map(to_nanos),
         start_interval: None,
     })
 }
@@ -993,6 +997,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1009,6 +1014,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1023,6 +1029,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         assert!(build_health_config(&hcs).is_none());
     }
@@ -1037,6 +1044,7 @@ mod tests {
             on_failure: FailureAction::Alert,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }];
         let cfg = build_health_config(&hcs).expect("should translate");
         assert_eq!(
@@ -1049,6 +1057,25 @@ mod tests {
         assert_eq!(cfg.interval, Some(10_000_000_000));
         assert_eq!(cfg.timeout, Some(5_000_000_000));
         assert_eq!(cfg.retries, Some(3));
+        // No start_period declared → Docker's default (None).
+        assert_eq!(cfg.start_period, None);
+    }
+
+    #[test]
+    fn build_health_config_forwards_start_period() {
+        let hcs = vec![HealthCheck::Command {
+            command: "test -f /var/run/kemeter/ready".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: Some("180s".to_string()),
+        }];
+        let cfg = build_health_config(&hcs).expect("should translate");
+        // The grace period reaches Docker's native HEALTHCHECK in nanoseconds.
+        assert_eq!(cfg.start_period, Some(180_000_000_000));
     }
 
     #[test]
@@ -1062,6 +1089,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: true,
                 min_healthy_time: None,
+                start_period: None,
             },
             HealthCheck::Command {
                 command: "/usr/local/bin/ready.sh".to_string(),
@@ -1071,6 +1099,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: true,
                 min_healthy_time: None,
+                start_period: None,
             },
         ];
         let cfg = build_health_config(&hcs).expect("should translate the command HC");
