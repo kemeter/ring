@@ -96,6 +96,7 @@ pub(crate) struct LoginInput {
 #[cfg(test)]
 mod tests {
     use crate::api::server::tests::new_test_app;
+    use crate::models::token as token_model;
     use axum::http::StatusCode;
     use axum_test::{TestResponse, TestServer};
     use serde::Deserialize;
@@ -221,7 +222,6 @@ mod tests {
         // rotate on /tokens/{id} must 404 for a session row, so it is managed
         // only via /login and /logout. We mint a session directly on the pool
         // (so we hold its id) and prove every id-based token route rejects it.
-        use crate::models::token as token_model;
         let (pool, router) = crate::api::server::tests::new_test_app_with_pool().await;
         let server = TestServer::new(router).unwrap();
         let admin = login_token(&server).await;

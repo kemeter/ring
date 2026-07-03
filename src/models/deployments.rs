@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::fmt;
+use std::str::FromStr;
 
 pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 
@@ -476,7 +477,6 @@ impl From<DeploymentRow> for Deployment {
             pending_events: vec![],
             parent_id: row.parent_id,
             network: row.network_mode.as_deref().and_then(|s| {
-                use std::str::FromStr;
                 NetworkMode::from_str(s)
                     .map(|mode| NetworkConfig { mode })
                     .map_err(|e| {
@@ -974,7 +974,6 @@ mod tests {
 
     #[test]
     fn network_mode_as_str_round_trips() {
-        use std::str::FromStr;
         for mode in [NetworkMode::Bridge, NetworkMode::Host] {
             assert_eq!(NetworkMode::from_str(mode.as_str()).unwrap(), mode);
         }

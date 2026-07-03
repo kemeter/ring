@@ -14,12 +14,13 @@
 //! presence on disk (its `.sock`) is the source of truth for "is it running".
 
 use crate::config::server::FirecrackerConfig;
-use crate::hypervisor::cloud_init::GuestNet;
+use crate::hypervisor::cloud_init::{GuestMount, GuestNet};
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::tap::TapDevice;
+use crate::hypervisor::volume_image as vol;
 use crate::hypervisor::vsock_client::{self, VsockError};
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
@@ -29,6 +30,8 @@ use crate::runtime::firecracker::client::{
     BootSource, Drive, FirecrackerClient, MachineConfig, NetworkInterface, Vsock,
 };
 use async_trait::async_trait;
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -181,9 +184,6 @@ impl FirecrackerLifecycle {
         deployment: &Deployment,
         resolved_mounts: &[ResolvedMount],
     ) -> Result<Vec<crate::hypervisor::cloud_init::GuestMount>, String> {
-        use crate::hypervisor::cloud_init::GuestMount;
-        use crate::hypervisor::volume_image as vol;
-
         // /dev/vda is root and cidata takes the free letter after the last
         // volume, so volumes can use vdb..=vdy at most — 24 of them. Past that
         // the device letters would overflow into punctuation ('{', '|', …) and
@@ -794,9 +794,6 @@ impl FirecrackerLifecycle {
     /// tap: Firecracker holds the tap's backend fd while alive, so the tap
     /// can only be removed once the process has fully exited.
     async fn kill_pid(&self, pid: u32) {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-
         let target = Pid::from_raw(pid as i32);
         let _ = kill(target, Signal::SIGTERM);
         for i in 0..20 {

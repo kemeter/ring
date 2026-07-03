@@ -12,6 +12,7 @@
 use super::client::DEFAULT_SNAPSHOTTER;
 use crate::hypervisor::error::RuntimeError;
 use crate::runtime::docker::{ImagePullPolicy, ImageReference, parse_image_reference};
+use base64::Engine as _;
 use containerd_client::services::v1::GetImageRequest;
 use containerd_client::services::v1::ReadContentRequest;
 use containerd_client::services::v1::TransferRequest;
@@ -249,7 +250,6 @@ async fn pull_image(
     // the token endpoint, so this covers the common private-registry case.
     let mut headers = HashMap::new();
     if let Some((_, username, password)) = &image.auth {
-        use base64::Engine as _;
         let raw = format!("{}:{}", username, password);
         let encoded = base64::engine::general_purpose::STANDARD.encode(raw.as_bytes());
         headers.insert("Authorization".to_string(), format!("Basic {}", encoded));
