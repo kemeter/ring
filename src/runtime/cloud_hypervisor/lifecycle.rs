@@ -10,13 +10,16 @@ use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, ex
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::virtiofs::{self, VirtiofsMount};
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
+use crate::models::health_check::HealthCheckStatus;
 use crate::models::volume::ResolvedMount;
 use crate::runtime::docker::tiny_id;
 use async_trait::async_trait;
+use futures::stream::{self, StreamExt};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 /// Resolved runtime configuration for Cloud Hypervisor.
@@ -492,7 +495,6 @@ impl CloudHypervisorLifecycle {
         tokio::spawn(async move {
             let stderr_task = stderr.map(|mut s| {
                 tokio::spawn(async move {
-                    use tokio::io::AsyncReadExt;
                     let mut buf = Vec::new();
                     let _ = s.read_to_end(&mut buf).await;
                     String::from_utf8_lossy(&buf).into_owned()
@@ -1273,8 +1275,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                 + Send,
         >,
     > {
-        use futures::stream::{self, StreamExt};
-
         let instances = self.scan_instances(deployment_id, &[]).await;
         let filtered: Vec<String> = instances
             .into_iter()
@@ -1346,8 +1346,6 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         crate::models::health_check::HealthCheckStatus,
         Option<String>,
     ) {
-        use crate::models::health_check::HealthCheckStatus;
-
         let cid = cid_for_instance(instance_id);
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), command.to_string()];
         let timeout = std::time::Duration::from_secs(30);

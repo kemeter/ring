@@ -20,6 +20,8 @@ use clap::{Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use rand::RngCore;
 use std::fs;
 use std::io::IsTerminal;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 pub(crate) fn command_config() -> Command {
@@ -376,7 +378,6 @@ fn write_secret_key_file(path: &str, key: &str) -> std::io::Result<()> {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
 
