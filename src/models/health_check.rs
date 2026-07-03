@@ -36,6 +36,17 @@ pub(crate) enum HealthCheck {
         /// to the scheduler's built-in window when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        /// Grace period before this check's failures count against the
+        /// deployment. A deployment that builds at boot (e.g. `bun run
+        /// build` behind Caddy) isn't ready for many seconds, and a
+        /// readiness probe running during that window would fail purely
+        /// because the app hasn't started serving yet. The scheduler's
+        /// readiness deadline (`rollout_deadline_exceeded`) starts counting
+        /// only after this period, and it is forwarded to Docker's native
+        /// `HEALTHCHECK start_period`. Parsed by `parse_duration`. Ignored
+        /// when `readiness = false`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     #[serde(rename = "http")]
     Http {
@@ -49,6 +60,8 @@ pub(crate) enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
     #[serde(rename = "command")]
     Command {
@@ -62,6 +75,8 @@ pub(crate) enum HealthCheck {
         readiness: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         min_healthy_time: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_period: Option<String>,
     },
 }
 
@@ -174,6 +189,17 @@ impl HealthCheck {
             } => min_healthy_time.as_deref(),
         }
     }
+
+    /// Returns the configured build/boot grace period for this check, if any.
+    /// Only meaningful when `is_readiness() == true`; the scheduler takes the
+    /// maximum across readiness checks so the slowest-starting one wins.
+    pub(crate) fn start_period(&self) -> Option<&str> {
+        match self {
+            HealthCheck::Tcp { start_period, .. }
+            | HealthCheck::Http { start_period, .. }
+            | HealthCheck::Command { start_period, .. } => start_period.as_deref(),
+        }
+    }
 }
 
 impl Default for HealthCheck {
@@ -186,6 +212,7 @@ impl Default for HealthCheck {
             on_failure: FailureAction::Restart,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 }

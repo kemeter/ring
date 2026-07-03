@@ -414,6 +414,7 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -447,6 +448,7 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -491,6 +493,7 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -523,6 +526,7 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -555,6 +559,7 @@ mod tests {
                 on_failure: FailureAction::Restart,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -602,6 +607,7 @@ mod tests {
                 on_failure: FailureAction::Stop,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -636,6 +642,7 @@ mod tests {
                 on_failure: FailureAction::Alert,
                 readiness: false,
                 min_healthy_time: None,
+                start_period: None,
             }],
         );
 
@@ -697,6 +704,7 @@ mod tests {
             on_failure: FailureAction::Restart,
             readiness: true,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
@@ -709,6 +717,7 @@ mod tests {
             on_failure: FailureAction::Restart,
             readiness: false,
             min_healthy_time: None,
+            start_period: None,
         }
     }
 
