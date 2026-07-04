@@ -276,14 +276,19 @@ impl Default for DashboardConfig {
 }
 
 /// `[server.telemetry]` — OpenTelemetry export. One sub-block per signal so the
-/// table can grow without breaking existing configs: `traces` ships now; `logs`
-/// and `metrics` are reserved for later phases and are intentionally absent from
-/// the struct until implemented (an unknown `[server.telemetry.logs]` table is
-/// simply ignored by serde today, so adding it later is backward-compatible).
+/// table can grow without breaking existing configs. Each signal is independent
+/// and opt-in: `traces` (spans), `metrics` (per-deployment runtime gauges), and
+/// `logs` (server log events) can each be enabled on their own, and with all
+/// three disabled (the default) no exporter is built and Ring runs exactly as
+/// before.
 #[derive(Deserialize, Debug, Clone, Default)]
 pub(crate) struct TelemetryConfig {
     #[serde(default)]
     pub(crate) traces: TracesConfig,
+    #[serde(default)]
+    pub(crate) metrics: MetricsConfig,
+    #[serde(default)]
+    pub(crate) logs: LogsConfig,
 }
 
 /// `[server.telemetry.traces]` — OTLP/gRPC span export. Opt-in: with `enabled`
@@ -350,6 +355,131 @@ impl TracesConfig {
     }
 }
 
+/// `[server.telemetry.metrics]` — OTLP/gRPC metric export (push). Opt-in: with
+/// `enabled` false (the default) no meter provider is built. When on, an
+/// `SdkMeterProvider` periodically exports the same per-deployment runtime
+/// gauges the Prometheus `/metrics` endpoint already serves (CPU, memory,
+/// network, disk, PIDs, instance count), read from the background stats cache
+/// so no extra runtime round-trip is added.
+///
+/// `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` then `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// override `endpoint`; `OTEL_SERVICE_NAME` overrides `service_name`.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct MetricsConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// OTLP/gRPC collector endpoint, e.g. `http://collector:4317`.
+    #[serde(default = "default_metrics_endpoint")]
+    pub(crate) endpoint: String,
+    /// `service.name` resource attribute reported to the collector.
+    #[serde(default = "default_metrics_service_name")]
+    pub(crate) service_name: String,
+    /// Push interval in seconds. The meter provider reads the stats snapshot and
+    /// exports on this cadence; the values are at most one stats-cache refresh
+    /// stale regardless (the cache refreshes on the scheduler interval).
+    #[serde(default = "default_metrics_interval_seconds")]
+    pub(crate) interval_seconds: u64,
+}
+
+fn default_metrics_endpoint() -> String {
+    "http://127.0.0.1:4317".to_string()
+}
+
+fn default_metrics_service_name() -> String {
+    "ring-server".to_string()
+}
+
+fn default_metrics_interval_seconds() -> u64 {
+    15
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_metrics_endpoint(),
+            service_name: default_metrics_service_name(),
+            interval_seconds: default_metrics_interval_seconds(),
+        }
+    }
+}
+
+impl MetricsConfig {
+    /// Effective collector endpoint: the metrics-specific
+    /// `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` wins, then the shared
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`, then the configured value.
+    pub(crate) fn resolved_endpoint(&self) -> String {
+        std::env::var("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            .unwrap_or_else(|_| self.endpoint.clone())
+    }
+
+    /// Effective `service.name`: `OTEL_SERVICE_NAME` overrides the configured
+    /// value.
+    pub(crate) fn resolved_service_name(&self) -> String {
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| self.service_name.clone())
+    }
+
+    /// Push interval, floored at 1s so a misconfigured `0` cannot spin.
+    pub(crate) fn resolved_interval_seconds(&self) -> u64 {
+        self.interval_seconds.max(1)
+    }
+}
+
+/// `[server.telemetry.logs]` — OTLP/gRPC log export (push). Opt-in: with
+/// `enabled` false (the default) no logger provider is built and logs go only
+/// to the console. When on, `tracing` events are bridged to an
+/// `SdkLoggerProvider` and exported over OTLP, in addition to the console.
+///
+/// `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` then `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// override `endpoint`; `OTEL_SERVICE_NAME` overrides `service_name`.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct LogsConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// OTLP/gRPC collector endpoint, e.g. `http://collector:4317`.
+    #[serde(default = "default_logs_endpoint")]
+    pub(crate) endpoint: String,
+    /// `service.name` resource attribute reported to the collector.
+    #[serde(default = "default_logs_service_name")]
+    pub(crate) service_name: String,
+}
+
+fn default_logs_endpoint() -> String {
+    "http://127.0.0.1:4317".to_string()
+}
+
+fn default_logs_service_name() -> String {
+    "ring-server".to_string()
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_logs_endpoint(),
+            service_name: default_logs_service_name(),
+        }
+    }
+}
+
+impl LogsConfig {
+    /// Effective collector endpoint: the logs-specific
+    /// `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` wins, then the shared
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT`, then the configured value.
+    pub(crate) fn resolved_endpoint(&self) -> String {
+        std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            .unwrap_or_else(|_| self.endpoint.clone())
+    }
+
+    /// Effective `service.name`: `OTEL_SERVICE_NAME` overrides the configured
+    /// value.
+    pub(crate) fn resolved_service_name(&self) -> String {
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| self.service_name.clone())
+    }
+}
+
 #[cfg(test)]
 mod telemetry_tests {
     use super::*;
@@ -364,10 +494,75 @@ mod telemetry_tests {
     }
 
     #[test]
-    fn telemetry_absent_from_toml_yields_disabled_traces() {
+    fn telemetry_absent_from_toml_yields_disabled_signals() {
         // A `[server]` table with no telemetry block must not enable anything.
         let cfg: ServerConfig = toml::from_str("").unwrap();
         assert!(!cfg.telemetry.traces.enabled);
+        assert!(!cfg.telemetry.metrics.enabled);
+        assert!(!cfg.telemetry.logs.enabled);
+    }
+
+    #[test]
+    fn metrics_disabled_by_default() {
+        let c = MetricsConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.endpoint, "http://127.0.0.1:4317");
+        assert_eq!(c.service_name, "ring-server");
+        assert_eq!(c.interval_seconds, 15);
+    }
+
+    #[test]
+    fn logs_disabled_by_default() {
+        let c = LogsConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.endpoint, "http://127.0.0.1:4317");
+        assert_eq!(c.service_name, "ring-server");
+    }
+
+    #[test]
+    fn metrics_and_logs_blocks_parse_from_toml() {
+        let cfg: ServerConfig = toml::from_str(
+            r#"
+            [telemetry.metrics]
+            enabled = true
+            endpoint = "http://collector:4317"
+            interval_seconds = 30
+
+            [telemetry.logs]
+            enabled = true
+            endpoint = "http://collector:4318"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.telemetry.metrics.enabled);
+        assert_eq!(cfg.telemetry.metrics.endpoint, "http://collector:4317");
+        assert_eq!(cfg.telemetry.metrics.interval_seconds, 30);
+        assert!(cfg.telemetry.logs.enabled);
+        assert_eq!(cfg.telemetry.logs.endpoint, "http://collector:4318");
+    }
+
+    #[test]
+    fn metrics_interval_zero_is_floored_to_one() {
+        let c = MetricsConfig {
+            interval_seconds: 0,
+            ..Default::default()
+        };
+        assert_eq!(c.resolved_interval_seconds(), 1);
+    }
+
+    #[test]
+    fn signals_are_independent() {
+        // Enabling metrics alone must leave traces and logs off.
+        let cfg: ServerConfig = toml::from_str(
+            r#"
+            [telemetry.metrics]
+            enabled = true
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.telemetry.metrics.enabled);
+        assert!(!cfg.telemetry.traces.enabled);
+        assert!(!cfg.telemetry.logs.enabled);
     }
 
     #[test]

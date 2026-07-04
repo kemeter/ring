@@ -16,6 +16,8 @@ A context describes one client→server connection; it has no business deciding 
 [server.scheduler]                        # optional
 [server.dashboard]                        # optional
 [server.telemetry.traces]                 # opt-in: enabled = true
+[server.telemetry.metrics]                # opt-in: enabled = true
+[server.telemetry.logs]                   # opt-in: enabled = true
 [server.runtime.docker]                   # opt-in: enabled = true
 [server.runtime.cloud_hypervisor]         # opt-in: enabled = true
 
@@ -90,6 +92,33 @@ Opt-in OpenTelemetry span export over OTLP/gRPC. Off by default: with `enabled =
 Standard `OTEL_*` environment variables take precedence over the TOML values, so a deployment can point Ring at its collector without editing the file. If the exporter fails to initialise (unreachable endpoint at startup, etc.) Ring logs the error and continues without traces rather than failing.
 
 Ring emits one span per HTTP request (named `{method} {route}` with the stable HTTP-server semantic-convention attributes) and one `scheduler.cycle` span per reconciliation cycle that has work to do — idle scheduler ticks produce no spans.
+
+Each telemetry signal is independent: you can enable traces, metrics, or logs on their own or in any combination. All three are off by default.
+
+### `[server.telemetry.metrics]`
+
+Opt-in OpenTelemetry metric export (push) over OTLP/gRPC. Off by default. When enabled, Ring periodically pushes the same per-deployment resource series the Prometheus `/metrics` endpoint serves, read from the background stats cache (so enabling it adds no extra runtime round-trip). Only `ring server start` exports metrics.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Push metrics to an OTLP/gRPC collector |
+| `endpoint` | string | no | `"http://127.0.0.1:4317"` | Collector endpoint. Override with `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`) |
+| `service_name` | string | no | `"ring-server"` | `service.name` resource attribute. Override with `OTEL_SERVICE_NAME` |
+| `interval_seconds` | int | no | `15` | Push interval. Floored at 1s |
+
+The exported gauges, labelled `{deployment, namespace, runtime}`, are: `ring.deployment.cpu.percent`, `ring.deployment.memory.used_bytes`, `ring.deployment.memory.limit_bytes`, `ring.deployment.network.rx_bytes`, `ring.deployment.network.tx_bytes`, `ring.deployment.disk.read_bytes`, `ring.deployment.disk.write_bytes`, `ring.deployment.pids`, `ring.deployment.instances`, and `ring.deployment.restarts`. Values are at most one stats-cache refresh (the scheduler interval) stale. A failed exporter is logged and the server continues without OTLP metrics.
+
+### `[server.telemetry.logs]`
+
+Opt-in OpenTelemetry log export (push) over OTLP/gRPC. Off by default. When enabled, Ring's log events are bridged to an OTLP collector **in addition to** the console — console logging is never turned off. Only `ring server start` exports logs.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Export log records to an OTLP/gRPC collector |
+| `endpoint` | string | no | `"http://127.0.0.1:4317"` | Collector endpoint. Override with `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`) |
+| `service_name` | string | no | `"ring-server"` | `service.name` resource attribute. Override with `OTEL_SERVICE_NAME` |
+
+A failed exporter is logged and the server continues console-only rather than failing.
 
 ### `[server.runtime.docker]`
 
