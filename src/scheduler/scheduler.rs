@@ -244,6 +244,22 @@ async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Optio
     Some(resolved)
 }
 
+// Span the runtime apply (image pull + container create/start, or teardown).
+// This is the step whose wall-clock dominates a rollout, so measuring it
+// directly answers "is the delay the pull or the boot?" from the trace instead
+// of guesswork. Only the deployment identity and status are recorded; the large
+// value args are skipped.
+#[tracing::instrument(
+    name = "scheduler.apply_runtime",
+    skip_all,
+    fields(
+        otel.kind = "internal",
+        deployment.id = %deployment.id,
+        deployment.namespace = %deployment.namespace,
+        deployment.name = %deployment.name,
+        deployment.status = %deployment.status,
+    )
+)]
 async fn apply_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
@@ -1354,9 +1370,19 @@ pub(crate) async fn schedule(
             // Honour the retry backoff. (Deletes are handled above and never
             // reach this point, so they're never blocked by backoff.)
             if backoff.is_blocked(&deployment.id) {
-                debug!(
-                    "Deployment {} in retry backoff, skipping cycle",
-                    deployment.id
+                // Emit this at info as a structured event, not a bare debug line:
+                // a deployment being skipped by backoff is the single most useful
+                // signal when diagnosing "why is my rollout slow to converge?",
+                // and it's otherwise invisible in production. As an event inside
+                // the `scheduler.cycle` span it surfaces directly in the trace,
+                // tagged with the deployment and its retry count.
+                info!(
+                    deployment.id = %deployment.id,
+                    deployment.namespace = %deployment.namespace,
+                    deployment.name = %deployment.name,
+                    deployment.status = %deployment.status,
+                    deployment.restart_count = deployment.restart_count,
+                    "deployment skipped this cycle: in retry backoff"
                 );
                 continue;
             }
