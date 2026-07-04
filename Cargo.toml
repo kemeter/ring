@@ -85,17 +85,21 @@ prost = "0.14"
 prost-types = "0.14"
 tokio-stream = "0.1"
 docker_credential = "1.4.0"
-# OpenTelemetry distributed tracing. Spans from `tracing` are bridged to OTel
-# via `tracing-opentelemetry` and exported over OTLP/gRPC (tonic transport,
-# already vendored above for containerd — one tonic across the tree). The whole
-# pipeline is opt-in: with `[server.telemetry.traces]` disabled no exporter is
-# built and there is zero runtime cost. Pinned in lockstep on 0.32 (the core
-# crates release together); `tracing-opentelemetry` 0.33 targets opentelemetry
-# 0.32.
+# OpenTelemetry export. Three signals, all opt-in per sub-block under
+# `[server.telemetry]`, all over OTLP/gRPC (tonic transport, already vendored
+# above for containerd — one tonic across the tree):
+#   - traces: spans from `tracing` bridged via `tracing-opentelemetry`;
+#   - metrics: the per-deployment runtime gauges (read from the stats cache,
+#     no extra runtime round-trip) pushed via an `SdkMeterProvider`;
+#   - logs: `tracing` events bridged to OTLP via `opentelemetry-appender-tracing`.
+# With a signal disabled (the default) no exporter is built and there is zero
+# runtime cost. Pinned in lockstep on 0.32 (the core crates release together);
+# `tracing-opentelemetry` 0.33 targets opentelemetry 0.32.
 opentelemetry = "0.32"
 opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "metrics", "logs"] }
 tracing-opentelemetry = "0.33"
+opentelemetry-appender-tracing = "0.32"
 
 [dev-dependencies]
 axum-test = "17.3.0"
