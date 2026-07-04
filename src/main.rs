@@ -25,20 +25,59 @@ mod dashboard;
 mod database;
 mod exit_code;
 mod serializer;
+mod telemetry;
 mod utils;
 
 #[cfg(test)]
 mod fixtures;
 
+/// Build a fresh `EnvFilter` from `RUST_LOG` (falling back to `info`). Called
+/// per layer so each layer filters independently rather than relying on the
+/// `.with()` order — an `EnvFilter` added as a bare layer would otherwise act
+/// globally over the whole registry.
+fn env_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+}
+
+/// Initialise `tracing`. Always installs the console `fmt` layer; when
+/// `traces` is `Some` and enabled, also attaches the OpenTelemetry span layer
+/// and returns its guard (which must be kept alive for the process). If the
+/// OTLP exporter can't be built, logs the error and continues console-only.
+///
+/// Called exactly once, after the config is loaded, so `server start` can turn
+/// tracing on while every other command stays console-only at zero cost.
+fn init_tracing(traces: Option<&config::server::TracesConfig>) -> Option<telemetry::OtelGuard> {
+    use tracing_subscriber::layer::{Layer, SubscriberExt};
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let fmt_layer = tracing_subscriber::fmt::layer().with_filter(env_filter());
+    let registry = tracing_subscriber::registry().with(fmt_layer);
+
+    match traces {
+        Some(cfg) if cfg.enabled => match telemetry::build_tracer(cfg) {
+            Ok((otel_layer, guard)) => {
+                registry.with(otel_layer.with_filter(env_filter())).init();
+                info!("telemetry: OTLP trace export enabled ({})", cfg.endpoint);
+                Some(guard)
+            }
+            Err(e) => {
+                registry.init();
+                error!(
+                    "telemetry: failed to initialise OTLP exporter, continuing without traces: {e}"
+                );
+                None
+            }
+        },
+        _ => {
+            registry.init();
+            None
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
     let app = Command::new("ring")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
@@ -152,6 +191,17 @@ async fn main() {
 
     let subcommand_name = matches.subcommand();
     let config = config::config::load_config(context, config_file);
+
+    // OTLP trace export is a server concern: enable it only for `server start`,
+    // where the daemon runs long enough for batching to matter. Every other
+    // command initialises console logging only. The guard lives for the whole
+    // of `main` so spans flush on exit.
+    let is_server_start = matches!(
+        subcommand_name,
+        Some(("server", sub)) if sub.subcommand().map(|(n, _)| n).unwrap_or("start") == "start"
+    );
+    let _telemetry_guard = init_tracing(is_server_start.then_some(&config.server.telemetry.traces));
+
     let client = reqwest::Client::builder()
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();

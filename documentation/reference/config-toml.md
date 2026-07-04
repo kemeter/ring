@@ -15,6 +15,7 @@ A context describes one client→server connection; it has no business deciding 
 [server]                                  # daemon config (shared)
 [server.scheduler]                        # optional
 [server.dashboard]                        # optional
+[server.telemetry.traces]                 # opt-in: enabled = true
 [server.runtime.docker]                   # opt-in: enabled = true
 [server.runtime.cloud_hypervisor]         # opt-in: enabled = true
 
@@ -74,6 +75,21 @@ The daemon's own configuration, shared by every context in the file. All subsect
 |---|---|---|---|---|
 | `enabled` | bool | no | `false` | Spawn the embedded dashboard. Also flippable via `--dashboard` / `RING_DASHBOARD` |
 | `listen_address` | string | no | `"127.0.0.1:3031"` | `host:port` the dashboard binds to. Override with `RING_DASHBOARD_LISTEN` |
+
+### `[server.telemetry.traces]`
+
+Opt-in OpenTelemetry span export over OTLP/gRPC. Off by default: with `enabled = false` no exporter is built and the server runs exactly as before. Only `ring server start` exports traces; the CLI commands stay console-only.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Export spans to an OTLP/gRPC collector |
+| `endpoint` | string | no | `"http://127.0.0.1:4317"` | Collector endpoint. Override with `OTEL_EXPORTER_OTLP_ENDPOINT` (or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) |
+| `service_name` | string | no | `"ring-server"` | `service.name` resource attribute. Override with `OTEL_SERVICE_NAME` |
+| `sampler` | string | no | `"parent_based_always_on"` | `always_on`, `always_off`, `parent_based_always_on`, `parent_based_always_off`, or `ratio:<0..1>` (e.g. `ratio:0.1` for 10% of roots) |
+
+Standard `OTEL_*` environment variables take precedence over the TOML values, so a deployment can point Ring at its collector without editing the file. If the exporter fails to initialise (unreachable endpoint at startup, etc.) Ring logs the error and continues without traces rather than failing.
+
+Ring emits one span per HTTP request (named `{method} {route}` with the stable HTTP-server semantic-convention attributes) and one `scheduler.cycle` span per reconciliation cycle that has work to do — idle scheduler ticks produce no spans.
 
 ### `[server.runtime.docker]`
 

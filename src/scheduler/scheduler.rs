@@ -19,6 +19,7 @@ use std::env;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, sleep};
+use tracing::Instrument as _;
 
 async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
     let mut resolved = HashMap::new();
@@ -243,6 +244,22 @@ async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Optio
     Some(resolved)
 }
 
+// Span the runtime apply (image pull + container create/start, or teardown).
+// This is the step whose wall-clock dominates a rollout, so measuring it
+// directly answers "is the delay the pull or the boot?" from the trace instead
+// of guesswork. Only the deployment identity and status are recorded; the large
+// value args are skipped.
+#[tracing::instrument(
+    name = "scheduler.apply_runtime",
+    skip_all,
+    fields(
+        otel.kind = "internal",
+        deployment.id = %deployment.id,
+        deployment.namespace = %deployment.namespace,
+        deployment.name = %deployment.name,
+        deployment.status = %deployment.status,
+    )
+)]
 async fn apply_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
@@ -1275,6 +1292,30 @@ pub(crate) async fn schedule(
         debug!("Processing {} deployments", list_deployments.len());
         let mut deleted: Vec<String> = Vec::new();
 
+        // Trace a cycle only when it has work to do. An idle tick (no
+        // reconcilable deployment) opens no span, so a scheduler polling every
+        // few seconds doesn't drown the collector in empty traces — the
+        // recommended pattern for periodic background loops. Each productive
+        // cycle is its own INTERNAL root span carrying the workload size. The
+        // span is attached to the work future via `Instrument` rather than an
+        // `entered()` guard, which cannot be held across `.await` on a
+        // multi-thread runtime.
+        let cycle_span = if list_deployments.is_empty() {
+            tracing::Span::none()
+        } else {
+            info_span!(
+                "scheduler.cycle",
+                otel.kind = "internal",
+                deployments.count = list_deployments.len(),
+            )
+        };
+
+        // Instrument the reconciliation work with the cycle span. A plain
+        // (non-`move`) async block borrows the surrounding state, and awaiting
+        // it in place attaches the span without holding an `entered()` guard
+        // across `.await` (which would make the loop future non-`Send`). An
+        // idle tick uses `Span::none()`, so no span is recorded at all.
+        async {
         for deployment in list_deployments.into_iter() {
             let runtime = match runtimes.get(&deployment.runtime) {
                 Some(rt) => rt.clone(),
@@ -1329,9 +1370,19 @@ pub(crate) async fn schedule(
             // Honour the retry backoff. (Deletes are handled above and never
             // reach this point, so they're never blocked by backoff.)
             if backoff.is_blocked(&deployment.id) {
-                debug!(
-                    "Deployment {} in retry backoff, skipping cycle",
-                    deployment.id
+                // Emit this at info as a structured event, not a bare debug line:
+                // a deployment being skipped by backoff is the single most useful
+                // signal when diagnosing "why is my rollout slow to converge?",
+                // and it's otherwise invisible in production. As an event inside
+                // the `scheduler.cycle` span it surfaces directly in the trace,
+                // tagged with the deployment and its retry count.
+                info!(
+                    deployment.id = %deployment.id,
+                    deployment.namespace = %deployment.namespace,
+                    deployment.name = %deployment.name,
+                    deployment.status = %deployment.status,
+                    deployment.restart_count = deployment.restart_count,
+                    "deployment skipped this cycle: in retry backoff"
                 );
                 continue;
             }
@@ -1567,6 +1618,9 @@ pub(crate) async fn schedule(
         }
 
         cleanup_deleted(&pool, deleted).await;
+        }
+        .instrument(cycle_span)
+        .await;
 
         if last_cleanup.elapsed() >= cleanup_interval {
             last_cleanup = Instant::now();

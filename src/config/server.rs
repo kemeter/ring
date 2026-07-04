@@ -20,6 +20,8 @@ pub(crate) struct ServerConfig {
     pub(crate) runtime: RuntimesConfig,
     #[serde(default)]
     pub(crate) dashboard: DashboardConfig,
+    #[serde(default)]
+    pub(crate) telemetry: TelemetryConfig,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -270,5 +272,119 @@ impl Default for DashboardConfig {
             enabled: false,
             listen_address: default_dashboard_listen_address(),
         }
+    }
+}
+
+/// `[server.telemetry]` — OpenTelemetry export. One sub-block per signal so the
+/// table can grow without breaking existing configs: `traces` ships now; `logs`
+/// and `metrics` are reserved for later phases and are intentionally absent from
+/// the struct until implemented (an unknown `[server.telemetry.logs]` table is
+/// simply ignored by serde today, so adding it later is backward-compatible).
+#[derive(Deserialize, Debug, Clone, Default)]
+pub(crate) struct TelemetryConfig {
+    #[serde(default)]
+    pub(crate) traces: TracesConfig,
+}
+
+/// `[server.telemetry.traces]` — OTLP/gRPC span export. Opt-in: with `enabled`
+/// false (the default) no exporter is built and Ring runs exactly as before.
+///
+/// Standard `OTEL_*` environment variables override the TOML values so a
+/// deployment can point Ring at its collector without editing the file:
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` overrides `endpoint`, `OTEL_SERVICE_NAME`
+/// overrides `service_name`. Resolution order is env > TOML > built-in default.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct TracesConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// OTLP/gRPC collector endpoint, e.g. `http://collector:4317`.
+    #[serde(default = "default_traces_endpoint")]
+    pub(crate) endpoint: String,
+    /// `service.name` resource attribute reported to the collector.
+    #[serde(default = "default_traces_service_name")]
+    pub(crate) service_name: String,
+    /// Sampler: `parent_based_always_on` (default) follows an upstream decision
+    /// and samples roots; `always_on`, `always_off`, or `ratio:<0..1>` (e.g.
+    /// `ratio:0.1` for 10%, wrapped in parent-based).
+    #[serde(default = "default_traces_sampler")]
+    pub(crate) sampler: String,
+}
+
+fn default_traces_endpoint() -> String {
+    "http://127.0.0.1:4317".to_string()
+}
+
+fn default_traces_service_name() -> String {
+    "ring-server".to_string()
+}
+
+fn default_traces_sampler() -> String {
+    "parent_based_always_on".to_string()
+}
+
+impl Default for TracesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_traces_endpoint(),
+            service_name: default_traces_service_name(),
+            sampler: default_traces_sampler(),
+        }
+    }
+}
+
+impl TracesConfig {
+    /// Effective collector endpoint: `OTEL_EXPORTER_OTLP_ENDPOINT` (or the
+    /// traces-specific `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, which wins per the
+    /// OTLP spec) overrides the configured value.
+    pub(crate) fn resolved_endpoint(&self) -> String {
+        std::env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+            .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+            .unwrap_or_else(|_| self.endpoint.clone())
+    }
+
+    /// Effective `service.name`: `OTEL_SERVICE_NAME` overrides the configured
+    /// value.
+    pub(crate) fn resolved_service_name(&self) -> String {
+        std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| self.service_name.clone())
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    #[test]
+    fn traces_disabled_by_default() {
+        let c = TracesConfig::default();
+        assert!(!c.enabled);
+        assert_eq!(c.endpoint, "http://127.0.0.1:4317");
+        assert_eq!(c.service_name, "ring-server");
+        assert_eq!(c.sampler, "parent_based_always_on");
+    }
+
+    #[test]
+    fn telemetry_absent_from_toml_yields_disabled_traces() {
+        // A `[server]` table with no telemetry block must not enable anything.
+        let cfg: ServerConfig = toml::from_str("").unwrap();
+        assert!(!cfg.telemetry.traces.enabled);
+    }
+
+    #[test]
+    fn traces_block_parses_from_toml() {
+        let cfg: ServerConfig = toml::from_str(
+            r#"
+            [telemetry.traces]
+            enabled = true
+            endpoint = "http://collector:4317"
+            service_name = "ring-prod"
+            sampler = "ratio:0.25"
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.telemetry.traces.enabled);
+        assert_eq!(cfg.telemetry.traces.endpoint, "http://collector:4317");
+        assert_eq!(cfg.telemetry.traces.service_name, "ring-prod");
+        assert_eq!(cfg.telemetry.traces.sampler, "ratio:0.25");
     }
 }

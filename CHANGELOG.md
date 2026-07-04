@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- OpenTelemetry distributed tracing (opt-in) via `[server.telemetry.traces]`: `ring server start` exports spans over OTLP/gRPC — one per HTTP request (stable HTTP-server semantic-convention attributes) and one per productive scheduler cycle. Endpoint, `service.name` and sampler are configurable, standard `OTEL_*` env vars override the TOML, and an unreachable collector degrades gracefully instead of failing the server
+
 ## [0.10.0] - 2026-07-04
 
 ### Added

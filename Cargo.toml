@@ -61,7 +61,7 @@ sysinfo = "0.35.1"
 libc = "0.2"
 thiserror = "2.0.18"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"] }
 tokio-vsock = "0.7"
 rust-embed = "8"
 mime_guess = "2"
@@ -85,6 +85,17 @@ prost = "0.14"
 prost-types = "0.14"
 tokio-stream = "0.1"
 docker_credential = "1.4.0"
+# OpenTelemetry distributed tracing. Spans from `tracing` are bridged to OTel
+# via `tracing-opentelemetry` and exported over OTLP/gRPC (tonic transport,
+# already vendored above for containerd — one tonic across the tree). The whole
+# pipeline is opt-in: with `[server.telemetry.traces]` disabled no exporter is
+# built and there is zero runtime cost. Pinned in lockstep on 0.32 (the core
+# crates release together); `tracing-opentelemetry` 0.33 targets opentelemetry
+# 0.32.
+opentelemetry = "0.32"
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace"] }
+tracing-opentelemetry = "0.33"
 
 [dev-dependencies]
 axum-test = "17.3.0"
