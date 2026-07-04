@@ -41,39 +41,97 @@ fn env_filter() -> tracing_subscriber::EnvFilter {
 }
 
 /// Initialise `tracing`. Always installs the console `fmt` layer; when
-/// `traces` is `Some` and enabled, also attaches the OpenTelemetry span layer
-/// and returns its guard (which must be kept alive for the process). If the
-/// OTLP exporter can't be built, logs the error and continues console-only.
+/// `telemetry` is `Some` (server start) it also attaches whichever of the
+/// subscriber-layer signals — traces and logs — are enabled, returning a guard
+/// that owns their providers (kept alive for the process). Metrics is not a
+/// subscriber layer; it is built later, once the stats cache exists, and
+/// attached to the same guard via [`telemetry::OtelGuard::attach_meter`].
 ///
-/// Called exactly once, after the config is loaded, so `server start` can turn
-/// tracing on while every other command stays console-only at zero cost.
-fn init_tracing(traces: Option<&config::server::TracesConfig>) -> Option<telemetry::OtelGuard> {
+/// Each signal is independent and non-fatal: if an OTLP exporter can't be built
+/// the error is logged and that signal is skipped, but the console subscriber
+/// (and the other signals) still come up. Called exactly once, after the config
+/// is loaded, so every non-server command stays console-only at zero cost.
+fn init_tracing(
+    telemetry: Option<&config::server::TelemetryConfig>,
+) -> Option<telemetry::OtelGuard> {
     use tracing_subscriber::layer::{Layer, SubscriberExt};
     use tracing_subscriber::util::SubscriberInitExt;
 
     let fmt_layer = tracing_subscriber::fmt::layer().with_filter(env_filter());
     let registry = tracing_subscriber::registry().with(fmt_layer);
 
-    match traces {
-        Some(cfg) if cfg.enabled => match telemetry::build_tracer(cfg) {
-            Ok((otel_layer, guard)) => {
-                registry.with(otel_layer.with_filter(env_filter())).init();
-                info!("telemetry: OTLP trace export enabled ({})", cfg.endpoint);
-                Some(guard)
+    let Some(cfg) = telemetry else {
+        registry.init();
+        return None;
+    };
+
+    let mut guard = telemetry::OtelGuard::default();
+
+    // Outcome messages are buffered and emitted *after* `.init()`: logging here
+    // would go nowhere because no subscriber is active until the registry is
+    // initialised. `(is_error, message)` — errors are rare (a bad exporter) but
+    // must still surface once logging is live.
+    let mut messages: Vec<(bool, String)> = Vec::new();
+
+    // Traces: an OTel span layer over the registry.
+    let trace_layer = if cfg.traces.enabled {
+        match telemetry::build_tracer(&cfg.traces) {
+            Ok((layer, tracer_guard)) => {
+                guard.absorb(tracer_guard);
+                messages.push((
+                    false,
+                    format!(
+                        "telemetry: OTLP trace export enabled ({})",
+                        cfg.traces.endpoint
+                    ),
+                ));
+                Some(layer.with_filter(env_filter()))
             }
             Err(e) => {
-                registry.init();
-                error!(
-                    "telemetry: failed to initialise OTLP exporter, continuing without traces: {e}"
-                );
+                messages.push((true, format!(
+                    "telemetry: failed to initialise trace exporter, continuing without traces: {e}"
+                )));
                 None
             }
-        },
-        _ => {
-            registry.init();
-            None
+        }
+    } else {
+        None
+    };
+
+    // Logs: a tracing→OTLP bridge layer, in addition to the console.
+    let log_layer = if cfg.logs.enabled {
+        match telemetry::build_logger(&cfg.logs) {
+            Ok((layer, provider)) => {
+                guard.attach_logger(provider);
+                messages.push((
+                    false,
+                    format!("telemetry: OTLP log export enabled ({})", cfg.logs.endpoint),
+                ));
+                Some(layer.with_filter(env_filter()))
+            }
+            Err(e) => {
+                messages.push((true, format!(
+                    "telemetry: failed to initialise log exporter, continuing without OTLP logs: {e}"
+                )));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    registry.with(trace_layer).with(log_layer).init();
+
+    // Now that the subscriber is live, replay the buffered outcomes.
+    for (is_error, msg) in messages {
+        if is_error {
+            error!("{msg}");
+        } else {
+            info!("{msg}");
         }
     }
+
+    Some(guard)
 }
 
 #[tokio::main]
@@ -192,15 +250,17 @@ async fn main() {
     let subcommand_name = matches.subcommand();
     let config = config::config::load_config(context, config_file);
 
-    // OTLP trace export is a server concern: enable it only for `server start`,
-    // where the daemon runs long enough for batching to matter. Every other
-    // command initialises console logging only. The guard lives for the whole
-    // of `main` so spans flush on exit.
+    // OTLP export is a server concern: enable it only for `server start`, where
+    // the daemon runs long enough for batching to matter. Every other command
+    // initialises console logging only. The guard lives for the whole of `main`
+    // so every signal flushes on exit. Traces and logs are installed now (they
+    // are subscriber layers); metrics is attached later, once the stats cache
+    // exists (see `server::execute`).
     let is_server_start = matches!(
         subcommand_name,
         Some(("server", sub)) if sub.subcommand().map(|(n, _)| n).unwrap_or("start") == "start"
     );
-    let _telemetry_guard = init_tracing(is_server_start.then_some(&config.server.telemetry.traces));
+    let mut telemetry_guard = init_tracing(is_server_start.then_some(&config.server.telemetry));
 
     let client = reqwest::Client::builder()
         .default_headers({
@@ -221,7 +281,7 @@ async fn main() {
         Some(("server", sub_matches)) => {
             let server_command = sub_matches.subcommand().unwrap_or(("start", sub_matches));
             if let ("start", sub_matches) = server_command {
-                commands::server::execute(sub_matches, config).await
+                commands::server::execute(sub_matches, config, telemetry_guard.as_mut()).await
             }
         }
         Some(("apply", sub_matches)) => {

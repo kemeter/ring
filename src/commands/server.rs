@@ -29,7 +29,11 @@ pub(crate) fn command_config() -> Command {
     )
 }
 
-pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
+pub(crate) async fn execute(
+    args: &ArgMatches,
+    mut configuration: Config,
+    telemetry_guard: Option<&mut crate::telemetry::OtelGuard>,
+) {
     // Dashboard activation precedence, strongest first:
     //   1. `--dashboard` CLI flag (explicit one-off)
     //   2. `RING_DASHBOARD=true|1|yes` env var (systemd / docker / CI)
@@ -308,6 +312,30 @@ pub(crate) async fn execute(args: &ArgMatches, mut configuration: Config) {
     // background and read by `/metrics` so a scrape never blocks on the
     // runtimes. See `scheduler::stats_cache`.
     let stats_cache = crate::scheduler::stats_cache::new_cache();
+
+    // OTLP metrics push (opt-in). The meter provider is built here — not in
+    // `init_tracing` — because its observable gauges read this stats cache, and
+    // it reports the same per-deployment series the Prometheus `/metrics`
+    // endpoint serves, so enabling it adds no runtime round-trip. Non-fatal: a
+    // failed exporter is logged and the server continues without OTLP metrics.
+    if let Some(guard) = telemetry_guard {
+        let metrics_cfg = &configuration.server.telemetry.metrics;
+        if metrics_cfg.enabled {
+            match crate::telemetry::build_meter(metrics_cfg, stats_cache.clone()) {
+                Ok(provider) => {
+                    guard.attach_meter(provider);
+                    info!(
+                        "telemetry: OTLP metrics export enabled ({}, every {}s)",
+                        metrics_cfg.endpoint,
+                        metrics_cfg.resolved_interval_seconds()
+                    );
+                }
+                Err(e) => error!(
+                    "telemetry: failed to initialise metrics exporter, continuing without OTLP metrics: {e}"
+                ),
+            }
+        }
+    }
     {
         let cache = stats_cache.clone();
         let cache_pool = pool.clone();
