@@ -2,7 +2,7 @@ use axum::{
     Router,
     error_handling::HandleErrorLayer,
     http::{HeaderValue, Method, StatusCode, header},
-    middleware::from_fn_with_state,
+    middleware::{from_fn, from_fn_with_state},
     routing::{delete, get, post, put},
 };
 use axum_macros::FromRef;
@@ -176,7 +176,10 @@ pub(crate) fn router(state: AppState) -> Router {
         .merge(public_routes)
         .merge(streaming_routes)
         .merge(api_routes)
-        .with_state(state);
+        .with_state(state)
+        // One tracing span per request (OTel HTTP-server semconv). Outermost so
+        // it wraps every route; a no-op when trace export is disabled.
+        .layer(from_fn(crate::telemetry::http_trace_middleware));
 
     if !cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cors_origins

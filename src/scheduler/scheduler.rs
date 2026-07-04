@@ -19,6 +19,7 @@ use std::env;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, sleep};
+use tracing::Instrument as _;
 
 async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
     let mut resolved = HashMap::new();
@@ -1275,6 +1276,30 @@ pub(crate) async fn schedule(
         debug!("Processing {} deployments", list_deployments.len());
         let mut deleted: Vec<String> = Vec::new();
 
+        // Trace a cycle only when it has work to do. An idle tick (no
+        // reconcilable deployment) opens no span, so a scheduler polling every
+        // few seconds doesn't drown the collector in empty traces — the
+        // recommended pattern for periodic background loops. Each productive
+        // cycle is its own INTERNAL root span carrying the workload size. The
+        // span is attached to the work future via `Instrument` rather than an
+        // `entered()` guard, which cannot be held across `.await` on a
+        // multi-thread runtime.
+        let cycle_span = if list_deployments.is_empty() {
+            tracing::Span::none()
+        } else {
+            info_span!(
+                "scheduler.cycle",
+                otel.kind = "internal",
+                deployments.count = list_deployments.len(),
+            )
+        };
+
+        // Instrument the reconciliation work with the cycle span. A plain
+        // (non-`move`) async block borrows the surrounding state, and awaiting
+        // it in place attaches the span without holding an `entered()` guard
+        // across `.await` (which would make the loop future non-`Send`). An
+        // idle tick uses `Span::none()`, so no span is recorded at all.
+        async {
         for deployment in list_deployments.into_iter() {
             let runtime = match runtimes.get(&deployment.runtime) {
                 Some(rt) => rt.clone(),
@@ -1567,6 +1592,9 @@ pub(crate) async fn schedule(
         }
 
         cleanup_deleted(&pool, deleted).await;
+        }
+        .instrument(cycle_span)
+        .await;
 
         if last_cleanup.elapsed() >= cleanup_interval {
             last_cleanup = Instant::now();
