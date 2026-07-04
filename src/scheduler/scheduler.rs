@@ -509,6 +509,23 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
 /// across readiness checks so the most-cautious wins.
 const DEFAULT_MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
 
+/// Whether a deployment currently has a live container for the purpose of the
+/// anti-flap window that refills `restart_count`.
+///
+/// A worker that reached `Running` obviously qualifies. So does one still in
+/// `Creating` that already has an instance: a host-network worker can never pass
+/// Ring's readiness checks (its container has no resolvable address), so it stays
+/// `Creating` for life even though its container runs fine. Requiring `Running`
+/// here left such a worker's `restart_count` monotonic, so its retry backoff
+/// climbed to the 60s cap and never came back down — every redeploy got slower.
+fn has_live_container(status: &DeploymentStatus, instances_empty: bool) -> bool {
+    match status {
+        DeploymentStatus::Running => true,
+        DeploymentStatus::Creating => !instances_empty,
+        _ => false,
+    }
+}
+
 /// Resolve the anti-flap window for a deployment: take the max of the
 /// per-HC `min_healthy_time` (parsed via `HealthCheck::parse_duration`)
 /// across readiness checks. Falls back to `DEFAULT_MIN_HEALTHY_TIME` when
@@ -1514,7 +1531,7 @@ pub(crate) async fn schedule(
             if result.kind == "worker"
                 && healthy_window.observe(
                     &result.id,
-                    result.status == DeploymentStatus::Running,
+                    has_live_container(&result.status, result.instances.is_empty()),
                     result.restart_count,
                     min_healthy_time_for(&result),
                 )
@@ -2128,5 +2145,38 @@ mod tests {
         let d = simple_running("trans-3", vec![]);
         log_running_transition(&pool, &DeploymentStatus::Running, &d).await;
         assert_eq!(count_state_transition_events(&pool, "trans-3").await, 0);
+    }
+
+    #[test]
+    fn live_container_running_is_healthy() {
+        // A worker that reached Running always counts as healthy-running.
+        assert!(has_live_container(&DeploymentStatus::Running, false));
+        assert!(has_live_container(&DeploymentStatus::Running, true));
+    }
+
+    #[test]
+    fn live_container_creating_with_instance_is_healthy() {
+        // The host-network case: stuck in Creating (readiness can't pass) but the
+        // container is actually up. This must count as healthy so restart_count
+        // can be forgiven and the retry backoff stops climbing.
+        assert!(has_live_container(&DeploymentStatus::Creating, false));
+    }
+
+    #[test]
+    fn live_container_creating_without_instance_is_not_healthy() {
+        // Creating with no instance yet: genuinely not running, no reset.
+        assert!(!has_live_container(&DeploymentStatus::Creating, true));
+    }
+
+    #[test]
+    fn live_container_other_states_are_not_healthy() {
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::Failed,
+            DeploymentStatus::Deleted,
+        ] {
+            assert!(!has_live_container(&status, false));
+            assert!(!has_live_container(&status, true));
+        }
     }
 }

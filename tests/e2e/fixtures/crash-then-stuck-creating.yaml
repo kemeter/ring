@@ -1,0 +1,43 @@
+deployments:
+  crash-then-stuck-creating:
+    name: crash-then-stuck-creating
+    namespace: ring-e2e
+    runtime: docker
+    # Host-network windowed restart_count reset (the regression fixed by
+    # has_live_container). Docker re-runs the SAME command on every (re)spawn, so
+    # the "crash a few times then stay up" behaviour is driven by state on a host
+    # bind mount: each start increments a counter in /state/count. While count
+    # <= 3 the container exits 1 (a crash Ring counts toward restart_count); on
+    # the 4th start it stops crashing and sleeps forever.
+    #
+    # Unlike crash-then-heal, this worker uses host networking and a readiness
+    # probe that never turns green (the file it checks for is never created). A
+    # host-network container has no resolvable address, so it can never pass
+    # readiness and stays in `Creating` for life even though its container is
+    # alive. A long start_period keeps the rollout deadline from failing it, so
+    # it sits in `Creating` with a live instance — the exact state where the old
+    # `status == Running` gate left restart_count monotonic. With the fix the
+    # scheduler recognises the live container and forgives the accrued count.
+    network:
+      mode: host
+    image: alpine:3.19
+    command:
+      - "sh"
+      - "-c"
+      - 'n=$(cat /state/count 2>/dev/null || echo 0); n=$((n+1)); echo $n > /state/count; if [ "$n" -le 3 ]; then echo "crash #$n" >&2; exit 1; fi; echo "healthy after $n starts" >&2; exec sleep 3600'
+    replicas: 1
+    health_checks:
+      - type: command
+        command: test -f /var/run/kemeter/never-ready
+        interval: 2s
+        timeout: 1s
+        threshold: 3
+        on_failure: alert
+        readiness: true
+        start_period: 300s
+    volumes:
+      - type: bind
+        source: /tmp/ring-e2e-t43
+        destination: /state
+        driver: local
+        permission: rw
