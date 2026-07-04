@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - OpenTelemetry distributed tracing (opt-in) via `[server.telemetry.traces]`: `ring server start` exports spans over OTLP/gRPC — one per HTTP request (stable HTTP-server semantic-convention attributes) and one per productive scheduler cycle. Endpoint, `service.name` and sampler are configurable, standard `OTEL_*` env vars override the TOML, and an unreachable collector degrades gracefully instead of failing the server
+- OpenTelemetry metric export (opt-in, push) via `[server.telemetry.metrics]`: periodically pushes the per-deployment resource gauges (CPU, memory, network, disk, PIDs, instance and restart counts, labelled `{deployment, namespace, runtime}`) over OTLP/gRPC, read from the same stats cache the Prometheus `/metrics` endpoint uses so no extra runtime round-trip is added. Endpoint, `service.name` and push interval are configurable
+- OpenTelemetry log export (opt-in, push) via `[server.telemetry.logs]`: bridges the server's log events to an OTLP/gRPC collector in addition to the console. Each telemetry signal (traces, metrics, logs) is independently toggled; all three degrade gracefully when the collector is unreachable
 
 ## [0.10.0] - 2026-07-04
 
