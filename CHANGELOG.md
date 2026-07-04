@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-04
+
 ### Added
 - Readiness health checks accept a `start_period` grace window: readiness failures during a slow build/boot no longer trip the rollout deadline (effective budget becomes `start_period + RING_ROLLOUT_DEADLINE`), and the value is forwarded to Docker's native `HEALTHCHECK start_period` (#183)
 - containerd runtime over native gRPC: index/entrypoint resolution for multi-arch images, CNI networking, logs, command health checks (#144)
@@ -39,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `deployment list` resolves instances in one bulk runtime call instead of one per deployment (#180)
 
 ### Fixed
+- A host-network worker stuck in `Creating` with a live container has its `restart_count` reset instead of being counted against the crash-loop bound (#185)
+- A worker that exits 0 is marked `Completed` instead of being recreated indefinitely (#181)
+- `deployment list` reports all container states so finished jobs remain visible (#182)
 - Docker workers honour `MAX_RESTART_COUNT` and stop restarting once the bound is reached instead of looping indefinitely (#177)
 - Health-check phase is keyed on the pre-cycle status so liveness checks run on the right instance state (#175)
 - Firecracker allocates guest networking unconditionally (not only when a port is published) and connects to the base vsock socket for host-to-guest calls (#171)
