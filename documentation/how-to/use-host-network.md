@@ -1,6 +1,8 @@
 # Use host network mode
 
-By default Ring attaches every Docker container to a per-namespace bridge network. Some workloads need to bypass that and run directly on the host's network stack. This page covers when, how, and the constraints Ring enforces.
+By default Ring attaches every Docker or Podman container to a per-namespace bridge network. Some workloads need to bypass that and run directly on the host's network stack. This page covers when, how, and the constraints Ring enforces.
+
+Host networking is available on the **Docker and Podman** runtimes (Podman shares the Docker-compatible lifecycle). The Cloud Hypervisor and Firecracker runtimes have their own network model and reject `network.mode: host`.
 
 For the underlying model, see [Namespaces and networking](/documentation/concepts/namespaces-and-networking). For the field schema, see [Manifest reference → `network`](/documentation/reference/manifest#network).
 
@@ -51,7 +53,7 @@ The API rejects the deployment up front if any of these hold:
 |---|---|
 | `ports:` is non-empty | Host networking bypasses Docker's port bindings, so `ports:` would be silently ignored. |
 | `replicas: 2` or more | All replicas would compete for the same host ports. |
-| `runtime: cloud-hypervisor` | Host mode is Docker-only. The CH runtime has its own network model (per-VM /30 subnet under `10.42.0.0/16`). |
+| `runtime: cloud-hypervisor` (or `firecracker`) | Host mode is Docker/Podman-only. The microVM runtimes have their own network model (per-VM /30 subnet under `10.42.0.0/16`). |
 
 The rejection happens at `ring apply` time with a 400 response, so there is no half-deployed state to clean up.
 
@@ -186,7 +188,7 @@ See [how-to: expose HTTP traffic](/documentation/how-to/expose-http-traffic) for
 
 ## Limits
 
-- **Docker-only.** The Cloud Hypervisor runtime rejects `network.mode=host`, since its network model is different (per-VM /30, no shared bridge).
+- **Docker and Podman only.** The Cloud Hypervisor and Firecracker runtimes reject `network.mode=host`, since their network model is different (per-VM /30, no shared bridge).
 - **One replica.** Port conflicts make `replicas > 1` impossible; Ring rejects it at the API.
 - **No isolation.** Host-mode containers can bind to any free port on the host and see all host network traffic. Treat them like a host-level daemon for security purposes.
 

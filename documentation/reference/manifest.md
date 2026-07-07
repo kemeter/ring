@@ -290,7 +290,7 @@ When `mode: host`, the API rejects the deployment if:
 
 - `ports:` is non-empty, because host networking bypasses Docker's port bindings, so the mapping would be silently ignored. Remove `ports:` and let the container bind directly.
 - `replicas: > 1`, because all replicas would compete for the same host ports.
-- `runtime: cloud-hypervisor`, because host mode is Docker-only. The CH runtime has its own network model.
+- `runtime: cloud-hypervisor` or `runtime: firecracker`, because host mode is available only on the container runtimes (Docker, Podman). The microVM runtimes have their own network model.
 
 See [how-to: use host network mode](/documentation/how-to/use-host-network) for the full walk-through.
 

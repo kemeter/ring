@@ -1,0 +1,17 @@
+deployments:
+  hostnet:
+    name: hostnet
+    namespace: ring-e2e
+    runtime: podman
+    image: docker.io/library/busybox:latest
+    replicas: 1
+    config:
+      # Use the locally cached image; this test proves host networking, not
+      # registry auth, and avoids a flaky Docker Hub anonymous-pull 401.
+      image_pull_policy: IfNotPresent
+    network:
+      mode: host
+    command:
+      - "sh"
+      - "-c"
+      - "echo hello-hostnet > /tmp/index.html && httpd -f -p 18099 -h /tmp"

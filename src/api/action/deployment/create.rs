@@ -49,11 +49,14 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
         return;
     }
 
-    if input.runtime != "docker" {
+    // Podman shares the Docker-compatible lifecycle and honours
+    // `NetworkMode: host` identically, so both runtimes support host networking.
+    // containerd, Cloud Hypervisor and Firecracker have their own network models.
+    if !matches!(input.runtime.as_str(), "docker" | "podman") {
         errors.push(Violation::new(
             "network.mode",
             format!(
-                "host networking is only supported on the docker runtime, got '{}'",
+                "host networking is only supported on the docker and podman runtimes, got '{}'",
                 input.runtime
             ),
             "deployment.network.host_runtime_unsupported",
@@ -2679,6 +2682,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_host_network_mode_accepted_on_podman() {
+        // Podman shares the Docker-compatible lifecycle and honours
+        // `NetworkMode: host`, so host mode must be accepted on podman too.
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "podman",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["network"]["mode"], "host");
+    }
+
+    #[tokio::test]
     async fn create_host_mode_rejects_ports() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
@@ -2762,10 +2790,18 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
         let body: serde_json::Value = response.json();
+        // Match on the stable `code` slug instead of human text — the wording
+        // of `message` may evolve without breaking clients.
+        let codes: Vec<String> = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
         assert!(
-            body["detail"].as_str().unwrap().contains("docker runtime"),
-            "unexpected message: {}",
-            body["detail"]
+            codes.contains(&"deployment.network.host_runtime_unsupported".to_string()),
+            "expected deployment.network.host_runtime_unsupported, got {:?}",
+            codes
         );
     }
 
