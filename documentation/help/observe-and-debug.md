@@ -214,6 +214,12 @@ RUST_LOG=ring=debug ring server start                    # all Ring components
 RUST_LOG=ring::scheduler=debug ring server start         # one component
 ```
 
+For structured ingestion, set `RING_LOG_FORMAT=json` to emit one JSON object per log line instead of the default human-readable text:
+
+```bash
+RING_LOG_FORMAT=json ring server start | jq 'select(.level == "ERROR")'
+```
+
 Under systemd:
 
 ```bash

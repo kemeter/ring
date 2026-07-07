@@ -13,6 +13,7 @@ Variables Ring reads from the process environment. Set them in your shell, a sys
 | `RING_SCHEDULER_INTERVAL` | No | `10` | Scheduler tick interval in seconds. Overrides `[scheduler] interval` in `config.toml` |
 | `RING_VIRTIOFSD` | No | autodiscover | Path to the `virtiofsd` binary on the host. Ring tries `/usr/libexec/virtiofsd` then `/usr/lib/qemu/virtiofsd` if unset |
 | `RUST_LOG` | No | (off) | Log level for Ring's own output. Examples: `RUST_LOG=info`, `RUST_LOG=ring=debug`, `RUST_LOG=ring::scheduler=debug` |
+| `RING_LOG_FORMAT` | No | `text` | Console log format. `json` emits one structured JSON object per line (for log shippers and structured ingestion); any other value keeps the default human-readable text. Independent of OTLP log export (`[server.telemetry.logs]`), which can run alongside either format |
 
 ## Generating the secret key
 

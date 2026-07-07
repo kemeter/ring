@@ -40,6 +40,29 @@ fn env_filter() -> tracing_subscriber::EnvFilter {
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
 }
 
+/// Build the console `fmt` layer, honouring `RING_LOG_FORMAT`. `json` emits one
+/// JSON object per event (for log shippers / structured ingestion); anything
+/// else (unset, `text`, `pretty`) keeps the default human-readable format. The
+/// layer is boxed so both formats share one return type. Each format carries its
+/// own `EnvFilter` so it filters independently of layer ordering (see
+/// [`env_filter`]).
+fn console_fmt_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    use tracing_subscriber::layer::Layer;
+
+    match env::var("RING_LOG_FORMAT").as_deref() {
+        Ok("json") => tracing_subscriber::fmt::layer()
+            .json()
+            .with_filter(env_filter())
+            .boxed(),
+        _ => tracing_subscriber::fmt::layer()
+            .with_filter(env_filter())
+            .boxed(),
+    }
+}
+
 /// Initialise `tracing`. Always installs the console `fmt` layer; when
 /// `telemetry` is `Some` (server start) it also attaches whichever of the
 /// subscriber-layer signals — traces and logs — are enabled, returning a guard
@@ -57,8 +80,7 @@ fn init_tracing(
     use tracing_subscriber::layer::{Layer, SubscriberExt};
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let fmt_layer = tracing_subscriber::fmt::layer().with_filter(env_filter());
-    let registry = tracing_subscriber::registry().with(fmt_layer);
+    let registry = tracing_subscriber::registry().with(console_fmt_layer());
 
     let Some(cfg) = telemetry else {
         registry.init();
