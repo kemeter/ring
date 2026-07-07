@@ -61,7 +61,7 @@ sysinfo = "0.35.1"
 libc = "0.2"
 thiserror = "2.0.18"
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "registry"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "registry"] }
 tokio-vsock = "0.7"
 rust-embed = "8"
 mime_guess = "2"

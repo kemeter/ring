@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenTelemetry metric export (opt-in, push) via `[server.telemetry.metrics]`: periodically pushes the per-deployment resource gauges (CPU, memory, network, disk, PIDs, instance and restart counts, labelled `{deployment, namespace, runtime}`) over OTLP/gRPC, read from the same stats cache the Prometheus `/metrics` endpoint uses so no extra runtime round-trip is added. Endpoint, `service.name` and push interval are configurable
 - OpenTelemetry log export (opt-in, push) via `[server.telemetry.logs]`: bridges the server's log events to an OTLP/gRPC collector in addition to the console. Each telemetry signal (traces, metrics, logs) is independently toggled; all three degrade gracefully when the collector is unreachable
 - `network.mode: host` is now accepted on the Podman runtime, not just Docker: Podman shares the Docker-compatible lifecycle and honours `NetworkMode: host`, so the container binds the host's network stack directly (Cloud Hypervisor and Firecracker still reject host mode)
+- `RING_LOG_FORMAT=json` switches the console logger to structured JSON (one object per line) for log shippers and structured ingestion; the default stays human-readable text. Independent of OTLP log export
 
 ## [0.10.0] - 2026-07-04
 
