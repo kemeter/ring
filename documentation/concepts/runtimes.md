@@ -67,7 +67,7 @@ The socket must be running; start it once with `systemctl --user start podman.so
 
 **Caveats:**
 - **Crash detection is tick-bound.** Ring does not consume Podman's event stream, so a crashed container is noticed on the next scheduler reconcile pass (which still bumps `restart_count` and converges a crash loop to `CrashLoopBackOff`, bounded), not sub-second like Docker. The orphan-volume reaper, which *does* rely on live events, stays Docker-only.
-- **Host networking** (`network.mode: host`) is not yet allowed on Podman, only on Docker.
+- **Host networking** (`network.mode: host`) works the same as Docker: Podman shares the Docker-compatible lifecycle, so the container binds the host's network stack directly.
 - Rootless remaps UID/GID; bind-mount and named-volume ownership behave differently than Docker-root, so mind file permissions on mounts.
 
 ## containerd runtime (beta)
