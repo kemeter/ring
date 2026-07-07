@@ -246,9 +246,46 @@ pub(crate) async fn start(
             return;
         }
     };
-    if let Err(e) = axum::serve(listener, app).await {
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
         error!("API server stopped unexpectedly: {}", e);
     }
+    info!("API server shut down gracefully");
+}
+
+/// Resolves when the process receives a shutdown signal: Ctrl-C (SIGINT) on any
+/// platform, or SIGTERM on Unix (what `systemctl stop` and container runtimes
+/// send). Handing this to `axum::serve(...).with_graceful_shutdown(...)` stops
+/// accepting new connections and lets in-flight requests finish before the
+/// server returns, instead of dropping them on an abrupt exit.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!("failed to install Ctrl-C handler: {}", e);
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => error!("failed to install SIGTERM handler: {}", e),
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+
+    info!("shutdown signal received, draining in-flight requests");
 }
 
 #[cfg(test)]

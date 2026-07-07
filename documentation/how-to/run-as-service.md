@@ -63,6 +63,12 @@ sudo journalctl -u ring -f
 
 The systemd `Environment=` directive bakes the value into the unit file, which usually ends up in version control. A separate `EnvironmentFile=` keeps `RING_SECRET_KEY` out of git and lets you `chmod 0600` it.
 
+### Graceful shutdown
+
+On `SIGTERM` (what `systemctl stop` sends) or `Ctrl-C` (`SIGINT`), Ring stops accepting new API connections, lets in-flight HTTP requests finish, tears down the scheduler, and exits on its own. Workloads it manages are **not** stopped: they keep running under their container runtime, and the scheduler reconciles them again when Ring restarts.
+
+systemd's default `TimeoutStopSec` (90s) is ample; the drain normally completes in well under a second. No `ExecStop=` or `KillSignal=` override is needed. If you run a custom unit, keep the default `KillSignal=SIGTERM`.
+
 ## Docker Compose
 
 If Ring itself runs as a container:
