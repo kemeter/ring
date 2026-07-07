@@ -394,17 +394,24 @@ pub(crate) async fn execute(
         intentional_shutdowns,
     ));
 
-    if let Err(e) = api_server_handler.await {
-        eprintln!("API server task failed: {}", e);
+    // The API server owns the shutdown signal (SIGTERM / Ctrl-C): it drains
+    // in-flight HTTP requests, then its task returns. That is our cue to bring
+    // the whole process down. The scheduler, event worker and Docker listener
+    // are daemon loops with no critical buffered state — each reconcile step
+    // persists to the DB transactionally, so aborting them between ticks is
+    // safe. We abort them rather than awaiting, since their loops never return
+    // on their own and would otherwise hang the process after the API is gone.
+    match api_server_handler.await {
+        Ok(()) => info!("API server task ended, shutting down scheduler"),
+        Err(e) => eprintln!("API server task failed: {}", e),
     }
-    if let Err(e) = scheduler_handler.await {
-        eprintln!("Scheduler task failed: {}", e);
+
+    scheduler_handler.abort();
+    if let Some(handler) = event_listener_handler {
+        handler.abort();
     }
-    if let Some(handler) = event_listener_handler
-        && let Err(e) = handler.await
-    {
-        eprintln!("Docker event listener task failed: {}", e);
-    }
+
+    info!("ring server stopped");
 }
 
 /// Current Unix time in seconds, or `0` if the clock is before the epoch

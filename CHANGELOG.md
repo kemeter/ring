@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `network.mode: host` is now accepted on the Podman runtime, not just Docker: Podman shares the Docker-compatible lifecycle and honours `NetworkMode: host`, so the container binds the host's network stack directly (Cloud Hypervisor and Firecracker still reject host mode)
 - `RING_LOG_FORMAT=json` switches the console logger to structured JSON (one object per line) for log shippers and structured ingestion; the default stays human-readable text. Independent of OTLP log export
 
+### Changed
+- `ring server start` shuts down gracefully on `SIGTERM` / `Ctrl-C`: it stops accepting new API connections, drains in-flight HTTP requests, tears down the scheduler, and exits on its own instead of being killed abruptly. Managed workloads keep running and are reconciled again on restart
+
 ## [0.10.0] - 2026-07-04
 
 ### Added
