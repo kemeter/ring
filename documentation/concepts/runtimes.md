@@ -28,7 +28,7 @@ Enable just the runtimes a host actually runs: Docker-only, Podman-only, contain
 | Crash detection | ✓ event-driven (sub-second) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) |
 | `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | In-guest `ring-agent` over vsock (host Unix socket) |
 | `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Clean shutdown (guest reboot) = success (no exit code from host) |
-| Labels (`labels:`) | Forwarded to container | Forwarded to container | Forwarded to container | Silently ignored | Silently ignored |
+| Labels (`labels:`) | Stored by Ring, forwarded to the container | Stored by Ring, forwarded to the container | Stored by Ring, forwarded to the container | Stored by Ring, not applied to the VM | Stored by Ring, not applied to the VM |
 | Host networking | Supported | Not supported by Ring yet | Not supported by Ring yet | N/A | N/A |
 | Private registry creds | Supported | Supported | Supported (basic auth) | N/A (no image pull) | N/A (no image pull) |
 
@@ -154,7 +154,8 @@ checks via the in-guest `ring-agent` over vsock, `kind: job` run-to-completion, 
 `volumes:` mounted as virtio-block ext4 images.
 
 **Current limitations (experimental):**
-- Crash detection is tick-bound (no event stream), and `labels` are silently ignored
+- Crash detection is tick-bound (no event stream), and `labels`, while stored and
+  filterable as Ring metadata, are not applied to the VM itself
 
 A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them (re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down) so a deployment keeps its guest state and its published ports across a restart.
 

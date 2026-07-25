@@ -840,8 +840,26 @@ async fn write_config_files(
 /// Translate a runtime error into the deployment's status + event, mirroring the
 /// Docker runtime's `handle_create_error`.
 fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment_restart: bool) {
+    // Decide retry-vs-give-up before mapping the message, like Docker: a terminal
+    // error (image absent, config missing) can't fix itself on a retry, so jump
+    // straight to the restart bound instead of burning MAX_RESTART_COUNT
+    // reconcile cycles to reach the same outcome.
+    //
+    // `InstanceCreationFailed` is the one exception, and it is a containerd
+    // quirk rather than a classifier one. Docker only raises that variant when
+    // the daemon rejects a container spec — permanent by construction. Here it
+    // wraps every gRPC call in the create path (`PrepareSnapshot`,
+    // `CreateContainer`, `CreateTask`, `StartTask`), so it also covers a shim
+    // that is momentarily unavailable or a snapshotter under contention. Those
+    // do recover, so this runtime keeps them inside the retry budget.
+    let terminal = crate::hypervisor::classifier::classify_create_error(&err).is_terminal()
+        && !matches!(err, RuntimeError::InstanceCreationFailed(_));
     if increment_restart {
-        deployment.restart_count += 1;
+        if terminal {
+            deployment.restart_count = MAX_RESTART_COUNT;
+        } else {
+            deployment.restart_count += 1;
+        }
     }
     let (status, reason, message) = match &err {
         RuntimeError::ImageNotFound(detail) => (
@@ -864,6 +882,14 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
             "insufficient_resources",
             detail.clone(),
         ),
+        // Terminal per the classifier: the referenced config (or key) is absent
+        // and only the operator can create it. Give it the dedicated status
+        // rather than the generic `Error` catch-all.
+        RuntimeError::ConfigNotFound(detail) | RuntimeError::ConfigKeyNotFound(detail) => (
+            DeploymentStatus::ConfigError,
+            "config_error",
+            detail.clone(),
+        ),
         other => (
             DeploymentStatus::Error,
             "runtime_error",
@@ -873,4 +899,128 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     error!("[{}] {}: {}", deployment.id, reason, err);
     deployment.status = status;
     deployment.emit_event("error", message, "containerd", Some(reason));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn worker() -> Deployment {
+        Deployment {
+            id: "d1".to_string(),
+            created_at: chrono::Utc::now().to_string(),
+            updated_at: None,
+            status: DeploymentStatus::Creating,
+            restart_count: 0,
+            namespace: "test".to_string(),
+            name: "app".to_string(),
+            image: "nginx:alpine".to_string(),
+            config: None,
+            runtime: "containerd".to_string(),
+            kind: "worker".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: HashMap::new(),
+            environment: HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+            network: None,
+        }
+    }
+
+    /// A permanent failure must not burn the whole restart budget: one create
+    /// attempt is enough to jump to the bound, so the deployment converges on
+    /// the next tick instead of five ticks from now.
+    #[test]
+    fn terminal_create_error_jumps_to_the_restart_bound() {
+        let mut deployment = worker();
+        handle_create_error(
+            &mut deployment,
+            RuntimeError::ImageNotFound("nope".into()),
+            true,
+        );
+
+        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
+        assert_eq!(deployment.status, DeploymentStatus::ImagePullBackOff);
+    }
+
+    /// A missing config is terminal too, and gets its own status rather than the
+    /// generic `Error` catch-all.
+    #[test]
+    fn missing_config_is_terminal_with_config_error_status() {
+        let mut deployment = worker();
+        handle_create_error(
+            &mut deployment,
+            RuntimeError::ConfigNotFound("app-config".into()),
+            true,
+        );
+
+        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
+        assert_eq!(deployment.status, DeploymentStatus::ConfigError);
+    }
+
+    /// Unlike Docker, containerd wraps every gRPC call in the create path in
+    /// `InstanceCreationFailed`, so it also covers a shim that is momentarily
+    /// unavailable. That must stay retryable — failing fast here would abandon a
+    /// deployment that a retry recovers.
+    ///
+    /// Asserting `restart_count == 1` alone would not prove much, so drive the
+    /// full budget: the deployment must take `MAX_RESTART_COUNT` failed ticks to
+    /// reach the bound, one increment at a time, and never jump early.
+    #[test]
+    fn instance_creation_failed_stays_retryable_on_containerd() {
+        let mut deployment = worker();
+
+        for tick in 1..=MAX_RESTART_COUNT {
+            handle_create_error(
+                &mut deployment,
+                RuntimeError::InstanceCreationFailed("CreateTask: transport error".into()),
+                true,
+            );
+            assert_eq!(
+                deployment.restart_count, tick,
+                "a transient shim error must consume exactly one restart per tick"
+            );
+            assert_eq!(deployment.status, DeploymentStatus::CreateContainerError);
+        }
+
+        // Only now is the budget exhausted; the guard in `handle_worker` turns
+        // this into CrashLoopBackOff on the next tick.
+        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
+    }
+
+    /// A transient failure keeps its one-by-one budget.
+    #[test]
+    fn transient_create_error_increments_by_one() {
+        let mut deployment = worker();
+        handle_create_error(
+            &mut deployment,
+            RuntimeError::ImagePullFailed("registry timeout".into()),
+            true,
+        );
+
+        assert_eq!(deployment.restart_count, 1);
+    }
+
+    /// With `increment_restart == false` the counter is left alone entirely,
+    /// terminal verdict or not.
+    #[test]
+    fn no_increment_leaves_the_counter_untouched() {
+        let mut deployment = worker();
+        handle_create_error(
+            &mut deployment,
+            RuntimeError::ImageNotFound("nope".into()),
+            false,
+        );
+
+        assert_eq!(deployment.restart_count, 0);
+        assert_eq!(deployment.status, DeploymentStatus::ImagePullBackOff);
+    }
 }

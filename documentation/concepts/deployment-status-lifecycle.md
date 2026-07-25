@@ -91,6 +91,8 @@ Ring tracks a cumulative `restart_count` per deployment. It is bumped when:
 
 Once `restart_count` reaches `MAX_RESTART_COUNT` (5), the next tick flips a **worker** to `crash_loop_back_off` (terminal) and a **job** to `failed` (terminal): the reconciler stops retrying, protecting the host from a tight crash loop. The counter is **cumulative for the deployment's lifetime**, not a sliding window; `ring apply` with a fixed manifest resets it.
 
+**Permanent failures skip the budget.** Some failures cannot fix themselves on a retry: the image genuinely doesn't exist, a referenced config or key is absent, the container/VM spec is rejected, the Firecracker kernel or Cloud Hypervisor firmware is missing at its configured path, or the host is out of memory. Rather than bumping the counter by one and burning five reconcile cycles to reach the same conclusion, Ring classifies these as terminal and lands on the matching status (`image_pull_back_off`, `config_error`, `create_container_error`, `failed`, `insufficient_resources`) on the next tick. Transient failures — a pull that died mid-flight, a busy port, a network setup race — still bump by one and retry within the budget. The classification is shared by every runtime, so Docker, Podman, containerd, Cloud Hypervisor and Firecracker converge identically.
+
 Counters live in memory only, so restarting `ring server` clears them, so each `(deployment, instance, check)` triple starts back at zero after a server restart.
 
 ## Observing the status
