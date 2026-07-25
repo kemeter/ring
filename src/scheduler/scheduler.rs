@@ -958,8 +958,14 @@ async fn handle_rolling_update(
         }
     };
 
-    // Refresh parent's live instance list.
-    parent.instances = runtime.list_instances(parent.id.clone(), "active").await;
+    // Refresh the parent's instance list. Deliberately `all`, not `active`: the
+    // drain below is what releases each instance's host resources (tap, rootfs
+    // copy, console logs, temp volumes), and a dead-but-not-reaped instance
+    // still holds all of them. Listing only the live ones would make an
+    // exhausted parent look empty, and the finalization below would mark it
+    // deleted without ever calling `remove_instance` — leaking everything a
+    // crashed VM left behind.
+    parent.instances = runtime.list_instances(parent.id.clone(), "all").await;
 
     // Drain one instance per cycle if the parent still has some. If the
     // remove fails, bail — the next cycle will retry.

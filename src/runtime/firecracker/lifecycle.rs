@@ -1268,6 +1268,72 @@ fn find_pid_by_socket(socket_path: &str) -> Option<u32> {
     None
 }
 
+/// Every API socket path currently served by a live `firecracker` process, read
+/// in one pass over `/proc`.
+///
+/// Filtering a listing by liveness would otherwise call `instance_alive` per
+/// instance, and each of those walks all of `/proc` — N full scans for N
+/// replicas. One scan answers the question for every instance at once.
+///
+/// Keyed on the full socket path, not the instance id: two `ring-server`
+/// instances with different `socket_dir`s can mint the same instance id, and
+/// matching on the basename alone would let one of them mark the other's stale
+/// socket as live. This mirrors the exact-path comparison `instance_alive` does.
+fn live_socket_paths() -> std::collections::HashSet<String> {
+    let mut live = std::collections::HashSet::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return live;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{}/cmdline", pid)) else {
+            continue;
+        };
+        if let Some(path) = socket_path_from_cmdline(&cmdline) {
+            live.insert(path);
+        }
+    }
+    live
+}
+
+/// Translate the runtime-agnostic `status` filter of
+/// [`RuntimeLifecycle::list_instances`] into the liveness an instance must have
+/// to satisfy it: `Some(true)` for alive, `Some(false)` for dead, `None` for no
+/// filter at all.
+///
+/// The filter vocabulary is Docker's, since that is what the trait's callers
+/// speak. Firecracker exposes no VM-state API, so the only observable
+/// distinction is whether a live process still backs the instance — `active` and
+/// `running` collapse onto the same thing here, and `exited` is its negation.
+///
+/// The argument used to be ignored entirely, so every caller got every instance
+/// with a socket on disk, including the stale sockets crashed VMs leave behind.
+fn fc_liveness_for_status(status: &str) -> FcFilter {
+    match status {
+        "all" => FcFilter::Any,
+        "active" | "running" => FcFilter::Alive(true),
+        "exited" | "stopped" => FcFilter::Alive(false),
+        // Unknown filter: match nothing. Falling back to "everything" would
+        // misreport a deployment as fully up, and falling back to "dead" would
+        // be just as wrong — neither is what the caller asked for.
+        _ => FcFilter::None,
+    }
+}
+
+/// What [`fc_liveness_for_status`] resolved a status filter to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FcFilter {
+    /// No filtering — every instance with a socket on disk.
+    Any,
+    /// Keep instances whose liveness matches the flag.
+    Alive(bool),
+    /// Unrecognised filter: keep nothing.
+    None,
+}
+
 /// Is a live `firecracker` process currently serving the instance that owns
 /// `tap_name`? Scans `/proc` for firecracker processes and re-derives each
 /// one's tap name from the instance id embedded in its `--api-sock` path.
@@ -1325,21 +1391,25 @@ fn live_vm_uses_tap(tap_name: &str, booting_instance_id: &str) -> bool {
     false
 }
 
-/// The instance id of the firecracker process described by `cmdline`, taken from
-/// the file stem of its `--api-sock` argument (`/run/fc/<instance-id>.sock`).
+/// The API socket path of the firecracker process described by `cmdline`.
 /// `None` when this is not a firecracker process or carries no socket argument.
-fn instance_id_from_cmdline(cmdline: &[u8]) -> Option<String> {
+fn socket_path_from_cmdline(cmdline: &[u8]) -> Option<String> {
     let mut args = cmdline.split(|&b| b == 0);
     if !args.next()?.ends_with(b"firecracker") {
         return None;
     }
-    for arg in args {
-        let s = std::str::from_utf8(arg).ok()?;
-        if let Some(stem) = s.strip_suffix(".sock") {
-            return stem.rsplit('/').next().map(|id| id.to_string());
-        }
-    }
-    None
+    args.filter_map(|arg| std::str::from_utf8(arg).ok())
+        .find(|s| s.ends_with(".sock"))
+        .map(|s| s.to_string())
+}
+
+/// The instance id of the firecracker process described by `cmdline`, taken from
+/// the file stem of its `--api-sock` argument (`/run/fc/<instance-id>.sock`).
+/// `None` when this is not a firecracker process or carries no socket argument.
+fn instance_id_from_cmdline(cmdline: &[u8]) -> Option<String> {
+    let path = socket_path_from_cmdline(cmdline)?;
+    let stem = path.strip_suffix(".sock")?;
+    stem.rsplit('/').next().map(|id| id.to_string())
 }
 
 /// Does this `/proc/<pid>/cmdline` (NUL-separated argv) belong to a
@@ -1473,8 +1543,32 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         }
     }
 
-    async fn list_instances(&self, deployment_id: String, _status: &str) -> Vec<String> {
-        self.scan_instances(&deployment_id)
+    async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
+        let ids = self.scan_instances(&deployment_id);
+        match fc_liveness_for_status(status) {
+            // "all" — every instance with a socket on disk, alive or not.
+            FcFilter::Any => ids,
+            // Firecracker has no VM-state API: an instance is either backed by a
+            // live process or it is not. `instance_alive` is that distinction,
+            // and it also filters out the stale sockets a crashed VM leaves
+            // behind — which a bare socket scan would report as running.
+            FcFilter::Alive(want) => {
+                // Index /proc once for the whole listing. Calling
+                // `instance_alive` per id would rescan every process for each
+                // instance — N full /proc walks for N replicas.
+                let live = live_socket_paths();
+                ids.into_iter()
+                    .filter(|id| {
+                        // Same test as `instance_alive`: the socket is on disk
+                        // AND a live process is bound to that exact path.
+                        let socket = self.socket_path(id);
+                        let alive = Path::new(&socket).exists() && live.contains(&socket);
+                        alive == want
+                    })
+                    .collect()
+            }
+            FcFilter::None => Vec::new(),
+        }
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {
@@ -1949,6 +2043,55 @@ mod tests {
         // argv[0]=firecracker, then --api-sock <sock>
         let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
         assert!(cmdline_matches_socket(cmd, sock));
+    }
+
+    /// The status argument used to be ignored, so every caller got every
+    /// instance with a socket on disk — including the stale sockets crashed VMs
+    /// leave behind, which then looked like running instances.
+    #[test]
+    fn status_filter_maps_to_liveness() {
+        assert_eq!(fc_liveness_for_status("all"), FcFilter::Any);
+        // Firecracker has no VM-state API, so active and running are the same
+        // observable thing: a live process backs the instance.
+        assert_eq!(fc_liveness_for_status("active"), FcFilter::Alive(true));
+        assert_eq!(fc_liveness_for_status("running"), FcFilter::Alive(true));
+        assert_eq!(fc_liveness_for_status("exited"), FcFilter::Alive(false));
+        assert_eq!(fc_liveness_for_status("stopped"), FcFilter::Alive(false));
+    }
+
+    /// Liveness is keyed on the full socket path, not the instance id: two
+    /// `ring-server` instances with different `socket_dir`s can mint the same
+    /// id, and matching on the basename alone would let one mark the other's
+    /// stale socket as live.
+    #[test]
+    fn socket_path_is_captured_whole() {
+        let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert_eq!(
+            socket_path_from_cmdline(cmd).as_deref(),
+            Some("/run/fc/dep-1-aaa.sock"),
+            "the directory must be kept, not just the file name"
+        );
+        // Same instance id under a different socket_dir is a different socket.
+        let other = b"/usr/bin/firecracker\0--api-sock\0/var/run/other/dep-1-aaa.sock\0";
+        assert_ne!(
+            socket_path_from_cmdline(cmd),
+            socket_path_from_cmdline(other)
+        );
+    }
+
+    #[test]
+    fn socket_path_ignores_non_firecracker_processes() {
+        let cmd = b"/usr/bin/socat\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert_eq!(socket_path_from_cmdline(cmd), None);
+    }
+
+    /// An unrecognised filter must match nothing. Returning everything would
+    /// report a deployment as fully up; returning the dead ones would be just as
+    /// wrong. Neither is what the caller asked for.
+    #[test]
+    fn unknown_status_filter_matches_nothing() {
+        assert_eq!(fc_liveness_for_status("paused"), FcFilter::None);
+        assert_eq!(fc_liveness_for_status(""), FcFilter::None);
     }
 
     /// The instance id is what lets a live VM be matched to the tap it owns, so
