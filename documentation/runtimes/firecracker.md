@@ -21,6 +21,16 @@ A minimal KVM-backed **micro-VM**, the technology behind AWS Lambda. A tiny devi
    curl -sSL -o /var/lib/ring/firecracker/rootfs.ext4    "$BASE/ubuntu-22.04.ext4"
    ```
 
+3. **`CAP_NET_ADMIN` on `ring`.** Unlike Cloud Hypervisor, Firecracker expects the host TAP to already exist, so Ring creates and deletes it itself:
+
+   ```bash
+   sudo setcap cap_net_admin+ep $(command -v ring)
+   ```
+
+   The capability goes on the **Ring binary**, not on `firecracker`. This runtime allocates a TAP for *every* microVM, not just those publishing `ports` (Cloud Hypervisor only creates one when ports are declared), so without the capability no Firecracker deployment boots at all — each fails with `could not create tap '…': operation not permitted`. `setcap` does not survive a rebuild or upgrade, so re-run it after replacing the binary.
+
+4. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`). See [Command health checks](#command-health-checks) below.
+
 ## Enable it
 
 ```toml
@@ -73,6 +83,78 @@ Console logs are rotated once they cross `max_console_log_bytes` (10 MiB by defa
 
 Per-instance CPU, memory, network, disk I/O, and thread counts are exposed at `GET /deployments/{id}/metrics`, the same as every other runtime. Ring reads them host-side from the `firecracker` process (`/proc/<pid>/{stat,status,io}`) and the per-VM tap counters, with no in-guest agent required. Memory `usage_percent` is reported against the deployment's memory limit; network counters read zero for deployments that publish no ports (no tap is created).
 
+## Health checks
+
+`tcp` and `http` probe from the host against the guest IP, with nothing needed inside the VM.
+
+### Command health checks
+
+`command` checks have no `docker exec` equivalent on a VM, so they run through **`ring-agent`**, a small static binary you install in the guest image. It listens on AF_VSOCK port 2375; Ring reaches it through the VM's vsock device and runs the command via `/bin/sh -c`.
+
+Each Ring release attaches a static musl build:
+
+```bash
+TAG=$(curl -s https://api.github.com/repos/kemeter/ring/releases/latest | grep -oP '"tag_name": "\K[^"]+')
+curl -L "https://github.com/kemeter/ring/releases/download/${TAG}/ring-agent-${TAG}-x86_64-unknown-linux-musl.tar.gz" \
+  | tar -xz
+```
+
+Or build it yourself: `cargo build -p ring-agent --release --target x86_64-unknown-linux-musl`.
+
+Install it into the rootfs at `/usr/local/bin/ring-agent` and start it at boot. Mounting the image on the host is the simplest route:
+
+```bash
+sudo mount -o loop rootfs.ext4 /mnt
+sudo install -m 0755 ring-agent /mnt/usr/local/bin/ring-agent
+sudo tee /mnt/etc/systemd/system/ring-agent.service > /dev/null <<'EOF'
+[Unit]
+Description=Ring in-guest agent
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ring-agent
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo ln -sf /etc/systemd/system/ring-agent.service \
+  /mnt/etc/systemd/system/multi-user.target.wants/ring-agent.service
+sudo umount /mnt
+```
+
+The symlink is what enables the unit. `sudo systemctl --root=/mnt enable ring-agent.service` does the same thing if the host's systemd is recent enough; the explicit symlink avoids depending on that.
+
+Without root, `debugfs` from `e2fsprogs` writes into the ext4 image directly:
+
+```bash
+cat > ring-agent.service <<'EOF'
+[Unit]
+Description=Ring in-guest agent
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/ring-agent
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+debugfs -w rootfs.ext4 <<'EOF'
+write ring-agent /usr/local/bin/ring-agent
+sif /usr/local/bin/ring-agent mode 0100755
+write ring-agent.service /etc/systemd/system/ring-agent.service
+symlink /etc/systemd/system/multi-user.target.wants/ring-agent.service /etc/systemd/system/ring-agent.service
+EOF
+```
+
+`write` doesn't preserve the source's mode, hence the explicit `sif`. Check the result with `debugfs -R "ls -l /usr/local/bin" rootfs.ext4`.
+
+The same binary and unit work on Cloud Hypervisor: the guest side is plain AF_VSOCK on both runtimes, and only the host transport differs.
+
+> **A `command` check added to a running deployment needs a VM restart.** The vsock device is attached at boot, and only when the deployment already declares such a check — Firecracker has no hot-plug path for it. Until the VM restarts, the probe cannot reach the guest. Whether it restarts on its own depends on the check's `on_failure`: `restart` heals itself once the failure threshold is reached, while `alert` and `stop` never reboot the VM. Declaring the check before the first boot avoids the situation entirely.
+
 ## Jobs (`kind: job`)
 
 A `kind: job` deployment boots a single microVM (replicas are ignored) and is marked **`completed`** once the guest finishes. Firecracker exposes no VM-state API, so completion is signalled by the **guest rebooting**: with the default `reboot=k` kernel cmdline, a guest `reboot` is trapped by Firecracker and exits the VMM cleanly. Ring's next scheduler tick sees the process gone and finalizes the deployment.
@@ -103,6 +185,8 @@ Bind and config/secret images are ephemeral and reaped when the instance stops; 
 ## Known gaps (experimental)
 
 - `image:` must be a host rootfs file, with no registry pull.
+- `command` health checks need `ring-agent` installed in the guest image, and the vsock device that carries them is attached at boot only (see [Command health checks](#command-health-checks)).
+- `labels:` are stored and filterable as Ring metadata, but not applied to the VM.
 
 ## See also
 
