@@ -713,7 +713,10 @@ impl FirecrackerLifecycle {
         // runtime. The guest reaches `ring-agent` over AF_VSOCK; the host
         // reaches it through the multiplexing Unix socket at `vsock_path`.
         // Same boot-time limitation as CH: adding a `command` check to a
-        // running deployment only takes effect after the next restart.
+        // running deployment only takes effect after the next VM restart, and
+        // whether one ever happens depends on the check's `on_failure`
+        // (`restart` heals itself; `alert`/`stop` do not). `execute_command_probe`
+        // detects a VM booted without the device and says so.
         if needs_vsock(deployment) {
             client
                 .put_vsock(&Vsock {
@@ -1721,19 +1724,22 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
                     resp.stderr.trim()
                 )),
             ),
-            // A connect failure almost always means the guest image doesn't
-            // ship `ring-agent` listening on AF_VSOCK port 2375 (or it hasn't
-            // started yet) — the most common `command` health-check pitfall on
-            // this runtime. Point the operator straight at it.
-            Err(VsockError::Connect { cid, source }) => (
-                HealthCheckStatus::Failed,
-                Some(format!(
-                    "cannot reach ring-agent in the guest (CID {cid}): {source}. \
-                     `command` health checks on firecracker require ring-agent \
-                     running in the guest image on AF_VSOCK port 2375 — see the \
-                     firecracker runtime docs"
-                )),
-            ),
+            // A connect failure has two very different causes, and blaming the
+            // guest image for both sends the operator hunting in the wrong
+            // place. The host-side socket only exists when the VM was booted
+            // with a vsock device, so its absence pinpoints the other cause.
+            Err(VsockError::Connect { cid, source }) => {
+                let host_socket_present = Path::new(&self.vsock_path(instance_id)).exists();
+                (
+                    HealthCheckStatus::Failed,
+                    Some(vsock_client::connect_failure_message(
+                        "firecracker",
+                        cid,
+                        &source.to_string(),
+                        host_socket_present,
+                    )),
+                )
+            }
             Err(e) => (
                 HealthCheckStatus::Failed,
                 Some(format!("vsock probe failed: {}", e)),

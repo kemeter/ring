@@ -245,3 +245,136 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(
         Response::Error { message } => Err(VsockError::Agent(message)),
     }
 }
+
+/// Explain a vsock connect failure for a `command` health check.
+///
+/// A bare io error leaves the operator with nothing to act on, and there are two
+/// quite different causes:
+///
+/// * the guest side is at fault — `ring-agent` isn't installed, isn't running,
+///   or isn't listening on [`VSOCK_PORT`] yet;
+/// * the VM has no vsock device at all. It is attached at boot, and only when
+///   the deployment already declares a `command` check, so one added to a
+///   running deployment cannot work until that VM restarts — neither hypervisor
+///   can hot-plug it.
+///
+/// `host_socket_present` reports whether the host-side vsock socket is on disk.
+/// It is a *hint*, not proof: a crashed VMM can leave the socket behind until
+/// the reconciler reaps it, and a live VM can have its socket unlinked while
+/// keeping the device. So it only orders the two causes — the message names both
+/// either way, rather than asserting one and sending the operator to the wrong
+/// place.
+pub(crate) fn connect_failure_message(
+    runtime: &str,
+    cid: u32,
+    source: &str,
+    host_socket_present: bool,
+) -> String {
+    let (first, second) = if host_socket_present {
+        (
+            format!(
+                "ring-agent may not be running in the guest on AF_VSOCK port {VSOCK_PORT} \
+                 (install it in the image and start it at boot — see the {runtime} runtime docs)"
+            ),
+            "or this VM may have been booted without a vsock device".to_string(),
+        )
+    } else {
+        (
+            "this VM appears to have been booted without a vsock device".to_string(),
+            format!(
+                "or ring-agent may not be running in the guest on AF_VSOCK port {VSOCK_PORT} \
+                 (install it in the image and start it at boot — see the {runtime} runtime docs)"
+            ),
+        )
+    };
+
+    format!(
+        "cannot reach ring-agent in the guest (CID {cid}): {source}. {first}, {second}. \
+         The device is attached at boot only when the deployment already declares a \
+         `command` check, so one added to a running deployment takes effect on the next \
+         VM restart — neither {runtime} nor Ring can hot-plug it"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both causes must appear whichever way the hint points: the host socket is
+    /// not proof (a crashed VMM leaves it behind, a live VM can have it
+    /// unlinked), so asserting one cause would send the operator to the wrong
+    /// place half the time.
+    #[test]
+    fn both_causes_are_always_named() {
+        for present in [true, false] {
+            let msg = connect_failure_message("firecracker", 42, "connection refused", present);
+            assert!(msg.contains("ring-agent"), "names the agent: {msg}");
+            assert!(msg.contains("vsock device"), "names the device: {msg}");
+            assert!(msg.contains("CID 42"), "names the CID: {msg}");
+            assert!(
+                msg.contains("connection refused"),
+                "keeps the source: {msg}"
+            );
+            // The agent-side remedy must survive whichever way the hint points:
+            // it is what an operator acts on when the image really is at fault.
+            assert!(msg.contains("2375"), "names the port: {msg}");
+            assert!(
+                msg.contains("install it in the image"),
+                "keeps the install remedy: {msg}"
+            );
+            assert!(msg.contains("runtime docs"), "points at the docs: {msg}");
+        }
+    }
+
+    /// The hint decides which cause is stated first — that ordering is the whole
+    /// value the host-socket check adds.
+    #[test]
+    fn the_hint_orders_the_two_causes() {
+        // Unwrap both positions before comparing: `Option` ordering would make
+        // `None < Some(_)` pass, so a vanished phrase would look like correct
+        // ordering instead of failing.
+        let with_socket = connect_failure_message("firecracker", 1, "e", true);
+        let agent_first = with_socket
+            .find("ring-agent may not be running")
+            .unwrap_or_else(|| panic!("agent cause missing: {with_socket}"));
+        let device_second = with_socket
+            .find("may have been booted without")
+            .unwrap_or_else(|| panic!("device cause missing: {with_socket}"));
+        assert!(
+            agent_first < device_second,
+            "socket on disk → guest side first: {with_socket}"
+        );
+
+        let without_socket = connect_failure_message("firecracker", 1, "e", false);
+        let device_first = without_socket
+            .find("appears to have been booted without")
+            .unwrap_or_else(|| panic!("device cause missing: {without_socket}"));
+        let agent_second = without_socket
+            .find("or ring-agent may not be running")
+            .unwrap_or_else(|| panic!("agent cause missing: {without_socket}"));
+        assert!(
+            device_first < agent_second,
+            "no socket → missing device first: {without_socket}"
+        );
+    }
+
+    /// The boot-time constraint is the actionable part: it tells the operator a
+    /// restart is needed, which no amount of guest-side debugging would reveal.
+    #[test]
+    fn the_boot_time_constraint_is_always_explained() {
+        for present in [true, false] {
+            let msg = connect_failure_message("cloud-hypervisor", 7, "no such file", present);
+            assert!(msg.contains("attached at boot only"), "{msg}");
+            assert!(msg.contains("next VM restart"), "gives the remedy: {msg}");
+        }
+    }
+
+    /// The runtime name is interpolated so the message points at the right docs.
+    #[test]
+    fn message_names_the_runtime() {
+        for runtime in ["firecracker", "cloud-hypervisor"] {
+            assert!(connect_failure_message(runtime, 1, "e", true).contains(runtime));
+            assert!(connect_failure_message(runtime, 1, "e", false).contains(runtime));
+        }
+    }
+}
