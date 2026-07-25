@@ -54,6 +54,8 @@ You need all of these on the host:
 
    If you'd rather build it yourself: `cargo build -p ring-agent --release --target x86_64-unknown-linux-musl`. Either way, install it at `/usr/local/bin/ring-agent` in the guest and run it at boot via a systemd unit. It listens on AF_VSOCK port 2375.
 
+   The [Firecracker page](/documentation/runtimes/firecracker#command-health-checks) has a step-by-step recipe for installing the binary and its systemd unit into a disk image; it applies unchanged here, since the guest side is plain AF_VSOCK on both runtimes.
+
 Run `ring doctor` to verify everything is in place; it checks each item and prints the missing pieces.
 
 ## Configure Ring

@@ -1,9 +1,15 @@
-//! ring-agent — in-guest companion to the Cloud Hypervisor runtime.
+//! ring-agent — in-guest companion to Ring's micro-VM runtimes.
 //!
 //! Listens on AF_VSOCK port 2375 (well-known to the host-side client) and
 //! services length-prefixed JSON requests. Today the only supported request
-//! is `Exec`, used to back `health_checks: [{ type: command, ... }]` on CH
-//! deployments where Ring has no `docker exec` equivalent.
+//! is `Exec`, used to back `health_checks: [{ type: command, ... }]` on
+//! Cloud Hypervisor and Firecracker deployments, where Ring has no
+//! `docker exec` equivalent.
+//!
+//! The same binary serves both: the guest side is plain AF_VSOCK either way.
+//! Only the host differs — Cloud Hypervisor connects over kernel AF_VSOCK,
+//! Firecracker multiplexes through a Unix socket and a `CONNECT <port>`
+//! handshake before speaking this protocol.
 //!
 //! Wire format:
 //!   request:  [u32 BE length][JSON ExecRequest]
