@@ -443,7 +443,7 @@ pub(crate) async fn create_container(
     let temporary_id = tiny_id();
     let container_name = format!(
         "{}_{}_{}",
-        &deployment.namespace, &deployment.name, temporary_id
+        deployment.namespace, deployment.name, temporary_id
     );
 
     let mut labels = HashMap::new();
