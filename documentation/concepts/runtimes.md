@@ -24,7 +24,8 @@ Enable just the runtimes a host actually runs: Docker-only, Podman-only, contain
 | Boot time | ~1 s | ~1 s | ~1 s | ~3–5 s (cloud-init, kernel boot) | ~1 s (minimal microVM) |
 | Memory overhead per workload | ~10 MB | ~10 MB | ~10 MB | ~80–150 MB (kernel + guest userland) | ~5–50 MB (minimal device model) |
 | Image format | Docker image (`nginx:1.25`) | Docker/OCI image | OCI image (`nginx:1.25`) | Raw disk image on the host filesystem | Kernel (`vmlinux`) + ext4 rootfs on the host filesystem |
-| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | CNI (bridge + host-local IPAM) | Per-VM /30 subnet, host-port forwarding via `socat` | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP) |
+| Networking | Per-namespace bridge, DNS aliases | Per-namespace bridge, DNS aliases | CNI (bridge + host-local IPAM) | Per-VM /30 subnet, host-port forwarding via `socat`, Ring-managed outbound NAT | Per-VM /30 subnet, host-port forwarding via `socat` (Ring-owned host TAP), Ring-managed outbound NAT |
+| Host-memory admission | N/A (cgroup limits) | N/A (cgroup limits) | ✓ before create | ✓ before VM boot | ✓ before rootfs copy and VM boot |
 | Crash detection | ✓ event-driven (sub-second) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) | ✓ reconcile-based (per scheduler tick) |
 | `command` health checks | `docker exec` | `podman exec` (same API) | `Tasks.Exec` (gRPC) | In-guest `ring-agent` over AF_VSOCK | In-guest `ring-agent` over vsock (host Unix socket) |
 | `kind: job` | Exit code visible | Exit code visible | Exit code visible | Clean shutdown = success (no exit code from host) | Clean shutdown (guest reboot) = success (no exit code from host) |

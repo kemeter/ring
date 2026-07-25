@@ -55,6 +55,8 @@ ring apply -f app.yaml
 
 What Ring does: copies the rootfs per instance, spawns a `firecracker` process, drives its REST API to set the kernel / rootfs / network / machine config, then boots. Networking is a Ring-owned TAP (a /30 subnet per VM) with `socat` host-port forwarding; outbound NAT lets guests reach external networks.
 
+Before any of that, the deployment's memory ask is admitted against the host's available memory. A microVM reserves its whole RAM at boot, so an over-ask would otherwise die on an opaque allocation failure — and only after a full rootfs copy. The check reads `resources.requests.memory`, falling back to `resources.limits.memory`; a deployment declaring neither is not gated. Refusal is terminal (`insufficient_resources`) rather than a crash loop, since a retry won't free memory.
+
 ## Logs
 
 The guest serial console (kernel, init, and anything the workload writes to the console) is persisted per instance and readable with the standard commands, same as every other runtime:

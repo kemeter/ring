@@ -393,6 +393,13 @@ impl FirecrackerLifecycle {
             )));
         }
 
+        // Admission control before the rootfs copy and the VM boot. A microVM
+        // reserves its whole memory at boot, so an over-ask dies on an opaque
+        // allocation failure — and here it would do so only *after* copying a
+        // full rootfs image. Same check Cloud Hypervisor already ran; without it
+        // Firecracker had no memory gate at all.
+        crate::hypervisor::resources::check_host_memory(deployment)?;
+
         std::fs::create_dir_all(&self.config.socket_dir).map_err(|e| {
             RuntimeError::VmStartFailed(format!(
                 "could not create socket_dir '{}': {}",

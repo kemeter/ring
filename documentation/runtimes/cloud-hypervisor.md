@@ -196,6 +196,14 @@ If `published` is already taken on the host, Ring **refuses to start the VM** an
 
 Both `tcp` (default) and `udp` are supported via the port's `protocol` field; `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
+### Outbound access
+
+The per-VM /30 lets the guest reach the host, but reaching *external* networks (package installs, `git clone`, …) needs the host to masquerade the guest subnet. Ring installs that itself — a single idempotent rule set covering `10.42.0.0/16`, so it is set up once and re-asserted for free on later boots. The operator never touches `iptables`.
+
+This requires `CAP_NET_ADMIN` on the Ring binary (`setcap cap_net_admin+ep $(command -v ring)`). Without it the rules are skipped: the VM still boots and serves inbound traffic, but outbound calls fail to resolve. The failure is logged at warn on the first VM start.
+
+Note that the guest network is only allocated when the deployment publishes at least one port; a VM with no `ports:` has no network at all.
+
 ## Health checks
 
 `tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375, so install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
@@ -247,7 +255,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | `labels:` | **Stored and usable.** Not applied to the VM (no container-label equivalent), but persisted as Ring metadata (shown in `inspect` and filterable with `ring deployment list --label key=value`), same as Docker |
 | `resources.limits.cpu` | Honored as **allocation, not cap**: rounded down to whole vCPU, floor 1 (`"500m"` → 1 vCPU) |
 | `resources.limits.memory` | Honored as **allocation, not cap**: VM RAM size, minimum 128 MiB |
-| `resources.requests.*` | Ignored (VM is sized from `limits`); a **warning event** is recorded at create so it isn't silent |
+| `resources.requests.*` | Not used to **size** the VM (that comes from `limits`); a **warning event** is recorded at create so it isn't silent. `requests.memory` is still read for host-memory admission control, where it takes precedence over `limits.memory` |
 | `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull); a **warning event** is recorded at create |
 | `config.user` (privileged / id / group) | Ignored; a **warning event** is recorded at create |
 | `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`. CH does not expose the workload's exit code, so Ring sees VM state only. |

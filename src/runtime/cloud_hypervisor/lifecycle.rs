@@ -639,12 +639,21 @@ impl CloudHypervisorLifecycle {
         }
 
         let net_config = match &net_alloc {
-            Some(n) => NetConfig {
-                tap: Some(n.tap_name.clone()),
-                ip: Some(n.host_ip.clone()),
-                mask: Some(n.netmask.clone()),
-                mac: Some(n.mac.clone()),
-            },
+            Some(n) => {
+                // The tap CH is about to create lets the guest reach the host;
+                // outbound NAT is what lets it reach the Internet (apt, git
+                // clone, …). Same call Firecracker makes after creating its own
+                // tap: idempotent, scoped to the whole guest supernet, so it is
+                // a no-op after the first VM on this host. Without it a CH guest
+                // resolved nothing, while an equivalent Firecracker guest did.
+                crate::hypervisor::host_nat::ensure_outbound_nat();
+                NetConfig {
+                    tap: Some(n.tap_name.clone()),
+                    ip: Some(n.host_ip.clone()),
+                    mask: Some(n.netmask.clone()),
+                    mac: Some(n.mac.clone()),
+                }
+            }
             None => NetConfig {
                 tap: None,
                 ip: None,
