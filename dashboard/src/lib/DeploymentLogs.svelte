@@ -31,11 +31,14 @@
   let logsStream: LogStreamHandle | null = null;
   let logsEl: HTMLDivElement | null = $state(null);
 
-  /** Incremented on every reload. A snapshot or stream that resolves after a
-   *  newer reload started belongs to a superseded deployment (or tail size) and
-   *  must not touch the state — otherwise a slow response for the previous
-   *  deployment could overwrite the current one's logs. */
-  let generation = 0;
+  /** Snapshot and stream have independent lifecycles — pausing invalidates the
+   *  stream but not a pending snapshot, and a reload restarts both — so they
+   *  get a counter each. A request whose generation is stale by the time it
+   *  resolves belongs to a superseded deployment (or tail size) and must not
+   *  touch the state: otherwise a slow response for the previous deployment
+   *  could overwrite the current one's logs. */
+  let snapshotGen = 0;
+  let streamGen = 0;
 
   function pushLog(entry: LogEntry) {
     logs.push(entry);
@@ -45,16 +48,21 @@
   }
 
   function stopStream() {
+    // Bump the generation even when there is no handle yet: a `startStream`
+    // still awaiting its ticket would otherwise resolve after this and keep
+    // delivering entries while the UI says it is paused.
+    streamGen++;
     if (logsStream) {
       logsStream.close();
       logsStream = null;
     }
   }
 
-  async function loadSnapshot(gen: number) {
+  async function loadSnapshot() {
     if (!id) {
       return;
     }
+    const gen = ++snapshotGen;
     logsLoading = true;
     logsError = null;
     try {
@@ -62,40 +70,47 @@
         tail: logsTail,
         container: logsContainerFilter || undefined
       });
-      if (gen !== generation) {
+      if (gen !== snapshotGen) {
         return;
       }
       logs = snap;
     } catch (e) {
-      if (gen !== generation) {
+      if (gen !== snapshotGen) {
         return;
       }
       logsError = e instanceof Error ? e.message : String(e);
     } finally {
-      if (gen === generation) {
+      // Only the newest snapshot clears the flag. A superseded one must leave it
+      // set, otherwise the viewer would report "no logs" while its replacement
+      // is still in flight. Since every generation bump here starts a new load,
+      // the flag is always cleared by someone.
+      if (gen === snapshotGen) {
         logsLoading = false;
       }
     }
   }
 
-  async function startStream(gen: number) {
+  async function startStream() {
     if (!id) {
       return;
     }
+    // stopStream() bumps streamGen, so read it after: this call owns whatever
+    // generation it leaves behind.
     stopStream();
+    const gen = streamGen;
     logsError = null;
     try {
       const handle = await streamLogs(
         id,
         { tail: logsTail, container: logsContainerFilter || undefined },
         (entry) => {
-          if (gen !== generation) {
+          if (gen !== streamGen) {
             return;
           }
           pushLog(entry);
         },
         () => {
-          if (gen !== generation) {
+          if (gen !== streamGen) {
             return;
           }
           // EventSource fires a generic Event on disconnect; surface a hint
@@ -104,16 +119,16 @@
           logsError = 'stream interrupted, reconnecting…';
         }
       );
-      if (gen !== generation) {
-        // A newer reload started while the ticket was in flight; this stream
-        // belongs to the previous deployment, so close it instead of letting
-        // it leak alongside the current one.
+      if (gen !== streamGen) {
+        // A newer reload started — or the user paused — while the ticket was in
+        // flight; this stream is already obsolete, so close it instead of
+        // letting it leak alongside (or instead of) the current one.
         handle.close();
         return;
       }
       logsStream = handle;
     } catch (e) {
-      if (gen !== generation) {
+      if (gen !== streamGen) {
         return;
       }
       logsError = e instanceof Error ? e.message : String(e);
@@ -122,24 +137,25 @@
 
   async function refreshLogs() {
     stopStream();
-    const gen = ++generation;
     // Don't clear `logs` here: emptying the array collapses the viewport,
     // which makes the page jump to the top because the scroll position
     // becomes out of range. Keep the old lines until the snapshot lands
     // and then swap atomically inside loadSnapshot().
-    await loadSnapshot(gen);
-    if (gen !== generation) {
+    const gen = snapshotGen + 1;
+    await loadSnapshot();
+    if (gen !== snapshotGen) {
+      // Another reload overtook this one; it will start its own stream.
       return;
     }
     if (logsFollow) {
-      await startStream(gen);
+      await startStream();
     }
   }
 
   async function toggleFollow() {
     logsFollow = !logsFollow;
     if (logsFollow) {
-      await startStream(++generation);
+      await startStream();
     } else {
       stopStream();
     }

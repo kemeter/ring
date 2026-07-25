@@ -9,13 +9,16 @@
     listDeploymentEvents,
     type DeploymentDetail,
     type DeploymentEvent,
+    type DeploymentPort,
     type DeploymentStats,
+    type DeploymentVolume,
     type EnvValue,
     type HealthCheck,
     type HealthCheckResult
   } from '$lib/api';
   import CopyButton from '$lib/CopyButton.svelte';
   import DeploymentLogs from '$lib/DeploymentLogs.svelte';
+  import DetailTableCard from '$lib/DetailTableCard.svelte';
   import { getToken } from '$lib/auth';
   import { formatBytes, formatDate, timeAgo } from '$lib/utils';
 
@@ -170,6 +173,12 @@
   }
 
   let groupedEvents = $derived(groupConsecutive(events));
+
+  /** Environment as sorted `[key, value]` pairs — the card takes a list, and
+   *  sorting here keeps the ordering stable across re-renders. */
+  let envEntries = $derived<Array<[string, EnvValue]>>(
+    Object.entries(detail?.environment ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  );
 </script>
 
 <svelte:head>
@@ -388,136 +397,85 @@
     {/if}
   </section>
 
-  <section class="card">
-    <header class="section-head">
-      <h2>Ports</h2>
-      <span class="count">{detail.ports.length}</span>
-    </header>
-    {#if detail.ports.length === 0}
-      <p class="muted pad">No ports published.</p>
-    {:else}
-      <table>
-        <thead>
-          <tr>
-            <th class="num">Published</th>
-            <th class="num">Target</th>
-            <th>Protocol</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each detail.ports as p}
-            <tr>
-              <td class="num mono">{p.published}</td>
-              <td class="num mono">{p.target}</td>
-              <td>{p.protocol ?? 'tcp'}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+  <DetailTableCard
+    title="Ports"
+    columns={[{ label: 'Published', align: 'right' }, { label: 'Target', align: 'right' }, { label: 'Protocol' }]}
+    items={detail.ports}
+    emptyText="No ports published."
+  >
+    {#snippet row(p: DeploymentPort)}
+      <tr>
+        <td class="num mono">{p.published}</td>
+        <td class="num mono">{p.target}</td>
+        <td>{p.protocol ?? 'tcp'}</td>
+      </tr>
+    {/snippet}
+  </DetailTableCard>
 
-  <section class="card">
-    <header class="section-head">
-      <h2>Volumes</h2>
-      <span class="count">{detail.volumes.length}</span>
-    </header>
-    {#if detail.volumes.length === 0}
-      <p class="muted pad">No volumes mounted.</p>
-    {:else}
-      <table>
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Source</th>
-            <th>Destination</th>
-            <th>Mode</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each detail.volumes as v}
-            <tr>
-              <td>{v.type}</td>
-              <td class="mono">{v.source ?? v.key ?? '—'}</td>
-              <td class="mono">{v.destination}</td>
-              <td>{v.permission}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+  <DetailTableCard
+    title="Volumes"
+    columns={[{ label: 'Type' }, { label: 'Source' }, { label: 'Destination' }, { label: 'Mode' }]}
+    items={detail.volumes}
+    emptyText="No volumes mounted."
+  >
+    {#snippet row(v: DeploymentVolume)}
+      <tr>
+        <td>{v.type}</td>
+        <td class="mono">{v.source ?? v.key ?? '\u2014'}</td>
+        <td class="mono">{v.destination}</td>
+        <td>{v.permission}</td>
+      </tr>
+    {/snippet}
+  </DetailTableCard>
 
-  <section class="card">
-    <header class="section-head">
-      <h2>Environment</h2>
-      <span class="count">{Object.keys(detail.environment).length}</span>
-    </header>
-    {#if Object.keys(detail.environment).length === 0}
-      <p class="muted pad">No environment variables.</p>
-    {:else}
-      <table>
-        <thead>
-          <tr>
-            <th>Key</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each Object.entries(detail.environment).sort(([a], [b]) => a.localeCompare(b)) as [k, v] (k)}
-            {@const disp = envDisplay(v)}
-            <tr>
-              <td class="mono">{k}</td>
-              <td class="mono">
-                {#if disp.kind === 'secret'}
-                  <span class="secret-tag">{disp.text}</span>
-                {:else}
-                  {disp.text}
-                {/if}
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+  <DetailTableCard
+    title="Environment"
+    columns={[{ label: 'Key' }, { label: 'Value' }]}
+    items={envEntries}
+    emptyText="No environment variables."
+    key={([k]) => k}
+  >
+    {#snippet row([k, v]: [string, EnvValue])}
+      {@const disp = envDisplay(v)}
+      <tr>
+        <td class="mono">{k}</td>
+        <td class="mono">
+          {#if disp.kind === 'secret'}
+            <span class="secret-tag">{disp.text}</span>
+          {:else}
+            {disp.text}
+          {/if}
+        </td>
+      </tr>
+    {/snippet}
+  </DetailTableCard>
 
-  <section class="card">
-    <header class="section-head">
-      <h2>Health checks</h2>
-      <span class="count">{detail.health_checks.length}</span>
-    </header>
-    {#if detail.health_checks.length === 0}
-      <p class="muted pad">No health checks configured.</p>
-    {:else}
-      <table>
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Target</th>
-            <th>Interval</th>
-            <th>Timeout</th>
-            <th class="num">Threshold</th>
-            <th>On failure</th>
-            <th>Readiness</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each detail.health_checks as hc}
-            <tr>
-              <td>{hc.type}</td>
-              <td class="mono">{hcSummary(hc)}</td>
-              <td>{hc.interval}</td>
-              <td>{hc.timeout}</td>
-              <td class="num mono">{hc.threshold}</td>
-              <td>{hc.on_failure}</td>
-              <td>{hc.readiness ? 'yes' : 'no'}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {/if}
-  </section>
+  <DetailTableCard
+    title="Health checks"
+    columns={[
+      { label: 'Type' },
+      { label: 'Target' },
+      { label: 'Interval' },
+      { label: 'Timeout' },
+      { label: 'Threshold', align: 'right' },
+      { label: 'On failure' },
+      { label: 'Readiness' }
+    ]}
+    items={detail.health_checks}
+    emptyText="No health checks configured."
+  >
+    {#snippet row(hc: HealthCheck)}
+      <tr>
+        <td>{hc.type}</td>
+        <td class="mono">{hcSummary(hc)}</td>
+        <td>{hc.interval}</td>
+        <td>{hc.timeout}</td>
+        <td class="num mono">{hc.threshold}</td>
+        <td>{hc.on_failure}</td>
+        <td>{hc.readiness ? 'yes' : 'no'}</td>
+      </tr>
+    {/snippet}
+  </DetailTableCard>
 
   {#if detail.health_checks.length > 0}
     <section class="card">
