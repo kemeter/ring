@@ -68,7 +68,11 @@ EOF
 # Record any pre-existing ring-* taps (orphans from earlier runs on a shared
 # host) so we can attribute the NEW tap to this deployment rather than picking
 # an unrelated one with `head -1`.
-taps_now() { ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' | sort -u; }
+# `|| true`: grep exits 1 when the host carries no ring-* tap at all (a clean
+# machine, or the very first Firecracker test of a run), which under `set -e`
+# would abort the test before it does any work. Same guard as setup.sh and
+# t4_restart.sh.
+taps_now() { (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) | sort -u; }
 TAPS_BEFORE=$(taps_now)
 
 "$RING_BIN" apply --file "$FIXTURE"

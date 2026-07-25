@@ -5,11 +5,14 @@
 #
 #   1. a deployment WITH ports → each instance carries its id AND a routable
 #      guest address (the 10.42.x.y/30 allocated for its tap),
-#   2. a deployment WITHOUT ports → each instance carries its id but NO address
-#      (no network was allocated, so there is nothing to route to).
+#   2. a deployment WITHOUT ports → the same, because this runtime allocates a
+#      tap for every microVM; ports only decide whether inbound forwarders are
+#      spawned.
 #
-# We assert against `deployment list --output json`, which serializes the same
-# DTO the REST API returns — so this covers get.rs/list.rs + the dto shape.
+# We assert against `GET /deployments?instances=true`, which serializes the
+# DeploymentOutput DTO — so this covers list.rs + the dto shape. The query
+# parameter is required: resolving an address costs a per-instance runtime
+# inspect, so the endpoint skips it by default (and the CLI never asks for it).
 #
 # Requires: firecracker, /dev/kvm, jq, and CAP_NET_ADMIN for ring-server (tap
 # creation, needed by the with-ports case). SKIPs (exit 0) when the ring binary
@@ -47,10 +50,19 @@ setup_fc
 start_ring
 ring_login
 
+TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
+
 # Returns the JSON `.instances` array for a deployment, by namespace/name.
+#
+# Hits the API directly with `?instances=true` rather than going through
+# `deployment list`: resolving an instance address costs a per-instance runtime
+# inspect, so the endpoint only does it when explicitly asked, and the CLI never
+# passes the flag. Without it every `.address` is null on every runtime, and the
+# assertions below would be testing the default listing rather than the DTO.
 instances_json() {
   local namespace="$1" name="$2"
-  "$RING_BIN" deployment list --output json 2>/dev/null \
+  curl -fsS "$RING_URL/deployments?instances=true" \
+    -H "Authorization: Bearer $TOKEN" 2>/dev/null \
     | jq -c --arg ns "$namespace" --arg n "$name" \
         '.[] | select(.namespace==$ns and .name==$n) | .instances' \
     | head -n1
@@ -95,7 +107,13 @@ printf '%s' "$ADDR" | grep -qE '^10\.42\.[0-9]+\.[0-9]+$' \
   || fail "instance address '$ADDR' is not a 10.42.x.y guest IP"
 log "with-ports instance address: $ADDR"
 
-# === Case 2: deployment WITHOUT ports → instances carry id but NO address ===
+# === Case 2: deployment WITHOUT ports → instances still carry an address ===
+#
+# Unlike Cloud Hypervisor, this runtime allocates a tap for every microVM, not
+# only for those publishing ports: a VM needs outbound connectivity to be useful
+# (fetching what it runs) whether or not anything is forwarded inbound. Ports
+# only decide whether host-side forwarders are spawned. This assertion used to
+# expect no address, matching the older ports-only behaviour.
 FIXTURE_NOPORTS="$RING_TEST_DIR/api-noports-vm.yaml"
 cat > "$FIXTURE_NOPORTS" <<EOF
 deployments:
@@ -115,13 +133,13 @@ ID_NP=$(printf '%s' "$INSTANCES_NP" | jq -r '.[0].id // empty' 2>/dev/null || tr
 [ -n "$ID_NP" ] || { printf '%s\n' "$INSTANCES_NP" >&2; fail "no-ports instance has no .id"; }
 log "no-ports instance id: $ID_NP"
 
-# `address` must be absent/null — no network was allocated, so there is no
-# reachable endpoint. `#[serde(skip_serializing_if = "Option::is_none")]` means
-# the field should not even be present; `// empty` collapses both null + absent.
+# `address` is present and routable, exactly as for a deployment with ports.
 ADDR_NP=$(printf '%s' "$INSTANCES_NP" | jq -r '.[0].address // empty' 2>/dev/null || true)
-[ -z "$ADDR_NP" ] \
-  || { printf '%s\n' "$INSTANCES_NP" >&2; fail "no-ports instance unexpectedly has address '$ADDR_NP'"; }
-log "no-ports instance has no address (as expected)"
+[ -n "$ADDR_NP" ] \
+  || { printf '%s\n' "$INSTANCES_NP" >&2; fail "no-ports instance has no .address (tap should be allocated regardless of ports)"; }
+printf '%s' "$ADDR_NP" | grep -qE '^10\.42\.[0-9]+\.[0-9]+$' \
+  || { printf '%s\n' "$INSTANCES_NP" >&2; fail "no-ports instance address '$ADDR_NP' is not a 10.42.x.y guest IP"; }
+log "no-ports instance address: $ADDR_NP"
 
 # === Cleanup ===
 for name in api-ports-vm api-noports-vm; do
@@ -129,4 +147,4 @@ for name in api-ports-vm api-noports-vm; do
   [ -n "$id" ] && { "$RING_BIN" deployment delete "$id" >/dev/null 2>&1 || true; }
 done
 
-log "PASS — T3-FC: API reports instances as { id, address }; address present with ports, absent without."
+log "PASS — T3-FC: API reports instances as { id, address }; address present with and without ports."
