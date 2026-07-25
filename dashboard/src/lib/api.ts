@@ -395,6 +395,21 @@ export function listWebhooks(): Promise<Webhook[]> {
   return request<Webhook[]>('/webhooks');
 }
 
+export interface User {
+  id: string;
+  username: string;
+  created_at: string;
+  updated_at: string | null;
+  status: string;
+  /** Last successful login; absent for an account that never signed in. */
+  login_at: string | null;
+}
+
+/** Requires the `users:read` scope. Password hashes are never returned. */
+export function listUsers(): Promise<User[]> {
+  return request<User[]>('/users');
+}
+
 export interface LogsQuery {
   tail?: number;
   since?: string;
