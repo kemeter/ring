@@ -26,6 +26,7 @@
     { href: '/volumes', label: 'Volumes', icon: 'disc' },
     { href: '/webhooks', label: 'Webhooks', icon: 'webhook' },
     { href: '/users', label: 'Users', icon: 'users' },
+    { href: '/tokens', label: 'Tokens', icon: 'token' },
     { href: '/node', label: 'Node', icon: 'server' }
   ];
 
@@ -183,6 +184,18 @@
                   <circle cx="6" cy="5.5" r="2.5" />
                   <path d="M1.75 13.5c0-2.35 1.9-3.75 4.25-3.75s4.25 1.4 4.25 3.75" />
                   <path d="M11 3.4a2.5 2.5 0 0 1 0 4.7M12.4 9.9c1.25.45 2.1 1.5 2.1 3.1" />
+                </svg>
+              {:else if item.icon === 'token'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="1.75" y="4.75" width="12.5" height="6.5" rx="2" />
+                  <path d="M4.5 8h.01M7 8h.01M9.5 8h.01M12 8h.01" />
                 </svg>
               {:else if item.icon === 'server'}
                 <svg
