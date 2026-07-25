@@ -25,6 +25,7 @@
     { href: '/configs', label: 'Configs', icon: 'file' },
     { href: '/volumes', label: 'Volumes', icon: 'disc' },
     { href: '/webhooks', label: 'Webhooks', icon: 'webhook' },
+    { href: '/users', label: 'Users', icon: 'users' },
     { href: '/node', label: 'Node', icon: 'server' }
   ];
 
@@ -169,6 +170,19 @@
                   <circle cx="3.75" cy="11.5" r="2.25" />
                   <circle cx="12.25" cy="11.5" r="2.25" />
                   <path d="M6.85 6.2L4.9 9.55M9.15 6.2l1.95 3.35M6 11.5h4" />
+                </svg>
+              {:else if item.icon === 'users'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="6" cy="5.5" r="2.5" />
+                  <path d="M1.75 13.5c0-2.35 1.9-3.75 4.25-3.75s4.25 1.4 4.25 3.75" />
+                  <path d="M11 3.4a2.5 2.5 0 0 1 0 4.7M12.4 9.9c1.25.45 2.1 1.5 2.1 3.1" />
                 </svg>
               {:else if item.icon === 'server'}
                 <svg
