@@ -51,17 +51,27 @@ ensure_fc_job_image() {
   # Start from a private copy so the shared base rootfs stays pristine.
   cp "$RING_E2E_FC_ROOTFS" "$RING_E2E_FC_JOB_IMAGE"
 
+  # Replay the journal before touching the image with debugfs. The CI rootfs
+  # ships with `needs_recovery` set, and debugfs writes straight to the block
+  # device without consulting the journal — so the kernel replays it at mount
+  # and overwrites everything injected below. The symptom is remote from the
+  # cause: systemd logs "Wants dropin ... unreadable, ignoring: Structure needs
+  # cleaning", the unit never runs, the guest never reboots, and the job stays
+  # Running until the test times out.
+  e2fsck -fy "$RING_E2E_FC_JOB_IMAGE" >/dev/null 2>&1 || true
+
   # NOTE: the guest must `reboot`, not `poweroff`. With `reboot=k` in the
   # kernel cmdline a guest reboot is a keyboard-controller reset that
   # Firecracker traps and exits the VMM on (exit_code=0). A `poweroff` only
   # halts the vCPU ("System halted") and leaves the firecracker process alive,
   # so Ring would never see the VM go away. This mirrors how `kind: job`
   # workloads are expected to signal completion on this runtime.
+  # No explicit ordering: the unit is pulled in by multi-user.target and only
+  # needs a working init to call `reboot`. Ordering it After that same target
+  # while being WantedBy it would be redundant at best.
   cat > "$service_file" <<'EOF'
 [Unit]
 Description=Ring kind:job E2E auto-reboot (signals job completion)
-After=multi-user.target
-Wants=multi-user.target
 
 [Service]
 Type=oneshot
@@ -76,9 +86,19 @@ EOF
   debugfs -w -R "write $service_file /etc/systemd/system/ring-job-poweroff.service" "$RING_E2E_FC_JOB_IMAGE" 2>&1 \
     | grep -v "^debugfs " >&2 || true
   # Enable via the standard *.wants symlink (idempotent: drop a stale one first).
+  #
+  # The destination MUST be relative. ext4 stores a symlink target of up to 59
+  # bytes inline in the inode ("fast symlink") and needs a data block beyond
+  # that, but debugfs writes every target inline regardless — so an absolute
+  # `/etc/systemd/system/ring-job-poweroff.service` (45 bytes) produces an inode
+  # the kernel rejects with EUCLEAN. systemd then logs "Wants dropin ...
+  # unreadable, ignoring: Structure needs cleaning", the unit never runs, and
+  # the guest sits at the login prompt while Ring waits for a reboot that never
+  # comes. `../ring-job-poweroff.service` is 28 bytes, safely inline, and is the
+  # form systemd itself uses for units under /etc/systemd/system.
   debugfs -w -R "rm /etc/systemd/system/multi-user.target.wants/ring-job-poweroff.service" "$RING_E2E_FC_JOB_IMAGE" 2>&1 \
     | grep -v "^debugfs " >&2 || true
-  debugfs -w -R "symlink /etc/systemd/system/multi-user.target.wants/ring-job-poweroff.service /etc/systemd/system/ring-job-poweroff.service" "$RING_E2E_FC_JOB_IMAGE" 2>&1 \
+  debugfs -w -R "symlink /etc/systemd/system/multi-user.target.wants/ring-job-poweroff.service ../ring-job-poweroff.service" "$RING_E2E_FC_JOB_IMAGE" 2>&1 \
     | grep -v "^debugfs " >&2 || true
 
   stat -c '%Y %s' "$RING_E2E_FC_ROOTFS" > "$RING_E2E_FC_JOB_STAMP"
