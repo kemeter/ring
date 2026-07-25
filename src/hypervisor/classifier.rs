@@ -17,8 +17,10 @@
 //!
 //! It generalises the Cloud Hypervisor runtime's `classify_vm_start_error`. It is
 //! deliberately runtime-agnostic (it only reads the shared [`RuntimeError`] enum
-//! and a raw exit code) so containerd and the VM runtimes can adopt it next; for
-//! now only the Docker runtime is wired to it.
+//! and a raw exit code): Docker and Podman go through [`classify_create_error`]
+//! and [`classify_exit_code`] directly, while the VM runtimes (Cloud Hypervisor,
+//! Firecracker) share [`classify_vm_start_error`], which layers an event reason
+//! on top of the same verdict.
 
 use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::DeploymentStatus;
@@ -59,6 +61,12 @@ pub(crate) fn classify_create_error(err: &RuntimeError) -> Disposition {
         // Permanent: Docker rejecting `create`/`start` almost always means a bad
         // container spec (entrypoint, mount, options) — retrying re-submits the
         // same rejected spec. Fail fast onto CreateContainerError.
+        //
+        // Caveat for adopters: this verdict assumes the variant carries a
+        // *rejected spec*, as it does on Docker. The containerd runtime reuses it
+        // for any failed gRPC call in the create path (including a transient shim
+        // outage), so it deliberately overrides this one case back to Retry — see
+        // `containerd::lifecycle::handle_create_error`.
         RuntimeError::InstanceCreationFailed(_) => {
             Disposition::Terminal(DeploymentStatus::CreateContainerError)
         }
@@ -112,6 +120,74 @@ pub(crate) fn classify_exit_code(exit_code: Option<i64>) -> Disposition {
         Some(0) => Disposition::Terminal(DeploymentStatus::Completed),
         Some(126) | Some(127) => Disposition::Terminal(DeploymentStatus::CreateContainerError),
         _ => Disposition::Retry,
+    }
+}
+
+/// Classify a VM start failure for the microVM runtimes (Cloud Hypervisor,
+/// Firecracker), returning the terminal status to land on — or `None` when the
+/// failure is transient and should bump `restart_count` — alongside the event
+/// reason to record.
+///
+/// The verdict comes from [`classify_create_error`], so the VM runtimes converge
+/// exactly like Docker: a missing config, a rejected instance spec or absent
+/// firmware fails fast instead of burning the whole restart budget. Only the
+/// event reason is runtime-flavoured, which is why this wrapper exists at all.
+pub(crate) fn classify_vm_start_error(
+    e: &RuntimeError,
+) -> (Option<DeploymentStatus>, &'static str) {
+    let reason = match e {
+        RuntimeError::FirmwareNotFound(_) => "FirmwareNotFound",
+        RuntimeError::ImageNotFound(_) => "ImageNotFound",
+        RuntimeError::ImagePullFailed(_) => "ImagePullFailed",
+        RuntimeError::InstanceCreationFailed(_) => "InstanceCreationFailed",
+        RuntimeError::ConfigNotFound(_) | RuntimeError::ConfigKeyNotFound(_) => "ConfigError",
+        RuntimeError::InsufficientResources(_) => "insufficient_resources",
+        RuntimeError::PortAlreadyInUse(_) => "PortAllocationFailed",
+        RuntimeError::NetworkCreationFailed(_) => "NetworkCreationFailed",
+        _ => "VmStartFailed",
+    };
+
+    let status = match classify_create_error(e) {
+        Disposition::Terminal(status) => Some(status),
+        Disposition::Retry => None,
+    };
+
+    (status, reason)
+}
+
+/// Apply a VM start failure to `deployment`: record the event, then either land
+/// on the terminal status or consume one unit of the restart budget.
+///
+/// `bound_status` is where a *transient* failure converges once the budget runs
+/// out — `CrashLoopBackOff` for a worker, `Failed` for a job.
+///
+/// Both branches must move `restart_count`. Several terminal statuses
+/// (`image_pull_back_off`, `config_error`, `create_container_error`) are still
+/// polled by the reconcile loop, so setting the status without pushing the
+/// counter to the bound would retry a permanent failure on every tick forever —
+/// exactly the loop this classifier exists to stop.
+pub(crate) fn apply_vm_start_failure(
+    deployment: &mut crate::models::deployments::Deployment,
+    err: &RuntimeError,
+    runtime: &str,
+    bound_status: DeploymentStatus,
+) {
+    use crate::models::deployments::MAX_RESTART_COUNT;
+
+    let (status, reason) = classify_vm_start_error(err);
+    deployment.emit_event("error", format!("{}", err), runtime, Some(reason));
+
+    match status {
+        Some(terminal) => {
+            deployment.restart_count = MAX_RESTART_COUNT;
+            deployment.status = terminal;
+        }
+        None => {
+            deployment.restart_count += 1;
+            if deployment.restart_count >= MAX_RESTART_COUNT {
+                deployment.status = bound_status;
+            }
+        }
     }
 }
 
@@ -197,6 +273,213 @@ mod tests {
         assert_eq!(
             classify_exit_code(Some(0)),
             Disposition::Terminal(DeploymentStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn vm_start_missing_firmware_is_terminal_failed() {
+        // Firecracker used to fall through to the catch-all here and retry a
+        // missing kernel/rootfs five times over.
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::FirmwareNotFound("/no/kernel".into())),
+            (Some(DeploymentStatus::Failed), "FirmwareNotFound")
+        );
+    }
+
+    #[test]
+    fn vm_start_config_errors_are_terminal() {
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::ConfigNotFound("c".into())),
+            (Some(DeploymentStatus::ConfigError), "ConfigError")
+        );
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::ConfigKeyNotFound("k".into())),
+            (Some(DeploymentStatus::ConfigError), "ConfigError")
+        );
+    }
+
+    #[test]
+    fn vm_start_instance_creation_failed_is_terminal() {
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::InstanceCreationFailed("bad spec".into())),
+            (
+                Some(DeploymentStatus::CreateContainerError),
+                "InstanceCreationFailed"
+            )
+        );
+    }
+
+    #[test]
+    fn vm_start_transient_errors_have_no_terminal_status() {
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::PortAlreadyInUse(8080)),
+            (None, "PortAllocationFailed")
+        );
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::VmStartFailed("boot".into())),
+            (None, "VmStartFailed")
+        );
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::ImagePullFailed("net".into())),
+            (None, "ImagePullFailed")
+        );
+    }
+
+    #[test]
+    fn vm_start_matches_create_error_verdict() {
+        // The two entry points must never drift: same error, same terminal-ness.
+        let errors = [
+            RuntimeError::FirmwareNotFound("f".into()),
+            RuntimeError::ImageNotFound("i".into()),
+            RuntimeError::ImagePullFailed("p".into()),
+            RuntimeError::InstanceCreationFailed("c".into()),
+            RuntimeError::ConfigNotFound("c".into()),
+            RuntimeError::InsufficientResources("m".into()),
+            RuntimeError::PortAlreadyInUse(1),
+            RuntimeError::NetworkCreationFailed("n".into()),
+            RuntimeError::Other("x".into()),
+        ];
+        for err in &errors {
+            let (status, _) = classify_vm_start_error(err);
+            assert_eq!(
+                status.is_some(),
+                classify_create_error(err).is_terminal(),
+                "verdict drifted for {:?}",
+                err
+            );
+        }
+    }
+
+    fn vm_deployment() -> crate::models::deployments::Deployment {
+        crate::models::deployments::Deployment {
+            id: "vm1".to_string(),
+            created_at: chrono::Utc::now().to_string(),
+            updated_at: None,
+            status: DeploymentStatus::Creating,
+            restart_count: 0,
+            namespace: "test".to_string(),
+            name: "vm".to_string(),
+            image: "/var/lib/ring/rootfs.ext4".to_string(),
+            config: None,
+            runtime: "firecracker".to_string(),
+            kind: "worker".to_string(),
+            replicas: 1,
+            command: vec![],
+            instances: vec![],
+            labels: std::collections::HashMap::new(),
+            environment: std::collections::HashMap::new(),
+            volumes: "[]".to_string(),
+            health_checks: vec![],
+            resources: None,
+            image_digest: None,
+            ports: vec![],
+            pending_events: vec![],
+            parent_id: None,
+            network: None,
+        }
+    }
+
+    /// The invariant that stops the infinite reboot loop: whichever branch is
+    /// taken, `restart_count` must move. Several terminal statuses are still
+    /// polled by the reconcile loop, so a terminal verdict that left the counter
+    /// at zero would retry a permanent failure on every tick, forever.
+    #[test]
+    fn every_start_failure_moves_the_restart_counter() {
+        let errors = [
+            RuntimeError::FirmwareNotFound("f".into()),
+            RuntimeError::ImageNotFound("i".into()),
+            RuntimeError::ConfigNotFound("c".into()),
+            RuntimeError::InsufficientResources("m".into()),
+            RuntimeError::PortAlreadyInUse(1),
+            RuntimeError::VmStartFailed("boot".into()),
+        ];
+        for err in &errors {
+            let mut deployment = vm_deployment();
+            apply_vm_start_failure(
+                &mut deployment,
+                err,
+                "firecracker",
+                DeploymentStatus::CrashLoopBackOff,
+            );
+            assert!(
+                deployment.restart_count > 0,
+                "counter stayed at zero for {:?} — the deployment would retry forever",
+                err
+            );
+        }
+    }
+
+    /// A permanent failure lands on its status and exhausts the budget at once,
+    /// so the very next tick is terminal instead of the fifth.
+    #[test]
+    fn terminal_start_failure_jumps_to_the_bound() {
+        let mut deployment = vm_deployment();
+        apply_vm_start_failure(
+            &mut deployment,
+            &RuntimeError::FirmwareNotFound("/no/vmlinux".into()),
+            "firecracker",
+            DeploymentStatus::CrashLoopBackOff,
+        );
+
+        assert_eq!(
+            deployment.restart_count,
+            crate::models::deployments::MAX_RESTART_COUNT
+        );
+        assert_eq!(deployment.status, DeploymentStatus::Failed);
+    }
+
+    /// A transient failure keeps its one-per-tick budget and converges to the
+    /// caller's bound status (CrashLoopBackOff for a worker, Failed for a job).
+    #[test]
+    fn transient_start_failure_converges_to_the_bound_status() {
+        let mut deployment = vm_deployment();
+        let max = crate::models::deployments::MAX_RESTART_COUNT;
+
+        for tick in 1..max {
+            apply_vm_start_failure(
+                &mut deployment,
+                &RuntimeError::VmStartFailed("boot timeout".into()),
+                "firecracker",
+                DeploymentStatus::CrashLoopBackOff,
+            );
+            assert_eq!(deployment.restart_count, tick);
+            assert_ne!(deployment.status, DeploymentStatus::CrashLoopBackOff);
+        }
+
+        apply_vm_start_failure(
+            &mut deployment,
+            &RuntimeError::VmStartFailed("boot timeout".into()),
+            "firecracker",
+            DeploymentStatus::CrashLoopBackOff,
+        );
+        assert_eq!(deployment.restart_count, max);
+        assert_eq!(deployment.status, DeploymentStatus::CrashLoopBackOff);
+    }
+
+    /// A job converges to Failed rather than CrashLoopBackOff.
+    #[test]
+    fn job_bound_status_is_honoured() {
+        let mut deployment = vm_deployment();
+        deployment.restart_count = crate::models::deployments::MAX_RESTART_COUNT - 1;
+
+        apply_vm_start_failure(
+            &mut deployment,
+            &RuntimeError::VmStartFailed("boot timeout".into()),
+            "cloud-hypervisor",
+            DeploymentStatus::Failed,
+        );
+
+        assert_eq!(deployment.status, DeploymentStatus::Failed);
+    }
+
+    #[test]
+    fn vm_start_insufficient_resources_is_terminal() {
+        assert_eq!(
+            classify_vm_start_error(&RuntimeError::InsufficientResources("need".into())),
+            (
+                Some(DeploymentStatus::InsufficientResources),
+                "insufficient_resources"
+            )
         );
     }
 

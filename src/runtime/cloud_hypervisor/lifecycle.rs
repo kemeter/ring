@@ -4,6 +4,7 @@ use super::client::{
 };
 use crate::config::config::get_config_dir;
 use crate::config::server::CloudHypervisorConfig;
+use crate::hypervisor::classifier::apply_vm_start_failure;
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
@@ -958,23 +959,12 @@ impl CloudHypervisorLifecycle {
                         deployment.id, e
                     );
 
-                    let (status, reason) = classify_vm_start_error(&e);
-
-                    deployment.emit_event(
-                        "error",
-                        format!("{}", e),
+                    apply_vm_start_failure(
+                        &mut deployment,
+                        &e,
                         "cloud-hypervisor",
-                        Some(reason),
+                        DeploymentStatus::CrashLoopBackOff,
                     );
-
-                    if let Some(terminal_status) = status {
-                        deployment.status = terminal_status;
-                    } else {
-                        deployment.restart_count += 1;
-                        if deployment.restart_count >= MAX_RESTART_COUNT {
-                            deployment.status = DeploymentStatus::CrashLoopBackOff;
-                        }
-                    }
                 }
             }
         } else if current_count > target_count
@@ -1128,49 +1118,17 @@ impl CloudHypervisorLifecycle {
                         deployment.id, e
                     );
 
-                    let (status, reason) = classify_vm_start_error(&e);
-
-                    deployment.emit_event(
-                        "error",
-                        format!("{}", e),
+                    apply_vm_start_failure(
+                        &mut deployment,
+                        &e,
                         "cloud-hypervisor",
-                        Some(reason),
+                        DeploymentStatus::Failed,
                     );
-
-                    if let Some(terminal_status) = status {
-                        deployment.status = terminal_status;
-                    } else {
-                        deployment.restart_count += 1;
-                        if deployment.restart_count >= MAX_RESTART_COUNT {
-                            deployment.status = DeploymentStatus::Failed;
-                        }
-                    }
                 }
             }
         }
 
         deployment
-    }
-}
-
-/// Classify a VM start failure into either a terminal deployment status
-/// (permanent: missing firmware/image) or `None` for transient errors that
-/// should bump `restart_count` and let the scheduler retry.
-fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'static str) {
-    match e {
-        RuntimeError::FirmwareNotFound(_) => (Some(DeploymentStatus::Failed), "FirmwareNotFound"),
-        RuntimeError::ImageNotFound(_) => {
-            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
-        }
-        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
-        // Terminal, not transient: the host is short on memory now and a retry
-        // on the next tick won't conjure more. Crash-looping would only spam
-        // events without changing the outcome — surface it and stop.
-        RuntimeError::InsufficientResources(_) => (
-            Some(DeploymentStatus::InsufficientResources),
-            "insufficient_resources",
-        ),
-        _ => (None, "VmStartFailed"),
     }
 }
 
@@ -1456,6 +1414,10 @@ impl CloudHypervisorLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The classification itself now lives in the shared classifier; this module
+    // still asserts the verdicts CH depends on, so the move can't silently
+    // change them.
+    use crate::hypervisor::classifier::classify_vm_start_error;
 
     fn cfg_with_binary(binary_path: &str) -> CloudHypervisorRuntimeConfig {
         CloudHypervisorRuntimeConfig {

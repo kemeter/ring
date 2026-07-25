@@ -14,6 +14,7 @@
 //! presence on disk (its `.sock`) is the source of truth for "is it running".
 
 use crate::config::server::FirecrackerConfig;
+use crate::hypervisor::classifier::{apply_vm_start_failure, classify_vm_start_error};
 use crate::hypervisor::cloud_init::{GuestMount, GuestNet};
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
@@ -956,7 +957,24 @@ impl FirecrackerLifecycle {
                     Ok(_) => {}
                     Err(e) => {
                         error!("Firecracker: failed to start instance: {}", e);
-                        deployment.status = DeploymentStatus::CreateContainerError;
+                        // This path used to set the status without ever touching
+                        // `restart_count`, so the scheduler — which keeps polling
+                        // `create_container_error` — retried the boot forever.
+                        let terminal = classify_vm_start_error(&e).0.is_some();
+                        apply_vm_start_failure(
+                            &mut deployment,
+                            &e,
+                            "firecracker",
+                            DeploymentStatus::CrashLoopBackOff,
+                        );
+                        // A transient failure that still has budget left keeps
+                        // reporting a create error, so the retry stays visible
+                        // instead of silently sitting in Creating. A terminal
+                        // verdict already owns the status and must not be
+                        // overwritten here.
+                        if !terminal && deployment.restart_count < MAX_RESTART_COUNT {
+                            deployment.status = DeploymentStatus::CreateContainerError;
+                        }
                         break;
                     }
                 }
@@ -1088,39 +1106,17 @@ impl FirecrackerLifecycle {
                         "Firecracker: failed to start job VM for deployment {}: {}",
                         deployment.id, e
                     );
-                    let (status, reason) = classify_vm_start_error(&e);
-                    deployment.emit_event("error", format!("{}", e), "firecracker", Some(reason));
-                    if let Some(terminal) = status {
-                        deployment.status = terminal;
-                    } else {
-                        deployment.restart_count += 1;
-                        if deployment.restart_count >= MAX_RESTART_COUNT {
-                            deployment.status = DeploymentStatus::Failed;
-                        }
-                    }
+                    apply_vm_start_failure(
+                        &mut deployment,
+                        &e,
+                        "firecracker",
+                        DeploymentStatus::Failed,
+                    );
                 }
             }
         }
 
         deployment
-    }
-}
-
-/// Classify a VM start failure into either a terminal deployment status
-/// (permanent: missing kernel/rootfs) or `None` for transient errors that
-/// should bump `restart_count` and let the scheduler retry. Mirrors the Cloud
-/// Hypervisor classifier so the two runtimes converge identically.
-fn classify_vm_start_error(e: &RuntimeError) -> (Option<DeploymentStatus>, &'static str) {
-    match e {
-        RuntimeError::ImageNotFound(_) => {
-            (Some(DeploymentStatus::ImagePullBackOff), "ImageNotFound")
-        }
-        RuntimeError::PortAlreadyInUse(_) => (None, "PortAllocationFailed"),
-        RuntimeError::InsufficientResources(_) => (
-            Some(DeploymentStatus::InsufficientResources),
-            "insufficient_resources",
-        ),
-        _ => (None, "VmStartFailed"),
     }
 }
 
@@ -1136,7 +1132,19 @@ fn liveness_confirmed_status(
     current: &DeploymentStatus,
     any_alive: bool,
 ) -> Option<DeploymentStatus> {
-    if *current == DeploymentStatus::CreateContainerError {
+    // A status the scale loop just set from a failed boot must survive this
+    // gate. With replicas > 1 one instance can be alive while another failed to
+    // start, and reporting Running would erase the failure the operator needs to
+    // see — including the terminal verdicts the classifier now produces.
+    if matches!(
+        current,
+        DeploymentStatus::CreateContainerError
+            | DeploymentStatus::CrashLoopBackOff
+            | DeploymentStatus::ImagePullBackOff
+            | DeploymentStatus::ConfigError
+            | DeploymentStatus::InsufficientResources
+            | DeploymentStatus::Failed
+    ) {
         return None;
     }
     any_alive.then_some(DeploymentStatus::Running)
@@ -1572,6 +1580,27 @@ mod tests {
             liveness_confirmed_status(&DeploymentStatus::CreateContainerError, true),
             None
         );
+    }
+
+    /// Same reasoning for every terminal verdict the classifier can produce on a
+    /// failed boot: with replicas > 1 a sibling instance can be alive, and
+    /// promoting to Running there would erase the failure entirely.
+    #[test]
+    fn terminal_boot_failures_are_preserved() {
+        for status in [
+            DeploymentStatus::CrashLoopBackOff,
+            DeploymentStatus::ImagePullBackOff,
+            DeploymentStatus::ConfigError,
+            DeploymentStatus::InsufficientResources,
+            DeploymentStatus::Failed,
+        ] {
+            assert_eq!(
+                liveness_confirmed_status(&status, true),
+                None,
+                "{:?} must survive the liveness gate",
+                status
+            );
+        }
     }
 
     #[test]
