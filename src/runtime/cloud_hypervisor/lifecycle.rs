@@ -586,13 +586,15 @@ impl CloudHypervisorLifecycle {
         // vsock for every CH VM would mean an extra device per VM for no
         // benefit; gate it on demand instead.
         //
-        // Known limitation: `needs_vsock` is evaluated only at boot. If an
-        // operator adds a `command` health check to an already-running
-        // deployment, the existing VM has no vsock device; the next probe
-        // will fail at connect, the scheduler will increment failures and
-        // eventually restart the VM, at which point this path runs again
-        // and the vsock is provisioned. The transient failures are
-        // unavoidable without a hot-attach path through the CH API.
+        // Known limitation: `needs_vsock` is evaluated only at boot, and CH has
+        // no hot-attach path for vhost-vsock. A `command` check added to an
+        // already-running deployment therefore cannot reach its VM until that
+        // VM restarts. Whether it ever does is up to the check's `on_failure`:
+        // `restart` heals itself after the failure threshold, but `alert` and
+        // `stop` never re-run this path, so the check stays red until the
+        // operator restarts the deployment. `execute_command_probe` detects
+        // this case (no host-side vsock socket) and says so, rather than
+        // blaming a missing `ring-agent` in the guest.
         let needs_vsock = deployment
             .health_checks
             .iter()
@@ -1373,20 +1375,23 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
                     resp.stderr.trim()
                 )),
             ),
-            // A connect failure almost always means the guest image doesn't
-            // ship `ring-agent` listening on AF_VSOCK port 2375 (or it hasn't
-            // started yet) — the single most common `command` health-check
-            // pitfall on this runtime. Point the operator straight at it
-            // instead of leaving them with a bare io error.
-            Err(crate::hypervisor::vsock_client::VsockError::Connect { cid, source }) => (
-                HealthCheckStatus::Failed,
-                Some(format!(
-                    "cannot reach ring-agent in the guest (CID {cid}): {source}. \
-                     `command` health checks on cloud-hypervisor require ring-agent \
-                     running in the guest image on AF_VSOCK port 2375 — see the \
-                     cloud-hypervisor runtime docs"
-                )),
-            ),
+            // A connect failure has two very different causes, and blaming the
+            // guest image for both sends the operator hunting in the wrong
+            // place. The host-side socket only exists when the VM was booted
+            // with a vsock device, so its absence pinpoints the other cause.
+            Err(crate::hypervisor::vsock_client::VsockError::Connect { cid, source }) => {
+                let vsock_path =
+                    PathBuf::from(&self.config.socket_dir).join(format!("{}.vsock", instance_id));
+                (
+                    HealthCheckStatus::Failed,
+                    Some(crate::hypervisor::vsock_client::connect_failure_message(
+                        "cloud-hypervisor",
+                        cid,
+                        &source.to_string(),
+                        vsock_path.exists(),
+                    )),
+                )
+            }
             Err(e) => (
                 HealthCheckStatus::Failed,
                 Some(format!("vsock probe failed: {}", e)),

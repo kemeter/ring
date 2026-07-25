@@ -210,6 +210,10 @@ Note that the guest network is only allocated when the deployment publishes at l
 
 `tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375, so install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
 
+> **A `command` check added to a running deployment needs a VM restart.** The vsock device is attached at boot, and only when the deployment already declares a `command` check — cloud-hypervisor has no hot-plug path for it. Until the VM restarts, the probe cannot reach the guest at all. The failure message names this cause alongside a missing agent, so it isn't mistaken for one.
+>
+> Whether the VM ever restarts on its own is up to the check's `on_failure`: `restart` heals itself once the failure threshold is reached, but `alert` and `stop` never reboot the VM, so the check stays red until you restart the deployment yourself. Declaring the `command` check before the first boot avoids the whole situation.
+
 The readiness gate (`readiness: true`) works exactly as on Docker, since the scheduler-side drain logic is runtime-agnostic. **But there is no CH equivalent of the native Docker `HEALTHCHECK` translation**, so a `readiness: true` check gates the Ring drain but is not exposed to external proxies.
 
 ## Logs

@@ -157,6 +157,12 @@ checks via the in-guest `ring-agent` over vsock, `kind: job` run-to-completion, 
 **Current limitations (experimental):**
 - Crash detection is tick-bound (no event stream), and `labels`, while stored and
   filterable as Ring metadata, are not applied to the VM itself
+- Like Cloud Hypervisor, the vsock device backing `command` health checks is
+  attached at boot and only when the deployment already declares such a check;
+  one added to a running deployment cannot reach its VM until that VM restarts
+  (neither hypervisor can hot-plug it). The probe names this cause alongside a
+  missing agent instead of reporting only the latter, and `on_failure: restart`
+  heals itself — `alert` and `stop` need a manual restart
 
 A `ring-server` restart is transparent: running microVMs (and their persistent host taps) survive it, and the reconciler re-adopts them (re-deriving each instance's network from its id and re-spawning the host port-forwarders the old process took down) so a deployment keeps its guest state and its published ports across a restart.
 
