@@ -23,6 +23,7 @@
     { href: '/namespaces', label: 'Namespaces', icon: 'folder' },
     { href: '/secrets', label: 'Secrets', icon: 'key' },
     { href: '/configs', label: 'Configs', icon: 'file' },
+    { href: '/volumes', label: 'Volumes', icon: 'disc' },
     { href: '/node', label: 'Node', icon: 'server' }
   ];
 
@@ -140,6 +141,19 @@
                 >
                   <path d="M3 1.5h6L13 5.5V14a.5.5 0 0 1-.5.5h-9A.5.5 0 0 1 3 14V1.5z" />
                   <path d="M9 1.5V5.5h4" />
+                </svg>
+              {:else if item.icon === 'disc'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <ellipse cx="8" cy="4" rx="5.5" ry="2.25" />
+                  <path d="M2.5 4v8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25V4" />
+                  <path d="M2.5 8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25" />
                 </svg>
               {:else if item.icon === 'server'}
                 <svg

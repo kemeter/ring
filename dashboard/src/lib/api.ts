@@ -353,6 +353,33 @@ export function listConfigs(): Promise<Config[]> {
   return request<Config[]>('/configs');
 }
 
+export interface Volume {
+  id: string;
+  created_at: string;
+  /** Absent until the volume is updated. */
+  updated_at: string | null;
+  namespace: string;
+  name: string;
+  /** Bytes. `null` when the backend doesn't report a size. */
+  size: number | null;
+  backend_type: string;
+  host_path: string;
+  /** Unlike `Config.labels` (a free-form string), the volumes endpoint
+   *  returns a real object. */
+  labels: Record<string, string>;
+}
+
+/** Lists volumes, optionally narrowed server-side to given namespaces. The
+ *  endpoint expects a repeated `namespace[]` parameter. */
+export function listVolumes(namespaces: string[] = []): Promise<Volume[]> {
+  const params = new URLSearchParams();
+  for (const ns of namespaces) {
+    params.append('namespace[]', ns);
+  }
+  const qs = params.toString();
+  return request<Volume[]>(`/volumes${qs ? `?${qs}` : ''}`);
+}
+
 export interface LogsQuery {
   tail?: number;
   since?: string;
