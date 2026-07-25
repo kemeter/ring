@@ -380,6 +380,21 @@ export function listVolumes(namespaces: string[] = []): Promise<Volume[]> {
   return request<Volume[]>(`/volumes${qs ? `?${qs}` : ''}`);
 }
 
+export interface Webhook {
+  id: string;
+  url: string;
+  /** Event names this webhook subscribes to. */
+  events: string[];
+  created_at: string;
+  /** Set once revoked; the webhook then stops receiving deliveries. */
+  revoked_at: string | null;
+}
+
+/** Webhooks are not namespaced. The HMAC secret is never returned by the API. */
+export function listWebhooks(): Promise<Webhook[]> {
+  return request<Webhook[]>('/webhooks');
+}
+
 export interface LogsQuery {
   tail?: number;
   since?: string;

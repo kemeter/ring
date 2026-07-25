@@ -24,6 +24,7 @@
     { href: '/secrets', label: 'Secrets', icon: 'key' },
     { href: '/configs', label: 'Configs', icon: 'file' },
     { href: '/volumes', label: 'Volumes', icon: 'disc' },
+    { href: '/webhooks', label: 'Webhooks', icon: 'webhook' },
     { href: '/node', label: 'Node', icon: 'server' }
   ];
 
@@ -154,6 +155,20 @@
                   <ellipse cx="8" cy="4" rx="5.5" ry="2.25" />
                   <path d="M2.5 4v8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25V4" />
                   <path d="M2.5 8c0 1.24 2.46 2.25 5.5 2.25s5.5-1.01 5.5-2.25" />
+                </svg>
+              {:else if item.icon === 'webhook'}
+                <svg
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <circle cx="8" cy="4.25" r="2.25" />
+                  <circle cx="3.75" cy="11.5" r="2.25" />
+                  <circle cx="12.25" cy="11.5" r="2.25" />
+                  <path d="M6.85 6.2L4.9 9.55M9.15 6.2l1.95 3.35M6 11.5h4" />
                 </svg>
               {:else if item.icon === 'server'}
                 <svg
