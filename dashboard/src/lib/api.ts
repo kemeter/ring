@@ -410,6 +410,27 @@ export function listUsers(): Promise<User[]> {
   return request<User[]>('/users');
 }
 
+export interface Token {
+  id: string;
+  name: string;
+  /** Leading characters of the clear token (e.g. `ring_pat_a1b2c3`), enough to
+   *  identify it. The secret itself is only ever returned at creation. */
+  token_prefix: string;
+  scopes: string[];
+  /** Empty means the token is valid in every namespace. */
+  namespaces: string[];
+  created_at: string;
+  expire_at: string | null;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** Lists the caller's own personal access tokens — never another user's, and
+ *  never login sessions. Requires the `admin` scope. */
+export function listTokens(): Promise<Token[]> {
+  return request<Token[]>('/tokens');
+}
+
 export interface LogsQuery {
   tail?: number;
   since?: string;
