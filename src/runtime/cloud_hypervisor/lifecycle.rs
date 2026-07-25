@@ -1141,6 +1141,43 @@ impl CloudHypervisorLifecycle {
     }
 }
 
+/// Translate the runtime-agnostic `status` filter of
+/// [`RuntimeLifecycle::list_instances`] into the Cloud Hypervisor VM states that
+/// satisfy it. `None` means "no filter" (the `all` case).
+///
+/// The filter vocabulary is Docker's, since that is what the trait's callers
+/// speak: `all` accepts everything, `active` means running-or-coming-up, and
+/// anything else is an exact state match.
+///
+/// `active` maps to the same trio this runtime already treats as "alive or
+/// about to be" when scaling and when running a job — the counterpart of
+/// Docker's running/restarting. It is deliberately wider than Docker's
+/// `active`, which excludes `created`: a CH VM sits in `Created` for a moment
+/// between spawn and boot, and dropping it there would make a freshly-started
+/// replica briefly invisible.
+///
+/// This used to be hardcoded to `["Running"]` regardless of the argument, so a
+/// caller asking for `all` (or for a stopped instance) silently got only the
+/// running ones.
+fn ch_states_for_status(status: &str) -> Option<Vec<&'static str>> {
+    match status {
+        "all" => None,
+        "active" => Some(vec!["Running", "Created", "Booting"]),
+        "running" => Some(vec!["Running"]),
+        "exited" | "stopped" => Some(vec!["Shutdown"]),
+        // An explicit CH state name, passed through as-is.
+        "Created" => Some(vec!["Created"]),
+        "Booting" => Some(vec!["Booting"]),
+        "Running" => Some(vec!["Running"]),
+        "Shutdown" => Some(vec!["Shutdown"]),
+        "Paused" => Some(vec!["Paused"]),
+        "BreakPoint" => Some(vec!["BreakPoint"]),
+        // Unknown filter: match nothing rather than silently returning
+        // everything, which would misreport a deployment as fully up.
+        _ => Some(Vec::new()),
+    }
+}
+
 fn parse_resources(deployment: &Deployment) -> (u32, u32) {
     let mut vcpus = 1u32;
     let mut memory_mb = 256u32;
@@ -1190,8 +1227,13 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         }
     }
 
-    async fn list_instances(&self, deployment_id: String, _status: &str) -> Vec<String> {
-        self.scan_instances(&deployment_id, &["Running"]).await
+    async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
+        match ch_states_for_status(status) {
+            Some(states) => self.scan_instances(&deployment_id, &states).await,
+            // "all" — no state filter at all, which also skips one API round
+            // trip per instance.
+            None => self.scan_instances(&deployment_id, &[]).await,
+        }
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {
@@ -1738,6 +1780,41 @@ mod tests {
         let out = lc.handle_job_deployment(dep, vec![]).await;
         assert_eq!(out.status, DeploymentStatus::Failed);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The status argument used to be ignored — `list_instances` always scanned
+    /// for `Running` only, so a caller asking for `all` (or for a stopped
+    /// instance) silently got just the running ones.
+    #[test]
+    fn status_filter_maps_to_ch_states() {
+        // `all` means no state filter at all, which also skips one API round
+        // trip per instance.
+        assert_eq!(ch_states_for_status("all"), None);
+        // `active` is running-or-coming-up, mirroring Docker's
+        // running/restarting intent.
+        assert_eq!(
+            ch_states_for_status("active"),
+            Some(vec!["Running", "Created", "Booting"])
+        );
+        assert_eq!(ch_states_for_status("running"), Some(vec!["Running"]));
+        assert_eq!(ch_states_for_status("exited"), Some(vec!["Shutdown"]));
+        assert_eq!(ch_states_for_status("stopped"), Some(vec!["Shutdown"]));
+    }
+
+    /// A raw CH state name passes through, so a caller can ask for exactly one.
+    #[test]
+    fn explicit_ch_state_names_pass_through() {
+        for state in ["Created", "Booting", "Running", "Shutdown"] {
+            assert_eq!(ch_states_for_status(state), Some(vec![state]));
+        }
+    }
+
+    /// An unrecognised filter must match nothing rather than fall back to
+    /// everything, which would misreport a deployment as fully up.
+    #[test]
+    fn unknown_status_filter_matches_nothing() {
+        assert_eq!(ch_states_for_status("paused"), Some(Vec::new()));
+        assert_eq!(ch_states_for_status(""), Some(Vec::new()));
     }
 
     #[test]
