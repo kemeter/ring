@@ -488,6 +488,9 @@ impl FirecrackerLifecycle {
         // hands its name to Firecracker, while cloud-init configures the
         // matching guest IP.
         let net_alloc = Some(InstanceNet::for_instance(&instance_id));
+        if let Some(n) = &net_alloc {
+            self.reclaim_stale_tap(&n.tap_name, &instance_id);
+        }
         let tap = match &net_alloc {
             Some(n) => match TapDevice::create(&n.tap_name, &n.host_ip, n.prefix_len) {
                 Ok(t) => {
@@ -840,6 +843,24 @@ impl FirecrackerLifecycle {
         instances
     }
 
+    /// Every instance on this host, across all deployments, read from the socket
+    /// directory. Unlike [`Self::scan_instances`] it does not filter by
+    /// deployment: tap names are derived from a hash of the instance id, so a
+    /// clash can involve two entirely unrelated deployments.
+    fn all_instances(&self) -> Vec<String> {
+        let entries = match std::fs::read_dir(&self.config.socket_dir) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.strip_suffix(".sock").map(|id| id.to_string())
+            })
+            .collect()
+    }
+
     /// Instances of a deployment that are alive on disk (socket present) but
     /// absent from our PID map — i.e. inherited from a previous `ring-server`.
     /// These are the ones whose in-process networking state was lost on restart.
@@ -849,6 +870,74 @@ impl FirecrackerLifecycle {
             .into_iter()
             .filter(|id| !pids.contains_key(id))
             .collect()
+    }
+
+    /// Delete `tap_name` if it exists on the host but belongs to no live
+    /// instance, so a fresh boot can claim the name.
+    ///
+    /// `TapDevice::create` refuses an existing interface — without that, a hash
+    /// collision on the tap name would silently put two guests on one tap and
+    /// one host IP. But `TapDevice::delete` is best-effort (it gives up on
+    /// EPERM, or after exhausting its EBUSY retries), so a teardown can leave an
+    /// interface behind. That leftover would then block every future boot that
+    /// hashes to the same slot — trading a rare silent collision for a
+    /// permanent, self-inflicted outage.
+    ///
+    /// Ownership is decided from the socket directory, which is Ring's inventory
+    /// of what exists: a tap whose name matches no on-disk instance is
+    /// unreachable garbage, safe to remove. A tap that *does* match a live
+    /// instance is left alone, and `create` will then fail with a clear message
+    /// — the genuine collision case, where refusing is the right answer.
+    fn reclaim_stale_tap(&self, tap_name: &str, booting_instance_id: &str) {
+        if !TapDevice::exists(tap_name) {
+            return;
+        }
+
+        // Every instance Ring currently knows about, across all deployments.
+        // The booting instance's own socket already exists at this point, and it
+        // hashes to this very tap name — counting it would make the interface
+        // look claimed and defeat the reclaim.
+        let claimed = self
+            .all_instances()
+            .into_iter()
+            .filter(|id| id != booting_instance_id)
+            .any(|id| InstanceNet::for_instance(&id).tap_name == tap_name);
+        if claimed {
+            return;
+        }
+
+        // The socket inventory can lie: a live VM whose socket was unlinked
+        // would look unowned, and deleting its interface would cut the network
+        // of a running guest. Confirm against /proc, which is the actual source
+        // of truth for "is a VM still using this tap", before removing anything.
+        if live_vm_uses_tap(tap_name, booting_instance_id) {
+            warn!(
+                "Firecracker: tap '{}' has no instance socket but a live VM still uses it — \
+                 leaving it alone",
+                tap_name
+            );
+            return;
+        }
+
+        warn!(
+            "Firecracker: reclaiming stale tap '{}' (no live instance owns it)",
+            tap_name
+        );
+        TapDevice::adopt(tap_name).delete();
+
+        // `delete` is best-effort: it gives up on EPERM (no CAP_NET_ADMIN) and
+        // after exhausting its EBUSY retries. If the interface is still there,
+        // `TapDevice::create` will refuse the boot — say why now, since its
+        // message alone would read as a hash collision when it is really a
+        // permissions or teardown problem. The remedy it prints
+        // (`ip link delete <name>`) applies either way.
+        if TapDevice::exists(tap_name) {
+            warn!(
+                "Firecracker: could not remove stale tap '{}' — the boot will fail. \
+                 Check that ring-server holds CAP_NET_ADMIN, then delete it manually",
+                tap_name
+            );
+        }
     }
 
     /// Re-adopt the host networking of instances inherited from a previous
@@ -1174,6 +1263,80 @@ fn find_pid_by_socket(socket_path: &str) -> Option<u32> {
         };
         if cmdline_matches_socket(&cmdline, socket_path) {
             return Some(pid);
+        }
+    }
+    None
+}
+
+/// Is a live `firecracker` process currently serving the instance that owns
+/// `tap_name`? Scans `/proc` for firecracker processes and re-derives each
+/// one's tap name from the instance id embedded in its `--api-sock` path.
+///
+/// This is the safety net over the socket inventory used by
+/// [`FirecrackerLifecycle::reclaim_stale_tap`]: a running VM whose socket file
+/// was removed would vanish from that inventory, and reclaiming its tap would
+/// take the network away from a live guest. `/proc` still shows the process.
+///
+/// `booting_instance_id` is excluded — the process being booted right now owns
+/// the very socket whose tap we are about to claim.
+///
+/// Errs on the side of "in use" whenever `/proc` cannot be read, so on a host
+/// with `hidepid` the reclaim simply does not happen and the operator gets the
+/// manual remedy from `TapDevice::create`. Failing to reclaim costs one boot;
+/// deleting a live VM's interface breaks a running workload.
+fn live_vm_uses_tap(tap_name: &str, booting_instance_id: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        // Can't read /proc: assume the tap is in use rather than risk deleting
+        // a live VM's interface.
+        return true;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let cmdline = match std::fs::read(format!("/proc/{}/cmdline", pid)) {
+            Ok(c) => c,
+            // The process exited between readdir and here — genuinely gone, so
+            // it owns nothing.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            // Anything else (EACCES under `hidepid`, EPERM, I/O error) means a
+            // process we cannot inspect, not a process that isn't there. Treat
+            // the tap as in use rather than risk cutting a live guest's network.
+            Err(_) => {
+                warn!(
+                    "Firecracker: cannot inspect /proc/{}/cmdline; assuming tap '{}' is in use",
+                    pid, tap_name
+                );
+                return true;
+            }
+        };
+        let Some(instance_id) = instance_id_from_cmdline(&cmdline) else {
+            continue;
+        };
+        if instance_id == booting_instance_id {
+            continue;
+        }
+        if InstanceNet::for_instance(&instance_id).tap_name == tap_name {
+            return true;
+        }
+    }
+    false
+}
+
+/// The instance id of the firecracker process described by `cmdline`, taken from
+/// the file stem of its `--api-sock` argument (`/run/fc/<instance-id>.sock`).
+/// `None` when this is not a firecracker process or carries no socket argument.
+fn instance_id_from_cmdline(cmdline: &[u8]) -> Option<String> {
+    let mut args = cmdline.split(|&b| b == 0);
+    if !args.next()?.ends_with(b"firecracker") {
+        return None;
+    }
+    for arg in args {
+        let s = std::str::from_utf8(arg).ok()?;
+        if let Some(stem) = s.strip_suffix(".sock") {
+            return stem.rsplit('/').next().map(|id| id.to_string());
         }
     }
     None
@@ -1653,6 +1816,88 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// `all_instances` must span every deployment, unlike `scan_instances`:
+    /// tap names come from a hash of the instance id, so a clash can involve two
+    /// unrelated deployments. Missing one would make a live tap look orphaned
+    /// and get it deleted out from under a running VM.
+    #[test]
+    fn all_instances_spans_every_deployment() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ring-fc-all-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = FirecrackerRuntimeConfig {
+            socket_dir: dir.to_string_lossy().to_string(),
+            ..FirecrackerRuntimeConfig::default()
+        };
+        let lc = FirecrackerLifecycle::new(cfg);
+
+        for f in [
+            "dep-1-aaa.sock",
+            "dep-2-bbb.sock",
+            "dep-1-aaa.ext4", // not a socket
+        ] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+
+        let mut found = lc.all_instances();
+        found.sort();
+        assert_eq!(
+            found,
+            vec!["dep-1-aaa".to_string(), "dep-2-bbb".to_string()],
+            "must cross deployment boundaries and ignore non-sockets"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A tap owned by a live instance must never be reclaimed. The reclaim is
+    /// keyed on the socket inventory, so this asserts the ownership lookup that
+    /// decides it — deleting a live VM's interface would be far worse than the
+    /// collision the guard exists to catch.
+    #[test]
+    fn a_live_instance_claims_its_tap_name() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("ring-fc-claim-{}-{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let cfg = FirecrackerRuntimeConfig {
+            socket_dir: dir.to_string_lossy().to_string(),
+            ..FirecrackerRuntimeConfig::default()
+        };
+        let lc = FirecrackerLifecycle::new(cfg);
+
+        let live = "dep-1-live";
+        std::fs::write(dir.join(format!("{}.sock", live)), b"").unwrap();
+        let live_tap = InstanceNet::for_instance(live).tap_name;
+
+        // The live instance claims its own tap name...
+        assert!(
+            lc.all_instances()
+                .iter()
+                .any(|id| InstanceNet::for_instance(id).tap_name == live_tap)
+        );
+
+        // ...but excluding it (as the booting instance is) leaves the name
+        // unclaimed, which is exactly what makes a leftover reclaimable.
+        assert!(
+            !lc.all_instances()
+                .iter()
+                .filter(|id| *id != live)
+                .any(|id| InstanceNet::for_instance(id).tap_name == live_tap)
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn orphan_instances_are_on_disk_but_not_in_pid_map() {
         // After a restart the pid map is empty, so every on-disk instance is an
@@ -1704,6 +1949,47 @@ mod tests {
         // argv[0]=firecracker, then --api-sock <sock>
         let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
         assert!(cmdline_matches_socket(cmd, sock));
+    }
+
+    /// The instance id is what lets a live VM be matched to the tap it owns, so
+    /// a running guest's interface is never reclaimed. It comes from the socket
+    /// argument's file stem.
+    #[test]
+    fn instance_id_is_read_from_the_socket_argument() {
+        let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert_eq!(
+            instance_id_from_cmdline(cmd).as_deref(),
+            Some("dep-1-aaa"),
+            "must strip both the directory and the .sock suffix"
+        );
+    }
+
+    /// A non-firecracker process must never be mistaken for a VM — otherwise an
+    /// unrelated process could make a genuinely stale tap look alive and block
+    /// the reclaim forever.
+    #[test]
+    fn instance_id_ignores_non_firecracker_processes() {
+        let cmd = b"/usr/bin/socat\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        assert_eq!(instance_id_from_cmdline(cmd), None);
+    }
+
+    #[test]
+    fn instance_id_is_none_without_a_socket_argument() {
+        let cmd = b"/usr/bin/firecracker\0--version\0";
+        assert_eq!(instance_id_from_cmdline(cmd), None);
+    }
+
+    /// The id feeds straight back into the tap-name derivation, so this closes
+    /// the loop the reclaim actually relies on.
+    #[test]
+    fn instance_id_round_trips_to_its_tap_name() {
+        let id = "dep-1-aaa";
+        let cmd = b"/usr/bin/firecracker\0--api-sock\0/run/fc/dep-1-aaa.sock\0";
+        let parsed = instance_id_from_cmdline(cmd).expect("id parses");
+        assert_eq!(
+            InstanceNet::for_instance(&parsed).tap_name,
+            InstanceNet::for_instance(id).tap_name
+        );
     }
 
     #[test]

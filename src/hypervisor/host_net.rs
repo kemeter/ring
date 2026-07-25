@@ -12,10 +12,19 @@
 //! mapping for a still-running VM.
 //!
 //! `10.42.0.0/16` carries 16384 /30 subnets — far more than any realistic
-//! single-host CH workload. Hash collisions across the 14-bit space are
-//! tolerated with best-effort: if two instance ids happen to hash to the
-//! same /30, the second VM will fail to bring its tap up and Ring will
-//! crashloop it. Documented as a known v1 limitation.
+//! single-host VM workload, but the 14-bit space still admits hash collisions.
+//!
+//! On **Firecracker**, Ring owns tap creation, and [`TapDevice::create`] refuses
+//! a name that already exists: a collision surfaces as a plain boot failure
+//! naming the interface. This matters because `TUNSETIFF` on an existing name
+//! *succeeds* — without that guard the two guests would silently share one tap
+//! and one host IP, and tearing one VM down would delete the other's interface.
+//!
+//! On **Cloud Hypervisor** the VMM creates the tap itself, so Ring does not
+//! gate it. A collision there remains a known limitation: `cloud-hypervisor`
+//! would reuse the existing interface with the same silent consequences.
+//!
+//! [`TapDevice::create`]: super::tap::TapDevice::create
 
 const TAP_PREFIX: &str = "ring-";
 const SUBNET_BASE_HIGH: u8 = 10;

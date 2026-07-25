@@ -59,12 +59,37 @@ impl TapDevice {
     /// Create a tap device named `name`, assign `host_ip/prefix_len` to its host
     /// side, and bring it up. The device is made persistent and our fd is closed
     /// before returning, so Firecracker can open it as its backend.
+    ///
+    /// Fails if an interface of that name already exists. `TUNSETIFF` would
+    /// otherwise *reuse* it silently — and since [`InstanceNet`] derives the tap
+    /// name from a 14-bit hash of the instance id, two instances whose ids
+    /// collide would then share one tap and one host IP. Nothing would report an
+    /// error: the two guests would sit on the same /30, and tearing the second
+    /// one down would delete the first one's interface out from under a running
+    /// VM. Refusing here turns that silent corruption into a plain boot failure.
+    ///
+    /// The check is not atomic with `TUNSETIFF`, so two *concurrent* creations
+    /// of the same name could both pass it. Ring boots instances sequentially
+    /// within a reconcile tick, so this is not reachable today; it would need
+    /// revisiting if boots ever run in parallel.
+    ///
+    /// [`InstanceNet`]: super::host_net::InstanceNet
     pub(crate) fn create(name: &str, host_ip: &str, prefix_len: u8) -> Result<Self, RuntimeError> {
         if name.len() >= libc::IFNAMSIZ {
             return Err(RuntimeError::NetworkCreationFailed(format!(
                 "tap name '{}' exceeds IFNAMSIZ-1 ({})",
                 name,
                 libc::IFNAMSIZ - 1
+            )));
+        }
+
+        if Self::exists(name) {
+            return Err(RuntimeError::NetworkCreationFailed(format!(
+                "tap '{}' already exists on this host — another instance derived \
+                 the same network slot (hash collision on the instance id, or a \
+                 leftover interface from a previous run). Delete it with \
+                 `ip link delete {}` if no VM is using it.",
+                name, name
             )));
         }
 
@@ -382,6 +407,34 @@ fn prefix_to_mask(prefix_len: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creating a tap whose name is already taken must be refused rather than
+    /// silently reusing the interface. `TUNSETIFF` on an existing name succeeds,
+    /// so without this guard two instances that hash to the same network slot
+    /// would share one tap and one host IP, and tearing one down would delete
+    /// the other's interface.
+    ///
+    /// Uses `lo`, which always exists. The check runs before any ioctl, so this
+    /// needs no privileges and never touches the loopback interface.
+    #[test]
+    fn create_refuses_an_existing_interface() {
+        match TapDevice::create("lo", "10.42.0.1", 30) {
+            Err(RuntimeError::NetworkCreationFailed(msg)) => {
+                assert!(msg.contains("already exists"), "explains the clash: {msg}");
+                assert!(msg.contains("lo"), "names the interface: {msg}");
+            }
+            Err(other) => panic!("expected NetworkCreationFailed, got {other:?}"),
+            Ok(_) => panic!("an existing interface must not be reused"),
+        }
+    }
+
+    /// The guard keys off interface existence, so a free name is unaffected —
+    /// it falls through to the real creation path (which needs CAP_NET_ADMIN and
+    /// is therefore not exercised here).
+    #[test]
+    fn exists_is_false_for_a_free_name() {
+        assert!(!TapDevice::exists("ring-test-nonexistent"));
+    }
 
     #[test]
     fn prefix_30_mask_is_252() {
