@@ -7,10 +7,16 @@
 #   tests/e2e/run.sh podman             # run only Podman tests
 #   tests/e2e/run.sh containerd         # run only containerd tests (root + CNI)
 #   tests/e2e/run.sh cloud-hypervisor   # run only Cloud Hypervisor tests
+#   tests/e2e/run.sh firecracker        # run only Firecracker tests
 #
 # The containerd suite is not in the default set: it needs access to the
 # root-owned containerd socket and CNI plugins, so run it explicitly
 # (e.g. `sudo -E tests/e2e/run.sh containerd`).
+#
+# Both micro-VM suites are in the default set and gate themselves the same way:
+# each setup.sh exits non-zero with an install hint when its VMM binary or
+# /dev/kvm is missing, so a host without them reports a clear failure rather
+# than silently skipping coverage.
 #
 # The script doesn't `set -e` on the loop so a single failing test does not
 # abort the rest of the run; the summary at the end reports pass/fail per
@@ -21,7 +27,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUITES=("server" "docker" "podman" "cloud-hypervisor")
+SUITES=("server" "docker" "podman" "cloud-hypervisor" "firecracker")
 
 # Restrict to the suite the user named, if any.
 if [ "$#" -gt 0 ]; then
@@ -31,6 +37,23 @@ fi
 cleanup_between_tests() {
   pkill -9 -f "target/debug/ring server" 2>/dev/null || true
   pkill -9 -f "cloud-hypervisor --api-socket" 2>/dev/null || true
+  # Firecracker VMs from a test that died before its own EXIT trap ran. Without
+  # this a leaked VM keeps its tap and its /30, and the next test that hashes to
+  # the same network slot fails on a name that is already taken.
+  #
+  # Scoped to the suite's own socket directory (`mktemp -d -t
+  # ring-e2e-fc-sockets-XXXXXX`, see firecracker/setup.sh) rather than every
+  # `firecracker` process: unlike a container runtime's daemon, a microVM on
+  # this host may well belong to something other than the test suite.
+  pkill -9 -f "firecracker --api-sock ${TMPDIR:-/tmp}/ring-e2e-fc-sockets-" 2>/dev/null || true
+  # Note: killing the VM does not remove its tap, which is persistent. The
+  # firecracker suite reaps those itself (setup.sh snapshots `ring-*` before the
+  # run and deletes what appeared, via an EXIT trap). One gap remains: if a test
+  # is killed hard enough to skip its trap, the leaked tap is already present
+  # when the next test snapshots, so it is treated as pre-existing and never
+  # reaped. Deleting every `ring-*` here would close it but could take down a
+  # tap belonging to a concurrent Ring — the tap name is a hash of the instance
+  # id, with nothing in it to tell a test VM from a real one.
   pkill -9 -f "virtiofsd --socket-path" 2>/dev/null || true
   pkill -9 -f "socat.*TCP4-LISTEN" 2>/dev/null || true
   if command -v docker > /dev/null 2>&1; then
