@@ -333,7 +333,7 @@ impl Deployment {
         self.name = env_resolver(&self.name, env_vars);
         self.image = env_resolver(&self.image, env_vars);
 
-        for (_, value) in self.environment.iter_mut() {
+        for value in self.environment.values_mut() {
             if let EnvValue::Plain(s) = value {
                 *s = env_resolver(s, env_vars);
             }
