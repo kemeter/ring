@@ -71,6 +71,34 @@ ring doctor
 
 Use this as the first step when something doesn't work as expected. Exits non-zero if any check fails.
 
+### `ring completions`
+
+Print a shell completion script on stdout, for `bash`, `zsh`, or `fish`. Once installed, `<TAB>` completes command names, subcommands, and flags.
+
+```bash
+ring completions zsh
+```
+
+Where to put the script depends on the shell:
+
+```bash
+# Bash
+ring completions bash | sudo tee /etc/bash_completion.d/ring > /dev/null
+
+# Zsh (the target directory must be on your $fpath)
+mkdir -p ~/.zsh/completions
+ring completions zsh > ~/.zsh/completions/_ring
+
+# Fish
+ring completions fish > ~/.config/fish/completions/ring.fish
+```
+
+Start a new shell to pick up the completions.
+
+The script is generated from Ring's own command tree, so it always matches the version of `ring` that produced it. Regenerate it after upgrading to pick up new commands and flags.
+
+> Completion covers command names and flags, not values: `ring deployment logs <TAB>` completes the flags, not your deployment IDs. Resolving those would mean calling the API from inside the shell's completion hook.
+
 ## Server
 
 ### `ring server start`

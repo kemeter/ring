@@ -1,4 +1,5 @@
 pub(crate) mod apply;
+pub(crate) mod completions;
 pub(crate) mod context;
 pub(crate) mod dashboard;
 pub(crate) mod deployment;

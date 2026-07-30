@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenTelemetry log export (opt-in, push) via `[server.telemetry.logs]`: bridges the server's log events to an OTLP/gRPC collector in addition to the console. Each telemetry signal (traces, metrics, logs) is independently toggled; all three degrade gracefully when the collector is unreachable
 - `network.mode: host` is now accepted on the Podman runtime, not just Docker: Podman shares the Docker-compatible lifecycle and honours `NetworkMode: host`, so the container binds the host's network stack directly (Cloud Hypervisor and Firecracker still reject host mode)
 - `RING_LOG_FORMAT=json` switches the console logger to structured JSON (one object per line) for log shippers and structured ingestion; the default stays human-readable text. Independent of OTLP log export
+- `ring completions <bash|zsh|fish>` prints a shell completion script, so `<TAB>` completes commands, subcommands and flags. Generated from Ring's own command tree, so it never drifts from the CLI it ships with; regenerate after upgrading to pick up new commands
 
 ### Changed
 - `ring server start` shuts down gracefully on `SIGTERM` / `Ctrl-C`: it stops accepting new API connections, drains in-flight HTTP requests, tears down the scheduler, and exits on its own instead of being killed abruptly. Managed workloads keep running and are reconciled again on restart
