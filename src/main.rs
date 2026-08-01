@@ -156,9 +156,13 @@ fn init_tracing(
     Some(guard)
 }
 
-#[tokio::main]
-async fn main() {
-    let app = Command::new("ring")
+/// Build the CLI tree.
+///
+/// Kept as its own function (rather than inlined in `main`) because
+/// `ring completions` generates its scripts from this exact tree — one
+/// definition, so the completions can never drift from the real commands.
+fn build_cli() -> Command {
+    Command::new("ring")
         .version(env!("CARGO_PKG_VERSION"))
         .author("Mlanawo Mbechezi <mlanawo.mbechezi@kemeter.io>")
         .about("The ring to rule them all")
@@ -259,9 +263,23 @@ async fn main() {
                 .subcommand(commands::webhook::create::command_config())
                 .subcommand(commands::webhook::delete::command_config())
                 .subcommand(commands::webhook::inspect::command_config()),
-        );
+        )
+        .subcommand(commands::completions::command_config())
+}
 
-    let matches = app.get_matches();
+#[tokio::main]
+async fn main() {
+    let app = build_cli();
+
+    // `completions` only needs the CLI tree, never the config or a client, so
+    // it is dispatched before `load_config`: generating a script must work on a
+    // machine that has never run `ring init`.
+    let matches = app.clone().get_matches();
+    if let Some(("completions", sub_matches)) = matches.subcommand() {
+        commands::completions::execute(sub_matches, app);
+        return;
+    }
+
     let context = matches
         .get_one::<String>("context")
         .map(|s| s.as_str())
