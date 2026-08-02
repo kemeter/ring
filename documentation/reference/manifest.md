@@ -137,7 +137,8 @@ A map of deployment declarations. The map key is internal; Ring keys the deploym
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
-| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. |
+| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. |
+| `autoscale` | object | unset | Adjust the instance count from observed CPU. Opt-in: without it the count never changes on its own. See [autoscale](#autoscale). |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only**, rejected at the API on the CH runtime. |
 | `environment` | map | `{}` | Environment variables, either plain values or `secretRef` references. See [environment](#environment). |
 | `volumes` | object list | `[]` | Volume mounts. See [volumes](#volumes). |
@@ -353,6 +354,47 @@ Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are a
 - IEC suffixes: `"512Mi"`, `"1Gi"`, `"2Gi"`
 
 > **Cloud Hypervisor:** `resources.limits.cpu` becomes the VM's vCPU count (minimum 1) and `resources.limits.memory` becomes the VM's RAM (minimum 128 MiB). `requests` is ignored on the CH runtime.
+
+## `autoscale`
+
+Let Ring pick the instance count from observed CPU instead of holding `replicas` fixed:
+
+```yaml
+replicas: 2          # starting count
+autoscale:
+  min: 2
+  max: 10
+  target_cpu: 70     # aim for 70% CPU per instance
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `min` | integer | Never scale below this. Must be at least 1 — scaling to zero is not supported. |
+| `max` | integer | Never scale above this. Must be greater than or equal to `min`. |
+| `target_cpu` | number | Average CPU percentage **per instance** to aim for, between 0 and 100 (exclusive). |
+
+**Opt-in.** Without an `autoscale` block a deployment holds exactly `replicas` and Ring never changes it on its own. That is what lets an external controller (a CI job, a platform on top of Ring) own the count for its own deployments while Ring autoscales only what was explicitly handed to it.
+
+`replicas` keeps meaning "what this manifest asked for" and is never rewritten by the scheduler, so re-running `ring apply` does not fight the autoscaler. On a rolling update the current capacity carries over to the new deployment, so a redeploy under load does not drop you back to the starting count.
+
+### How it decides
+
+- **One instance at a time.** A decision moves the count by ±1, never straight to a computed target.
+- **A dead band.** CPU within 10 points of `target_cpu` counts as on-target, so ordinary jitter decides nothing.
+- **Asymmetric cooldowns.** At least 60s between adding instances, 300s before removing one. Shedding capacity slowly is what stops a load that oscillates around the target from driving the count up and down with it.
+- **No measurement means no decision.** If the runtime is unreachable, nothing is running yet, or the stats are stale (older than 120s), Ring holds the current count rather than scaling blind.
+
+### Limits
+
+> **Ring is single-node.** Autoscaling multiplies instances on **one machine**: it divides that machine's CPU more finely, it does not add capacity. It is meant to absorb spikes on a host with headroom, and to release resources when load drops. It cannot rescue a saturated host — if the machine is already at its limit, adding instances only increases contention. Size `max` against what the host can actually carry.
+>
+> Memory is still admitted per instance (see [resources](#resources)), so an autoscaled deployment that outgrows the host is stopped with `insufficient_resources` rather than taking the machine down.
+
+Rejected combinations, reported at `ring apply` time:
+
+- **`kind: job`** — a job runs once and exits, it has no steady-state CPU to aim at.
+- **`network.mode: host` with `max` above 1** — every instance would compete for the same host ports.
+- **the `containerd` runtime** — it does not report CPU usage yet, so a CPU target would be measured against a constant zero and walk the deployment down to `min`.
 
 ## `health_checks`
 
