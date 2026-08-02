@@ -761,20 +761,25 @@ pub(crate) async fn reset_restart_count(pool: &SqlitePool, id: &str) -> Result<(
 /// Deliberately does not touch `replicas`: that column holds what the manifest
 /// declared, and overwriting it would make `ring apply` and the autoscaler
 /// fight over the same value.
+/// Returns `false` when no row matched — the deployment was deleted or replaced
+/// between the moment the scheduler listed it and the moment the decision was
+/// written. The caller must then leave its in-memory copy alone rather than
+/// reconcile a count that was never persisted.
 pub(crate) async fn set_desired_replicas(
     pool: &SqlitePool,
     id: &str,
     desired: u32,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
+) -> Result<bool, sqlx::Error> {
+    let affected = sqlx::query(
         "UPDATE deployment SET desired_replicas = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(desired as i32)
     .bind(id)
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
 
-    Ok(())
+    Ok(affected > 0)
 }
 
 pub(crate) async fn find_referencing_secret(

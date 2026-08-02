@@ -1198,6 +1198,13 @@ async fn apply_docker_event(
     }
 }
 
+/// How old a stats snapshot may be before the autoscaler refuses to act on it.
+///
+/// Generous relative to the default scheduler interval so a single slow refresh
+/// does not stall scaling, but bounded so a wedged stats worker cannot keep
+/// resizing deployments from measurements nobody is updating.
+const MAX_STATS_AGE_SECS: u64 = 120;
+
 /// Let the autoscaler adjust `desired_replicas` for the deployments that opted
 /// into it.
 ///
@@ -1217,12 +1224,27 @@ async fn run_autoscaling(
     autoscaler: &mut Autoscaler,
 ) {
     // Snapshot the per-deployment CPU averages once, keyed the same way the
-    // cache is (namespace + name is unique).
+    // cache is (namespace + name is unique per deployment).
     let measurements: HashMap<(String, String), Option<f64>> = {
         let Ok(snapshot) = stats.read() else {
             warn!("Stats snapshot lock poisoned; skipping autoscaling this tick");
             return;
         };
+
+        // Refuse to act on a stale snapshot. If the refresh worker stalls or a
+        // runtime stops answering, the previous numbers stay in the cache and
+        // would keep driving decisions after every cooldown — quietly resizing
+        // deployments from measurements taken minutes ago. Holding is the safe
+        // failure: capacity stays where it is until fresh data arrives.
+        let age = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().saturating_sub(snapshot.last_refresh_unix))
+            .unwrap_or(u64::MAX);
+
+        if snapshot.last_refresh_unix == 0 || age > MAX_STATS_AGE_SECS {
+            debug!("Stats snapshot is {age}s old; skipping autoscaling this tick");
+            return;
+        }
 
         snapshot
             .deployments
@@ -1265,14 +1287,26 @@ async fn run_autoscaling(
         match autoscaler.decide(&deployment.id, policy, current, cpu, now) {
             Decision::Hold => {}
             Decision::ScaleTo(target) => {
-                if let Err(e) =
-                    deployments::set_desired_replicas(pool, &deployment.id, target).await
-                {
-                    error!(
-                        "Failed to persist autoscale decision for {}: {}",
-                        deployment.id, e
-                    );
-                    continue;
+                match deployments::set_desired_replicas(pool, &deployment.id, target).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // The row vanished mid-tick (deleted, or replaced by a
+                        // rollout). Leave the in-memory copy untouched so this
+                        // tick does not reconcile against a count that was
+                        // never stored.
+                        debug!(
+                            "Autoscale decision for {} dropped: the deployment no longer exists",
+                            deployment.id
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to persist autoscale decision for {}: {}",
+                            deployment.id, e
+                        );
+                        continue;
+                    }
                 }
 
                 // Apply the decision to the in-memory copy too: the

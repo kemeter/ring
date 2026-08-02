@@ -139,6 +139,20 @@ fn validate_autoscale(input: &DeploymentInput, errors: &mut ViolationList) {
             "deployment.autoscale.invalid".to_string(),
         ));
     }
+
+    // containerd reports `cpu_usage_percent` as a hard-coded 0 (see
+    // src/runtime/containerd/stats.rs — a percentage needs two samples, and the
+    // sampling loop does not exist yet). A CPU-driven controller fed a constant
+    // zero reads "idle" forever and walks the deployment down to `min` whatever
+    // the real load. Refusing is the honest answer; silently scaling on a fake
+    // measurement is not.
+    if input.runtime == "containerd" {
+        errors.push(Violation::new(
+            "autoscale",
+            "the containerd runtime does not report CPU usage yet, so it cannot be autoscaled on a CPU target",
+            "deployment.autoscale.runtime_unsupported",
+        ));
+    }
 }
 
 fn validate_resources(input: &DeploymentInput, errors: &mut ViolationList) {
@@ -758,6 +772,7 @@ pub(crate) async fn create(
     // - it has health checks configured
     // - --force flag is not set
     let mut rolling_parent_id: Option<String> = None;
+    let mut inherited_desired_replicas: Option<u32> = None;
     // Captured to log a `ForceReplace` event on the new deployment once
     // it exists. We collect the reason here so the caller of the API
     // gets a clear explanation for why rolling didn't happen, instead
@@ -807,6 +822,13 @@ pub(crate) async fn create(
                         existing.id
                     );
                     rolling_parent_id = Some(existing.id.clone());
+                    // Carry the parent's scaled-up capacity into the child.
+                    // Without this a redeploy silently drops an autoscaled
+                    // deployment back to the manifest count — a service running
+                    // 8 instances under load would restart at 2 and have to
+                    // climb again, one cooldown at a time, exactly when it is
+                    // least able to afford it.
+                    inherited_desired_replicas = existing.desired_replicas;
                 } else {
                     // Immediate replace. Pick the most specific reason so
                     // operators can fix the root cause: `force=true` is a
@@ -882,9 +904,12 @@ pub(crate) async fn create(
         health_checks: input.health_checks.unwrap_or_default(),
         resources: input.resources,
         autoscale: input.autoscale.clone(),
-        // No decision yet: the first scheduler tick that sees usable metrics
-        // makes one. Until then `target_replicas()` falls back to `replicas`.
-        desired_replicas: None,
+        // Inherited from the parent on a rolling update, so a redeploy keeps
+        // the capacity the autoscaler had reached. `None` for a fresh
+        // deployment: the first tick with usable metrics makes the first
+        // decision, and until then `target_replicas()` falls back to
+        // `replicas`.
+        desired_replicas: inherited_desired_replicas,
         image_digest: None,
         ports: input.ports,
         pending_events: vec![],
