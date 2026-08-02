@@ -156,10 +156,12 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
         let token = login_token(&server).await;
 
-        // This logs in as `admin`, whose role grants the `admin` wildcard, so
-        // the session must reach every protected route — here a plain read.
+        // Assert against `/users/me`: it is protected by the same middleware
+        // but belongs to the identity domain, so this test does not depend on
+        // the contract of an unrelated resource (a deployments payload change
+        // must never break a login test).
         let ok = server
-            .get("/deployments")
+            .get("/users/me")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
         assert_eq!(ok.status_code(), StatusCode::OK);
@@ -176,12 +178,20 @@ mod tests {
         assert_ne!(first, second, "two logins must not share a token");
         for token in [&first, &second] {
             let res = server
-                .get("/deployments")
+                .get("/users/me")
                 .add_header("Authorization", format!("Bearer {}", token))
                 .await;
             assert_eq!(res.status_code(), StatusCode::OK);
         }
     }
+
+    // The tests below query `/tokens` on purpose. That is not the cross-domain
+    // coupling this module otherwise avoids: the session/PAT boundary IS the
+    // behaviour under test, so the assertion has to be made where it lives. The
+    // rule is about which contract a test depends on -- reaching for an
+    // unrelated resource merely to have "some protected route" is what breaks
+    // (use `/users/me` for that), whereas asserting a documented interaction
+    // between two domains belongs to whichever module owns the invariant.
 
     #[tokio::test]
     async fn session_is_hidden_from_the_token_list() {
