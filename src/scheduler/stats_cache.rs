@@ -34,7 +34,22 @@ pub(crate) struct DeploymentRuntimeStats {
     pub namespace: String,
     pub runtime: String,
     pub instance_count: u64,
+    /// CPU percentage **summed** across the deployment's instances, so three
+    /// instances at 30% report 90%. That is what the Prometheus gauge wants.
+    ///
+    /// Do NOT compare this against a per-instance setpoint: adding an instance
+    /// raises the sum, so a controller aiming at "70%" would keep scaling up
+    /// while every instance idles. Use [`Self::cpu_usage_percent_per_instance`]
+    /// for that.
     pub cpu_usage_percent: f64,
+    /// CPU percentage **averaged** over the instances, i.e. how busy a typical
+    /// instance is. `None` when there is no instance to average over — which
+    /// means "no measurement", not "idle".
+    ///
+    /// Kept beside the sum rather than derived at each call site: the two are
+    /// easy to confuse, and reading the wrong one is silent (see the autoscaler
+    /// runaway this field exists to prevent).
+    pub cpu_usage_percent_per_instance: Option<f64>,
     pub memory_usage_bytes: u64,
     pub memory_limit_bytes: u64,
     pub network_rx_bytes: u64,
@@ -163,6 +178,13 @@ fn aggregate(
         runtime: runtime.to_string(),
         instance_count: instances.len() as u64,
         cpu_usage_percent: instances.iter().map(|i| i.cpu_usage_percent).sum(),
+        cpu_usage_percent_per_instance: if instances.is_empty() {
+            None
+        } else {
+            Some(
+                instances.iter().map(|i| i.cpu_usage_percent).sum::<f64>() / instances.len() as f64,
+            )
+        },
         memory_usage_bytes: instances.iter().map(|i| i.memory.usage_bytes).sum(),
         memory_limit_bytes: instances.iter().map(|i| i.memory.limit_bytes).sum(),
         network_rx_bytes: instances.iter().map(|i| i.network.rx_bytes).sum(),

@@ -62,8 +62,15 @@ impl Autoscaler {
         Self::default()
     }
 
-    /// Decide what to do with one deployment, given its policy, the count it is
-    /// currently targeting, and its average CPU percentage across instances.
+    /// Decide what to do with one deployment.
+    ///
+    /// `cpu_percent` must be the **per-instance average**, not the deployment
+    /// total. `stats_cache` sums CPU across instances (correct for the
+    /// Prometheus gauge, wrong as a setpoint), so the caller divides by the
+    /// instance count — see [`average_cpu`]. Comparing a sum against a target
+    /// would be a runaway: three instances at 30% sum to 90%, which "exceeds" a
+    /// 70% target, so the autoscaler adds a fourth, pushing the sum higher
+    /// still, all the way to `max`, while every instance sits idle.
     ///
     /// `cpu_percent` is `None` when no usable measurement exists (the runtime
     /// was unreachable, the deployment has no running instance yet, or the
@@ -296,6 +303,34 @@ mod tests {
         assert!(
             ups <= 4,
             "scale-ups should be paced by the cooldown, got {ups} in 200s"
+        );
+    }
+
+    #[test]
+    fn idle_instances_scale_down_rather_than_run_away() {
+        // Regression guard for the bug that nearly shipped: `stats_cache` sums
+        // CPU across instances, so three instances at 30% report 90%. Fed that
+        // sum, the controller would read "above a 70% target", add an instance,
+        // see the sum rise, and climb to max while every instance idled.
+        //
+        // `decide` takes the PER-INSTANCE average, so the same workload reads
+        // as 30% and correctly sheds capacity.
+        let mut a = Autoscaler::new();
+        let p = policy(1, 10, 70.0);
+        let t0 = Instant::now();
+        let mut current = 3;
+
+        for tick in 0..10 {
+            let per_instance = 30.0;
+            let now = t0 + Duration::from_secs(tick * 120);
+            if let Decision::ScaleTo(n) = a.decide("d", &p, current, Some(per_instance), now) {
+                current = n;
+            }
+        }
+
+        assert!(
+            current < 3,
+            "instances idling at 30% against a 70% target must scale DOWN, got {current}"
         );
     }
 
