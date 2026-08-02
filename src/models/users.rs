@@ -219,14 +219,29 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn update(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE user SET username = ?, password = ?, updated_at = datetime() WHERE id = ?")
-        .bind(&user.username)
-        .bind(&user.password)
-        .bind(&user.id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE user SET username = ?, password = ?, role = ?, updated_at = datetime() WHERE id = ?",
+    )
+    .bind(&user.username)
+    .bind(&user.password)
+    .bind(&user.role)
+    .bind(&user.id)
+    .execute(pool)
+    .await?;
 
     Ok(())
+}
+
+/// Number of accounts holding the `admin` role. Used to refuse the demotion or
+/// deletion of the last admin, which would leave the instance unadministrable
+/// with no way back in through the API.
+pub(crate) async fn count_admins(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user WHERE role = ?")
+        .bind(Role::Admin.as_str())
+        .fetch_one(pool)
+        .await?;
+
+    Ok(count)
 }
 
 pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
