@@ -61,7 +61,15 @@ pub(crate) async fn delete(
     // is the last thing visible if the trail is consulted before retention
     // cleanup elsewhere — but since we just purged, this is intentionally
     // the sole surviving entry for the deleted namespace.
-    let _ = audit_log::delete_by_namespace(&pool, &name).await;
+    if let Err(e) = audit_log::delete_by_namespace(&pool, &name).await {
+        // Not fatal (the namespace is already gone), but a failed purge leaves
+        // orphaned audit rows behind, and a silent one makes that impossible to
+        // notice.
+        warn!(
+            "Failed to purge the audit trail of namespace '{}': {}",
+            name, e
+        );
+    }
     let _ = audit_log::record(
         &pool,
         Some(&auth.user.id),

@@ -115,6 +115,12 @@ pub(crate) async fn find_events_by_deployment_and_level(
     .await
 }
 
+/// Record a deployment event. Call at the point the thing actually happened.
+///
+/// Callers discard the result on purpose: failing to record an event must never
+/// break a deployment. The write failure is logged here, once, so a missing
+/// event is still visible in the server log instead of vanishing silently --
+/// the same contract as `audit_log::record`.
 pub(crate) async fn log_event(
     pool: &SqlitePool,
     deployment_id: String,
@@ -124,5 +130,14 @@ pub(crate) async fn log_event(
     reason: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let event = DeploymentEvent::new(deployment_id, level, message, component, reason);
-    create_event(pool, &event).await
+    let result = create_event(pool, &event).await;
+
+    if let Err(ref e) = result {
+        warn!(
+            "Failed to record deployment event ({} {} for deployment {}): {}",
+            event.level, event.component, event.deployment_id, e
+        );
+    }
+
+    result
 }

@@ -67,7 +67,12 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
     // No subscriber for this kind: nothing to do, mark delivered so it doesn't
     // sit pending forever.
     if subscribers.is_empty() {
-        let _ = event_queue::mark_delivered(pool, &event.id).await;
+        if let Err(e) = event_queue::mark_delivered(pool, &event.id).await {
+            warn!(
+                "Failed to mark event {} ({}) delivered: {} — it stays pending and will be reprocessed",
+                event.id, event.kind, e
+            );
+        }
         return;
     }
 
@@ -94,20 +99,37 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
         }
     }
 
+    // Every branch below writes the event's terminal state. A silent failure
+    // here leaves the row `pending`, so the next tick redelivers an event the
+    // subscriber has already received -- a duplicate-webhook storm with nothing
+    // in the logs to explain it. Log loudly instead of swallowing.
     match first_error {
         None => {
-            let _ = event_queue::mark_delivered(pool, &event.id).await;
+            if let Err(e) = event_queue::mark_delivered(pool, &event.id).await {
+                warn!(
+                    "Failed to mark event {} ({}) delivered: {} — it stays pending and will be redelivered",
+                    event.id, event.kind, e
+                );
+            }
         }
         Some(err) => {
             let attempts = event.attempts + 1;
             if attempts >= MAX_ATTEMPTS {
-                let _ = event_queue::mark_dead(pool, &event.id, attempts, &err).await;
+                if let Err(e) = event_queue::mark_dead(pool, &event.id, attempts, &err).await {
+                    warn!(
+                        "Failed to dead-letter event {} ({}): {} — it stays pending and will be retried past its attempt limit",
+                        event.id, event.kind, e
+                    );
+                }
                 warn!(
                     "Event {} ({}) dead-lettered after {} attempts: {}",
                     event.id, event.kind, attempts, err
                 );
-            } else {
-                let _ = event_queue::reschedule(pool, &event.id, attempts, &err).await;
+            } else if let Err(e) = event_queue::reschedule(pool, &event.id, attempts, &err).await {
+                warn!(
+                    "Failed to reschedule event {} ({}): {} — the attempt counter did not advance",
+                    event.id, event.kind, e
+                );
             }
         }
     }
