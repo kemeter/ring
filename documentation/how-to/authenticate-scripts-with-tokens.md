@@ -24,7 +24,7 @@ TOKEN=$(ring token create ci-status --scope deployments:read --expires 90d)
 
 > The clear `ring_pat_…` value is shown **once**. Ring stores only a hash, so if you lose it, rotate the token, don't try to recover it.
 
-Available scopes: `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (everything).
+Available scopes: `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (everything).
 
 ## Use the token
 

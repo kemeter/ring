@@ -104,9 +104,11 @@ Every account holds one of three roles. A login session is issued the scopes of 
 
 | Role | Can do |
 |---|---|
-| `viewer` | Read-only: list and inspect deployments, configs, secrets metadata, namespaces, users, webhooks |
-| `operator` | Everything a viewer can, plus write deployments, configs, secrets and webhooks |
+| `viewer` | Read-only: list and inspect deployments, configs, secrets metadata, volumes, namespaces, users, webhooks |
+| `operator` | Everything a viewer can, plus write deployments, configs, secrets, volumes and webhooks |
 | `admin` | Everything, including managing accounts, namespaces and API tokens |
+
+Creating a namespace is admin-only, and that holds even when deploying: naming a namespace that does not exist yet in a deployment is refused (`403`) unless the caller holds `namespaces:write`. Create the namespace first, then deploy into it.
 
 New accounts are created as `viewer`. Promotion is a separate, deliberate act:
 
