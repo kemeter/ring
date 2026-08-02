@@ -138,21 +138,19 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         // Users.
         "/users" if is_read => Some("users:read"),
         "/users" => Some("users:write"),
-        // Writes to an account stay behind `users:write`. Lowering this to
-        // `users:read` (to let a viewer change its own password) would be an
-        // escalation, because the per-handler guard is NOT scope-derived:
-        // `auth.user` is loaded from the user ROW, so `is_admin()` is true for
-        // any token an admin owns, including a PAT deliberately restricted to
-        // `users:read`. Such a PAT would then reach PUT/DELETE and act on other
-        // accounts -- breaking PAT scope attenuation.
+        // `users:read` is the floor, so every account can reach its OWN record
+        // (self-service password change). It is not the whole check: the route
+        // scope only decides who may reach the handler, and the handler then
+        // requires `users:write` for anything touching ANOTHER account, and for
+        // changing a role.
         //
-        // Consequence, deliberate for now: a viewer/operator cannot change its
-        // own password through the API (`/users/me` is read-only). Fixing that
-        // needs a dedicated self-service endpoint whose handler checks the
-        // PRESENTED TOKEN's scopes rather than the owner's role; widening this
-        // route is not a safe shortcut.
-        "/users/{id}" if is_read => Some("users:read"),
-        "/users/{id}" => Some("users:write"),
+        // The split matters because the handler's `auth.user` is loaded from
+        // the user ROW: `is_admin()` alone would be true for any token an admin
+        // owns, including a PAT deliberately restricted to `users:read`. So the
+        // handler checks the PRESENTED TOKEN's scopes (`require_scope`) rather
+        // than the owner's role -- that is what keeps PAT attenuation intact
+        // while still letting a viewer change its own password.
+        "/users/{id}" => Some("users:read"),
         "/users/me" => Some("users:read"),
         // Webhooks.
         "/webhooks" if is_read => Some("webhooks:read"),

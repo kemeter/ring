@@ -44,6 +44,8 @@ ring user update --password "new-password"
 
 `ring user update` operates only on the **currently authenticated user** (the one whose token is in `auth.json`). Passing `--username new-name` **renames** the current user; it does not target a different one. There is no CLI command to change another user's password from your own session.
 
+Every role can do this, `viewer` included: changing your own password is self-service. Acting on **another** account is what requires `admin` plus a token carrying `users:write`.
+
 To rotate another operator's password, either have them run `ring user update` themselves after logging in, or call the API directly:
 
 ```bash
@@ -164,7 +166,6 @@ ring user delete "$USER_ID"
 ## Limits
 
 - **Roles are global, not per-namespace.** An `operator` holds the same rights in every namespace.
-- **No self-service password change for non-admins.** `PUT /users/{id}` requires `users:write`, which only `admin` holds, so a `viewer` or `operator` currently needs an admin to reset their password. A dedicated self-service endpoint is needed to fix this properly.
 - **No token expiry.** Tokens live until the user is deleted or its row is manually rewritten.
 - **No SSO / OIDC.** Internal user database only.
 - **No audit log of admin actions** beyond what the events stream shows for deployment-level changes.

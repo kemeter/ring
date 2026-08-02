@@ -1,7 +1,7 @@
 use crate::api::action::user::validation::{
     PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN, USERNAME_PATTERN,
 };
-use crate::api::auth::Auth;
+use crate::api::auth::{Auth, require_scope};
 use crate::api::server::Db;
 use crate::api::validation::ViolationList;
 use crate::models::users as users_model;
@@ -19,11 +19,24 @@ pub(crate) async fn update(
     auth: Auth,
     Json(input): Json<UserInput>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    // Authorization: a user may only update its own account; an admin may
-    // update any. Without this an authenticated user could overwrite any
-    // other user's password and take the account over (IDOR).
-    if auth.user.id != id && !auth.user.is_admin() {
-        return Err((StatusCode::FORBIDDEN, "Forbidden").into_response());
+    // Authorization has two tiers.
+    //
+    // Acting on your OWN account (changing your password or username) is
+    // self-service: every role may do it, which is why the route only requires
+    // `users:read`.
+    //
+    // Acting on ANOTHER account additionally requires `users:write` ON THE
+    // PRESENTED TOKEN, not merely an admin owner. Checking `is_admin()` alone
+    // would break PAT attenuation: `auth.user` comes from the user row, so a
+    // PAT deliberately minted with just `users:read` by an admin would inherit
+    // full account-management power. `require_scope` reads the token's own
+    // scopes, so a restricted PAT stays restricted.
+    let is_self = auth.user.id == id;
+    if !is_self {
+        if !auth.user.is_admin() {
+            return Err((StatusCode::FORBIDDEN, "Forbidden").into_response());
+        }
+        require_scope(&auth.source, "users:write").map_err(|r| r.into_response())?;
     }
 
     // `Validate` skips fields that are `None`, so an empty body falls
@@ -59,12 +72,16 @@ pub(crate) async fn update(
     }
 
     // Changing a role is an administrative act, never self-service: a viewer
-    // must not be able to promote itself by PUTing its own account.
+    // must not be able to promote itself by PUTing its own account. This is
+    // checked even on one's own record (unlike a password change), and demands
+    // `users:write` on the presented token so a read-only PAT cannot grant
+    // privileges to anyone, including its own owner.
     let requested_role = match input.role {
         Some(ref requested) if *requested != user.role => {
             if !auth.user.is_admin() {
                 return Err((StatusCode::FORBIDDEN, "Forbidden").into_response());
             }
+            require_scope(&auth.source, "users:write").map_err(|r| r.into_response())?;
 
             Some(Role::parse(requested).map_err(|_| {
                 (
@@ -237,6 +254,56 @@ mod tests {
             live_credentials(&pool, JOHN_ID).await > 0,
             "an unchanged role must not revoke the account's session"
         );
+    }
+
+    #[tokio::test]
+    async fn a_read_only_pat_owned_by_an_admin_cannot_write_to_another_account() {
+        // PAT attenuation. The route sits at `users:read` so self-service can
+        // reach it, which means the cross-account guard cannot rely on the
+        // OWNER's role: `auth.user` is loaded from the user row, so `is_admin()`
+        // is true for every token an admin holds. A PAT deliberately minted
+        // read-only must stay read-only.
+        let app = new_test_app().await;
+        let session = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let mint: TestResponse = server
+            .post("/tokens")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .json(&json!({ "name": "ro", "scopes": ["users:read"], "namespaces": [] }))
+            .await;
+        assert_eq!(mint.status_code(), StatusCode::CREATED);
+        let pat = mint.json::<serde_json::Value>()["token"]
+            .as_str()
+            .expect("minted token")
+            .to_string();
+
+        // Reading another account is within the PAT's scope.
+        let read = server
+            .get("/users")
+            .add_header("Authorization", format!("Bearer {}", pat))
+            .await;
+        assert_eq!(read.status_code(), StatusCode::OK);
+
+        // Writing to another account is not, despite the owner being an admin.
+        let write: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", pat))
+            .json(&json!({ "password": "pwned-by-a-readonly-pat" }))
+            .await;
+        assert_eq!(
+            write.status_code(),
+            StatusCode::FORBIDDEN,
+            "a users:read PAT must not write to another account"
+        );
+
+        // Neither is promoting anyone.
+        let promote: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", pat))
+            .json(&json!({ "role": "admin" }))
+            .await;
+        assert_eq!(promote.status_code(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -474,22 +541,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "self-service needs a dedicated endpoint; see the comment below"]
     async fn non_admin_can_update_own_account() {
-        // KNOWN REGRESSION, kept as an executable specification of what we owe
-        // users rather than deleted.
-        //
-        // RBAC gates PUT /users/{id} on `users:write`, which viewers and
-        // operators do not hold, so they can no longer change their own
-        // password or username. The obvious fix -- lowering the route to
-        // `users:read` -- is NOT safe: the handler's `is_admin()` reads the
-        // user ROW, not the presented token's scopes, so a PAT deliberately
-        // restricted to `users:read` but owned by an admin would then be able
-        // to write to, and delete, other accounts.
-        //
-        // The real fix is a self-service endpoint that authorizes on the
-        // PRESENTED TOKEN's scopes and only allows a caller to act on itself.
-        // Un-ignore this test once that exists.
+        // Self-service: a viewer must be able to change its own password and
+        // username. The route sits at `users:read` so this call reaches the
+        // handler, which then only demands `users:write` for cross-account
+        // writes and role changes.
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
         let server = TestServer::new(app).unwrap();

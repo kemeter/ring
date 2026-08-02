@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::Response;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
-use crate::api::auth::Auth;
+use crate::api::auth::{Auth, require_scope};
 use crate::api::server::Db;
 use crate::models::users;
 
@@ -14,6 +14,14 @@ pub(crate) async fn delete(Path(id): Path<String>, auth: Auth, State(pool): Stat
     // authenticated user could delete every other account (IDOR / DoS).
     if auth.user.id == id || !auth.user.is_admin() {
         return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // The route only requires `users:read` (so self-service reaches PUT on the
+    // same path), so deletion must demand the write scope here, on the PRESENTED
+    // token: an admin-owned PAT minted read-only must not be able to delete
+    // accounts just because its owner is an admin.
+    if let Err(response) = require_scope(&auth.source, "users:write") {
+        return response;
     }
 
     let option = users::find(&pool, &id).await;
