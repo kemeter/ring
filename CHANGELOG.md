@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- **Role-based access control replaces the flat user/admin model.** Accounts now hold `admin`, `operator` or `viewer`, and a login session is issued the scopes of its role. Previously every login was minted with full-access scopes, so any authenticated user could do anything regardless of their role. Consequences when upgrading:
+  - accounts that were `user` become `viewer` (read-only); promote them with `PUT /users/{id}` `{"role":"operator"}`
+  - **every existing session and API token is revoked** by the migration, since a token carries the scopes it was minted with and is never re-evaluated. Everyone must log in again and re-issue their tokens
+  - `viewer` and `operator` accounts can no longer change their own password: `PUT /users/{id}` requires `users:write`, which only `admin` holds. An admin must reset it for them until a self-service endpoint exists
+
 ### Added
+- Role-based access control: `admin` (full access), `operator` (read everything, write deployments, configs, secrets and webhooks) and `viewer` (read-only). Changing an account's role revokes its sessions and tokens so the change takes effect immediately, and the last remaining admin can be neither demoted nor deleted (`409 Conflict`)
 - OpenTelemetry distributed tracing (opt-in) via `[server.telemetry.traces]`: `ring server start` exports spans over OTLP/gRPC — one per HTTP request (stable HTTP-server semantic-convention attributes) and one per productive scheduler cycle. Endpoint, `service.name` and sampler are configurable, standard `OTEL_*` env vars override the TOML, and an unreachable collector degrades gracefully instead of failing the server
 - OpenTelemetry metric export (opt-in, push) via `[server.telemetry.metrics]`: periodically pushes the per-deployment resource gauges (CPU, memory, network, disk, PIDs, instance and restart counts, labelled `{deployment, namespace, runtime}`) over OTLP/gRPC, read from the same stats cache the Prometheus `/metrics` endpoint uses so no extra runtime round-trip is added. Endpoint, `service.name` and push interval are configurable
 - OpenTelemetry log export (opt-in, push) via `[server.telemetry.logs]`: bridges the server's log events to an OTLP/gRPC collector in addition to the console. Each telemetry signal (traces, metrics, logs) is independently toggled; all three degrade gracefully when the collector is unreachable
