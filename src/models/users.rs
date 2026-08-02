@@ -7,6 +7,86 @@ use uuid::Uuid;
 
 use crate::serializer::deserialize_null_default;
 
+/// A user's authorization role. Each role maps to a fixed set of token scopes
+/// via [`Role::scopes`]; see migration 0023.
+///
+/// Deliberately NOT used as the `UserRow` column type: an unknown string in the
+/// database must fail loudly at parse time rather than deserialize into a
+/// silent default (which would either grant or strip privileges by accident).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Role {
+    /// Full access. Carries the `admin` wildcard scope, never a scope list.
+    Admin,
+    /// Day-to-day operation of workloads: read everything, write the resources
+    /// needed to run and configure deployments.
+    Operator,
+    /// Read-only across every resource.
+    Viewer,
+}
+
+impl Role {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Operator => "operator",
+            Role::Viewer => "viewer",
+        }
+    }
+
+    /// Parse a role as stored in the database. Fails on anything unknown: the
+    /// `CHECK` constraint from migration 0023 should make that impossible, so
+    /// an unknown value means a hand-edited or corrupt row and must not be
+    /// quietly resolved to a set of permissions.
+    pub(crate) fn parse(raw: &str) -> Result<Role, String> {
+        match raw {
+            "admin" => Ok(Role::Admin),
+            "operator" => Ok(Role::Operator),
+            "viewer" => Ok(Role::Viewer),
+            other => Err(format!("unknown user role {other:?}")),
+        }
+    }
+
+    /// The scopes a session gets when this role logs in.
+    ///
+    /// `Admin` returns the `admin` wildcard alone — it is never mixed with
+    /// ordinary scopes, so the wildcard stays the single meaning of "full
+    /// access" that the auth middleware already understands.
+    ///
+    /// `Operator` holds `secrets:write` on purpose. Withholding it would be a
+    /// fake boundary: `deployments:write` already lets a user mount any secret
+    /// of the namespace into a deployment, which the scheduler decrypts. The
+    /// honest framing, documented as such, is that `deployments:write` amounts
+    /// to administering the namespace's workloads.
+    pub(crate) fn scopes(&self) -> Vec<String> {
+        let slugs: &[&str] = match self {
+            Role::Admin => &["admin"],
+            Role::Operator => &[
+                "deployments:read",
+                "deployments:write",
+                "secrets:read",
+                "secrets:write",
+                "configs:read",
+                "configs:write",
+                "namespaces:read",
+                "users:read",
+                "webhooks:read",
+                "webhooks:write",
+            ],
+            Role::Viewer => &[
+                "deployments:read",
+                "secrets:read",
+                "configs:read",
+                "namespaces:read",
+                "users:read",
+                "webhooks:read",
+            ],
+        };
+
+        slugs.iter().map(|s| s.to_string()).collect()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct User {
     pub(crate) id: String,
@@ -14,8 +94,8 @@ pub(crate) struct User {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
-    /// Coarse authorization role: "user" (default, self-scoped) or "admin"
-    /// (may act on other accounts). Not RBAC — see migration 0016.
+    /// Authorization role: `admin`, `operator` or `viewer` (migration 0023).
+    /// Kept as a `String` on the row; use [`User::role`] for the parsed value.
     #[serde(default = "default_role")]
     pub(crate) role: String,
     pub(crate) username: String,
@@ -40,14 +120,22 @@ struct UserRow {
 const SELECT_COLUMNS: &str =
     "id, created_at, updated_at, status, role, username, password, login_at";
 
+/// Least privilege when a payload omits the role. `"user"` is no longer a legal
+/// value — migration 0023 constrains the column to admin/operator/viewer.
 fn default_role() -> String {
-    "user".to_string()
+    Role::Viewer.as_str().to_string()
 }
 
 impl User {
     /// True when this user may act on accounts other than its own.
     pub(crate) fn is_admin(&self) -> bool {
-        self.role == "admin"
+        self.role == Role::Admin.as_str()
+    }
+
+    /// The parsed role. `Err` when the stored string is not a known role, which
+    /// the caller must treat as a failure rather than falling back to a default.
+    pub(crate) fn role(&self) -> Result<Role, String> {
+        Role::parse(&self.role)
     }
 }
 
@@ -180,7 +268,56 @@ pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_password;
+    use super::{Role, hash_password};
+    use crate::models::token::KNOWN_SCOPES;
+
+    #[test]
+    fn every_role_scope_is_a_known_scope() {
+        // Scopes are validated against KNOWN_SCOPES at token creation. A role
+        // granting a slug that isn't in that set would mint a session the
+        // server refuses to honour, so the two lists must not drift apart.
+        for role in [Role::Admin, Role::Operator, Role::Viewer] {
+            for scope in role.scopes() {
+                assert!(
+                    KNOWN_SCOPES.contains(&scope.as_str()),
+                    "role {} grants unknown scope {scope:?}",
+                    role.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn admin_holds_only_the_wildcard() {
+        // `admin` means full access on its own; mixing it with ordinary scopes
+        // would create two competing encodings of the same privilege.
+        assert_eq!(Role::Admin.scopes(), vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn viewer_is_read_only_and_operator_can_write() {
+        let viewer = Role::Viewer.scopes();
+        assert!(
+            viewer.iter().all(|s| s.ends_with(":read")),
+            "viewer must not hold any write scope: {viewer:?}"
+        );
+
+        let operator = Role::Operator.scopes();
+        assert!(operator.contains(&"deployments:write".to_string()));
+        // Never admin: an operator must not reach token minting or user writes.
+        assert!(!operator.contains(&"admin".to_string()));
+        assert!(!operator.contains(&"users:write".to_string()));
+        assert!(!operator.contains(&"namespaces:write".to_string()));
+    }
+
+    #[test]
+    fn unknown_role_fails_loudly() {
+        // Fail-closed: a corrupt/hand-edited row must not resolve to a default
+        // set of permissions.
+        assert!(Role::parse("root").is_err());
+        assert!(Role::parse("user").is_err(), "'user' was dropped by 0023");
+        assert_eq!(Role::parse("admin").unwrap(), Role::Admin);
+    }
 
     #[test]
     fn same_password_yields_distinct_hashes() {
