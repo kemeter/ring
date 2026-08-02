@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use validator::{Validate, ValidationError};
 
-use crate::api::auth::{Auth, require_namespace};
+use crate::api::auth::{Auth, require_namespace, require_scope};
 use crate::api::dto::deployment::DeploymentOutput;
 use crate::api::server::Db;
 use crate::api::validation::{Violation, ViolationList};
@@ -668,6 +668,15 @@ pub(crate) async fn create(
     // Auto-create namespace if it doesn't exist
     match namespace::find_by_name(&pool, &input.namespace).await {
         Ok(None) => {
+            // Creating a namespace is an administrative act gated by
+            // `namespaces:write`. Deploying into a namespace that does not exist
+            // yet must not become a side door around that: without this check,
+            // `deployments:write` alone would let an operator create namespaces
+            // simply by naming one, and the boundary we document would not hold.
+            if let Err(response) = require_scope(&auth.source, "namespaces:write") {
+                return response;
+            }
+
             let new_namespace = namespace::Namespace {
                 id: Uuid::new_v4().to_string(),
                 created_at: Utc::now().to_string(),
@@ -2249,6 +2258,59 @@ mod tests {
             response.status_code() == StatusCode::CREATED
                 || response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
                 || response.status_code() == StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_creating_a_namespace_requires_the_namespace_write_scope() {
+        // `namespaces:write` is the scope that governs creating a namespace.
+        // Deploying into one that does not exist must not be a way around it:
+        // a token holding only `deployments:write` names a new namespace and
+        // must be refused rather than silently provisioning it.
+        let app = new_test_app().await;
+        let session = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let mint = server
+            .post("/tokens")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .json(&json!({
+                "name": "deployer",
+                "scopes": ["deployments:write", "deployments:read"],
+                "namespaces": []
+            }))
+            .await;
+        assert_eq!(mint.status_code(), StatusCode::CREATED);
+        let pat = mint.json::<serde_json::Value>()["token"]
+            .as_str()
+            .expect("minted token")
+            .to_string();
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", pat))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "nginx",
+                "namespace": "smuggled-ns",
+                "image": "nginx:latest"
+            }))
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::FORBIDDEN,
+            "deployments:write alone must not create a namespace"
+        );
+
+        // And nothing was provisioned on the way out.
+        let namespaces = server
+            .get("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .await
+            .json::<Vec<NamespaceOutput>>();
+        assert!(
+            namespaces.iter().all(|n| n.name != "smuggled-ns"),
+            "the namespace must not exist after a refused deployment"
         );
     }
 
