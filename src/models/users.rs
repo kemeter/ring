@@ -201,14 +201,15 @@ pub(crate) async fn create(
     username: &str,
     password: &str,
 ) -> Result<(), sqlx::Error> {
-    // role is hard-coded to 'user': there is no API path to create an admin
-    // (that would be a privilege-escalation vector). Admin is set out of band.
+    // New accounts start as `viewer` (read-only), the least-privileged role.
+    // Promotion is a separate, explicitly authorized act -- creating an account
+    // must never be a way to mint privileges.
     sqlx::query(
         "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, datetime(), ?, ?, ?, ?)"
     )
     .bind(Uuid::new_v4().to_string())
     .bind("active")
-    .bind("user")
+    .bind(Role::Viewer.as_str())
     .bind(username)
     .bind(password)
     .execute(pool)

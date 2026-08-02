@@ -18,22 +18,23 @@ pub async fn load(pool: &SqlitePool) {
         .await
         .unwrap();
 
-    // A deletable target account for the delete() test. Plain 'user', distinct
-    // username so it never collides with the admin login lookup.
+    // A deletable target account for the delete() test. Non-admin ('viewer',
+    // which replaced the old 'user' role in migration 0023), distinct username
+    // so it never collides with the admin login lookup.
     sqlx::query(
         "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, ?, ?, ?, ?, ?)"
     )
         .bind("5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47")
         .bind(chrono::Utc::now().to_rfc3339())
         .bind("active")
-        .bind("user")
+        .bind("viewer")
         .bind("deletable.user")
         .bind(CHANGEME_HASH)
         .execute(pool)
         .await
         .unwrap();
 
-    // A second plain 'user' used to assert a non-admin cannot touch other
+    // A second non-admin account used to assert a non-admin cannot touch other
     // accounts (IDOR regression tests).
     sqlx::query(
         "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, ?, ?, ?, ?, ?)"
@@ -41,7 +42,7 @@ pub async fn load(pool: &SqlitePool) {
         .bind("6c6d481b-debf-5gb5-937f-2ffa5e9f8e58")
         .bind(chrono::Utc::now().to_rfc3339())
         .bind("active")
-        .bind("user")
+        .bind("viewer")
         .bind("john.doe")
         .bind(CHANGEME_HASH)
         .execute(pool)

@@ -138,7 +138,15 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         // Users.
         "/users" if is_read => Some("users:read"),
         "/users" => Some("users:write"),
-        "/users/{id}" => Some("users:write"),
+        // Self-service: `/users/{id}` is gated on `users:read`, not
+        // `users:write`, so a viewer can still change its own password. That is
+        // NOT a weakening -- the handlers reject cross-account writes on their
+        // own (`auth.user.id != id && !is_admin()` -> 403), so this scope only
+        // decides who may reach the route, while who may affect ANOTHER account
+        // stays enforced there. Requiring `users:write` here instead would mean
+        // granting viewers a scope that also opens `POST /users` (account
+        // creation), which has no such per-handler guard -- a real escalation.
+        "/users/{id}" => Some("users:read"),
         "/users/me" => Some("users:read"),
         // Webhooks.
         "/webhooks" if is_read => Some("webhooks:read"),

@@ -46,17 +46,38 @@ pub(crate) async fn login(State(pool): State<Db>, Json(input): Json<LoginInput>)
                 );
             }
 
+            // Resolve the account's role before minting anything. An
+            // unparseable role is a corrupt row, not a reason to fall back to a
+            // default set of permissions, so refuse the login outright.
+            let role = match user.role() {
+                Ok(role) => role,
+                Err(err) => {
+                    error!(user_id = %user.id, error = %err, "refusing login: unknown role");
+                    return problem_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal Server Error",
+                        "account role is invalid",
+                    );
+                }
+            };
+
             // Mint a fresh session: a row in the `token` table, `kind = session`,
-            // scoped `admin` (full access, matching the old session semantics),
-            // all namespaces, no expiry (revoked on logout). Every login gets its
-            // own token, so two logins no longer share a secret. The clear value
-            // is returned once and only its SHA-256 hash is persisted.
+            // carrying the scopes of the user's role (this is what makes RBAC
+            // effective for humans -- sessions used to be hard-coded to `admin`,
+            // so every login was full access regardless of role), all namespaces,
+            // no expiry (revoked on logout). Every login gets its own token, so
+            // two logins no longer share a secret. The clear value is returned
+            // once and only its SHA-256 hash is persisted.
+            //
+            // Scopes are frozen into the row here, NOT recomputed per request:
+            // changing a user's role only takes effect once their existing
+            // credentials are revoked (see users::update).
             let token = match token_model::create(
                 &pool,
                 &user.id,
                 "session",
                 token_model::TokenKind::Session,
-                &["admin".to_string()],
+                &role.scopes(),
                 &[],
                 None,
             )
@@ -135,8 +156,8 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
         let token = login_token(&server).await;
 
-        // A session is scoped `admin`, so it must reach every protected route —
-        // here a plain read.
+        // This logs in as `admin`, whose role grants the `admin` wildcard, so
+        // the session must reach every protected route — here a plain read.
         let ok = server
             .get("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
