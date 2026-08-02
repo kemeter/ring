@@ -309,28 +309,6 @@ pub(crate) async fn revoke(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Erro
     Ok(())
 }
 
-/// Revoke every live credential of a user (sessions and PATs alike). Returns
-/// how many rows were affected. Idempotent.
-///
-/// This is what makes a role change take effect. Scopes are frozen into the
-/// token row when it is minted, never recomputed per request, so demoting a
-/// user leaves their existing sessions and PATs carrying the privileges of
-/// their former role until those credentials are revoked.
-pub(crate) async fn revoke_all_for_user(
-    pool: &SqlitePool,
-    user_id: &str,
-) -> Result<u64, sqlx::Error> {
-    let now = Utc::now().to_rfc3339();
-    let result =
-        sqlx::query("UPDATE token SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
-            .bind(&now)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
-
-    Ok(result.rows_affected())
-}
-
 /// Rotate: revoke the existing token and mint a new one carrying the same
 /// name/scopes/namespaces/expiry. Returns the new clear value.
 pub(crate) async fn rotate(

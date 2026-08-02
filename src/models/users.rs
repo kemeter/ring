@@ -232,25 +232,115 @@ pub(crate) async fn update(pool: &SqlitePool, user: &User) -> Result<(), sqlx::E
     Ok(())
 }
 
-/// Number of accounts holding the `admin` role. Used to refuse the demotion or
-/// deletion of the last admin, which would leave the instance unadministrable
-/// with no way back in through the API.
-pub(crate) async fn count_admins(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM user WHERE role = ?")
-        .bind(Role::Admin.as_str())
-        .fetch_one(pool)
-        .await?;
-
-    Ok(count)
+/// Outcome of [`change_role`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RoleChange {
+    /// Role updated; the account's credentials were revoked (count returned).
+    Changed { revoked: u64 },
+    /// Refused: the target is the only remaining admin.
+    WouldRemoveLastAdmin,
+    /// No such account.
+    UserNotFound,
 }
 
-pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM user WHERE id = ?")
-        .bind(&user.id)
-        .execute(pool)
-        .await?;
+/// Change a user's role and revoke their credentials as ONE atomic operation.
+///
+/// Both halves must commit together. Splitting them leaves two races:
+///
+///   * check-then-write on the last admin -- two concurrent demotions each see
+///     two admins, both proceed, and the instance ends up with none;
+///   * role-then-revoke -- if the revocation fails, or a login interleaves
+///     between the two statements, the account keeps credentials carrying the
+///     privileges of its former role. Scopes are frozen into the token row at
+///     mint time (see `login.rs`), so a live token is never re-evaluated.
+///
+/// The last-admin guard is expressed as a conditional UPDATE rather than a read
+/// followed by a write: SQLite evaluates the predicate as part of the writing
+/// statement, so two concurrent demotions cannot both observe "another admin
+/// exists" and both proceed. `rows_affected() == 0` means the guard bit.
+pub(crate) async fn change_role(
+    pool: &SqlitePool,
+    user_id: &str,
+    role: Role,
+) -> Result<RoleChange, sqlx::Error> {
+    let mut tx = pool.begin().await?;
 
-    Ok(())
+    // Promoting to admin can never remove one, so it updates unconditionally.
+    // Any other target role carries the last-admin predicate inline.
+    let updated = if role == Role::Admin {
+        sqlx::query("UPDATE user SET role = ?, updated_at = datetime() WHERE id = ?")
+            .bind(role.as_str())
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+    } else {
+        sqlx::query(
+            "UPDATE user SET role = ?, updated_at = datetime() \
+             WHERE id = ? \
+               AND (role != ? OR EXISTS (SELECT 1 FROM user u2 WHERE u2.role = ? AND u2.id != ?))",
+        )
+        .bind(role.as_str())
+        .bind(user_id)
+        .bind(Role::Admin.as_str())
+        .bind(Role::Admin.as_str())
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    };
+
+    if updated == 0 {
+        // Either the row does not exist, or the guard refused to strip the
+        // last admin. Distinguish them so the caller can answer 404 vs 409.
+        let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM user WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        return Ok(if exists.is_some() {
+            RoleChange::WouldRemoveLastAdmin
+        } else {
+            RoleChange::UserNotFound
+        });
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let revoked =
+        sqlx::query("UPDATE token SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+            .bind(&now)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+    tx.commit().await?;
+
+    Ok(RoleChange::Changed { revoked })
+}
+
+/// Delete a user, refusing to remove the last admin.
+///
+/// Returns `false` when the deletion was refused because the target is the only
+/// remaining admin. Like [`change_role`], the guard is a predicate on the
+/// writing statement rather than a preceding read: two admins deleting each
+/// other concurrently would otherwise both pass a separate check and leave the
+/// instance with none.
+pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<bool, sqlx::Error> {
+    let deleted = sqlx::query(
+        "DELETE FROM user \
+         WHERE id = ? \
+           AND (role != ? OR EXISTS (SELECT 1 FROM user u2 WHERE u2.role = ? AND u2.id != ?))",
+    )
+    .bind(&user.id)
+    .bind(Role::Admin.as_str())
+    .bind(Role::Admin.as_str())
+    .bind(&user.id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(deleted > 0)
 }
 
 /// Hash a password using Argon2id with a unique, randomly generated salt.
