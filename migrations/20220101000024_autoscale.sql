@@ -1,0 +1,21 @@
+-- Horizontal autoscaling: adjust a deployment's instance count from its
+-- observed CPU usage instead of holding the fixed number from the manifest.
+--
+-- Two columns, on purpose:
+--
+--   `autoscale`         the policy the user declared (min/max/target_cpu), JSON,
+--                       NULL when the deployment is not autoscaled.
+--   `desired_replicas`  the autoscaler's current decision.
+--
+-- `replicas` keeps meaning "what the manifest asked for" and is never written
+-- by the autoscaler. Overwriting it would make the manifest lie about the
+-- running state and put `ring apply` in a tug-of-war with the scheduler: apply
+-- would reset the count on every run, the autoscaler would climb back, and
+-- neither would be wrong. Keeping the declared value and the current decision
+-- apart also makes both observable in the API.
+--
+-- NULL `desired_replicas` means "no decision yet" -- the runtimes fall back to
+-- `replicas`, so an autoscaled deployment starts from its declared count and
+-- the first tick refines it.
+ALTER TABLE deployment ADD COLUMN autoscale JSON DEFAULT NULL;
+ALTER TABLE deployment ADD COLUMN desired_replicas INTEGER DEFAULT NULL;
