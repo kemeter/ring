@@ -81,6 +81,21 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
             "deployment.replicas.host_network_conflict",
         ));
     }
+
+    // Same conflict, one step removed: an autoscaler allowed to reach more than
+    // one instance would recreate the situation the check above rejects.
+    if let Some(policy) = &input.autoscale
+        && policy.max > 1
+    {
+        errors.push(Violation::new(
+            "autoscale.max",
+            format!(
+                "host networking is incompatible with autoscale.max > 1 (got {}): all instances would compete for the same host ports",
+                policy.max
+            ),
+            "deployment.autoscale.host_network_conflict",
+        ));
+    }
 }
 
 /// Validate environment variable names against POSIX/Docker rules:
@@ -109,6 +124,23 @@ fn validate_environment(input: &DeploymentInput, errors: &mut ViolationList) {
 /// strings parse correctly. `parse_cpu_string` accepts forms like `"500m"` or
 /// `"2"`; `parse_memory_string` handles binary (`Ki`, `Mi`, …) and decimal
 /// (`K`, `M`, …) suffixes. Anything else used to be a silent runtime crash.
+/// Reject an autoscaling policy that cannot be satisfied (min below 1, max
+/// below min, a target outside 0-100). Rejecting at the API boundary keeps the
+/// scheduler free of "what does this even mean" cases.
+fn validate_autoscale(input: &DeploymentInput, errors: &mut ViolationList) {
+    let Some(policy) = &input.autoscale else {
+        return;
+    };
+
+    if let Err(message) = policy.validate() {
+        errors.push(Violation::new(
+            "autoscale".to_string(),
+            message,
+            "deployment.autoscale.invalid".to_string(),
+        ));
+    }
+}
+
 fn validate_resources(input: &DeploymentInput, errors: &mut ViolationList) {
     let Some(resources) = &input.resources else {
         return;
@@ -612,6 +644,8 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     resources: Option<Resource>,
     #[serde(default)]
+    autoscale: Option<crate::models::deployments::Autoscale>,
+    #[serde(default)]
     ports: Vec<DeploymentPort>,
     #[serde(default)]
     network: Option<NetworkConfig>,
@@ -650,6 +684,7 @@ pub(crate) async fn create(
     validate_ports(&input, &mut violations);
     validate_environment(&input, &mut violations);
     validate_resources(&input, &mut violations);
+    validate_autoscale(&input, &mut violations);
     validate_config(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
@@ -835,6 +870,10 @@ pub(crate) async fn create(
         volumes,
         health_checks: input.health_checks.unwrap_or_default(),
         resources: input.resources,
+        autoscale: input.autoscale.clone(),
+        // No decision yet: the first scheduler tick that sees usable metrics
+        // makes one. Until then `target_replicas()` falls back to `replicas`.
+        desired_replicas: None,
         image_digest: None,
         ports: input.ports,
         pending_events: vec![],

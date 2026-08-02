@@ -389,6 +389,8 @@ mod tests {
             volumes: "".to_string(),
             health_checks,
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
