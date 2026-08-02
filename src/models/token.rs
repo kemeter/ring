@@ -64,6 +64,8 @@ pub(crate) const KNOWN_SCOPES: &[&str] = &[
     "configs:write",
     "namespaces:read",
     "namespaces:write",
+    "volumes:read",
+    "volumes:write",
     "users:read",
     "users:write",
     "webhooks:read",
