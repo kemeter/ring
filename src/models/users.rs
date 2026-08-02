@@ -7,6 +7,86 @@ use uuid::Uuid;
 
 use crate::serializer::deserialize_null_default;
 
+/// A user's authorization role. Each role maps to a fixed set of token scopes
+/// via [`Role::scopes`]; see migration 0023.
+///
+/// Deliberately NOT used as the `UserRow` column type: an unknown string in the
+/// database must fail loudly at parse time rather than deserialize into a
+/// silent default (which would either grant or strip privileges by accident).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Role {
+    /// Full access. Carries the `admin` wildcard scope, never a scope list.
+    Admin,
+    /// Day-to-day operation of workloads: read everything, write the resources
+    /// needed to run and configure deployments.
+    Operator,
+    /// Read-only across every resource.
+    Viewer,
+}
+
+impl Role {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Operator => "operator",
+            Role::Viewer => "viewer",
+        }
+    }
+
+    /// Parse a role as stored in the database. Fails on anything unknown: the
+    /// `CHECK` constraint from migration 0023 should make that impossible, so
+    /// an unknown value means a hand-edited or corrupt row and must not be
+    /// quietly resolved to a set of permissions.
+    pub(crate) fn parse(raw: &str) -> Result<Role, String> {
+        match raw {
+            "admin" => Ok(Role::Admin),
+            "operator" => Ok(Role::Operator),
+            "viewer" => Ok(Role::Viewer),
+            other => Err(format!("unknown user role {other:?}")),
+        }
+    }
+
+    /// The scopes a session gets when this role logs in.
+    ///
+    /// `Admin` returns the `admin` wildcard alone — it is never mixed with
+    /// ordinary scopes, so the wildcard stays the single meaning of "full
+    /// access" that the auth middleware already understands.
+    ///
+    /// `Operator` holds `secrets:write` on purpose. Withholding it would be a
+    /// fake boundary: `deployments:write` already lets a user mount any secret
+    /// of the namespace into a deployment, which the scheduler decrypts. The
+    /// honest framing, documented as such, is that `deployments:write` amounts
+    /// to administering the namespace's workloads.
+    pub(crate) fn scopes(&self) -> Vec<String> {
+        let slugs: &[&str] = match self {
+            Role::Admin => &["admin"],
+            Role::Operator => &[
+                "deployments:read",
+                "deployments:write",
+                "secrets:read",
+                "secrets:write",
+                "configs:read",
+                "configs:write",
+                "namespaces:read",
+                "users:read",
+                "webhooks:read",
+                "webhooks:write",
+            ],
+            Role::Viewer => &[
+                "deployments:read",
+                "secrets:read",
+                "configs:read",
+                "namespaces:read",
+                "users:read",
+                "webhooks:read",
+            ],
+        };
+
+        slugs.iter().map(|s| s.to_string()).collect()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct User {
     pub(crate) id: String,
@@ -14,8 +94,8 @@ pub(crate) struct User {
     #[serde(default, deserialize_with = "deserialize_null_default")]
     pub(crate) updated_at: Option<String>,
     pub(crate) status: String,
-    /// Coarse authorization role: "user" (default, self-scoped) or "admin"
-    /// (may act on other accounts). Not RBAC — see migration 0016.
+    /// Authorization role: `admin`, `operator` or `viewer` (migration 0023).
+    /// Kept as a `String` on the row; use [`User::role`] for the parsed value.
     #[serde(default = "default_role")]
     pub(crate) role: String,
     pub(crate) username: String,
@@ -40,14 +120,22 @@ struct UserRow {
 const SELECT_COLUMNS: &str =
     "id, created_at, updated_at, status, role, username, password, login_at";
 
+/// Least privilege when a payload omits the role. `"user"` is no longer a legal
+/// value — migration 0023 constrains the column to admin/operator/viewer.
 fn default_role() -> String {
-    "user".to_string()
+    Role::Viewer.as_str().to_string()
 }
 
 impl User {
     /// True when this user may act on accounts other than its own.
     pub(crate) fn is_admin(&self) -> bool {
-        self.role == "admin"
+        self.role == Role::Admin.as_str()
+    }
+
+    /// The parsed role. `Err` when the stored string is not a known role, which
+    /// the caller must treat as a failure rather than falling back to a default.
+    pub(crate) fn role(&self) -> Result<Role, String> {
+        Role::parse(&self.role)
     }
 }
 
@@ -113,14 +201,15 @@ pub(crate) async fn create(
     username: &str,
     password: &str,
 ) -> Result<(), sqlx::Error> {
-    // role is hard-coded to 'user': there is no API path to create an admin
-    // (that would be a privilege-escalation vector). Admin is set out of band.
+    // New accounts start as `viewer` (read-only), the least-privileged role.
+    // Promotion is a separate, explicitly authorized act -- creating an account
+    // must never be a way to mint privileges.
     sqlx::query(
         "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, datetime(), ?, ?, ?, ?)"
     )
     .bind(Uuid::new_v4().to_string())
     .bind("active")
-    .bind("user")
+    .bind(Role::Viewer.as_str())
     .bind(username)
     .bind(password)
     .execute(pool)
@@ -130,23 +219,128 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn update(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE user SET username = ?, password = ?, updated_at = datetime() WHERE id = ?")
-        .bind(&user.username)
-        .bind(&user.password)
-        .bind(&user.id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE user SET username = ?, password = ?, role = ?, updated_at = datetime() WHERE id = ?",
+    )
+    .bind(&user.username)
+    .bind(&user.password)
+    .bind(&user.role)
+    .bind(&user.id)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
-pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM user WHERE id = ?")
-        .bind(&user.id)
-        .execute(pool)
-        .await?;
+/// Outcome of [`change_role`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RoleChange {
+    /// Role updated; the account's credentials were revoked (count returned).
+    Changed { revoked: u64 },
+    /// Refused: the target is the only remaining admin.
+    WouldRemoveLastAdmin,
+    /// No such account.
+    UserNotFound,
+}
 
-    Ok(())
+/// Change a user's role and revoke their credentials as ONE atomic operation.
+///
+/// Both halves must commit together. Splitting them leaves two races:
+///
+///   * check-then-write on the last admin -- two concurrent demotions each see
+///     two admins, both proceed, and the instance ends up with none;
+///   * role-then-revoke -- if the revocation fails, or a login interleaves
+///     between the two statements, the account keeps credentials carrying the
+///     privileges of its former role. Scopes are frozen into the token row at
+///     mint time (see `login.rs`), so a live token is never re-evaluated.
+///
+/// The last-admin guard is expressed as a conditional UPDATE rather than a read
+/// followed by a write: SQLite evaluates the predicate as part of the writing
+/// statement, so two concurrent demotions cannot both observe "another admin
+/// exists" and both proceed. `rows_affected() == 0` means the guard bit.
+pub(crate) async fn change_role(
+    pool: &SqlitePool,
+    user_id: &str,
+    role: Role,
+) -> Result<RoleChange, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    // Promoting to admin can never remove one, so it updates unconditionally.
+    // Any other target role carries the last-admin predicate inline.
+    let updated = if role == Role::Admin {
+        sqlx::query("UPDATE user SET role = ?, updated_at = datetime() WHERE id = ?")
+            .bind(role.as_str())
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+    } else {
+        sqlx::query(
+            "UPDATE user SET role = ?, updated_at = datetime() \
+             WHERE id = ? \
+               AND (role != ? OR EXISTS (SELECT 1 FROM user u2 WHERE u2.role = ? AND u2.id != ?))",
+        )
+        .bind(role.as_str())
+        .bind(user_id)
+        .bind(Role::Admin.as_str())
+        .bind(Role::Admin.as_str())
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    };
+
+    if updated == 0 {
+        // Either the row does not exist, or the guard refused to strip the
+        // last admin. Distinguish them so the caller can answer 404 vs 409.
+        let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM user WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+        return Ok(if exists.is_some() {
+            RoleChange::WouldRemoveLastAdmin
+        } else {
+            RoleChange::UserNotFound
+        });
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let revoked =
+        sqlx::query("UPDATE token SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
+            .bind(&now)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+    tx.commit().await?;
+
+    Ok(RoleChange::Changed { revoked })
+}
+
+/// Delete a user, refusing to remove the last admin.
+///
+/// Returns `false` when the deletion was refused because the target is the only
+/// remaining admin. Like [`change_role`], the guard is a predicate on the
+/// writing statement rather than a preceding read: two admins deleting each
+/// other concurrently would otherwise both pass a separate check and leave the
+/// instance with none.
+pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<bool, sqlx::Error> {
+    let deleted = sqlx::query(
+        "DELETE FROM user \
+         WHERE id = ? \
+           AND (role != ? OR EXISTS (SELECT 1 FROM user u2 WHERE u2.role = ? AND u2.id != ?))",
+    )
+    .bind(&user.id)
+    .bind(Role::Admin.as_str())
+    .bind(Role::Admin.as_str())
+    .bind(&user.id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(deleted > 0)
 }
 
 /// Hash a password using Argon2id with a unique, randomly generated salt.
@@ -180,7 +374,56 @@ pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_password;
+    use super::{Role, hash_password};
+    use crate::models::token::KNOWN_SCOPES;
+
+    #[test]
+    fn every_role_scope_is_a_known_scope() {
+        // Scopes are validated against KNOWN_SCOPES at token creation. A role
+        // granting a slug that isn't in that set would mint a session the
+        // server refuses to honour, so the two lists must not drift apart.
+        for role in [Role::Admin, Role::Operator, Role::Viewer] {
+            for scope in role.scopes() {
+                assert!(
+                    KNOWN_SCOPES.contains(&scope.as_str()),
+                    "role {} grants unknown scope {scope:?}",
+                    role.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn admin_holds_only_the_wildcard() {
+        // `admin` means full access on its own; mixing it with ordinary scopes
+        // would create two competing encodings of the same privilege.
+        assert_eq!(Role::Admin.scopes(), vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn viewer_is_read_only_and_operator_can_write() {
+        let viewer = Role::Viewer.scopes();
+        assert!(
+            viewer.iter().all(|s| s.ends_with(":read")),
+            "viewer must not hold any write scope: {viewer:?}"
+        );
+
+        let operator = Role::Operator.scopes();
+        assert!(operator.contains(&"deployments:write".to_string()));
+        // Never admin: an operator must not reach token minting or user writes.
+        assert!(!operator.contains(&"admin".to_string()));
+        assert!(!operator.contains(&"users:write".to_string()));
+        assert!(!operator.contains(&"namespaces:write".to_string()));
+    }
+
+    #[test]
+    fn unknown_role_fails_loudly() {
+        // Fail-closed: a corrupt/hand-edited row must not resolve to a default
+        // set of permissions.
+        assert!(Role::parse("root").is_err());
+        assert!(Role::parse("user").is_err(), "'user' was dropped by 0023");
+        assert_eq!(Role::parse("admin").unwrap(), Role::Admin);
+    }
 
     #[test]
     fn same_password_yields_distinct_hashes() {

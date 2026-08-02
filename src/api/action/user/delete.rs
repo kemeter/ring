@@ -2,7 +2,7 @@ use axum::extract::State;
 use axum::response::Response;
 use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 
-use crate::api::auth::Auth;
+use crate::api::auth::{Auth, require_scope};
 use crate::api::server::Db;
 use crate::models::users;
 
@@ -16,16 +16,24 @@ pub(crate) async fn delete(Path(id): Path<String>, auth: Auth, State(pool): Stat
         return StatusCode::FORBIDDEN.into_response();
     }
 
+    // The route only requires `users:read` (so self-service reaches PUT on the
+    // same path), so deletion must demand the write scope here, on the PRESENTED
+    // token: an admin-owned PAT minted read-only must not be able to delete
+    // accounts just because its owner is an admin.
+    if let Err(response) = require_scope(&auth.source, "users:write") {
+        return response;
+    }
+
     let option = users::find(&pool, &id).await;
 
     match option {
-        Ok(Some(user)) => {
-            if users::delete(&pool, &user).await.is_err() {
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-
-            StatusCode::NO_CONTENT.into_response()
-        }
+        Ok(Some(user)) => match users::delete(&pool, &user).await {
+            Ok(true) => StatusCode::NO_CONTENT.into_response(),
+            // Refused: removing this account would leave no admin, and so no
+            // way back into the instance through the API.
+            Ok(false) => StatusCode::CONFLICT.into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
 
         Err(_) => StatusCode::NO_CONTENT.into_response(),
@@ -50,6 +58,43 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn deleting_an_admin_is_allowed_only_while_another_remains() {
+        // The API forbids self-deletion, so the last-admin guard is reached by
+        // deleting *another* admin. With two admins the delete succeeds; the
+        // survivor may then not be deleted, which is what keeps an instance
+        // from ending up with no administrator and no way back in.
+        let (pool, app) = crate::api::server::tests::new_test_app_with_pool().await;
+        sqlx::query(
+            "INSERT INTO user (id, created_at, status, role, username, password) VALUES (?, datetime(), 'active', 'admin', 'second.admin', ?)",
+        )
+        .bind("aa11bb22-cc33-dd44-ee55-ff6677889900")
+        .bind("$argon2id$v=19$m=65536,t=2,p=4$Y2hhbmdlbWU$HxyGA81ORfjb63QVOi3+t/eBaFPmdSbf4OZc4pBG8DM")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let token = login(app.clone(), "second.admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        // Two admins: deleting the seed admin leaves the caller, so it is fine.
+        let first = server
+            .delete("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(first.status_code(), StatusCode::NO_CONTENT);
+
+        // One admin left: the model guard refuses to remove it.
+        let last = crate::models::users::find(&pool, "aa11bb22-cc33-dd44-ee55-ff6677889900")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !crate::models::users::delete(&pool, &last).await.unwrap(),
+            "deleting the last admin must be refused"
+        );
     }
 
     #[tokio::test]

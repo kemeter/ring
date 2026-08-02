@@ -79,15 +79,17 @@ mod tests {
         let token = login(&server).await;
         let (h, v) = auth(&token);
 
-        // Token works before logout.
-        let before = server.get("/deployments").add_header(h, v.clone()).await;
+        // Token works before logout. `/users/me` stands in for "any protected
+        // route": it is behind the same middleware but in the identity domain,
+        // so this test does not ride on an unrelated resource's contract.
+        let before = server.get("/users/me").add_header(h, v.clone()).await;
         assert_eq!(before.status_code(), StatusCode::OK);
 
         let out = server.post("/logout").add_header(h, v.clone()).await;
         assert_eq!(out.status_code(), StatusCode::NO_CONTENT);
 
         // Same token is now rejected — the session row was revoked.
-        let after = server.get("/deployments").add_header(h, v).await;
+        let after = server.get("/users/me").add_header(h, v).await;
         assert_eq!(after.status_code(), StatusCode::UNAUTHORIZED);
     }
 
@@ -117,7 +119,7 @@ mod tests {
         // A new login mints a new, valid session.
         let second = login(&server).await;
         let (h2, v2) = auth(&second);
-        let res = server.get("/deployments").add_header(h2, v2).await;
+        let res = server.get("/users/me").add_header(h2, v2).await;
         assert_eq!(res.status_code(), StatusCode::OK);
     }
 }

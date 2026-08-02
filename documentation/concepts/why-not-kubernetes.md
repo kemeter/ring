@@ -40,7 +40,7 @@ Ring exists because Kubernetes is the wrong shape for a lot of real workloads. T
 - **High availability.** Control-plane HA, multi-AZ workloads, automatic failover when a node dies. Ring's HA model is "restart the process": if the host is down, your workloads are down.
 - **Horizontal autoscaling.** Ring has fixed `replicas:`. Kubernetes has HPA / VPA / cluster autoscaler.
 - **Operator ecosystem.** Cert-manager, ingress controllers, service meshes (Istio, Linkerd), observability stacks (Prometheus operator). Ring runs containers, and you wire up your own toolchain.
-- **Large teams with RBAC needs.** Kubernetes has fine-grained RBAC, namespaces, network policies, pod security standards. Ring authenticates with bearer tokens but has **no roles, no per-namespace scopes, no read-only tokens**: every valid token has full API access. Fine for small teams; insufficient for hundreds of developers.
+- **Large teams with RBAC needs.** Kubernetes has fine-grained RBAC, namespaces, network policies, pod security standards. Ring has three global roles (`admin` / `operator` / `viewer`) and namespace-scoped API tokens, but **no per-namespace roles and no custom permissions**. Fine for small teams; insufficient for hundreds of developers.
 
 ## What Ring deliberately leaves out
 

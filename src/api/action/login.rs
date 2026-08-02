@@ -46,17 +46,38 @@ pub(crate) async fn login(State(pool): State<Db>, Json(input): Json<LoginInput>)
                 );
             }
 
+            // Resolve the account's role before minting anything. An
+            // unparseable role is a corrupt row, not a reason to fall back to a
+            // default set of permissions, so refuse the login outright.
+            let role = match user.role() {
+                Ok(role) => role,
+                Err(err) => {
+                    error!(user_id = %user.id, error = %err, "refusing login: unknown role");
+                    return problem_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal Server Error",
+                        "account role is invalid",
+                    );
+                }
+            };
+
             // Mint a fresh session: a row in the `token` table, `kind = session`,
-            // scoped `admin` (full access, matching the old session semantics),
-            // all namespaces, no expiry (revoked on logout). Every login gets its
-            // own token, so two logins no longer share a secret. The clear value
-            // is returned once and only its SHA-256 hash is persisted.
+            // carrying the scopes of the user's role (this is what makes RBAC
+            // effective for humans -- sessions used to be hard-coded to `admin`,
+            // so every login was full access regardless of role), all namespaces,
+            // no expiry (revoked on logout). Every login gets its own token, so
+            // two logins no longer share a secret. The clear value is returned
+            // once and only its SHA-256 hash is persisted.
+            //
+            // Scopes are frozen into the row here, NOT recomputed per request:
+            // changing a user's role only takes effect once their existing
+            // credentials are revoked (see users::update).
             let token = match token_model::create(
                 &pool,
                 &user.id,
                 "session",
                 token_model::TokenKind::Session,
-                &["admin".to_string()],
+                &role.scopes(),
                 &[],
                 None,
             )
@@ -135,10 +156,12 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
         let token = login_token(&server).await;
 
-        // A session is scoped `admin`, so it must reach every protected route —
-        // here a plain read.
+        // Assert against `/users/me`: it is protected by the same middleware
+        // but belongs to the identity domain, so this test does not depend on
+        // the contract of an unrelated resource (a deployments payload change
+        // must never break a login test).
         let ok = server
-            .get("/deployments")
+            .get("/users/me")
             .add_header("Authorization", format!("Bearer {}", token))
             .await;
         assert_eq!(ok.status_code(), StatusCode::OK);
@@ -155,12 +178,20 @@ mod tests {
         assert_ne!(first, second, "two logins must not share a token");
         for token in [&first, &second] {
             let res = server
-                .get("/deployments")
+                .get("/users/me")
                 .add_header("Authorization", format!("Bearer {}", token))
                 .await;
             assert_eq!(res.status_code(), StatusCode::OK);
         }
     }
+
+    // The tests below query `/tokens` on purpose. That is not the cross-domain
+    // coupling this module otherwise avoids: the session/PAT boundary IS the
+    // behaviour under test, so the assertion has to be made where it lives. The
+    // rule is about which contract a test depends on -- reaching for an
+    // unrelated resource merely to have "some protected route" is what breaks
+    // (use `/users/me` for that), whereas asserting a documented interaction
+    // between two domains belongs to whichever module owns the invariant.
 
     #[tokio::test]
     async fn session_is_hidden_from_the_token_list() {
