@@ -77,6 +77,11 @@ struct Deployment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resources: Option<Resources>,
 
+    /// Opt into autoscaling. Absent means the deployment holds exactly
+    /// `replicas`, which is what lets an external controller own the count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    autoscale: Option<Autoscale>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     health_checks: Vec<HealthCheck>,
 
@@ -156,6 +161,16 @@ struct Port {
     /// when unset so the wire shape is unchanged for TCP-only manifests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     protocol: Option<String>,
+}
+
+/// Autoscaling policy as written in a manifest. Mirrors the API payload; the
+/// server is what validates the ranges, so a bad policy is reported once, by
+/// the same rules, whether it arrives via `ring apply` or over HTTP.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Autoscale {
+    min: u32,
+    max: u32,
+    target_cpu: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -996,6 +1011,7 @@ mod tests {
             config: None,
             command: Vec::new(),
             resources: None,
+            autoscale: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
             network: None,
@@ -1135,6 +1151,62 @@ deployments:
     }
 
     #[test]
+    fn autoscale_block_parses_and_is_absent_by_default() {
+        let yaml_content = r#"
+deployments:
+  api:
+    name: api
+    image: myapp:latest
+    replicas: 2
+    autoscale:
+      min: 2
+      max: 10
+      target_cpu: 70
+  worker:
+    name: worker
+    image: myapp:latest
+    replicas: 3
+"#;
+
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+
+        let policy = config.deployments["api"]
+            .autoscale
+            .as_ref()
+            .expect("autoscale should parse");
+        assert_eq!(policy.min, 2);
+        assert_eq!(policy.max, 10);
+        assert_eq!(policy.target_cpu, 70.0);
+
+        // Opt-in: a deployment that says nothing about autoscaling must send no
+        // policy at all, so Ring leaves its replica count alone.
+        assert!(
+            config.deployments["worker"].autoscale.is_none(),
+            "a manifest without an autoscale block must not opt in"
+        );
+    }
+
+    #[test]
+    fn a_deployment_without_autoscale_omits_it_from_the_payload() {
+        // `skip_serializing_if` matters here: sending `"autoscale": null` would
+        // still be an absent policy server-side, but keeping the payload shape
+        // unchanged is what guarantees existing clients see no difference.
+        let yaml_content = r#"
+deployments:
+  api:
+    name: api
+    image: myapp:latest
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let payload = serde_json::to_string(&config.deployments["api"]).unwrap();
+
+        assert!(
+            !payload.contains("autoscale"),
+            "payload must not mention autoscale when unset: {payload}"
+        );
+    }
+
+    #[test]
     fn test_config_file_with_command_resources_health_checks() {
         let yaml_content = r#"
 deployments:
@@ -1217,6 +1289,7 @@ deployments:
                 "serve --port $PORT".to_string(),
             ],
             resources: None,
+            autoscale: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
             network: None,
