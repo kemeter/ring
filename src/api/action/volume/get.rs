@@ -4,8 +4,8 @@ use axum::response::IntoResponse;
 use http::StatusCode;
 use serde::Serialize;
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
-use crate::models::users::User;
 use crate::models::volumes;
 
 #[derive(Serialize)]
@@ -24,10 +24,17 @@ struct VolumeOutput {
 pub(crate) async fn get(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    _user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     match volumes::find(&pool, &id).await {
         Ok(Some(volume)) => {
+            // The namespace is only known once the row is loaded, so the
+            // boundary is enforced here rather than by the scope middleware.
+            // `host_path` in particular must not leak across namespaces.
+            if let Err(response) = require_namespace(&auth.source, &volume.namespace) {
+                return response;
+            }
+
             let output = VolumeOutput {
                 labels: volume.labels_map(),
                 id: volume.id,
