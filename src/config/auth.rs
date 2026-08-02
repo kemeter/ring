@@ -50,16 +50,34 @@ pub(crate) fn load_auth_config(context_name: String) -> AuthConfig {
         }
     };
 
-    match context_auth.get(&context_name) {
+    resolve_context_token(&context_auth, &context_name)
+}
+
+/// Pick a context's token out of a parsed auth.json.
+///
+/// Split out of [`load_auth_config`] so the missing-context branch is testable:
+/// the caller does the I/O, this does the decision.
+fn resolve_context_token(
+    context_auth: &HashMap<String, AuthToken>,
+    context_name: &str,
+) -> AuthConfig {
+    match context_auth.get(context_name) {
         Some(auth_token) => AuthConfig {
             token: auth_token.token.clone(),
         },
+        // Same contract as an unreadable or unparseable file: report and hand
+        // back an empty token, letting the caller decide what that means. This
+        // used to `process::exit(1)`, which made "no credentials" fatal here
+        // but merely empty there -- and broke `ring logout`, whose whole point
+        // is to be a successful no-op when there is nothing to log out of.
         None => {
-            eprintln!(
-                "Error: Context '{}' does not exist in a configuration file",
+            error!(
+                "No credentials for context '{}' in auth.json — run `ring login` or set RING_TOKEN",
                 context_name
             );
-            std::process::exit(1);
+            AuthConfig {
+                token: String::new(),
+            }
         }
     }
 }
@@ -96,5 +114,39 @@ mod tests {
             }
         });
         assert!(token.is_none());
+    }
+
+    #[test]
+    fn known_context_yields_its_token() {
+        let mut map = HashMap::new();
+        map.insert(
+            "default".to_string(),
+            AuthToken {
+                token: "abc123".to_string(),
+            },
+        );
+
+        assert_eq!(resolve_context_token(&map, "default").token, "abc123");
+    }
+
+    #[test]
+    fn unknown_context_yields_an_empty_token_instead_of_exiting() {
+        // Regression guard: this branch used to call `process::exit(1)`, which
+        // made `ring logout` impossible when auth.json existed without the
+        // current context -- logout is meant to be a no-op success there. It
+        // also meant this assertion could not be written at all, since it would
+        // have killed the test process.
+        let mut map = HashMap::new();
+        map.insert(
+            "default".to_string(),
+            AuthToken {
+                token: "abc123".to_string(),
+            },
+        );
+
+        assert!(
+            resolve_context_token(&map, "production").token.is_empty(),
+            "a missing context must yield an empty token, not terminate"
+        );
     }
 }
