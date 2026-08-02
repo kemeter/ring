@@ -890,6 +890,103 @@ mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 
+    fn autoscale_policy() -> Autoscale {
+        Autoscale {
+            min: 2,
+            max: 8,
+            target_cpu: 70.0,
+        }
+    }
+
+    #[test]
+    fn a_deployment_without_a_policy_is_never_autoscaled() {
+        // The opt-in guarantee, at the one place every runtime reads. A
+        // deployment with no `autoscale` block must reconcile against exactly
+        // what its manifest declared, even if a stale `desired_replicas` sits
+        // in its row — otherwise Ring would silently override a count that
+        // something upstream (Kemeter, a CI job, a human) is managing.
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = None;
+        d.desired_replicas = Some(7);
+
+        assert_eq!(d.target_replicas(), 3);
+    }
+
+    #[test]
+    fn an_autoscaled_deployment_follows_the_decision() {
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(autoscale_policy());
+        d.desired_replicas = Some(5);
+
+        assert_eq!(d.target_replicas(), 5);
+    }
+
+    #[test]
+    fn an_autoscaled_deployment_starts_from_its_declared_count() {
+        // Before the first decision there is nothing to follow, so the manifest
+        // value stands (clamped into the policy's range).
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(autoscale_policy());
+        d.desired_replicas = None;
+
+        assert_eq!(d.target_replicas(), 3);
+    }
+
+    #[test]
+    fn a_narrowed_policy_reclamps_an_older_decision() {
+        // max lowered to 4 while a decision of 9 is still on the row: the new
+        // bound wins immediately, without waiting for the autoscaler to write.
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(Autoscale {
+            min: 1,
+            max: 4,
+            target_cpu: 70.0,
+        });
+        d.desired_replicas = Some(9);
+
+        assert_eq!(d.target_replicas(), 4);
+    }
+
+    #[test]
+    fn autoscale_policies_reject_impossible_ranges() {
+        assert!(autoscale_policy().validate().is_ok());
+        // Scaling to zero needs a wake-up path Ring has no way to trigger.
+        assert!(
+            Autoscale {
+                min: 0,
+                max: 5,
+                target_cpu: 70.0
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Autoscale {
+                min: 5,
+                max: 2,
+                target_cpu: 70.0
+            }
+            .validate()
+            .is_err()
+        );
+        for bad in [0.0, 100.0, -1.0, f64::NAN] {
+            assert!(
+                Autoscale {
+                    min: 1,
+                    max: 5,
+                    target_cpu: bad
+                }
+                .validate()
+                .is_err(),
+                "target_cpu {bad} must be rejected"
+            );
+        }
+    }
+
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)

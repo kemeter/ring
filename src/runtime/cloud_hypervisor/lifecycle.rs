@@ -943,7 +943,7 @@ impl CloudHypervisorLifecycle {
             .await;
 
         let current_count = deployment.instances.len();
-        let target_count = deployment.replicas as usize;
+        let target_count = deployment.target_replicas() as usize;
 
         if current_count < target_count && deployment.status != DeploymentStatus::CrashLoopBackOff {
             let instance_id = format!(

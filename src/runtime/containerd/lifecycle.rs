@@ -323,7 +323,7 @@ impl ContainerdLifecycle {
         }
 
         let current = deployment.instances.len();
-        let target = match usize::try_from(deployment.replicas) {
+        let target = match usize::try_from(deployment.target_replicas()) {
             Ok(t) => t,
             Err(_) => {
                 deployment.status = DeploymentStatus::Failed;

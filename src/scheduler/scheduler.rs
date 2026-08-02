@@ -8,6 +8,7 @@ use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::models::volume::ResolvedMount;
+use crate::scheduler::autoscaler::{Autoscaler, Decision};
 use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
@@ -1197,12 +1198,131 @@ async fn apply_docker_event(
     }
 }
 
+/// Let the autoscaler adjust `desired_replicas` for the deployments that opted
+/// into it.
+///
+/// **Opt-in by construction**: a deployment without an `autoscale` block is
+/// skipped before anything else happens, so Ring never second-guesses a replica
+/// count that something upstream is managing. This is what lets an external
+/// controller (Kemeter, a CI job, a human) own scaling for its own deployments
+/// while Ring autoscales only what was explicitly handed to it.
+///
+/// Decisions are written to `desired_replicas`; `replicas` — what the manifest
+/// declared — is never touched, so `ring apply` and the autoscaler cannot fight
+/// over the same value.
+async fn run_autoscaling(
+    pool: &SqlitePool,
+    deployments_list: &mut [Deployment],
+    stats: &crate::scheduler::stats_cache::StatsCache,
+    autoscaler: &mut Autoscaler,
+) {
+    // Snapshot the per-deployment CPU averages once, keyed the same way the
+    // cache is (namespace + name is unique).
+    let measurements: HashMap<(String, String), Option<f64>> = {
+        let Ok(snapshot) = stats.read() else {
+            warn!("Stats snapshot lock poisoned; skipping autoscaling this tick");
+            return;
+        };
+
+        snapshot
+            .deployments
+            .iter()
+            .map(|d| {
+                (
+                    (d.namespace.clone(), d.name.clone()),
+                    d.cpu_usage_percent_per_instance,
+                )
+            })
+            .collect()
+    };
+
+    // The autoscaler's cooldowns are wall-clock durations, so use the std
+    // clock: this module also has `tokio::time::Instant` in scope for the tick
+    // loop, and the two are not interchangeable.
+    let now = std::time::Instant::now();
+
+    for deployment in deployments_list.iter_mut() {
+        // The opt-in gate.
+        let Some(policy) = deployment.autoscale.clone() else {
+            continue;
+        };
+        let policy = &policy;
+
+        // Only reconcile a deployment that is actually up. Scaling something
+        // mid-rollout or mid-crash reacts to a transient state, and a draining
+        // parent must not be resized on its way out.
+        if deployment.status != DeploymentStatus::Running || deployment.parent_id.is_some() {
+            continue;
+        }
+
+        let cpu = measurements
+            .get(&(deployment.namespace.clone(), deployment.name.clone()))
+            .copied()
+            .flatten();
+
+        let current = deployment.target_replicas();
+
+        match autoscaler.decide(&deployment.id, policy, current, cpu, now) {
+            Decision::Hold => {}
+            Decision::ScaleTo(target) => {
+                if let Err(e) =
+                    deployments::set_desired_replicas(pool, &deployment.id, target).await
+                {
+                    error!(
+                        "Failed to persist autoscale decision for {}: {}",
+                        deployment.id, e
+                    );
+                    continue;
+                }
+
+                // Apply the decision to the in-memory copy too: the
+                // reconciliation loop below consumes this list, so without
+                // this the new count would only take effect one tick later.
+                deployment.desired_replicas = Some(target);
+
+                info!(
+                    "Autoscaled {}/{}: {} -> {} instances (cpu {:.1}% vs target {:.1}%)",
+                    deployment.namespace,
+                    deployment.name,
+                    current,
+                    target,
+                    cpu.unwrap_or(f64::NAN),
+                    policy.target_cpu
+                );
+
+                let _ = crate::models::deployment_event::log_event(
+                    pool,
+                    deployment.id.clone(),
+                    "info",
+                    format!(
+                        "Autoscaled from {} to {} instances (average CPU {:.1}% against a {:.1}% target)",
+                        current, target, cpu.unwrap_or(f64::NAN), policy.target_cpu
+                    ),
+                    "autoscaler",
+                    Some(if target > current {
+                        "scale_up"
+                    } else {
+                        "scale_down"
+                    }),
+                )
+                .await;
+            }
+        }
+    }
+
+    // Forget deployments that no longer appear, so the cooldown map stays
+    // bounded over the life of the process.
+    let live: Vec<String> = deployments_list.iter().map(|d| d.id.clone()).collect();
+    autoscaler.retain_known(&live);
+}
+
 pub(crate) async fn schedule(
     pool: SqlitePool,
     config: crate::config::config::Config,
     runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>,
     mut event_rx: mpsc::Receiver<DockerEvent>,
     intentional_shutdowns: IntentionalShutdowns,
+    stats: crate::scheduler::stats_cache::StatsCache,
 ) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
@@ -1234,6 +1354,10 @@ pub(crate) async fn schedule(
     // restart_count once it has run uninterrupted for the anti-flap window, so
     // the crash budget is "N crashes within a window", not "N crashes for life".
     let mut healthy_window = HealthyWindow::new();
+
+    // Per-deployment autoscaling cooldowns. Only ever consulted for deployments
+    // that carry an `autoscale` policy — see `run_autoscaling`.
+    let mut autoscaler = Autoscaler::new();
 
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
@@ -1286,7 +1410,7 @@ pub(crate) async fn schedule(
                 DeploymentStatus::Error.to_string(),
             ],
         );
-        let list_deployments = match deployments::find_all(&pool, filters).await {
+        let mut list_deployments = match deployments::find_all(&pool, filters).await {
             Ok(list) => list,
             Err(e) => {
                 error!("Failed to fetch deployments: {}", e);
@@ -1296,6 +1420,12 @@ pub(crate) async fn schedule(
         };
 
         debug!("Processing {} deployments", list_deployments.len());
+
+        // Decide before reconciling, so a fresh decision takes effect on this
+        // tick rather than waiting for the next one. Deployments without an
+        // `autoscale` block are untouched.
+        run_autoscaling(&pool, &mut list_deployments, &stats, &mut autoscaler).await;
+
         let mut deleted: Vec<String> = Vec::new();
 
         // Trace a cycle only when it has work to do. An idle tick (no

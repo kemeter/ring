@@ -352,6 +352,17 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
         ));
     }
 
+    // `kind: job + autoscale`: same reasoning as the replicas guard above, and
+    // there is nothing to measure anyway — a job has no steady-state CPU, it
+    // runs and exits, so a controller aiming at a CPU setpoint is meaningless.
+    if matches!(input.kind, DeploymentKind::Job) && input.autoscale.is_some() {
+        errors.push(Violation::new(
+            "autoscale",
+            "kind=job runs once and exits; it cannot be autoscaled",
+            "deployment.autoscale.job_unsupported",
+        ));
+    }
+
     // `kind: job + readiness check`: readiness gates a rolling update.
     // Jobs don't roll — they run once. A readiness flag here is a config
     // gap that would never trigger anything useful.

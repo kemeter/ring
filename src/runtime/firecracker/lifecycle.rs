@@ -1048,7 +1048,7 @@ impl FirecrackerLifecycle {
         self.readopt_networking(&deployment).await;
 
         let current = self.scan_instances(&deployment.id);
-        let desired = deployment.replicas as usize;
+        let desired = deployment.target_replicas() as usize;
 
         if current.len() < desired {
             for _ in current.len()..desired {

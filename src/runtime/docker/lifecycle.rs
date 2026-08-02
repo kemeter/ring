@@ -427,7 +427,10 @@ async fn handle_worker_deployment(
         }
 
         let current_count: usize = deployment.instances.len();
-        let target_count: usize = match deployment.replicas.try_into() {
+        // `target_replicas()`, not `replicas`: when the deployment opted into
+        // autoscaling this is the autoscaler's current decision, otherwise it
+        // is the declared count unchanged.
+        let target_count: usize = match deployment.target_replicas().try_into() {
             Ok(count) => count,
             Err(_) => {
                 error!(
