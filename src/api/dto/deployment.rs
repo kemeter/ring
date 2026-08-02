@@ -43,8 +43,13 @@ pub(crate) struct DeploymentOutput {
     /// Autoscaling policy, absent when the deployment holds a fixed count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) autoscale: Option<crate::models::deployments::Autoscale>,
-    /// The count the autoscaler is currently targeting. Absent when the
-    /// deployment is not autoscaled, or before its first decision.
+    /// The count Ring is actually reconciling towards, i.e. what the runtimes
+    /// use. Absent when the deployment is not autoscaled, in which case
+    /// `replicas` is the target.
+    ///
+    /// This is the *effective* value, not the raw stored decision: a policy
+    /// edited to a narrower range applies immediately, so reporting the stored
+    /// number would show a target the runtimes are not aiming at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) desired_replicas: Option<u32>,
     pub(crate) ports: Vec<DeploymentPort>,
@@ -75,6 +80,14 @@ pub(crate) struct DeploymentOutput {
 
 impl DeploymentOutput {
     pub(crate) fn from_to_model(deployment: Deployment) -> DeploymentOutput {
+        // Computed before the struct is taken apart below: `target_replicas()`
+        // needs the whole deployment, and reports the effective count rather
+        // than the raw stored decision.
+        let effective_target = deployment
+            .autoscale
+            .as_ref()
+            .map(|_| deployment.target_replicas());
+
         let labels: HashMap<String, String> = deployment.labels;
         let environment: HashMap<String, EnvValue> = deployment.environment;
 
@@ -101,8 +114,8 @@ impl DeploymentOutput {
             command: deployment.command,
             config: deployment.config,
             replicas: deployment.replicas,
+            desired_replicas: effective_target,
             autoscale: deployment.autoscale,
-            desired_replicas: deployment.desired_replicas,
             ports: deployment.ports,
             labels,
             environment,

@@ -93,17 +93,15 @@ pub(crate) async fn execute(
             // starting point, so showing it alone would misreport how many
             // instances Ring is actually aiming for.
             match (&deployment.autoscale, deployment.desired_replicas) {
-                (Some(policy), desired) => {
+                // `desired_replicas` is the effective target the API already
+                // clamped; `replicas` is what the manifest declared.
+                (Some(policy), Some(target)) => {
                     println!(
                         "Replicas      : {} (declared {}, autoscale {}-{} targeting {:.0}% CPU)",
-                        desired.unwrap_or(deployment.replicas),
-                        deployment.replicas,
-                        policy.min,
-                        policy.max,
-                        policy.target_cpu
+                        target, deployment.replicas, policy.min, policy.max, policy.target_cpu
                     );
                 }
-                (None, _) => println!("Replicas      : {}", deployment.replicas),
+                _ => println!("Replicas      : {}", deployment.replicas),
             }
             println!("Restart count : {}", deployment.restart_count);
             println!("Created at    : {}", deployment.created_at);

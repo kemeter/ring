@@ -957,6 +957,40 @@ mod tests {
     }
 
     #[test]
+    fn a_rollout_child_inherits_the_parents_capacity() {
+        // A redeploy under load must not drop back to the manifest count: the
+        // child starts from where the autoscaler had got the parent to.
+        let mut parent = worker("parent", 0);
+        parent.replicas = 2;
+        parent.autoscale = Some(autoscale_policy());
+        parent.desired_replicas = Some(8);
+
+        let mut child = worker("child", 0);
+        child.replicas = 2;
+        child.autoscale = Some(autoscale_policy());
+        child.parent_id = Some(parent.id.clone());
+        child.desired_replicas = parent.desired_replicas;
+
+        assert_eq!(child.target_replicas(), 8);
+    }
+
+    #[test]
+    fn an_inherited_count_is_reclamped_by_a_changed_policy() {
+        // The same apply that redeploys may also narrow the policy. The child
+        // must follow the NEW bounds, not the capacity it inherited.
+        let mut child = worker("child", 0);
+        child.replicas = 2;
+        child.autoscale = Some(Autoscale {
+            min: 1,
+            max: 4,
+            target_cpu: 70.0,
+        });
+        child.desired_replicas = Some(8); // inherited from the parent
+
+        assert_eq!(child.target_replicas(), 4);
+    }
+
+    #[test]
     fn autoscale_policies_reject_impossible_ranges() {
         assert!(autoscale_policy().validate().is_ok());
         // Scaling to zero needs a wake-up path Ring has no way to trigger.

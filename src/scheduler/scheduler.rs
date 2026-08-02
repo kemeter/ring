@@ -1225,7 +1225,7 @@ async fn run_autoscaling(
 ) {
     // Snapshot the per-deployment CPU averages once, keyed the same way the
     // cache is (namespace + name is unique per deployment).
-    let measurements: HashMap<(String, String), Option<f64>> = {
+    let measurements: HashMap<String, Option<f64>> = {
         let Ok(snapshot) = stats.read() else {
             warn!("Stats snapshot lock poisoned; skipping autoscaling this tick");
             return;
@@ -1249,14 +1249,18 @@ async fn run_autoscaling(
         snapshot
             .deployments
             .iter()
-            .map(|d| {
-                (
-                    (d.namespace.clone(), d.name.clone()),
-                    d.cpu_usage_percent_per_instance,
-                )
-            })
+            .map(|d| (d.id.clone(), d.cpu_usage_percent_per_instance))
             .collect()
     };
+
+    // A deployment being replaced by a rolling update must not be resized: it
+    // is on its way out, and it shares its namespace/name with the incoming
+    // child. Its own row carries no `parent_id` (the child points at it), so it
+    // has to be recognised from the other side.
+    let draining: std::collections::HashSet<String> = deployments_list
+        .iter()
+        .filter_map(|d| d.parent_id.clone())
+        .collect();
 
     // The autoscaler's cooldowns are wall-clock durations, so use the std
     // clock: this module also has `tokio::time::Instant` in scope for the tick
@@ -1270,17 +1274,21 @@ async fn run_autoscaling(
         };
         let policy = &policy;
 
-        // Only reconcile a deployment that is actually up. Scaling something
-        // mid-rollout or mid-crash reacts to a transient state, and a draining
-        // parent must not be resized on its way out.
-        if deployment.status != DeploymentStatus::Running || deployment.parent_id.is_some() {
+        // Only reconcile a deployment that is actually up, and stay out of
+        // rolling updates entirely: the incoming child is still converging
+        // (`parent_id` set), and the outgoing parent is draining (its id shows
+        // up as someone's parent). Resizing either reacts to a transient state.
+        if deployment.status != DeploymentStatus::Running
+            || deployment.parent_id.is_some()
+            || draining.contains(&deployment.id)
+        {
             continue;
         }
 
-        let cpu = measurements
-            .get(&(deployment.namespace.clone(), deployment.name.clone()))
-            .copied()
-            .flatten();
+        // Keyed by id, never by name: a rollout puts two running deployments
+        // under the same namespace/name, so a name lookup could hand this
+        // deployment the other one's CPU.
+        let cpu = measurements.get(&deployment.id).copied().flatten();
 
         let current = deployment.target_replicas();
 
