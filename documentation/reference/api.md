@@ -740,7 +740,7 @@ Update a user. Both fields are optional, so sending an empty body is a no-op tha
 
 Scoped API tokens (Personal Access Tokens). A token authenticates like a session (`Authorization: Bearer ring_pat_…`) but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
 
-**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
+**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
 
 Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`), otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
 

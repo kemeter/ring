@@ -4,11 +4,11 @@ use crate::api::action::namespace::validation::{
 use crate::api::action::volume::validation::{
     VOLUME_NAME_MAX, VOLUME_NAME_MIN, VOLUME_NAME_PATTERN,
 };
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::api::validation::{ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::namespace;
-use crate::models::users::User;
 use crate::models::volumes;
 use axum::Json;
 use axum::extract::State;
@@ -73,12 +73,19 @@ struct VolumeOutput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
     Json(input): Json<VolumeInput>,
 ) -> Response {
     if let Err(errs) = input.validate() {
         let violations: ViolationList = errs.into();
         return violations.into_response();
+    }
+
+    // The target namespace comes from the request body, so a namespace-scoped
+    // token must be held to it here — otherwise it could create volumes in any
+    // namespace simply by naming one.
+    if let Err(response) = require_namespace(&auth.source, &input.namespace) {
+        return response;
     }
 
     let backend_type = input.backend_type.unwrap_or_else(|| "local".to_string());
@@ -128,7 +135,7 @@ pub(crate) async fn create(
         Ok(_) => {
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "create",
                 "volume",
                 &new_volume.name,

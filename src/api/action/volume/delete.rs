@@ -4,10 +4,10 @@ use axum::response::IntoResponse;
 use http::StatusCode;
 use serde::Deserialize;
 
+use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::audit_log;
 use crate::models::deployments;
-use crate::models::users::User;
 use crate::models::volumes;
 
 #[derive(Deserialize)]
@@ -20,7 +20,7 @@ pub(crate) async fn delete(
     Path(id): Path<String>,
     Query(query): Query<DeleteQuery>,
     State(pool): State<Db>,
-    user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     let volume = match volumes::find(&pool, &id).await {
         Ok(Some(v)) => v,
@@ -40,6 +40,13 @@ pub(crate) async fn delete(
                 .into_response();
         }
     };
+
+    // A volume's namespace is only known once the row is loaded, so the scope
+    // check in the middleware cannot enforce the boundary — this does. Without
+    // it a PAT restricted to one namespace could destroy another's volumes.
+    if let Err(response) = require_namespace(&auth.source, &volume.namespace) {
+        return response;
+    }
 
     // Refuse to delete a volume still mounted by a live deployment, unless the
     // caller explicitly forces it — destroying it out from under a running
@@ -78,7 +85,7 @@ pub(crate) async fn delete(
         Ok(_) => {
             let _ = audit_log::record(
                 &pool,
-                Some(&user.id),
+                Some(&auth.user.id),
                 "delete",
                 "volume",
                 &volume.name,
@@ -188,6 +195,70 @@ mod tests {
             .await;
 
         volume_id
+    }
+
+    #[tokio::test]
+    async fn a_namespace_scoped_token_cannot_delete_another_namespaces_volume() {
+        // The volume routes carried no namespace check while they were
+        // effectively admin-only (unmapped scope + deny-by-default). Granting
+        // `volumes:*` to operators and viewers makes that omission reachable,
+        // so the boundary has to be enforced in the handler: the namespace is
+        // only known once the row is loaded.
+        let app = new_test_app().await;
+        let session = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        for ns in ["team-a", "team-b"] {
+            server
+                .post("/namespaces")
+                .add_header("Authorization", format!("Bearer {}", session))
+                .json(&json!({ "name": ns }))
+                .await;
+        }
+
+        let created = server
+            .post("/volumes")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .json(&json!({ "namespace": "team-b", "name": "secrets-vol" }))
+            .await;
+        assert_eq!(created.status_code(), StatusCode::CREATED);
+        let volume_id = created.json::<serde_json::Value>()["id"]
+            .as_str()
+            .expect("volume id")
+            .to_string();
+
+        // A token confined to team-a.
+        let mint = server
+            .post("/tokens")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .json(&json!({
+                "name": "team-a-only",
+                "scopes": ["volumes:read", "volumes:write"],
+                "namespaces": ["team-a"]
+            }))
+            .await;
+        assert_eq!(mint.status_code(), StatusCode::CREATED);
+        let pat = mint.json::<serde_json::Value>()["token"]
+            .as_str()
+            .expect("minted token")
+            .to_string();
+
+        let response = server
+            .delete(&format!("/volumes/{}", volume_id))
+            .add_header("Authorization", format!("Bearer {}", pat))
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::FORBIDDEN,
+            "a team-a token must not delete a team-b volume"
+        );
+
+        // And the volume is still there.
+        let still_there = server
+            .get(&format!("/volumes/{}", volume_id))
+            .add_header("Authorization", format!("Bearer {}", session))
+            .await;
+        assert_eq!(still_there.status_code(), StatusCode::OK);
     }
 
     #[tokio::test]

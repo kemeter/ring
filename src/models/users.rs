@@ -68,7 +68,14 @@ impl Role {
                 "secrets:write",
                 "configs:read",
                 "configs:write",
+                "volumes:read",
+                "volumes:write",
+                // An operator provisions the namespaces its workloads live in.
+                // Without this, deploying into a namespace that does not exist
+                // yet is refused (the auto-creation path checks this scope), so
+                // `ring apply` on a fresh manifest would need an admin first.
                 "namespaces:read",
+                "namespaces:write",
                 "users:read",
                 "webhooks:read",
                 "webhooks:write",
@@ -77,6 +84,7 @@ impl Role {
                 "deployments:read",
                 "secrets:read",
                 "configs:read",
+                "volumes:read",
                 "namespaces:read",
                 "users:read",
                 "webhooks:read",
@@ -410,10 +418,16 @@ mod tests {
 
         let operator = Role::Operator.scopes();
         assert!(operator.contains(&"deployments:write".to_string()));
+        // An operator administers its workloads' storage, so volumes are part
+        // of the job: they were unreachable while /volumes had no mapped scope.
+        assert!(operator.contains(&"volumes:write".to_string()));
+        assert!(viewer.contains(&"volumes:read".to_string()));
+        // An operator provisions the namespaces it deploys into, otherwise
+        // deploying a fresh manifest would always need an admin first.
+        assert!(operator.contains(&"namespaces:write".to_string()));
         // Never admin: an operator must not reach token minting or user writes.
         assert!(!operator.contains(&"admin".to_string()));
         assert!(!operator.contains(&"users:write".to_string()));
-        assert!(!operator.contains(&"namespaces:write".to_string()));
     }
 
     #[test]

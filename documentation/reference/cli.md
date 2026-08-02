@@ -363,7 +363,7 @@ The clear token (`ring_pat_…`) is shown **once**, at creation, and never again
 
 Login sessions (`ring login`) use the same storage and format: a session is a token scoped `admin`, created automatically on login and revoked on `ring logout`. It is distinguished from a PAT by its **kind** (not by its name), so naming a PAT `session` is fine and has no special effect. Sessions are **not** shown by `ring token list` and cannot be managed by id (`ring token revoke`/`rotate`); that command lists and acts only on the PATs you created. End a session with `ring logout`.
 
-**Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, and `admin` (grants everything).
+**Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (grants everything).
 
 ### `ring token create`
 

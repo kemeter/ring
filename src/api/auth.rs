@@ -125,6 +125,13 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         "/namespaces/{id}" if is_read => Some("namespaces:read"),
         "/namespaces/{id}" => Some("namespaces:write"),
         "/namespaces/{id}/audit" => Some("namespaces:read"),
+        // Volumes. These were previously unmapped, which deny-by-default turned
+        // into admin-only — so an `operator` could not manage the volumes of the
+        // workloads it is meant to administer.
+        "/volumes" if is_read => Some("volumes:read"),
+        "/volumes" => Some("volumes:write"),
+        "/volumes/{id}" if is_read => Some("volumes:read"),
+        "/volumes/{id}" => Some("volumes:write"),
         // Configs.
         "/configs" if is_read => Some("configs:read"),
         "/configs" => Some("configs:write"),

@@ -1,5 +1,5 @@
+use crate::api::auth::{Auth, filter_by_namespace};
 use crate::api::server::Db;
-use crate::models::users::User;
 use crate::models::volumes;
 use axum::extract::{FromRequestParts, State};
 use axum::{Json, response::IntoResponse};
@@ -53,7 +53,7 @@ struct VolumeOutput {
 pub(crate) async fn list(
     query_parameters: QueryParameters,
     State(pool): State<Db>,
-    _user: User,
+    auth: Auth,
 ) -> impl IntoResponse {
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
     if !query_parameters.namespaces.is_empty() {
@@ -62,6 +62,11 @@ pub(crate) async fn list(
 
     match volumes::find_all(&pool, filters).await {
         Ok(list) => {
+            // The `namespace[]` query parameter is the caller's own filter, not
+            // a boundary: a namespace-scoped token must not see other
+            // namespaces' volumes (host_path included) just by omitting it.
+            let list = filter_by_namespace(&auth.source, list, |v| v.namespace.as_str());
+
             let output: Vec<VolumeOutput> = list
                 .into_iter()
                 .map(|volume| VolumeOutput {
