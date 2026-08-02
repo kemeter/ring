@@ -36,7 +36,17 @@ pub(crate) struct DeploymentOutput {
     pub(crate) command: Vec<String>,
     #[serde(serialize_with = "serialize_option_deployment_config")]
     pub(crate) config: Option<DeploymentConfig>,
+    /// What the manifest declared. On an autoscaled deployment this is the
+    /// starting count, NOT the number of instances currently targeted — read
+    /// `desired_replicas` for that.
     pub(crate) replicas: u32,
+    /// Autoscaling policy, absent when the deployment holds a fixed count.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) autoscale: Option<crate::models::deployments::Autoscale>,
+    /// The count the autoscaler is currently targeting. Absent when the
+    /// deployment is not autoscaled, or before its first decision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) desired_replicas: Option<u32>,
     pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
     /// Running instances of this deployment. Each carries its id and — when it
@@ -91,6 +101,8 @@ impl DeploymentOutput {
             command: deployment.command,
             config: deployment.config,
             replicas: deployment.replicas,
+            autoscale: deployment.autoscale,
+            desired_replicas: deployment.desired_replicas,
             ports: deployment.ports,
             labels,
             environment,
