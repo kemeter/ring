@@ -178,6 +178,15 @@ pub(crate) fn scheduler_skips_by_status(status: &DeploymentStatus) -> bool {
     !crate::models::deployments::RECONCILED_STATUSES.contains(status)
 }
 
+/// Apply a VM start failure to a deployment: record the event, set the status,
+/// and decide what happens to the restart budget.
+///
+/// A transient failure bumps `restart_count` by one and retries within the
+/// budget. A terminal failure lands on its status immediately — and exhausts
+/// the budget only when the scheduler would otherwise keep reconciling that
+/// status. For the statuses it already skips, the counter is left alone: the
+/// deployment never restarted, and reporting that it did sends whoever reads
+/// the field looking for an instability that never happened.
 pub(crate) fn apply_vm_start_failure(
     deployment: &mut crate::models::deployments::Deployment,
     err: &RuntimeError,
