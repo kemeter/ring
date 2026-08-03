@@ -95,16 +95,10 @@ for _ in $(seq 1 1200); do
     fi
   done
 
+  # Not yet two live VMs: keep sampling. Deliberately no CLI call here — the
+  # point of the fast loop is to observe a ~1.4s window, and shelling out on
+  # every iteration is exactly what made the previous version miss it.
   if [ "$LIVE_VMS" -lt 2 ]; then
-    # Nothing to correlate yet. Bail out of the wait once the rollout has
-    # clearly converged (v1 gone), so a genuine replacement fails fast rather
-    # than burning the whole loop.
-    if [ -z "$V2_ID" ]; then
-      V2_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \
-        | jq -r --arg ns "ring-e2e" --arg n "fc-rolling" --arg old "$V1_ID" \
-            '.[] | select(.namespace==$ns and .name==$n and .id != $old and .status != "deleted") | .id' \
-        | head -n1)
-    fi
     sleep 0.1
     continue
   fi
@@ -140,11 +134,19 @@ for _ in $(seq 1 1200); do
   sleep 1
 done
 
+# Resolve the surviving deployment once, after the fast loop — not inside it,
+# where a CLI call per iteration would slow the sampling down.
+if [ -z "$V2_ID" ]; then
+  V2_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \
+    | jq -r --arg ns "ring-e2e" --arg n "fc-rolling" --arg old "$V1_ID" \
+        '.[] | select(.namespace==$ns and .name==$n and .id != $old and .status != "deleted") | .id' \
+    | head -n1)
+fi
 [ -n "$V2_ID" ] || fail "no second deployment appeared after re-applying — nothing was rolled"
 log "v2 id: $V2_ID"
 
 [ "$OVERLAP" -eq 1 ] \
-  || fail "never observed two live microVMs while v1 and its child both existed: the rollout replaced instead of overlapping (or converged faster than a 1s poll, which this test cannot distinguish)"
+  || fail "never observed two live microVMs while v1 and its child both existed: the rollout replaced instead of overlapping (or converged faster than a 100ms poll, which this test cannot distinguish)"
 log "the rollout overlapped: both microVMs ran at once"
 
 # === the parent is eventually reaped ===
