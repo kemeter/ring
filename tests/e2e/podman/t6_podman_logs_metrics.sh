@@ -95,10 +95,20 @@ log "both stdout markers present in 'ring deployment logs'"
 
 # --tail must actually bound the output, otherwise the flag is decorative on
 # this runtime and a large log would flood the terminal.
-TAIL_OUT=$("$RING_BIN" deployment logs "$DEPLOYMENT_ID" --tail 1 2>&1 || true)
+#
+# Absence of the first marker is NOT enough on its own: an error, an empty
+# response or "no logs available" would satisfy it just as well, and the flag
+# would look tested while nothing was proven. So require the command to succeed
+# AND to still return the last line, then require the first to be gone.
+if ! TAIL_OUT=$("$RING_BIN" deployment logs "$DEPLOYMENT_ID" --tail 1 2>&1); then
+  printf '%s\n' "$TAIL_OUT" | head -10 >&2
+  fail "'deployment logs --tail 1' exited non-zero"
+fi
+echo "$TAIL_OUT" | grep -q "$MARKER_TWO" \
+  || { printf '%s\n' "$TAIL_OUT" | head -10 >&2; fail "--tail 1 did not return the last log line"; }
 echo "$TAIL_OUT" | grep -q "$MARKER_ONE" \
-  && fail "--tail 1 returned the first marker: the limit is not applied"
-log "--tail 1 bounded the output as expected"
+  && { printf '%s\n' "$TAIL_OUT" | head -10 >&2; fail "--tail 1 returned the first marker too: the limit is not applied"; }
+log "--tail 1 returned the last line only"
 
 # --- metrics ---------------------------------------------------------------
 # `deployment metrics` renders text and has no --output json (unlike
