@@ -111,16 +111,16 @@ log "status stayed at insufficient_resources"
 # in the rendered table: any unrelated event mentioning that word would satisfy
 # a loose grep, and the reason is a stable identifier while the message wording
 # is not.
+# Both facts must hold on the SAME line: separate greps could match two
+# different events and prove nothing about either. The line must carry the
+# `insufficient_resources` reason AND concrete figures ("needs N MiB but only
+# M MiB is available"), so an operator can size the host from the event alone.
 EVENTS=$("$RING_BIN" deployment events "$DEPLOYMENT_ID" --level error 2>/dev/null || echo "")
-echo "$EVENTS" | grep -q "insufficient_resources" \
-  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "no error event with reason=insufficient_resources — the refusal is unexplained"; }
-log "an error event carries reason=insufficient_resources"
-
-# The message must also name the figures, so an operator can size the host
-# without reading the source.
-echo "$EVENTS" | grep -qiE "memor|MiB|GiB|TiB" \
-  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "the event does not state how much memory was needed"; }
-log "the event states the memory figures"
+echo "$EVENTS" \
+  | grep "insufficient_resources" \
+  | grep -qE "needs +[0-9]+ +MiB +but +only +[0-9]+ +MiB" \
+  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "no single error event carries both reason=insufficient_resources and the memory figures"; }
+log "one error event carries the reason and the needed/available figures"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
