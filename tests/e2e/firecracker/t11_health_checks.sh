@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T11-FC: validate that tcp/http health checks actually run on the Firecracker
+# T11-FC: validate that tcp health checks actually run on the Firecracker
 # runtime, through the shared `hypervisor::health_probes` module.
 #
 # Firecracker implements neither `execute_health_check` nor the probes: it
@@ -24,7 +24,7 @@ source "$SCRIPT_DIR/../lib.sh"
 # shellcheck source=./setup.sh
 source "$SCRIPT_DIR/setup.sh"
 
-log "== T11-FC: health checks (tcp + http failure path) =="
+log "== T11-FC: health checks (tcp failure path) =="
 
 setup_fc
 start_ring
@@ -80,9 +80,14 @@ SUCCESS=$("$RING_BIN" deployment health-checks "$TCP_ID" --output json \
   | jq '[.[] | select(.status=="success")] | length')
 [ "${SUCCESS:-0}" -eq 0 ] || fail "expected zero successful probes on a closed port, got $SUCCESS"
 
-# The load-bearing assertion: the message must come from health_probes::tcp_probe.
-# "not supported" would mean the default trait impl bailed out, i.e. Firecracker's
-# `instance_address` never resolved and no probe was actually attempted.
+# The load-bearing assertion: a connect was actually attempted against a
+# resolved guest address, rather than the probe bailing out early.
+#
+# What this does and does not prove: "TCP connection failed" means the host
+# reached the point of connecting, so `instance_address` resolved and the shared
+# probe ran. It does NOT prove a packet reached the guest — a refused connect
+# can also come from host routing or TAP state. The failure it does rule out is
+# the one that matters here: a runtime whose probes never run at all.
 MSG=$("$RING_BIN" deployment health-checks "$TCP_ID" --output json | jq -r '.[0].message // ""')
 log "first probe message: $MSG"
 case "$MSG" in
@@ -97,17 +102,7 @@ case "$MSG" in
     ;;
 esac
 
-# Deliberately NOT asserted here: that `on_failure: alert` emits an event.
-# `health_checker` suppresses failure counting and `on_failure` actions while a
-# deployment is still in its creating phase (see the `!creating_phase` guard in
-# src/scheduler/health_checker.rs), and this rootfs never brings up a service,
-# so the deployment does not leave that phase within the test's lifetime. That
-# gate is runtime-agnostic scheduler behaviour and belongs in its own test, not
-# in a Firecracker probe test — asserting it here would be testing the health
-# checker through the wrong door.
-#
-# Repeated probes are still worth checking: the loop must keep running rather
-# than record one row and stop.
+# The probe loop must keep running rather than record one row and stop.
 log "checking the probe loop keeps running..."
 for _ in $(seq 1 20); do
   ROWS=$("$RING_BIN" deployment health-checks "$TCP_ID" --output json 2>/dev/null | jq 'length')
@@ -116,6 +111,21 @@ for _ in $(seq 1 20); do
 done
 [ "${ROWS:-0}" -ge 2 ] || fail "only ${ROWS:-0} probe row(s) after 20s — the probe loop is not repeating"
 log "$ROWS probe rows recorded — the loop is repeating"
+
+# NOT asserted: that `on_failure: alert` emits a health_checker event within
+# this test's lifetime.
+#
+# It does fire — a longer-running instance of this exact fixture produces
+# `health_checker|health_check_alert` in the event table — but not reliably
+# inside the window here, and I could not pin down what governs the delay well
+# enough to write a non-flaky assertion. An earlier version of this file
+# "explained" the absence with a creating-phase argument that turned out to be
+# wrong (with no readiness check the deployment reaches Running immediately, so
+# failure counting does start).
+#
+# Leaving it unasserted rather than guessing at a timeout: a flaky assertion in
+# an e2e suite that CI never runs is worse than an honest gap. Tracked on the
+# board as "firecracker on_failure alert timing".
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-hc-tcp")
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"

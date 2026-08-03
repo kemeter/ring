@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 # T10-FC: apply a firecracker deployment with replicas=3 and assert the
 # scheduler converges to exactly 3 microVMs, each with its own API socket and
-# its own rootfs copy. Then scale down to 1 and assert two of them are torn
-# down — the cleanup is per-instance, not per-deployment.
+# its own rootfs copy. Then re-apply with replicas=1 and assert the instance
+# count settles back to one, with every artifact reaped on delete.
 #
-# Why this test exists: Firecracker used to boot the WHOLE deficit inside a
-# single reconciliation pass, unlike every other runtime, which creates one
-# instance per tick. That made any large jump in the target count (a raised
-# replica count, a re-clamped autoscaling decision) a burst of simultaneous VM
-# boots competing for host memory. It now converges one VM per pass, and this
-# test is what keeps that true — the multi-instance path had no Firecracker
-# coverage at all, only Cloud Hypervisor's (t2_replicas / t9_scaledown).
+# Why this test exists: the Firecracker multi-instance path had no e2e coverage
+# at all, only Cloud Hypervisor's (t2_replicas / t9_scaledown). Everything below
+# 2 replicas is single-VM behaviour that t1 already covers; fan-out, per-instance
+# artifact isolation and convergence back down were simply untested.
+#
+# What this does NOT prove, deliberately, so nobody reads more into a green run:
+#   * NOT that VMs are created one per reconciliation pass. This asserts the
+#     eventual count, which both the current one-per-pass implementation and the
+#     older boot-the-whole-deficit-at-once one satisfy. Proving the pacing needs
+#     observation of intermediate states, not a converged count.
+#   * NOT per-instance teardown. `ring apply` with a changed replica count
+#     REPLACES the deployment (new row, old one marked deleted) rather than
+#     resizing it in place, so what is exercised below is convergence after a
+#     replacement — the same thing t9_scaledown does on CH, and it documents the
+#     same caveat. The `current.len() > desired` branch in the runtime is not
+#     reached this way.
 #
 # Requires: firecracker binary, /dev/kvm, CAP_NET_ADMIN on the ring binary.
 
@@ -77,39 +86,44 @@ log "deployment id: $DEPLOYMENT_ID"
 # each, and CI hosts are slower than a laptop.
 wait_fc_socket_count 3 240
 
-# Distinct sockets, not the same one counted three times: a shared socket would
-# mean the instances collided instead of fanning out.
-distinct_sockets=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" -printf "%f\n" | sort -u | wc -l | tr -d ' ')
-[ "$distinct_sockets" -eq 3 ] || fail "expected 3 distinct socket filenames, got $distinct_sockets"
-
-# Each microVM runs off its own rootfs copy; sharing one would corrupt all three.
+# Each microVM runs off its own rootfs copy; sharing one would corrupt all
+# three. Exactly 3, not "at least 3": a looser bound would pass with leftovers
+# from failed starts, which is precisely the situation worth catching.
 rootfs_count=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
-[ "$rootfs_count" -ge 3 ] || fail "expected at least 3 per-instance rootfs images, got $rootfs_count"
-log "3 distinct sockets and $rootfs_count rootfs image(s) confirmed"
+[ "$rootfs_count" -eq 3 ] || fail "expected exactly 3 per-instance rootfs images, got $rootfs_count"
+log "3 sockets and 3 rootfs images confirmed"
 
 # The API must agree with what is on disk.
 INSTANCES=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json | jq -r '.instances | length')
 [ "$INSTANCES" -eq 3 ] || fail "API reports $INSTANCES instance(s), expected 3"
 log "API reports 3 instances"
 
-# --- Scale down to 1 -------------------------------------------------------
-# Removing instances must reap exactly the surplus, leaving one VM running.
+# --- Converge back down to 1 -----------------------------------------------
+# Re-applying with a lower replica count REPLACES the deployment (see the note
+# at the top): the old row is marked deleted and a new one created. What is
+# asserted here is that the host converges to exactly one live VM and does not
+# strand the other two — leaked sockets and rootfs images would accumulate
+# silently until the disk filled.
 sed -i 's/replicas: 3/replicas: 1/' "$FIXTURE"
 "$RING_BIN" apply --file "$FIXTURE"
 
+# Deliberately waits for the settled count rather than a transitional one: with
+# a replacement, the socket count passes through several values before landing.
 wait_fc_socket_count 1 180
-log "scaled down to a single microVM"
+log "converged to a single microVM"
 
-# The survivor is still serving: the deployment stays running rather than
-# being torn down and rebuilt.
+# The replacement is serving, not stuck mid-boot.
 wait_deployment_status "ring-e2e" "fc-scaled" "running" 120
 
-# Re-read the id: applying a changed manifest replaces the deployment row, so
-# the id captured before the scale-down no longer exists.
+ROOTFS_AFTER=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
+[ "$ROOTFS_AFTER" -eq 1 ] || fail "expected 1 rootfs image after converging down, got $ROOTFS_AFTER (surplus images leaked)"
+log "surplus rootfs images reaped"
+
+# The id changed with the replacement, so the pre-apply one no longer resolves.
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-scaled")
-[ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after scale-down"
+[ -n "$DEPLOYMENT_ID" ] || fail "could not find the active deployment after re-apply"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 wait_fc_socket_count 0 180
 
-log "== T10-FC: PASS — fanned out to 3 VMs, scaled down to 1, cleaned up =="
+log "== T10-FC: PASS — fanned out to 3 VMs, converged back to 1, all artifacts reaped =="

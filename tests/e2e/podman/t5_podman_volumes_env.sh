@@ -43,6 +43,18 @@ host = \"$PODMAN_SOCK\""
 start_ring
 ring_login
 
+# The shared cleanup trap in lib.sh reaps containers through the `docker` CLI,
+# which does not see this suite's rootless Podman socket. Without this, a test
+# that fails an assertion below leaves its container running and the next run
+# starts dirty.
+cleanup_podman_leftovers() {
+  # `ring_deployment` is the only label Ring sets (src/runtime/docker/container.rs),
+  # so match on its presence rather than on a namespace that is not labelled.
+  podman ps -aq --filter "label=ring_deployment" 2>/dev/null \
+    | xargs -r podman rm -f >/dev/null 2>&1 || true
+}
+trap 'cleanup_podman_leftovers; cleanup_ring' EXIT
+
 # The mount source must be readable by the rootless user's mapped uid, so keep
 # it inside the test dir rather than somewhere root-owned.
 BIND_SRC="$RING_TEST_DIR/podman-bind"
@@ -89,10 +101,17 @@ log "bind mount readable inside the container"
 
 # Read-only was requested, so a write must be refused. Without this the mount
 # could be silently rw and nobody would notice until data was corrupted.
+#
+# A non-zero exit is not enough on its own — an exec transport failure would
+# look identical — so the file must also be absent afterwards.
 if podman exec "$CONTAINER" sh -c 'echo x > /data/should-fail' 2>/dev/null; then
   fail "the ro bind mount accepted a write"
 fi
-log "ro permission enforced"
+if podman exec "$CONTAINER" test -e /data/should-fail 2>/dev/null; then
+  fail "the write was reported as refused but the file exists — the mount is not ro"
+fi
+[ ! -e "$BIND_SRC/should-fail" ] || fail "the write reached the host directory — the mount is not ro"
+log "ro permission enforced (write refused, no file created)"
 
 # --- the environment variable reached the process --------------------------
 ENV_VALUE=$(podman exec "$CONTAINER" printenv RING_E2E_MARKER 2>/dev/null || echo "")
