@@ -2,7 +2,7 @@
 # T10-FC: apply a firecracker deployment with replicas=3 and assert the
 # scheduler converges to exactly 3 microVMs, each with its own API socket and
 # its own rootfs copy. Then re-apply with replicas=1 and assert the instance
-# count settles back to one, with every artifact reaped on delete.
+# count settles back to one, with sockets and rootfs images reaped on delete.
 #
 # Why this test exists: the Firecracker multi-instance path had no e2e coverage
 # at all, only Cloud Hypervisor's (t2_replicas / t9_scaledown). Everything below
@@ -107,13 +107,18 @@ log "API reports 3 instances"
 sed -i 's/replicas: 3/replicas: 1/' "$FIXTURE"
 "$RING_BIN" apply --file "$FIXTURE"
 
-# Deliberately waits for the settled count rather than a transitional one: with
-# a replacement, the socket count passes through several values before landing.
-wait_fc_socket_count 1 180
-log "converged to a single microVM"
+# A replacement makes the socket count pass through several values, and the
+# helper returns on the FIRST match — which could be a transient 1 while the old
+# deployment drains and before the replacement boots. So wait for the
+# replacement to be serving first, then require the count to hold at 1.
+wait_deployment_status "ring-e2e" "fc-scaled" "running" 180
 
-# The replacement is serving, not stuck mid-boot.
-wait_deployment_status "ring-e2e" "fc-scaled" "running" 120
+wait_fc_socket_count 1 180
+# Hold the observation: if the count were transient, a second VM appears here.
+sleep 5
+HELD=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2>/dev/null | wc -l | tr -d ' ')
+[ "$HELD" -eq 1 ] || fail "socket count did not settle at 1: now $HELD (observed a transitional value)"
+log "converged to a single microVM and held"
 
 ROOTFS_AFTER=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
 [ "$ROOTFS_AFTER" -eq 1 ] || fail "expected 1 rootfs image after converging down, got $ROOTFS_AFTER (surplus images leaked)"
@@ -126,4 +131,9 @@ DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-scaled")
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 wait_fc_socket_count 0 180
 
-log "== T10-FC: PASS — fanned out to 3 VMs, converged back to 1, all artifacts reaped =="
+# Sockets going away is not the same as artifacts going away: a leaked rootfs
+# image is invisible until the disk fills.
+ROOTFS_FINAL=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
+[ "$ROOTFS_FINAL" -eq 0 ] || fail "expected no rootfs image after delete, got $ROOTFS_FINAL"
+
+log "== T10-FC: PASS — fanned out to 3 VMs, converged back to 1, sockets and rootfs images reaped =="

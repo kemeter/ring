@@ -90,8 +90,13 @@ SUCCESS=$("$RING_BIN" deployment health-checks "$TCP_ID" --output json \
 # the one that matters here: a runtime whose probes never run at all.
 MSG=$("$RING_BIN" deployment health-checks "$TCP_ID" --output json | jq -r '.[0].message // ""')
 log "first probe message: $MSG"
+# Only the two `TCP connection ...` messages are accepted: those come from
+# `health_probes::tcp_probe`. The scheduler's own outer timeout produces
+# "Health check timed out", which a regression hanging before `TcpStream::connect`
+# could also produce — accepting it would let this assertion pass without a
+# connect ever being attempted.
 case "$MSG" in
-  *"TCP connection failed"* | *"TCP connection timed out"* | *"Health check timed out"*)
+  *"TCP connection failed"* | *"TCP connection timed out"*)
     log "probe message confirms the shared health_probes module ran"
     ;;
   *"not supported"* | *"Could not resolve instance address"*)

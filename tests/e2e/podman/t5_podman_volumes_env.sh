@@ -48,9 +48,11 @@ ring_login
 # that fails an assertion below leaves its container running and the next run
 # starts dirty.
 cleanup_podman_leftovers() {
-  # `ring_deployment` is the only label Ring sets (src/runtime/docker/container.rs),
-  # so match on its presence rather than on a namespace that is not labelled.
-  podman ps -aq --filter "label=ring_deployment" 2>/dev/null \
+  # Scoped to the `ring-e2e_` name prefix as well as the label, mirroring the
+  # docker cleanup in lib.sh. The `ring_deployment` label alone is on EVERY Ring
+  # container, so filtering on it by itself would let this test destroy a
+  # developer's unrelated workloads on their normal rootless socket.
+  podman ps -aq --filter "label=ring_deployment" --filter "name=^ring-e2e_" 2>/dev/null \
     | xargs -r podman rm -f >/dev/null 2>&1 || true
 }
 trap 'cleanup_podman_leftovers; cleanup_ring' EXIT
