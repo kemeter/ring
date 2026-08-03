@@ -117,22 +117,31 @@ done
 [ "${ROWS:-0}" -ge 2 ] || fail "only ${ROWS:-0} probe row(s) after 20s — the probe loop is not repeating"
 log "$ROWS probe rows recorded — the loop is repeating"
 
-# NOT asserted: that `on_failure: alert` emits a health_checker event within
-# this test's lifetime.
+# `on_failure: alert` must reach the event stream, otherwise a failing workload
+# is invisible to whoever is watching the deployment.
 #
-# It does fire — a longer-running instance of this exact fixture produces
-# `health_checker|health_check_alert` in the event table — but not reliably
-# inside the window here, and I could not pin down what governs the delay well
-# enough to write a non-flaky assertion. An earlier version of this file
-# "explained" the absence with a creating-phase argument that turned out to be
-# wrong (with no readiness check the deployment reaches Running immediately, so
-# failure counting does start).
-#
-# Leaving it unasserted rather than guessing at a timeout: a flaky assertion in
-# an e2e suite that CI never runs is worse than an honest gap. Tracked on the
-# board as "firecracker on_failure alert timing".
+# Note: `deployment events` renders a table and has no --output json, so this
+# filters with its own --level flag and matches the rendered text. Piping that
+# output through jq silently yields nothing — which is what made an earlier
+# version of this assertion appear to fail, and led me to wrongly blame the
+# creating-phase guard.
+log "waiting for the on_failure alert..."
+ALERTED=0
+for _ in $(seq 1 60); do
+  if "$RING_BIN" deployment events "$TCP_ID" --level error 2>/dev/null \
+      | grep -qi "health"; then
+    ALERTED=1
+    break
+  fi
+  sleep 1
+done
+if [ "$ALERTED" -ne 1 ]; then
+  "$RING_BIN" deployment events "$TCP_ID" 2>/dev/null | head -20 >&2 || true
+  fail "on_failure: alert produced no health-related error event"
+fi
+log "health check alert reached the event stream"
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-hc-tcp")
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
-log "== T11-FC: PASS — tcp probe ran through the shared module and keeps polling =="
+log "== T11-FC: PASS — tcp probe ran, kept polling, and alerted =="
