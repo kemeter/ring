@@ -77,9 +77,38 @@ SOCKETS_V1=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2
 # The child's `parent_id` is cleared once the rollout converges, so poll for the
 # overlap rather than reading it after the fact — reading it later can miss a
 # correct rollout entirely.
+# The overlap window is SHORT — measured at ~1.4s on a warm host (child boots,
+# parent drains on the next scheduler tick). A 1s poll that also spends time
+# shelling out to the CLI misses it almost every run, so poll the sockets
+# directly and far more often, and only pay for a `deployment list` once the
+# VM-level overlap is actually visible.
 V2_ID=""
 OVERLAP=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 1200); do
+  # Cheap check first: two Firecracker APIs reporting Running.
+  LIVE_VMS=0
+  for sock in "$RING_E2E_FC_SOCKET_DIR"/*.sock; do
+    [ -S "$sock" ] || continue
+    if curl -s --max-time 1 --unix-socket "$sock" http://localhost/ 2>/dev/null \
+        | grep -qi '"state" *: *"running"'; then
+      LIVE_VMS=$((LIVE_VMS + 1))
+    fi
+  done
+
+  if [ "$LIVE_VMS" -lt 2 ]; then
+    # Nothing to correlate yet. Bail out of the wait once the rollout has
+    # clearly converged (v1 gone), so a genuine replacement fails fast rather
+    # than burning the whole loop.
+    if [ -z "$V2_ID" ]; then
+      V2_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \
+        | jq -r --arg ns "ring-e2e" --arg n "fc-rolling" --arg old "$V1_ID" \
+            '.[] | select(.namespace==$ns and .name==$n and .id != $old and .status != "deleted") | .id' \
+        | head -n1)
+    fi
+    sleep 0.1
+    continue
+  fi
+
   SNAPSHOT=$("$RING_BIN" deployment list --output json 2>/dev/null || echo "[]")
 
   # v1 still present and not deleted, AND a child pointing at it.
@@ -88,12 +117,7 @@ for _ in $(seq 1 120); do
   CHILD=$(echo "$SNAPSHOT" | jq -r --arg p "$V1_ID" \
     '.[] | select((.parent_id // "") == $p) | .id' | head -n1)
 
-  # Control-plane rows alone are not enough: a runtime could create the child
-  # row, then stop v1 before starting v2, and still satisfy a row-level check.
-  # On a VM runtime the resource that matters is the microVM itself, so require
-  # TWO live API sockets in the same observation.
-  LIVE_VMS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2>/dev/null | wc -l | tr -d ' ')
-
+  # Two VMs are already confirmed Running above; correlate them with the rows.
   if [ "${V1_ALIVE:-0}" -ge 1 ] && [ -n "$CHILD" ] && [ "${LIVE_VMS:-0}" -ge 2 ]; then
     V2_ID="$CHILD"
     OVERLAP=1
