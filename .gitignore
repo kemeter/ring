@@ -3,3 +3,6 @@ ring.db
 ring.db-shm
 ring.db-wal
 .config
+# Packer build artifacts: serial console dumps from the CH image build.
+# Regenerated on every build, hundreds of KB, no value in history.
+tests/e2e/cloud-hypervisor/packer/*.log
