@@ -78,22 +78,24 @@ ROOTFS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null |
 log "no VM was spawned and no rootfs was copied"
 
 # Terminal, not transient: the RAM is not coming back, so retrying would only
-# spam events. What is asserted is that the count STOPS moving, not that it is
-# zero.
+# spam events.
 #
-# Worth knowing: Firecracker reaches this state with restart_count = 5, i.e.
-# the over-ask is retried up to MAX_RESTART_COUNT before settling, whereas the
-# Cloud Hypervisor test's comment claims the count stays 0 (it never actually
-# asserts it). Same shared `check_host_memory`, different retry accounting.
-# Nothing is leaked either way — the check fires before any rootfs copy or VM
-# spawn, as the assertions above prove — so this pins the real behaviour rather
-# than the documented intent. Tracked on the board.
+# `restart_count` reads 5 here, which does NOT mean five boot attempts were
+# made: `apply_vm_start_failure` assigns MAX_RESTART_COUNT outright for any
+# terminal VM-start error (src/hypervisor/classifier.rs), so the counter is
+# used as a "do not reconcile again" marker rather than a tally. Cloud
+# Hypervisor goes through the same function, so both runtimes behave alike —
+# t23's "restart_count must stay 0" comment is simply stale.
+#
+# What matters for this test is that the count is FROZEN, i.e. nothing is
+# retrying underneath. Asserting the exact value would pin an implementation
+# detail of that marker.
 COUNT_ONE=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')
 sleep 12
 COUNT_TWO=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')
 [ "$COUNT_TWO" -eq "$COUNT_ONE" ] \
   || fail "restart_count moved from $COUNT_ONE to $COUNT_TWO: insufficient_resources is being retried instead of being terminal"
-log "restart_count held at $COUNT_TWO — the status is terminal"
+log "restart_count frozen at $COUNT_TWO — nothing is retrying"
 
 # The status must not drift onwards to crash_loop_back_off: an operator
 # filtering on insufficient_resources would otherwise lose sight of it.
@@ -104,10 +106,21 @@ STATUS_LATER=$("$RING_BIN" deployment list --output json 2>/dev/null \
 log "status stayed at insufficient_resources"
 
 # The operator must be told what was short, not just that something failed.
-EVENTS=$("$RING_BIN" deployment events "$DEPLOYMENT_ID" 2>/dev/null || echo "")
-echo "$EVENTS" | grep -qi "memor" \
-  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "no event mentions memory — the failure is unexplained"; }
-log "an event names memory as the cause"
+#
+# Match the structured `reason` field rather than hunting for "memory" anywhere
+# in the rendered table: any unrelated event mentioning that word would satisfy
+# a loose grep, and the reason is a stable identifier while the message wording
+# is not.
+EVENTS=$("$RING_BIN" deployment events "$DEPLOYMENT_ID" --level error 2>/dev/null || echo "")
+echo "$EVENTS" | grep -q "insufficient_resources" \
+  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "no error event with reason=insufficient_resources — the refusal is unexplained"; }
+log "an error event carries reason=insufficient_resources"
+
+# The message must also name the figures, so an operator can size the host
+# without reading the source.
+echo "$EVENTS" | grep -qiE "memor|MiB|GiB|TiB" \
+  || { printf '%s\n' "$EVENTS" | head -15 >&2; fail "the event does not state how much memory was needed"; }
+log "the event states the memory figures"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
