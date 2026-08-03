@@ -179,8 +179,21 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     // the restart bound: the deployment converges to its terminal state on the
     // next tick instead of five ticks from now. Transient errors still bump by
     // one and retry within the budget, exactly as before.
-    let terminal = crate::hypervisor::classifier::classify_create_error(&err).is_terminal();
-    if increment_restart {
+    //
+    // One exception: a few terminal statuses are already excluded from the
+    // scheduler's reconcile filter, so the budget marker buys nothing there and
+    // would report restarts that never happened — a host-memory refusal is
+    // checked before the image pull, so nothing was ever created.
+    let disposition = crate::hypervisor::classifier::classify_create_error(&err);
+    let terminal = disposition.is_terminal();
+    let marker_needed = match &disposition {
+        crate::hypervisor::classifier::Disposition::Terminal(status) => {
+            !crate::hypervisor::classifier::scheduler_skips_by_status(status)
+        }
+        crate::hypervisor::classifier::Disposition::Retry => true,
+    };
+
+    if increment_restart && marker_needed {
         if terminal {
             deployment.restart_count = MAX_RESTART_COUNT;
         } else {

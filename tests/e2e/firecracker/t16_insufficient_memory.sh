@@ -80,16 +80,13 @@ log "no VM was spawned and no rootfs was copied"
 # Terminal, not transient: the RAM is not coming back, so retrying would only
 # spam events.
 #
-# `restart_count` reads 5 here, which does NOT mean five boot attempts were
-# made: `apply_vm_start_failure` assigns MAX_RESTART_COUNT outright for any
-# terminal VM-start error (src/hypervisor/classifier.rs), so the counter is
-# used as a "do not reconcile again" marker rather than a tally. Cloud
-# Hypervisor goes through the same function, so both runtimes behave alike —
-# t23's "restart_count must stay 0" comment is simply stale.
+# `restart_count` stays 0: the admission check refused the boot before any
+# process existed, so there is nothing to report. It used to read 5 — the
+# terminal path assigned MAX_RESTART_COUNT as a "stop reconciling" marker,
+# which was redundant (the scheduler already skips this status) and made the
+# field claim restarts that never happened.
 #
-# What matters for this test is that the count is FROZEN, i.e. nothing is
-# retrying underneath. Asserting the exact value would pin an implementation
-# detail of that marker.
+# What matters here is that the count is FROZEN: nothing is retrying underneath.
 COUNT_ONE=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')
 sleep 12
 COUNT_TWO=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')

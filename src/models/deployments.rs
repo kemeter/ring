@@ -7,6 +7,26 @@ use std::str::FromStr;
 
 pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 
+/// Statuses the scheduler keeps reconciling on every tick.
+///
+/// Single source of truth: `scheduler::schedule` builds its DB filter from this
+/// list, and `classifier::scheduler_skips_by_status` is its complement. Keeping
+/// them derived from one array is what stops the two drifting apart — a status
+/// added here while still reported as "skipped" would be retried forever with
+/// no restart budget to stop it.
+pub(crate) const RECONCILED_STATUSES: &[DeploymentStatus] = &[
+    DeploymentStatus::Pending,
+    DeploymentStatus::Creating,
+    DeploymentStatus::Running,
+    DeploymentStatus::Deleted,
+    DeploymentStatus::CreateContainerError,
+    DeploymentStatus::ImagePullBackOff,
+    DeploymentStatus::NetworkError,
+    DeploymentStatus::ConfigError,
+    DeploymentStatus::FileSystemError,
+    DeploymentStatus::Error,
+];
+
 /// All variants serialize to snake_case, both on the wire (serde JSON) and
 /// in the SQLite `deployment.status` column (Display). Before this change,
 /// lifecycle states were lowercase (`running`, …) while error states were
