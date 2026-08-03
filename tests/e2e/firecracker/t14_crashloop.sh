@@ -37,7 +37,10 @@ RING_E2E_FC_KERNEL="$BOGUS_KERNEL"
 export RING_E2E_FC_KERNEL
 log "bogus kernel created at $BOGUS_KERNEL"
 
+# Reap it even when an assertion below exits early — `setup_fc` installs its own
+# trap, so this one has to be layered in after it rather than before.
 setup_fc
+trap 'rm -f "$BOGUS_KERNEL"; cleanup_fc; cleanup_ring' EXIT
 start_ring
 ring_login
 
@@ -83,12 +86,23 @@ log "reached crash_loop_back_off"
 # Landing in the terminal state is only half of it: the scheduler must also
 # STOP retrying. Without this, a deployment could report CrashLoopBackOff while
 # still burning a rootfs copy and a TAP every tick.
-ROOTFS_AT_TERMINAL=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
-sleep 10
-ROOTFS_LATER=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
-[ "$ROOTFS_LATER" -le "$ROOTFS_AT_TERMINAL" ] \
-  || fail "rootfs images still accumulating after CrashLoopBackOff ($ROOTFS_AT_TERMINAL -> $ROOTFS_LATER): retries did not stop"
-log "no new artifacts after the terminal state — retries stopped"
+#
+# `restart_count` is the right signal, not a file count: artifacts are created
+# and removed within each attempt, so their number can sit flat while retries
+# continue underneath. The counter only moves when a new attempt is actually
+# made.
+COUNT_AT_TERMINAL=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null \
+  | jq -r '.restart_count // 0')
+[ "${COUNT_AT_TERMINAL:-0}" -ge 1 ] \
+  || fail "restart_count is ${COUNT_AT_TERMINAL:-0} after repeated boot failures — attempts are not being counted"
+log "restart_count at the terminal state: $COUNT_AT_TERMINAL"
+
+sleep 15
+COUNT_LATER=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null \
+  | jq -r '.restart_count // 0')
+[ "$COUNT_LATER" -eq "$COUNT_AT_TERMINAL" ] \
+  || fail "restart_count kept climbing after CrashLoopBackOff ($COUNT_AT_TERMINAL -> $COUNT_LATER): retries did not stop"
+log "restart_count held at $COUNT_LATER over 15s — retries stopped"
 
 # The failure must be explained, not just recorded as a status. An operator
 # reading the events should learn the boot was rejected.

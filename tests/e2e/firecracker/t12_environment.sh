@@ -69,16 +69,18 @@ $(printf '%s' "$USER_DATA" | grep -oE '[A-Za-z0-9+/=]{40,}' | while read -r blob
     printf '%s' "$blob" | base64 -d 2>/dev/null || true
   done)"
 
-echo "$DECODED" | grep -q "RING_E2E_PLAIN" \
-  || { printf '%s\n' "$USER_DATA" | head -30 >&2; fail "env var RING_E2E_PLAIN missing from the cidata payload"; }
-echo "$DECODED" | grep -q "plain-value-42" \
-  || fail "the VALUE of RING_E2E_PLAIN never reached the cidata payload"
-log "RING_E2E_PLAIN and its value are present in the cidata"
+# Match each key TOGETHER with its value, not the two independently: separate
+# greps would pass even if the payload paired a key with the wrong value, which
+# is the failure worth catching.
+echo "$DECODED" | grep -qE 'RING_E2E_PLAIN=["'"'"']?plain-value-42' \
+  || { printf '%s\n' "$DECODED" | head -30 >&2; fail "RING_E2E_PLAIN is not bound to its value in the cidata payload"; }
+log "RING_E2E_PLAIN is bound to its value"
 
-# A value containing spaces is the case that breaks naive KEY=value emitters.
-echo "$DECODED" | grep -q "value with spaces" \
-  || fail "a value containing spaces was mangled or dropped"
-log "a spaced value survived intact"
+# A value containing spaces is the case that breaks naive KEY=value emitters —
+# it must survive whole and stay attached to its own key.
+echo "$DECODED" | grep -qE 'RING_E2E_SPACED=["'"'"']?value with spaces' \
+  || { printf '%s\n' "$DECODED" | head -30 >&2; fail "RING_E2E_SPACED lost its spaced value"; }
+log "RING_E2E_SPACED kept its spaced value intact"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
