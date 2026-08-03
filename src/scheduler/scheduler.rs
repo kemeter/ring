@@ -1439,18 +1439,10 @@ pub(crate) async fn schedule(
         let mut filters = HashMap::new();
         filters.insert(
             String::from("status"),
-            vec![
-                DeploymentStatus::Pending.to_string(),
-                DeploymentStatus::Creating.to_string(),
-                DeploymentStatus::Running.to_string(),
-                DeploymentStatus::Deleted.to_string(),
-                DeploymentStatus::CreateContainerError.to_string(),
-                DeploymentStatus::ImagePullBackOff.to_string(),
-                DeploymentStatus::NetworkError.to_string(),
-                DeploymentStatus::ConfigError.to_string(),
-                DeploymentStatus::FileSystemError.to_string(),
-                DeploymentStatus::Error.to_string(),
-            ],
+            crate::models::deployments::RECONCILED_STATUSES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         );
         let mut list_deployments = match deployments::find_all(&pool, filters).await {
             Ok(list) => list,

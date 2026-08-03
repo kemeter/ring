@@ -860,7 +860,13 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     // other terminal statuses (`ImagePullBackOff`, `CreateContainerError`) ARE
     // still reconciled, so for those the exhausted budget remains what stops
     // the retries.
-    let status_alone_stops_reconciliation = matches!(err, RuntimeError::InsufficientResources(_));
+    let status_alone_stops_reconciliation =
+        match crate::hypervisor::classifier::classify_create_error(&err) {
+            crate::hypervisor::classifier::Disposition::Terminal(ref s) => {
+                crate::hypervisor::classifier::scheduler_skips_by_status(s)
+            }
+            crate::hypervisor::classifier::Disposition::Retry => false,
+        };
 
     if increment_restart && !status_alone_stops_reconciliation {
         if terminal {

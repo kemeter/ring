@@ -169,19 +169,13 @@ pub(crate) fn classify_vm_start_error(
 /// True when the scheduler already refuses to reconcile a deployment in this
 /// status, so no restart-budget marker is needed to stop the retries.
 ///
-/// Must stay in sync with the status filter in `scheduler::schedule` — a status
-/// dropped from that filter has to be added here, or its terminal deployments
-/// would keep being picked up forever. The pairing is asserted in the tests
-/// below rather than enforced by the compiler, since the filter is built from
-/// strings for the DB query.
-fn scheduler_skips_by_status(status: &DeploymentStatus) -> bool {
-    matches!(
-        status,
-        DeploymentStatus::InsufficientResources
-            | DeploymentStatus::CrashLoopBackOff
-            | DeploymentStatus::Failed
-            | DeploymentStatus::Completed
-    )
+/// Derived from [`RECONCILED_STATUSES`] rather than listed by hand: the two
+/// must stay exact complements. A status ADDED to the reconcile filter while
+/// still reported as skipped here would be retried forever, with no budget to
+/// stop it — which is why this reads the same array the scheduler queries with
+/// instead of duplicating it.
+pub(crate) fn scheduler_skips_by_status(status: &DeploymentStatus) -> bool {
+    !crate::models::deployments::RECONCILED_STATUSES.contains(status)
 }
 
 pub(crate) fn apply_vm_start_failure(
@@ -320,35 +314,30 @@ mod tests {
         );
     }
 
-    /// Guard against drift: every status this module claims the scheduler skips
-    /// must be absent from the scheduler's reconcile filter. If someone adds a
-    /// status back to that filter without updating `scheduler_skips_by_status`,
-    /// its deployments would be retried forever with no budget to stop them.
+    /// The two sides must be exact complements. This no longer duplicates the
+    /// scheduler's list — both derive from `RECONCILED_STATUSES` — so the test
+    /// checks the property rather than a copy that could go stale.
     #[test]
-    fn skipped_statuses_are_absent_from_the_scheduler_filter() {
-        // Mirrors the filter built in `scheduler::schedule`.
-        let reconciled = [
-            DeploymentStatus::Pending,
-            DeploymentStatus::Creating,
-            DeploymentStatus::Running,
-            DeploymentStatus::Deleted,
-            DeploymentStatus::CreateContainerError,
-            DeploymentStatus::ImagePullBackOff,
-            DeploymentStatus::NetworkError,
-            DeploymentStatus::ConfigError,
-            DeploymentStatus::FileSystemError,
-            DeploymentStatus::Error,
-        ];
+    fn skipped_and_reconciled_statuses_are_complements() {
+        use crate::models::deployments::RECONCILED_STATUSES;
 
         for status in DeploymentStatus::all() {
-            if scheduler_skips_by_status(&status) {
-                assert!(
-                    !reconciled.contains(&status),
-                    "{status:?} is claimed to be skipped but the scheduler reconciles it: \
-                     without a budget marker it would retry forever"
-                );
-            }
+            assert_eq!(
+                scheduler_skips_by_status(&status),
+                !RECONCILED_STATUSES.contains(&status),
+                "{status:?} is inconsistent between the reconcile filter and the skip check"
+            );
         }
+
+        // Sanity: neither side is empty, which would make the assertion above
+        // vacuously true.
+        assert!(!RECONCILED_STATUSES.is_empty());
+        assert!(
+            DeploymentStatus::all()
+                .iter()
+                .any(scheduler_skips_by_status),
+            "no status is skipped — the marker would always be written"
+        );
     }
 
     #[test]
