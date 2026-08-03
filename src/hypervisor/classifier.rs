@@ -166,6 +166,24 @@ pub(crate) fn classify_vm_start_error(
 /// polled by the reconcile loop, so setting the status without pushing the
 /// counter to the bound would retry a permanent failure on every tick forever —
 /// exactly the loop this classifier exists to stop.
+/// True when the scheduler already refuses to reconcile a deployment in this
+/// status, so no restart-budget marker is needed to stop the retries.
+///
+/// Must stay in sync with the status filter in `scheduler::schedule` — a status
+/// dropped from that filter has to be added here, or its terminal deployments
+/// would keep being picked up forever. The pairing is asserted in the tests
+/// below rather than enforced by the compiler, since the filter is built from
+/// strings for the DB query.
+fn scheduler_skips_by_status(status: &DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::InsufficientResources
+            | DeploymentStatus::CrashLoopBackOff
+            | DeploymentStatus::Failed
+            | DeploymentStatus::Completed
+    )
+}
+
 pub(crate) fn apply_vm_start_failure(
     deployment: &mut crate::models::deployments::Deployment,
     err: &RuntimeError,
@@ -179,7 +197,19 @@ pub(crate) fn apply_vm_start_failure(
 
     match status {
         Some(terminal) => {
-            deployment.restart_count = MAX_RESTART_COUNT;
+            // Exhausting the restart budget is how a terminal error stops the
+            // scheduler from retrying — but only for statuses the scheduler
+            // still reconciles (`ConfigError`, `ImagePullBackOff`,
+            // `CreateContainerError`, ...). A few terminal statuses are already
+            // excluded from its filter by status alone; for those the marker
+            // buys nothing and makes the field lie, so it is skipped.
+            //
+            // Concretely: a deployment refused by host-memory admission used to
+            // report 5 restarts having never started a single process, sending
+            // whoever read it looking for an instability that never existed.
+            if !scheduler_skips_by_status(&terminal) {
+                deployment.restart_count = MAX_RESTART_COUNT;
+            }
             deployment.status = terminal;
         }
         None => {
@@ -244,6 +274,81 @@ mod tests {
             classify_create_error(&RuntimeError::Other("boom".into())),
             Disposition::Retry
         );
+    }
+
+    /// A deployment refused before anything ran must not claim restarts it
+    /// never made. `restart_count` is displayed by the CLI, the API and the
+    /// dashboard as a count of actual restarts; reporting 5 for a workload that
+    /// never started a process sends an operator hunting a phantom instability.
+    #[test]
+    fn admission_refusal_does_not_invent_restarts() {
+        let mut d = vm_deployment();
+        assert_eq!(d.restart_count, 0);
+
+        apply_vm_start_failure(
+            &mut d,
+            &RuntimeError::InsufficientResources("needs 4096 MiB but only 1800 MiB".into()),
+            "firecracker",
+            DeploymentStatus::CrashLoopBackOff,
+        );
+
+        assert_eq!(d.status, DeploymentStatus::InsufficientResources);
+        assert_eq!(
+            d.restart_count, 0,
+            "no VM was ever spawned, so no restart may be reported"
+        );
+    }
+
+    /// The counterpart: statuses the scheduler DOES keep reconciling still need
+    /// the exhausted budget, otherwise they would be retried forever.
+    #[test]
+    fn a_reconciled_terminal_status_still_exhausts_the_budget() {
+        let mut d = vm_deployment();
+
+        apply_vm_start_failure(
+            &mut d,
+            &RuntimeError::ConfigNotFound("missing-config".into()),
+            "firecracker",
+            DeploymentStatus::CrashLoopBackOff,
+        );
+
+        assert_eq!(d.status, DeploymentStatus::ConfigError);
+        assert_eq!(
+            d.restart_count,
+            crate::models::deployments::MAX_RESTART_COUNT,
+            "ConfigError is still reconciled, so the budget is what stops the retries"
+        );
+    }
+
+    /// Guard against drift: every status this module claims the scheduler skips
+    /// must be absent from the scheduler's reconcile filter. If someone adds a
+    /// status back to that filter without updating `scheduler_skips_by_status`,
+    /// its deployments would be retried forever with no budget to stop them.
+    #[test]
+    fn skipped_statuses_are_absent_from_the_scheduler_filter() {
+        // Mirrors the filter built in `scheduler::schedule`.
+        let reconciled = [
+            DeploymentStatus::Pending,
+            DeploymentStatus::Creating,
+            DeploymentStatus::Running,
+            DeploymentStatus::Deleted,
+            DeploymentStatus::CreateContainerError,
+            DeploymentStatus::ImagePullBackOff,
+            DeploymentStatus::NetworkError,
+            DeploymentStatus::ConfigError,
+            DeploymentStatus::FileSystemError,
+            DeploymentStatus::Error,
+        ];
+
+        for status in DeploymentStatus::all() {
+            if scheduler_skips_by_status(&status) {
+                assert!(
+                    !reconciled.contains(&status),
+                    "{status:?} is claimed to be skipped but the scheduler reconciles it: \
+                     without a budget marker it would retry forever"
+                );
+            }
+        }
     }
 
     #[test]
@@ -381,12 +486,16 @@ mod tests {
         }
     }
 
-    /// The invariant that stops the infinite reboot loop: whichever branch is
-    /// taken, `restart_count` must move. Several terminal statuses are still
-    /// polled by the reconcile loop, so a terminal verdict that left the counter
-    /// at zero would retry a permanent failure on every tick, forever.
+    /// The invariant that stops the infinite reboot loop: a failure must either
+    /// move `restart_count` or land on a status the scheduler refuses to
+    /// reconcile. Leaving BOTH untouched would retry a permanent failure on
+    /// every tick, forever.
+    ///
+    /// The counter is not required on its own: several terminal statuses are
+    /// already excluded from the reconcile filter, and marking those would only
+    /// report restarts that never happened.
     #[test]
-    fn every_start_failure_moves_the_restart_counter() {
+    fn every_start_failure_either_counts_or_lands_outside_the_reconcile_filter() {
         let errors = [
             RuntimeError::FirmwareNotFound("f".into()),
             RuntimeError::ImageNotFound("i".into()),
@@ -404,17 +513,23 @@ mod tests {
                 DeploymentStatus::CrashLoopBackOff,
             );
             assert!(
-                deployment.restart_count > 0,
-                "counter stayed at zero for {:?} — the deployment would retry forever",
-                err
+                deployment.restart_count > 0 || scheduler_skips_by_status(&deployment.status),
+                "{:?} left the counter at zero AND landed on {:?}, which the scheduler \
+                 still reconciles — the deployment would retry forever",
+                err,
+                deployment.status
             );
         }
     }
 
-    /// A permanent failure lands on its status and exhausts the budget at once,
-    /// so the very next tick is terminal instead of the fifth.
+    /// A permanent failure lands on its terminal status immediately, so the very
+    /// next tick is terminal instead of the fifth.
+    ///
+    /// `Failed` is outside the scheduler's reconcile filter, so the status alone
+    /// stops the retries and the restart budget is left untouched — the
+    /// deployment never restarted, and must not claim it did.
     #[test]
-    fn terminal_start_failure_jumps_to_the_bound() {
+    fn terminal_start_failure_lands_on_its_status_at_once() {
         let mut deployment = vm_deployment();
         apply_vm_start_failure(
             &mut deployment,
@@ -423,11 +538,11 @@ mod tests {
             DeploymentStatus::CrashLoopBackOff,
         );
 
-        assert_eq!(
-            deployment.restart_count,
-            crate::models::deployments::MAX_RESTART_COUNT
-        );
         assert_eq!(deployment.status, DeploymentStatus::Failed);
+        assert_eq!(
+            deployment.restart_count, 0,
+            "the VM never started, so no restart may be reported"
+        );
     }
 
     /// A transient failure keeps its one-per-tick budget and converges to the

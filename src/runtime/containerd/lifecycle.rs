@@ -854,7 +854,15 @@ fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment
     // do recover, so this runtime keeps them inside the retry budget.
     let terminal = crate::hypervisor::classifier::classify_create_error(&err).is_terminal()
         && !matches!(err, RuntimeError::InstanceCreationFailed(_));
-    if increment_restart {
+    // `InsufficientResources` is excluded from the scheduler's reconcile filter
+    // by status alone, so it needs no counter marker — and writing one would
+    // report restarts that never happened (no container was ever created). The
+    // other terminal statuses (`ImagePullBackOff`, `CreateContainerError`) ARE
+    // still reconciled, so for those the exhausted budget remains what stops
+    // the retries.
+    let status_alone_stops_reconciliation = matches!(err, RuntimeError::InsufficientResources(_));
+
+    if increment_restart && !status_alone_stops_reconciliation {
         if terminal {
             deployment.restart_count = MAX_RESTART_COUNT;
         } else {
