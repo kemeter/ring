@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # T15-FC: rolling update on the Firecracker runtime.
 #
-# The `parent_id` machinery ("keep the old deployment alive until the new one
-# is healthy") is runtime-agnostic, but it had never been exercised against
-# Firecracker. It matters more here than on containers: a rollout means a
-# second microVM boots while the first still holds its TAP, its rootfs copy and
-# its API socket. If the parent is not reaped once the child is up, every
-# redeploy leaks a VM's worth of host resources.
+# The `parent_id` machinery is runtime-agnostic, but it had never been
+# exercised against Firecracker. It matters more here than on containers: a
+# rollout means a second microVM boots while the first still holds its TAP, its
+# rootfs copy and its API socket. If the parent is not reaped once the child is
+# up, every redeploy leaks a VM's worth of host resources.
+#
+# Note on the fixture: the health check here is a LIVENESS probe (readiness
+# defaults to false), so it selects the rolling path but does not gate the
+# parent's draining. Nothing below should be read as "the child was healthy
+# before the parent went away".
 #
 # Cloud Hypervisor covers this (t10_rolling_update); this is its Firecracker
 # counterpart, plus an assertion CH's does not make: that the parent is
@@ -63,25 +67,50 @@ SOCKETS_V1=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2
 # new deployment id, not on an image diff.
 "$RING_BIN" apply --file "$FIXTURE"
 
-# === a second row appears, its parent_id pointing back at v1 ===
-# Both rows share (namespace, name) during a rollout, so `get_deployment_id`
-# cannot disambiguate — select on parent_id instead.
+# === both deployments are alive at the same time ===
+# This is the property that DEFINES a rolling update, and the one worth
+# testing: an implementation that killed v1 and only then booted v2 would
+# satisfy every parent_id assertion below while providing no availability at
+# all. Capture the overlap in a single `deployment list` snapshot so the two
+# observations cannot be separated in time.
+#
+# The child's `parent_id` is cleared once the rollout converges, so poll for the
+# overlap rather than reading it after the fact — reading it later can miss a
+# correct rollout entirely.
 V2_ID=""
-for _ in $(seq 1 90); do
-  V2_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r --arg ns "ring-e2e" --arg n "fc-rolling" \
-        '.[] | select(.namespace==$ns and .name==$n and (.parent_id // "") != "") | .id' \
-    | head -n1)
-  [ -n "$V2_ID" ] && break
+OVERLAP=0
+for _ in $(seq 1 120); do
+  SNAPSHOT=$("$RING_BIN" deployment list --output json 2>/dev/null || echo "[]")
+
+  # v1 still present and not deleted, AND a child pointing at it.
+  V1_ALIVE=$(echo "$SNAPSHOT" | jq -r --arg id "$V1_ID" \
+    '[.[] | select(.id==$id and .status != "deleted")] | length')
+  CHILD=$(echo "$SNAPSHOT" | jq -r --arg p "$V1_ID" \
+    '.[] | select((.parent_id // "") == $p) | .id' | head -n1)
+
+  if [ "${V1_ALIVE:-0}" -ge 1 ] && [ -n "$CHILD" ]; then
+    V2_ID="$CHILD"
+    OVERLAP=1
+    break
+  fi
+
+  # Fallback: the rollout may already have converged and cleared parent_id.
+  # Record the surviving row so the teardown assertions still have an id, but
+  # do NOT claim the overlap was observed.
+  if [ -z "$V2_ID" ]; then
+    V2_ID=$(echo "$SNAPSHOT" | jq -r --arg ns "ring-e2e" --arg n "fc-rolling" --arg old "$V1_ID" \
+      '.[] | select(.namespace==$ns and .name==$n and .id != $old and .status != "deleted") | .id' \
+      | head -n1)
+  fi
   sleep 1
 done
-[ -n "$V2_ID" ] || fail "no child deployment with a parent_id appeared — the rolling path was not taken"
+
+[ -n "$V2_ID" ] || fail "no second deployment appeared after re-applying — nothing was rolled"
 log "v2 id: $V2_ID"
 
-PARENT=$("$RING_BIN" deployment inspect "$V2_ID" --output json 2>/dev/null | jq -r '.parent_id // ""')
-[ "$PARENT" = "$V1_ID" ] \
-  || fail "the child's parent_id is '$PARENT', expected the v1 id '$V1_ID'"
-log "the child points back at v1 via parent_id"
+[ "$OVERLAP" -eq 1 ] \
+  || fail "never observed v1 and its child alive together: the rollout replaced instead of overlapping (or converged faster than a 1s poll, which this test cannot distinguish)"
+log "v1 and its child were alive at the same time — the rollout overlapped"
 
 # === the parent is eventually reaped ===
 # This is the part that matters on a VM runtime: until the parent is torn down
