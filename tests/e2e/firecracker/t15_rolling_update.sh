@@ -88,11 +88,22 @@ for _ in $(seq 1 120); do
   CHILD=$(echo "$SNAPSHOT" | jq -r --arg p "$V1_ID" \
     '.[] | select((.parent_id // "") == $p) | .id' | head -n1)
 
-  if [ "${V1_ALIVE:-0}" -ge 1 ] && [ -n "$CHILD" ]; then
+  # Control-plane rows alone are not enough: a runtime could create the child
+  # row, then stop v1 before starting v2, and still satisfy a row-level check.
+  # On a VM runtime the resource that matters is the microVM itself, so require
+  # TWO live API sockets in the same observation.
+  LIVE_VMS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "${V1_ALIVE:-0}" -ge 1 ] && [ -n "$CHILD" ] && [ "${LIVE_VMS:-0}" -ge 2 ]; then
     V2_ID="$CHILD"
     OVERLAP=1
+    log "observed $LIVE_VMS live microVMs while v1 and its child both existed"
     break
   fi
+
+  # Remember the child even before the VMs overlap, so a converged rollout
+  # still yields an id for the teardown assertions.
+  [ -n "$CHILD" ] && V2_ID="$CHILD"
 
   # Fallback: the rollout may already have converged and cleared parent_id.
   # Record the surviving row so the teardown assertions still have an id, but
@@ -109,8 +120,8 @@ done
 log "v2 id: $V2_ID"
 
 [ "$OVERLAP" -eq 1 ] \
-  || fail "never observed v1 and its child alive together: the rollout replaced instead of overlapping (or converged faster than a 1s poll, which this test cannot distinguish)"
-log "v1 and its child were alive at the same time — the rollout overlapped"
+  || fail "never observed two live microVMs while v1 and its child both existed: the rollout replaced instead of overlapping (or converged faster than a 1s poll, which this test cannot distinguish)"
+log "the rollout overlapped: both microVMs ran at once"
 
 # === the parent is eventually reaped ===
 # This is the part that matters on a VM runtime: until the parent is torn down
