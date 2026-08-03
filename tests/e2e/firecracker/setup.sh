@@ -24,6 +24,18 @@ setup_fc() {
     echo "[fc-setup] /dev/kvm not accessible (need the kvm group)" >&2
     exit 1
   }
+
+  # Ring creates a TAP per microVM, which needs CAP_NET_ADMIN. Without it every
+  # boot fails on TUNSETIFF and the deployment lands in crash_loop_back_off —
+  # which a test can only report as "did not reach running in 60s", pointing at
+  # the runtime rather than at the missing capability. Fail fast and say so.
+  RING_BIN_PATH="${RING_BIN:-$(cd "$SCRIPT_DIR/../../.." && pwd)/target/debug/ring}"
+  if [ "$(id -u)" -ne 0 ] && ! getcap "$RING_BIN_PATH" 2>/dev/null | grep -qE "cap_net_admin[^ ]*\+?e|cap_net_admin=.*e"; then
+    echo "[fc-setup] $RING_BIN_PATH lacks CAP_NET_ADMIN, so creating a TAP will fail" >&2
+    echo "           grant it with: sudo setcap cap_net_admin+ep $RING_BIN_PATH" >&2
+    echo "           (re-apply after every 'cargo build' — the capability is lost on rebuild)" >&2
+    exit 1
+  fi
   for cmd in curl; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "[fc-setup] missing: $cmd" >&2; exit 1; }
   done
