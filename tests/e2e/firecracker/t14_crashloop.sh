@@ -37,9 +37,13 @@ RING_E2E_FC_KERNEL="$BOGUS_KERNEL"
 export RING_E2E_FC_KERNEL
 log "bogus kernel created at $BOGUS_KERNEL"
 
-# Reap it even when an assertion below exits early — `setup_fc` installs its own
-# trap, so this one has to be layered in after it rather than before.
+# Guard the file from the moment it exists: `setup_fc` can itself exit (no
+# firecracker, no /dev/kvm, no CAP_NET_ADMIN), and a trap installed only after
+# it would never run in those cases.
+trap 'rm -f "$BOGUS_KERNEL"' EXIT
+
 setup_fc
+# setup_fc replaces the trap with its own cleanup, so re-chain all three.
 trap 'rm -f "$BOGUS_KERNEL"; cleanup_fc; cleanup_ring' EXIT
 start_ring
 ring_login
