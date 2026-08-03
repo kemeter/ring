@@ -81,6 +81,21 @@ fn validate_network_constraints(input: &DeploymentInput, errors: &mut ViolationL
             "deployment.replicas.host_network_conflict",
         ));
     }
+
+    // Same conflict, one step removed: an autoscaler allowed to reach more than
+    // one instance would recreate the situation the check above rejects.
+    if let Some(policy) = &input.autoscale
+        && policy.max > 1
+    {
+        errors.push(Violation::new(
+            "autoscale.max",
+            format!(
+                "host networking is incompatible with autoscale.max > 1 (got {}): all instances would compete for the same host ports",
+                policy.max
+            ),
+            "deployment.autoscale.host_network_conflict",
+        ));
+    }
 }
 
 /// Validate environment variable names against POSIX/Docker rules:
@@ -109,6 +124,37 @@ fn validate_environment(input: &DeploymentInput, errors: &mut ViolationList) {
 /// strings parse correctly. `parse_cpu_string` accepts forms like `"500m"` or
 /// `"2"`; `parse_memory_string` handles binary (`Ki`, `Mi`, …) and decimal
 /// (`K`, `M`, …) suffixes. Anything else used to be a silent runtime crash.
+/// Reject an autoscaling policy that cannot be satisfied (min below 1, max
+/// below min, a target outside 0-100). Rejecting at the API boundary keeps the
+/// scheduler free of "what does this even mean" cases.
+fn validate_autoscale(input: &DeploymentInput, errors: &mut ViolationList) {
+    let Some(policy) = &input.autoscale else {
+        return;
+    };
+
+    if let Err(message) = policy.validate() {
+        errors.push(Violation::new(
+            "autoscale".to_string(),
+            message,
+            "deployment.autoscale.invalid".to_string(),
+        ));
+    }
+
+    // containerd reports `cpu_usage_percent` as a hard-coded 0 (see
+    // src/runtime/containerd/stats.rs — a percentage needs two samples, and the
+    // sampling loop does not exist yet). A CPU-driven controller fed a constant
+    // zero reads "idle" forever and walks the deployment down to `min` whatever
+    // the real load. Refusing is the honest answer; silently scaling on a fake
+    // measurement is not.
+    if input.runtime == "containerd" {
+        errors.push(Violation::new(
+            "autoscale",
+            "the containerd runtime does not report CPU usage yet, so it cannot be autoscaled on a CPU target",
+            "deployment.autoscale.runtime_unsupported",
+        ));
+    }
+}
+
 fn validate_resources(input: &DeploymentInput, errors: &mut ViolationList) {
     let Some(resources) = &input.resources else {
         return;
@@ -317,6 +363,17 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
                 input.replicas
             ),
             "deployment.replicas.job_must_be_one",
+        ));
+    }
+
+    // `kind: job + autoscale`: same reasoning as the replicas guard above, and
+    // there is nothing to measure anyway — a job has no steady-state CPU, it
+    // runs and exits, so a controller aiming at a CPU setpoint is meaningless.
+    if matches!(input.kind, DeploymentKind::Job) && input.autoscale.is_some() {
+        errors.push(Violation::new(
+            "autoscale",
+            "kind=job runs once and exits; it cannot be autoscaled",
+            "deployment.autoscale.job_unsupported",
         ));
     }
 
@@ -612,6 +669,8 @@ pub(crate) struct DeploymentInput {
     #[serde(default)]
     resources: Option<Resource>,
     #[serde(default)]
+    autoscale: Option<crate::models::deployments::Autoscale>,
+    #[serde(default)]
     ports: Vec<DeploymentPort>,
     #[serde(default)]
     network: Option<NetworkConfig>,
@@ -650,6 +709,7 @@ pub(crate) async fn create(
     validate_ports(&input, &mut violations);
     validate_environment(&input, &mut violations);
     validate_resources(&input, &mut violations);
+    validate_autoscale(&input, &mut violations);
     validate_config(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
@@ -712,6 +772,7 @@ pub(crate) async fn create(
     // - it has health checks configured
     // - --force flag is not set
     let mut rolling_parent_id: Option<String> = None;
+    let mut inherited_desired_replicas: Option<u32> = None;
     // Captured to log a `ForceReplace` event on the new deployment once
     // it exists. We collect the reason here so the caller of the API
     // gets a clear explanation for why rolling didn't happen, instead
@@ -761,6 +822,13 @@ pub(crate) async fn create(
                         existing.id
                     );
                     rolling_parent_id = Some(existing.id.clone());
+                    // Carry the parent's scaled-up capacity into the child.
+                    // Without this a redeploy silently drops an autoscaled
+                    // deployment back to the manifest count — a service running
+                    // 8 instances under load would restart at 2 and have to
+                    // climb again, one cooldown at a time, exactly when it is
+                    // least able to afford it.
+                    inherited_desired_replicas = existing.desired_replicas;
                 } else {
                     // Immediate replace. Pick the most specific reason so
                     // operators can fix the root cause: `force=true` is a
@@ -835,6 +903,13 @@ pub(crate) async fn create(
         volumes,
         health_checks: input.health_checks.unwrap_or_default(),
         resources: input.resources,
+        autoscale: input.autoscale.clone(),
+        // Inherited from the parent on a rolling update, so a redeploy keeps
+        // the capacity the autoscaler had reached. `None` for a fresh
+        // deployment: the first tick with usable metrics makes the first
+        // decision, and until then `target_replicas()` falls back to
+        // `replicas`.
+        desired_replicas: inherited_desired_replicas,
         image_digest: None,
         ports: input.ports,
         pending_events: vec![],

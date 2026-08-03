@@ -219,6 +219,11 @@ Create a new deployment, or trigger a rolling update if one with the same `name`
   "namespace": "production",
   "kind": "worker",
   "replicas": 3,
+  "autoscale": {
+    "min": 2,
+    "max": 10,
+    "target_cpu": 70
+  },
   "image": "nginx:1.25",
   "labels": {
     "app": "nginx",
@@ -246,6 +251,8 @@ Create a new deployment, or trigger a rolling update if one with the same `name`
 ```
 
 Each port entry maps a host port (`published`) to a container port (`target`). Omit the field or pass `[]` to keep the container unpublished. Bindings are forwarded to Docker's `HostConfig.PortBindings`; a publish conflict is reported by Docker at start time.
+
+`autoscale` is optional and opt-in: omit it and the deployment holds exactly `replicas`, which Ring never changes on its own. When present, the response and `GET /deployments/{id}` also carry `desired_replicas`, the count the autoscaler is currently targeting — `replicas` keeps reporting what was declared. See [the manifest reference](/documentation/reference/manifest#autoscale) for the decision rules and limits.
 
 Environment values support two forms:
 
@@ -283,6 +290,10 @@ Environment values support two forms:
 | `ports` set with `replicas > 1` would race; surfaces on both fields          | `deployment.ports.replicas_conflict` + `deployment.replicas.ports_conflict` |
 | `kind: job` requires `replicas: 1`                                           | `deployment.replicas.job_must_be_one`                      |
 | `kind: job` doesn't take readiness checks                                    | `deployment.health_checks.job_readiness_unsupported`       |
+| `kind: job` cannot be autoscaled                                             | `deployment.autoscale.job_unsupported`                     |
+| `autoscale` needs `min >= 1`, `max >= min`, `0 < target_cpu < 100`           | `deployment.autoscale.invalid`                             |
+| `network.mode=host` forbids `autoscale.max > 1`                              | `deployment.autoscale.host_network_conflict`               |
+| `autoscale` is unsupported on containerd (no CPU metric yet)                 | `deployment.autoscale.runtime_unsupported`                 |
 | Environment keys must match `[A-Za-z_][A-Za-z0-9_]*`                         | `deployment.environment.key.invalid`                       |
 | `resources.{limits,requests}.{cpu,memory}` must parse                        | `deployment.resources.{limits,requests}.{cpu,memory}.invalid` |
 | `config.image_pull_policy` must be `Always`, `IfNotPresent`, or `Never`      | `deployment.config.image_pull_policy.unsupported`          |
@@ -832,7 +843,7 @@ Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`)
 | `deployment.status_changed`     | A deployment transitions to a new status                             |
 | `deployment.health_check_failed`| A health check fails enough to trigger its `on_failure` action       |
 | `deployment.rolling_update`     | A rolling update progresses (instance drained / complete / failed)   |
-| `deployment.scaled`             | The reconciler added or removed an instance to reach `replicas`      |
+| `deployment.scaled`             | The reconciler added or removed an instance to reach the target count |
 | `deployment.error`              | The runtime failed to bring a deployment up (image, network, …)      |
 
 Every payload shares a common envelope (`schema_version`, `deployment_id`, `namespace`, `name`, `kind`) plus the per-kind fields below.

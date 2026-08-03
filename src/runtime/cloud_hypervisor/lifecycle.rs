@@ -943,7 +943,7 @@ impl CloudHypervisorLifecycle {
             .await;
 
         let current_count = deployment.instances.len();
-        let target_count = deployment.replicas as usize;
+        let target_count = deployment.target_replicas() as usize;
 
         if current_count < target_count && deployment.status != DeploymentStatus::CrashLoopBackOff {
             let instance_id = format!(
@@ -1520,6 +1520,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
@@ -1553,6 +1555,8 @@ mod tests {
             environment: std::collections::HashMap::new(),
             volumes: "[]".to_string(),
             health_checks: vec![],
+            autoscale: None,
+            desired_replicas: None,
             resources: Some(crate::models::deployments::Resource {
                 limits: Some(crate::models::deployments::ResourceSpec {
                     cpu: Some("2".to_string()),
@@ -1749,6 +1753,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],

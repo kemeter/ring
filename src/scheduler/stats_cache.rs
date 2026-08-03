@@ -26,15 +26,42 @@ use std::time::Duration;
 use tokio::time::{sleep, timeout};
 
 /// Per-deployment aggregate, ready to render as labelled Prometheus series.
-/// `name`/`namespace`/`runtime` are the label set; the couple
-/// (namespace, name) is unique, so no unstable `id` is needed as a label.
+/// `name`/`namespace`/`runtime` are the label set.
+///
+/// `(namespace, name)` is unique only among deployments with no `parent_id`
+/// (see migration 0013's partial index). During a rolling update the parent and
+/// its replacement are both running under that same pair, so it identifies a
+/// *series*, not a row — anything that must address one specific deployment
+/// keys on [`Self::id`].
 #[derive(Debug, Clone)]
 pub(crate) struct DeploymentRuntimeStats {
+    /// Deployment id. Not a Prometheus label (it is unstable across redeploys,
+    /// and `(namespace, name)` is the stable series identity), but control-plane
+    /// consumers need it: during a rolling update the parent and its child are
+    /// both running under the SAME namespace and name — the unique index only
+    /// covers rows with `parent_id IS NULL` — so name-based lookup silently
+    /// picks one of the two, and would feed a deployment the other's CPU.
+    pub id: String,
     pub name: String,
     pub namespace: String,
     pub runtime: String,
     pub instance_count: u64,
+    /// CPU percentage **summed** across the deployment's instances, so three
+    /// instances at 30% report 90%. That is what the Prometheus gauge wants.
+    ///
+    /// Do NOT compare this against a per-instance setpoint: adding an instance
+    /// raises the sum, so a controller aiming at "70%" would keep scaling up
+    /// while every instance idles. Use [`Self::cpu_usage_percent_per_instance`]
+    /// for that.
     pub cpu_usage_percent: f64,
+    /// CPU percentage **averaged** over the instances, i.e. how busy a typical
+    /// instance is. `None` when there is no instance to average over — which
+    /// means "no measurement", not "idle".
+    ///
+    /// Kept beside the sum rather than derived at each call site: the two are
+    /// easy to confuse, and reading the wrong one is silent (see the autoscaler
+    /// runaway this field exists to prevent).
+    pub cpu_usage_percent_per_instance: Option<f64>,
     pub memory_usage_bytes: u64,
     pub memory_limit_bytes: u64,
     pub network_rx_bytes: u64,
@@ -132,6 +159,7 @@ pub(crate) async fn refresh(
         }
 
         out.push(aggregate(
+            &deployment.id,
             &deployment.name,
             &deployment.namespace,
             &deployment.runtime,
@@ -152,17 +180,26 @@ pub(crate) async fn refresh(
 /// totals add across instances; memory percentage is intentionally not summed
 /// (it is derived from usage/limit by the consumer when needed).
 fn aggregate(
+    id: &str,
     name: &str,
     namespace: &str,
     runtime: &str,
     instances: &[InstanceStatsOutput],
 ) -> DeploymentRuntimeStats {
     DeploymentRuntimeStats {
+        id: id.to_string(),
         name: name.to_string(),
         namespace: namespace.to_string(),
         runtime: runtime.to_string(),
         instance_count: instances.len() as u64,
         cpu_usage_percent: instances.iter().map(|i| i.cpu_usage_percent).sum(),
+        cpu_usage_percent_per_instance: if instances.is_empty() {
+            None
+        } else {
+            Some(
+                instances.iter().map(|i| i.cpu_usage_percent).sum::<f64>() / instances.len() as f64,
+            )
+        },
         memory_usage_bytes: instances.iter().map(|i| i.memory.usage_bytes).sum(),
         memory_limit_bytes: instances.iter().map(|i| i.memory.limit_bytes).sum(),
         network_rx_bytes: instances.iter().map(|i| i.network.rx_bytes).sum(),
@@ -210,7 +247,7 @@ mod tests {
     #[test]
     fn aggregate_sums_across_instances() {
         let stats = vec![instance(10.0, 100, 5), instance(20.0, 200, 7)];
-        let agg = aggregate("web", "prod", "docker", &stats);
+        let agg = aggregate("dep-1", "web", "prod", "docker", &stats);
         assert_eq!(agg.name, "web");
         assert_eq!(agg.namespace, "prod");
         assert_eq!(agg.runtime, "docker");

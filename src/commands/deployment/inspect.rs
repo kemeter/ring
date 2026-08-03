@@ -89,7 +89,20 @@ pub(crate) async fn execute(
             println!("Namespace     : {}", deployment.namespace);
             println!("Kind          : {}", deployment.kind);
             println!("Image         : {}", deployment.image);
-            println!("Replicas      : {}", deployment.replicas);
+            // On an autoscaled deployment `replicas` is only the declared
+            // starting point, so showing it alone would misreport how many
+            // instances Ring is actually aiming for.
+            match (&deployment.autoscale, deployment.desired_replicas) {
+                // `desired_replicas` is the effective target the API already
+                // clamped; `replicas` is what the manifest declared.
+                (Some(policy), Some(target)) => {
+                    println!(
+                        "Replicas      : {} (declared {}, autoscale {}-{} targeting {:.0}% CPU)",
+                        target, deployment.replicas, policy.min, policy.max, policy.target_cpu
+                    );
+                }
+                _ => println!("Replicas      : {}", deployment.replicas),
+            }
             println!("Restart count : {}", deployment.restart_count);
             println!("Created at    : {}", deployment.created_at);
             println!("Updated at    : {}", deployment.updated_at);

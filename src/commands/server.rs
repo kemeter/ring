@@ -353,6 +353,11 @@ pub(crate) async fn execute(
         });
     }
 
+    // The scheduler reads the same snapshot the API serves, so autoscaling
+    // decisions use the numbers already being collected rather than issuing a
+    // second round of runtime stats calls.
+    let scheduler_stats_cache = stats_cache.clone();
+
     let api_server_handler = task::spawn(ApiServer::start(
         pool.clone(),
         configuration.clone(),
@@ -392,6 +397,7 @@ pub(crate) async fn execute(
         runtimes,
         event_rx,
         intentional_shutdowns,
+        scheduler_stats_cache,
     ));
 
     // The API server owns the shutdown signal (SIGTERM / Ctrl-C): it drains

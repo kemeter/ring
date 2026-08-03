@@ -8,6 +8,7 @@ use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::health_check_logs;
 use crate::models::secret as SecretModel;
 use crate::models::volume::ResolvedMount;
+use crate::scheduler::autoscaler::{Autoscaler, Decision};
 use crate::scheduler::backoff::RetryBackoff;
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
@@ -1197,12 +1198,173 @@ async fn apply_docker_event(
     }
 }
 
+/// How old a stats snapshot may be before the autoscaler refuses to act on it.
+///
+/// Generous relative to the default scheduler interval so a single slow refresh
+/// does not stall scaling, but bounded so a wedged stats worker cannot keep
+/// resizing deployments from measurements nobody is updating.
+const MAX_STATS_AGE_SECS: u64 = 120;
+
+/// Let the autoscaler adjust `desired_replicas` for the deployments that opted
+/// into it.
+///
+/// **Opt-in by construction**: a deployment without an `autoscale` block is
+/// skipped before anything else happens, so Ring never second-guesses a replica
+/// count that something upstream is managing. This is what lets an external
+/// controller (Kemeter, a CI job, a human) own scaling for its own deployments
+/// while Ring autoscales only what was explicitly handed to it.
+///
+/// Decisions are written to `desired_replicas`; `replicas` — what the manifest
+/// declared — is never touched, so `ring apply` and the autoscaler cannot fight
+/// over the same value.
+async fn run_autoscaling(
+    pool: &SqlitePool,
+    deployments_list: &mut [Deployment],
+    stats: &crate::scheduler::stats_cache::StatsCache,
+    autoscaler: &mut Autoscaler,
+) {
+    // Snapshot the per-deployment CPU averages once, keyed the same way the
+    // cache is (namespace + name is unique per deployment).
+    let measurements: HashMap<String, Option<f64>> = {
+        let Ok(snapshot) = stats.read() else {
+            warn!("Stats snapshot lock poisoned; skipping autoscaling this tick");
+            return;
+        };
+
+        // Refuse to act on a stale snapshot. If the refresh worker stalls or a
+        // runtime stops answering, the previous numbers stay in the cache and
+        // would keep driving decisions after every cooldown — quietly resizing
+        // deployments from measurements taken minutes ago. Holding is the safe
+        // failure: capacity stays where it is until fresh data arrives.
+        let age = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().saturating_sub(snapshot.last_refresh_unix))
+            .unwrap_or(u64::MAX);
+
+        if snapshot.last_refresh_unix == 0 || age > MAX_STATS_AGE_SECS {
+            debug!("Stats snapshot is {age}s old; skipping autoscaling this tick");
+            return;
+        }
+
+        snapshot
+            .deployments
+            .iter()
+            .map(|d| (d.id.clone(), d.cpu_usage_percent_per_instance))
+            .collect()
+    };
+
+    // A deployment being replaced by a rolling update must not be resized: it
+    // is on its way out, and it shares its namespace/name with the incoming
+    // child. Its own row carries no `parent_id` (the child points at it), so it
+    // has to be recognised from the other side.
+    let draining: std::collections::HashSet<String> = deployments_list
+        .iter()
+        .filter_map(|d| d.parent_id.clone())
+        .collect();
+
+    // The autoscaler's cooldowns are wall-clock durations, so use the std
+    // clock: this module also has `tokio::time::Instant` in scope for the tick
+    // loop, and the two are not interchangeable.
+    let now = std::time::Instant::now();
+
+    for deployment in deployments_list.iter_mut() {
+        // The opt-in gate.
+        let Some(policy) = deployment.autoscale.clone() else {
+            continue;
+        };
+        let policy = &policy;
+
+        // Only reconcile a deployment that is actually up, and stay out of
+        // rolling updates entirely: the incoming child is still converging
+        // (`parent_id` set), and the outgoing parent is draining (its id shows
+        // up as someone's parent). Resizing either reacts to a transient state.
+        if deployment.status != DeploymentStatus::Running
+            || deployment.parent_id.is_some()
+            || draining.contains(&deployment.id)
+        {
+            continue;
+        }
+
+        // Keyed by id, never by name: a rollout puts two running deployments
+        // under the same namespace/name, so a name lookup could hand this
+        // deployment the other one's CPU.
+        let cpu = measurements.get(&deployment.id).copied().flatten();
+
+        let current = deployment.target_replicas();
+
+        match autoscaler.decide(&deployment.id, policy, current, cpu, now) {
+            Decision::Hold => {}
+            Decision::ScaleTo(target) => {
+                match deployments::set_desired_replicas(pool, &deployment.id, target).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // The row vanished mid-tick (deleted, or replaced by a
+                        // rollout). Leave the in-memory copy untouched so this
+                        // tick does not reconcile against a count that was
+                        // never stored.
+                        debug!(
+                            "Autoscale decision for {} dropped: the deployment no longer exists",
+                            deployment.id
+                        );
+                        continue;
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to persist autoscale decision for {}: {}",
+                            deployment.id, e
+                        );
+                        continue;
+                    }
+                }
+
+                // Apply the decision to the in-memory copy too: the
+                // reconciliation loop below consumes this list, so without
+                // this the new count would only take effect one tick later.
+                deployment.desired_replicas = Some(target);
+
+                info!(
+                    "Autoscaled {}/{}: {} -> {} instances (cpu {:.1}% vs target {:.1}%)",
+                    deployment.namespace,
+                    deployment.name,
+                    current,
+                    target,
+                    cpu.unwrap_or(f64::NAN),
+                    policy.target_cpu
+                );
+
+                let _ = crate::models::deployment_event::log_event(
+                    pool,
+                    deployment.id.clone(),
+                    "info",
+                    format!(
+                        "Autoscaled from {} to {} instances (average CPU {:.1}% against a {:.1}% target)",
+                        current, target, cpu.unwrap_or(f64::NAN), policy.target_cpu
+                    ),
+                    "autoscaler",
+                    Some(if target > current {
+                        "scale_up"
+                    } else {
+                        "scale_down"
+                    }),
+                )
+                .await;
+            }
+        }
+    }
+
+    // Forget deployments that no longer appear, so the cooldown map stays
+    // bounded over the life of the process.
+    let live: Vec<String> = deployments_list.iter().map(|d| d.id.clone()).collect();
+    autoscaler.retain_known(&live);
+}
+
 pub(crate) async fn schedule(
     pool: SqlitePool,
     config: crate::config::config::Config,
     runtimes: std::sync::Arc<HashMap<String, Arc<dyn RuntimeLifecycle>>>,
     mut event_rx: mpsc::Receiver<DockerEvent>,
     intentional_shutdowns: IntentionalShutdowns,
+    stats: crate::scheduler::stats_cache::StatsCache,
 ) {
     let interval_seconds = env::var("RING_SCHEDULER_INTERVAL")
         .ok()
@@ -1234,6 +1396,10 @@ pub(crate) async fn schedule(
     // restart_count once it has run uninterrupted for the anti-flap window, so
     // the crash budget is "N crashes within a window", not "N crashes for life".
     let mut healthy_window = HealthyWindow::new();
+
+    // Per-deployment autoscaling cooldowns. Only ever consulted for deployments
+    // that carry an `autoscale` policy — see `run_autoscaling`.
+    let mut autoscaler = Autoscaler::new();
 
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
@@ -1286,7 +1452,7 @@ pub(crate) async fn schedule(
                 DeploymentStatus::Error.to_string(),
             ],
         );
-        let list_deployments = match deployments::find_all(&pool, filters).await {
+        let mut list_deployments = match deployments::find_all(&pool, filters).await {
             Ok(list) => list,
             Err(e) => {
                 error!("Failed to fetch deployments: {}", e);
@@ -1296,6 +1462,12 @@ pub(crate) async fn schedule(
         };
 
         debug!("Processing {} deployments", list_deployments.len());
+
+        // Decide before reconciling, so a fresh decision takes effect on this
+        // tick rather than waiting for the next one. Deployments without an
+        // `autoscale` block are untouched.
+        run_autoscaling(&pool, &mut list_deployments, &stats, &mut autoscaler).await;
+
         let mut deleted: Vec<String> = Vec::new();
 
         // Trace a cycle only when it has work to do. An idle tick (no
@@ -1687,6 +1859,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: hcs,
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],

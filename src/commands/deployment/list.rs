@@ -164,7 +164,22 @@ pub(crate) async fn execute(
                     image: deployment.image,
                     runtime: deployment.runtime,
                     kind: deployment.kind,
-                    replicas: format!("{}/{}", deployment.instances.len(), deployment.replicas),
+                    // running/target, where target follows the autoscaler when
+                    // the deployment opted in. Showing the declared `replicas`
+                    // there would read as "2/2 instances" on a deployment Ring
+                    // has scaled to 8.
+                    replicas: {
+                        let target = match (&deployment.autoscale, deployment.desired_replicas) {
+                            (Some(_), Some(desired)) => desired,
+                            _ => deployment.replicas,
+                        };
+                        let marker = if deployment.autoscale.is_some() {
+                            "*"
+                        } else {
+                            ""
+                        };
+                        format!("{}/{}{}", deployment.instances.len(), target, marker)
+                    },
                     status: style::status(&deployment.status),
                 })
             }

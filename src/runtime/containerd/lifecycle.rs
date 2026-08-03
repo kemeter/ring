@@ -323,7 +323,7 @@ impl ContainerdLifecycle {
         }
 
         let current = deployment.instances.len();
-        let target = match usize::try_from(deployment.replicas) {
+        let target = match usize::try_from(deployment.target_replicas()) {
             Ok(t) => t,
             Err(_) => {
                 deployment.status = DeploymentStatus::Failed;
@@ -927,6 +927,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],

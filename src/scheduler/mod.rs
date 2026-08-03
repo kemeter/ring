@@ -1,3 +1,4 @@
+pub(crate) mod autoscaler;
 pub(crate) mod backoff;
 pub(crate) mod docker_events;
 pub(crate) mod event_worker;

@@ -1048,10 +1048,18 @@ impl FirecrackerLifecycle {
         self.readopt_networking(&deployment).await;
 
         let current = self.scan_instances(&deployment.id);
-        let desired = deployment.replicas as usize;
+        let desired = deployment.target_replicas() as usize;
 
         if current.len() < desired {
-            for _ in current.len()..desired {
+            // One VM per reconciliation pass, like the other runtimes. Booting
+            // the whole deficit at once turns any large jump in the target — a
+            // raised `autoscale.min`, a re-clamped decision, a bumped replica
+            // count — into a burst of simultaneous VM starts competing for the
+            // host's memory and CPU. Converging one at a time lets the next
+            // tick observe the result (and lets host-memory admission reject
+            // the boot) before committing to more.
+            let step = current.len() + 1;
+            for _ in current.len()..step.min(desired) {
                 match self.start_vm(&deployment, resolved_mounts).await {
                     Ok(_) => {}
                     Err(e) => {
@@ -2280,6 +2288,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],

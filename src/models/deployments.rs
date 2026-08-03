@@ -266,6 +266,51 @@ pub(crate) struct Resource {
     pub(crate) requests: Option<ResourceSpec>,
 }
 
+/// Horizontal autoscaling policy for a deployment.
+///
+/// Only CPU for now. Memory is deliberately left out: long-running runtimes
+/// (JVM, Node) commonly hold on to memory they no longer use, so a memory-based
+/// rule scales up and never back down, and `memory_limit_bytes` is 0 when no
+/// limit is configured, which makes a percentage meaningless. Adding
+/// `target_memory` later is a backward-compatible addition to this struct.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) struct Autoscale {
+    /// Never scale below this. Must be >= 1: scaling to zero is a different
+    /// feature (it needs a wake-up path, which Ring has no way to trigger).
+    pub(crate) min: u32,
+    /// Never scale above this. The ceiling matters on a single node, where
+    /// instances share one machine's CPU.
+    pub(crate) max: u32,
+    /// Average CPU percentage across the deployment's instances that the
+    /// autoscaler aims to hold, e.g. 70.
+    pub(crate) target_cpu: f64,
+}
+
+impl Autoscale {
+    /// Reject policies that cannot be satisfied. Returns the reason so the API
+    /// can report it verbatim.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if self.min < 1 {
+            return Err("autoscale.min must be at least 1".to_string());
+        }
+        if self.max < self.min {
+            return Err(format!(
+                "autoscale.max ({}) must be greater than or equal to autoscale.min ({})",
+                self.max, self.min
+            ));
+        }
+        if !(self.target_cpu.is_finite() && self.target_cpu > 0.0 && self.target_cpu < 100.0) {
+            return Err("autoscale.target_cpu must be between 0 and 100 (exclusive)".to_string());
+        }
+        Ok(())
+    }
+
+    /// Clamp a replica count into the policy's bounds.
+    pub(crate) fn clamp(&self, replicas: u32) -> u32 {
+        replicas.clamp(self.min, self.max)
+    }
+}
+
 pub(crate) fn parse_cpu_string(s: &str) -> Result<i64, String> {
     let s = s.trim();
 
@@ -339,6 +384,13 @@ pub(crate) struct Deployment {
     pub(crate) health_checks: Vec<crate::models::health_check::HealthCheck>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) resources: Option<Resource>,
+    /// Autoscaling policy, `None` when the deployment holds a fixed count.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) autoscale: Option<Autoscale>,
+    /// The autoscaler's current decision. `None` until it has made one, in
+    /// which case [`Deployment::target_replicas`] falls back to `replicas`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) desired_replicas: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) image_digest: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -369,6 +421,24 @@ impl Deployment {
         );
         self.pending_events.push(event);
     }
+
+    /// How many instances this deployment should currently be running.
+    ///
+    /// This is what the runtimes reconcile against, NOT `replicas`. When the
+    /// deployment is autoscaled, the autoscaler's decision wins; otherwise the
+    /// declared count does. `replicas` therefore keeps meaning "what the
+    /// manifest asked for" and stays untouched by the scheduler.
+    ///
+    /// The decision is re-clamped here rather than trusted: a policy edited to
+    /// a narrower range (say max lowered from 10 to 4) must take effect on the
+    /// next tick, not once the autoscaler happens to write a new value.
+    pub(crate) fn target_replicas(&self) -> u32 {
+        match (&self.autoscale, self.desired_replicas) {
+            (Some(policy), Some(desired)) => policy.clamp(desired),
+            (Some(policy), None) => policy.clamp(self.replicas),
+            (None, _) => self.replicas,
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -391,6 +461,8 @@ struct DeploymentRow {
     volumes: String,
     health_checks: Option<String>,
     resources: Option<String>,
+    autoscale: Option<String>,
+    desired_replicas: Option<i32>,
     image_digest: Option<String>,
     parent_id: Option<String>,
     ports: Option<String>,
@@ -463,6 +535,21 @@ impl From<DeploymentRow> for Deployment {
                 .resources
                 .filter(|s| !s.is_empty())
                 .and_then(|s| serde_json::from_str(&s).ok()),
+            autoscale: row
+                .autoscale
+                .filter(|s| !s.is_empty())
+                .and_then(|s| {
+                    serde_json::from_str(&s)
+                        .map_err(|e| {
+                            warn!(
+                                "Failed to deserialize autoscale for deployment {}: {} — treating it as not autoscaled",
+                                id, e
+                            );
+                            e
+                        })
+                        .ok()
+                }),
+            desired_replicas: row.desired_replicas.and_then(|n| u32::try_from(n).ok()),
             image_digest: row.image_digest,
             ports: row
                 .ports
@@ -495,7 +582,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports, network_mode
+    replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -567,6 +654,10 @@ pub(crate) async fn create(
         .resources
         .as_ref()
         .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
+    let autoscale_json = deployment
+        .autoscale
+        .as_ref()
+        .map(|a| serde_json::to_string(a).unwrap_or_else(|_| "null".to_string()));
     let ports_json = serde_json::to_string(&deployment.ports).unwrap_or_else(|_| "[]".to_string());
 
     let network_mode = deployment
@@ -577,8 +668,8 @@ pub(crate) async fn create(
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, image_digest, parent_id, ports, network_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -597,6 +688,8 @@ pub(crate) async fn create(
     .bind(&deployment.volumes)
     .bind(&health_checks_json)
     .bind(&resources_json)
+    .bind(&autoscale_json)
+    .bind(deployment.desired_replicas.map(|n| n as i32))
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
     .bind(&ports_json)
@@ -661,6 +754,32 @@ pub(crate) async fn reset_restart_count(pool: &SqlitePool, id: &str) -> Result<(
     .await?;
 
     Ok(())
+}
+
+/// Persist the autoscaler's decision.
+///
+/// Deliberately does not touch `replicas`: that column holds what the manifest
+/// declared, and overwriting it would make `ring apply` and the autoscaler
+/// fight over the same value.
+/// Returns `false` when no row matched — the deployment was deleted or replaced
+/// between the moment the scheduler listed it and the moment the decision was
+/// written. The caller must then leave its in-memory copy alone rather than
+/// reconcile a count that was never persisted.
+pub(crate) async fn set_desired_replicas(
+    pool: &SqlitePool,
+    id: &str,
+    desired: u32,
+) -> Result<bool, sqlx::Error> {
+    let affected = sqlx::query(
+        "UPDATE deployment SET desired_replicas = ?, updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(desired as i32)
+    .bind(id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    Ok(affected > 0)
 }
 
 pub(crate) async fn find_referencing_secret(
@@ -776,6 +895,137 @@ mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 
+    fn autoscale_policy() -> Autoscale {
+        Autoscale {
+            min: 2,
+            max: 8,
+            target_cpu: 70.0,
+        }
+    }
+
+    #[test]
+    fn a_deployment_without_a_policy_is_never_autoscaled() {
+        // The opt-in guarantee, at the one place every runtime reads. A
+        // deployment with no `autoscale` block must reconcile against exactly
+        // what its manifest declared, even if a stale `desired_replicas` sits
+        // in its row — otherwise Ring would silently override a count that
+        // something upstream (Kemeter, a CI job, a human) is managing.
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = None;
+        d.desired_replicas = Some(7);
+
+        assert_eq!(d.target_replicas(), 3);
+    }
+
+    #[test]
+    fn an_autoscaled_deployment_follows_the_decision() {
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(autoscale_policy());
+        d.desired_replicas = Some(5);
+
+        assert_eq!(d.target_replicas(), 5);
+    }
+
+    #[test]
+    fn an_autoscaled_deployment_starts_from_its_declared_count() {
+        // Before the first decision there is nothing to follow, so the manifest
+        // value stands (clamped into the policy's range).
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(autoscale_policy());
+        d.desired_replicas = None;
+
+        assert_eq!(d.target_replicas(), 3);
+    }
+
+    #[test]
+    fn a_narrowed_policy_reclamps_an_older_decision() {
+        // max lowered to 4 while a decision of 9 is still on the row: the new
+        // bound wins immediately, without waiting for the autoscaler to write.
+        let mut d = worker("d1", 0);
+        d.replicas = 3;
+        d.autoscale = Some(Autoscale {
+            min: 1,
+            max: 4,
+            target_cpu: 70.0,
+        });
+        d.desired_replicas = Some(9);
+
+        assert_eq!(d.target_replicas(), 4);
+    }
+
+    #[test]
+    fn a_rollout_child_inherits_the_parents_capacity() {
+        // A redeploy under load must not drop back to the manifest count: the
+        // child starts from where the autoscaler had got the parent to.
+        let mut parent = worker("parent", 0);
+        parent.replicas = 2;
+        parent.autoscale = Some(autoscale_policy());
+        parent.desired_replicas = Some(8);
+
+        let mut child = worker("child", 0);
+        child.replicas = 2;
+        child.autoscale = Some(autoscale_policy());
+        child.parent_id = Some(parent.id.clone());
+        child.desired_replicas = parent.desired_replicas;
+
+        assert_eq!(child.target_replicas(), 8);
+    }
+
+    #[test]
+    fn an_inherited_count_is_reclamped_by_a_changed_policy() {
+        // The same apply that redeploys may also narrow the policy. The child
+        // must follow the NEW bounds, not the capacity it inherited.
+        let mut child = worker("child", 0);
+        child.replicas = 2;
+        child.autoscale = Some(Autoscale {
+            min: 1,
+            max: 4,
+            target_cpu: 70.0,
+        });
+        child.desired_replicas = Some(8); // inherited from the parent
+
+        assert_eq!(child.target_replicas(), 4);
+    }
+
+    #[test]
+    fn autoscale_policies_reject_impossible_ranges() {
+        assert!(autoscale_policy().validate().is_ok());
+        // Scaling to zero needs a wake-up path Ring has no way to trigger.
+        assert!(
+            Autoscale {
+                min: 0,
+                max: 5,
+                target_cpu: 70.0
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Autoscale {
+                min: 5,
+                max: 2,
+                target_cpu: 70.0
+            }
+            .validate()
+            .is_err()
+        );
+        for bad in [0.0, 100.0, -1.0, f64::NAN] {
+            assert!(
+                Autoscale {
+                    min: 1,
+                    max: 5,
+                    target_cpu: bad
+                }
+                .validate()
+                .is_err(),
+                "target_cpu {bad} must be rejected"
+            );
+        }
+    }
+
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -807,6 +1057,8 @@ mod tests {
             volumes: "[]".to_string(),
             health_checks: vec![],
             resources: None,
+            autoscale: None,
+            desired_replicas: None,
             image_digest: None,
             ports: vec![],
             pending_events: vec![],

@@ -205,6 +205,8 @@ ring deployment list [OPTIONS]
 
 The table has ten columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
 
+On an [autoscaled](/documentation/reference/manifest#autoscale) deployment the desired count is the one the autoscaler is currently targeting, not the number declared in the manifest, and it is suffixed with `*` (`3/8*`). `ring deployment inspect` spells both out.
+
 Timestamps are rendered to the second (`2026-05-03 22:22:21`); sub-second
 digits and the `UTC` suffix are dropped from the cells since every Ring
 timestamp is UTC, as the column header says. The `json` output keeps the
