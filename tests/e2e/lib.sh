@@ -5,6 +5,18 @@
 # dedicated Ring server in an isolated RING_CONFIG_DIR. A trap on EXIT calls
 # `cleanup_ring` to kill the process, remove leftover Docker containers and
 # delete the temp directory.
+#
+# WHICH COMMANDS SUPPORT `--output json`
+#
+#   yes: deployment list, deployment inspect, deployment health-checks
+#   no:  deployment metrics, deployment events, deployment logs  (rendered text)
+#
+# This matters when writing assertions. Passing `--output json` to a command
+# that does not support it is not always a hard error, and piping rendered text
+# through `jq` yields nothing silently — which reads exactly like "the feature
+# is broken". Two assertions in this suite were mis-diagnosed that way before
+# the difference was noticed. For the text commands, grep the rendered output
+# or use the command's own filters (`deployment events --level error`).
 
 set -euo pipefail
 
