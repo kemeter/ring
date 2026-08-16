@@ -106,3 +106,5 @@ opentelemetry-appender-tracing = "0.32"
 
 [dev-dependencies]
 axum-test = "17.3.0"
+# Only to build the `LogOutput` frames bollard hands back, in the exec tests.
+bytes = "1"

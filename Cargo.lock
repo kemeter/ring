@@ -2584,6 +2584,7 @@ dependencies = [
  "axum-test",
  "base64 0.22.1",
  "bollard",
+ "bytes",
  "caps",
  "chrono",
  "clap",

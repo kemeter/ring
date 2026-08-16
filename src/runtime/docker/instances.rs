@@ -54,7 +54,7 @@ pub(crate) async fn list_instances(docker: &Docker, id: String, status: &str) ->
             for container in containers {
                 if matches_status(container.state.as_ref(), status)
                     && let Some(labels) = container.labels
-                    && let Some(deployment_id) = labels.get("ring_deployment")
+                    && let Some(deployment_id) = labels.get(super::RING_DEPLOYMENT_LABEL)
                     && deployment_id == &id
                     && let Some(container_id) = container.id
                 {
@@ -87,7 +87,7 @@ pub(crate) async fn list_running_instances_grouped(
             for container in containers {
                 if matches_status(container.state.as_ref(), "running")
                     && let Some(labels) = &container.labels
-                    && let Some(deployment_id) = labels.get("ring_deployment")
+                    && let Some(deployment_id) = labels.get(super::RING_DEPLOYMENT_LABEL)
                     && wanted.contains(deployment_id.as_str())
                     && let Some(container_id) = &container.id
                 {
@@ -117,7 +117,7 @@ pub(crate) async fn list_instances_with_names(
             for container in containers {
                 if matches_status(container.state.as_ref(), status)
                     && let Some(labels) = &container.labels
-                    && let Some(deployment_id) = labels.get("ring_deployment")
+                    && let Some(deployment_id) = labels.get(super::RING_DEPLOYMENT_LABEL)
                     && deployment_id == &id
                     && let Some(container_id) = &container.id
                 {

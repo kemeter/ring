@@ -1,5 +1,6 @@
 mod container;
 pub(crate) mod docker_lifecycle;
+mod exec;
 mod health_check;
 mod instances;
 mod lifecycle;
@@ -8,6 +9,12 @@ mod stats;
 
 use crate::hypervisor::error::RuntimeError;
 use bollard::Docker;
+
+/// Label key under which every Ring-managed container records its owning
+/// deployment id. Written by `container::create`, and the only thing that
+/// distinguishes a container Ring manages from any other container on the
+/// same daemon. Mirrors the containerd runtime's constant of the same name.
+pub(crate) const RING_DEPLOYMENT_LABEL: &str = "ring_deployment";
 
 /// How an image was addressed in the manifest. A `tag` is mutable on the
 /// registry side (`my/app:latest` can be re-pushed); a `digest` pins an

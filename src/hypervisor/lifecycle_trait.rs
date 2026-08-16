@@ -4,6 +4,7 @@ use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::ResolvedMount;
 use async_trait::async_trait;
 use axum::response::sse::Event;
+use futures::future::BoxFuture;
 use futures::stream;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,90 @@ pub(crate) struct Log {
     pub(crate) level: String,
     pub(crate) timestamp: Option<String>,
 }
+
+/// What to run inside an instance, and how to wire the terminal.
+#[derive(Clone, Debug)]
+pub(crate) struct ExecRequest {
+    /// Command and arguments. Never empty — the caller resolves what "a
+    /// shell" means before getting here, because that choice is policy
+    /// (which shell to fall back to) and not something a runtime should
+    /// decide on the caller's behalf.
+    pub(crate) command: Vec<String>,
+    /// Allocate a PTY. `false` is the one-off mode: no terminal, no resize,
+    /// stdout and stderr stay separate.
+    pub(crate) tty: bool,
+    /// Initial terminal size. Only meaningful when `tty` is set; a PTY that
+    /// starts at the wrong size redraws badly until the first SIGWINCH.
+    pub(crate) size: Option<TerminalSize>,
+}
+
+/// Terminal dimensions in character cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct TerminalSize {
+    pub(crate) cols: u16,
+    pub(crate) rows: u16,
+}
+
+/// One chunk of output from a running exec session.
+///
+/// `Stdout` and `Stderr` stay distinct because a one-off caller redirects
+/// them separately. Under a PTY the runtime folds everything into `Stdout`
+/// — that is what a terminal does, and pretending otherwise would invent a
+/// split the pty never had.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ExecOutput {
+    Stdout(Vec<u8>),
+    Stderr(Vec<u8>),
+}
+
+/// A live exec session: an output stream, a stdin sink, and the handles
+/// needed to resize the PTY and collect the exit code.
+///
+/// The session owns nothing about transport. Whoever holds it decides
+/// whether the bytes end up on a WebSocket, in a test buffer, or piped into
+/// another process.
+pub(crate) struct ExecSession {
+    /// Output chunks, or the error that ended the session. A transport
+    /// failure mid-stream is *not* an end-of-output: a caller that cannot
+    /// tell the two apart will report a truncated session as a clean one.
+    pub(crate) output: Pin<Box<dyn futures::Stream<Item = Result<ExecOutput, ExecError>> + Send>>,
+    pub(crate) input: Pin<Box<dyn tokio::io::AsyncWrite + Send>>,
+    /// Resize the PTY. A no-op on runtimes or sessions without a TTY.
+    pub(crate) resize: Box<dyn Fn(TerminalSize) -> BoxFuture<'static, ()> + Send + Sync>,
+    /// Await the process exit code, once the output stream is drained.
+    ///
+    /// Draining first is not a stylistic preference: the Docker daemon only
+    /// reports an exit code after the exec stream is consumed, and inspecting
+    /// early comes back with `running: true` and no code at all.
+    pub(crate) wait: BoxFuture<'static, Option<i64>>,
+}
+
+/// Why an exec session could not be opened.
+///
+/// Kept separate from a bare string so callers can map failures onto
+/// transport-level responses (a 404 for a missing instance, a 501 for a
+/// runtime that has no exec at all) without pattern-matching on prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExecError {
+    /// This runtime has no exec support at all.
+    UnsupportedRuntime(String),
+    /// The instance does not exist, or is not running.
+    InstanceUnavailable(String),
+    /// The runtime refused the request (bad command, daemon error).
+    Failed(String),
+}
+
+impl std::fmt::Display for ExecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedRuntime(m) => write!(f, "exec is not supported on this runtime: {m}"),
+            Self::InstanceUnavailable(m) => write!(f, "instance unavailable: {m}"),
+            Self::Failed(m) => write!(f, "exec failed: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for ExecError {}
 
 /// Best-effort log level classification. Recognises three families of
 /// conventions that show up in a Ring stream:
@@ -243,6 +328,27 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
             HealthCheckStatus::Failed,
             Some("command health checks are not supported on this runtime".to_string()),
         )
+    }
+
+    /// Open an interactive exec session inside a running instance.
+    ///
+    /// Container runtimes implement this on top of their native exec API.
+    /// VM runtimes have no direct equivalent — it needs an in-guest agent
+    /// that can allocate a PTY and stream it — so the default reports the
+    /// limitation instead of hanging or half-working.
+    ///
+    /// The runtime runs `request.command` as given. It does **not** probe
+    /// for a usable shell: picking `/bin/bash` over `/bin/sh` is a product
+    /// decision belonging to the caller, and a runtime that guessed would
+    /// make that policy impossible to override.
+    async fn exec(
+        &self,
+        _instance_id: &str,
+        _request: ExecRequest,
+    ) -> Result<ExecSession, ExecError> {
+        Err(ExecError::UnsupportedRuntime(
+            "no exec support for this runtime".to_string(),
+        ))
     }
 
     /// Execute one health-check definition for one instance.
