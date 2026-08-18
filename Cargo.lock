@@ -2641,6 +2641,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite 0.29.0",
  "tokio-vsock",
  "toml",
  "tonic",

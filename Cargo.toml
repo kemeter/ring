@@ -71,6 +71,9 @@ mime_guess = "2"
 anyhow = "1"
 caps = "0.5.6"
 nix = { version = "0.31.3", features = ["signal"] }
+# WebSocket client for `ring deployment exec`. Already in the tree via axum's
+# own `ws` support, so this is a direct handle on a crate we compile anyway.
+tokio-tungstenite = "0.29"
 # containerd runtime: native gRPC over containerd's Unix socket. We drive the
 # raw containerd API (images, content, snapshots, containers, tasks) rather
 # than going through Docker — there is no daemon in between. `containerd-client`

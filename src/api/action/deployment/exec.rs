@@ -376,6 +376,9 @@ async fn relay(
     // finished stream for more while still draining what the client sends.
     let mut output_done = false;
     let mut stream_error: Option<String> = None;
+    // Set once the client stops sending. The session continues: only its
+    // input half is over.
+    let mut client_gone = false;
 
     loop {
         let idle = tokio::time::sleep(idle_timeout);
@@ -421,7 +424,7 @@ async fn relay(
                 }
             }
 
-            incoming = receiver.next() => {
+            incoming = receiver.next(), if !client_gone => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ClientFrame>(&text) {
@@ -462,10 +465,20 @@ async fn relay(
                             }
                         }
                     }
-                    // A client that closed, errored, or sent binary where the
-                    // protocol is JSON: stop relaying. The process itself may
-                    // survive — see this module's note on Docker exec.
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    // The client is done *sending*. That is not the end of
+                    // the session: a non-interactive caller closes as soon as
+                    // its own stdin runs out (`ring exec … -- echo hi` inside
+                    // a `$(…)` closes immediately), and the command's output
+                    // is still on its way. Breaking here raced that output
+                    // away and returned an empty result.
+                    //
+                    // So stop reading input, close the process's stdin so a
+                    // command waiting on EOF can finish, and keep draining
+                    // output until it ends on its own.
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                        let _ = input.shutdown().await;
+                        client_gone = true;
+                    }
                     Some(Ok(_)) => {}
                 }
             }
