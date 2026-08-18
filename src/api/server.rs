@@ -19,6 +19,7 @@ use crate::config::config::Config;
 
 use crate::api::action::deployment::create as deployment_create;
 use crate::api::action::deployment::delete as deployment_delete;
+use crate::api::action::deployment::exec as deployment_exec;
 use crate::api::action::deployment::get as deployment_get;
 use crate::api::action::deployment::get_deployment_events;
 use crate::api::action::deployment::get_deployment_metrics;
@@ -88,6 +89,8 @@ pub(crate) type TicketStoreState = crate::api::stream_tickets::TicketStore;
 
 pub(crate) type StatsCacheState = crate::scheduler::stats_cache::StatsCache;
 
+pub(crate) type ExecLimiterState = crate::api::exec_sessions::ExecSessionLimiter;
+
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
@@ -95,6 +98,7 @@ pub(crate) struct AppState {
     pub(crate) runtimes: RuntimeMap,
     pub(crate) ticket_store: TicketStoreState,
     pub(crate) stats_cache: StatsCacheState,
+    pub(crate) exec_limiter: ExecLimiterState,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -111,6 +115,9 @@ pub(crate) fn router(state: AppState) -> Router {
     // head, so it doesn't interfere with the streaming body.
     let streaming_routes = Router::new()
         .route("/deployments/{id}/logs", get(deployment_logs))
+        // Exec is long-lived like logs, so it belongs here rather than under
+        // the 10s timeout that wraps the ordinary API routes.
+        .route("/deployments/{id}/exec", get(deployment_exec))
         .route_layer(from_fn_with_state(state.clone(), auth_middleware));
 
     // All other routes: protected + 10s timeout.
@@ -220,12 +227,15 @@ pub(crate) async fn start(
 
     let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
 
+    let exec_limiter = ExecLimiterState::new(&configuration.server.exec);
+
     let state = AppState {
         connection: pool,
         configuration,
         runtimes,
         ticket_store: TicketStoreState::new(),
         stats_cache,
+        exec_limiter,
     };
 
     let app = router(state);
@@ -290,7 +300,7 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::api::server::{AppState, RuntimeMap, TicketStoreState, router};
+    use crate::api::server::{AppState, ExecLimiterState, RuntimeMap, TicketStoreState, router};
     use crate::config::config::Config;
     use axum::Router;
     use axum::http::StatusCode;
@@ -327,12 +337,21 @@ pub(crate) mod tests {
 
         let runtimes: RuntimeMap = std::sync::Arc::new(std::collections::HashMap::new());
 
+        // Exec on in tests: the interesting assertions are about what the
+        // route refuses (auth, namespace, missing instance), and a disabled
+        // limiter would answer 501 before reaching any of them.
+        let exec_config = crate::config::server::ExecConfig {
+            enabled: true,
+            ..Default::default()
+        };
+
         let state = AppState {
             connection: pool.clone(),
             configuration,
             runtimes,
             ticket_store: TicketStoreState::new(),
             stats_cache: crate::scheduler::stats_cache::new_cache(),
+            exec_limiter: ExecLimiterState::new(&exec_config),
         };
 
         (pool, router(state))
