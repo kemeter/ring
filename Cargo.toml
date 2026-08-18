@@ -32,7 +32,7 @@ toml = "0.8.1"
 local-ip-address = "0.6.1"
 cli-table = "0.5.0"
 owo-colors = { version = "4", features = ["supports-colors"] }
-axum = { version = "0.8.4" }
+axum = { version = "0.8.4", features = ["ws"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
 tower-http = { version = "0.6", features = ["cors"] }
 axum-macros = "0.5.0"
@@ -105,6 +105,6 @@ tracing-opentelemetry = "0.33"
 opentelemetry-appender-tracing = "0.32"
 
 [dev-dependencies]
-axum-test = "17.3.0"
+axum-test = { version = "17.3.0", features = ["ws"] }
 # Only to build the `LogOutput` frames bollard hands back, in the exec tests.
 bytes = "1"

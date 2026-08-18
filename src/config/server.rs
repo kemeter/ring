@@ -22,6 +22,64 @@ pub(crate) struct ServerConfig {
     pub(crate) dashboard: DashboardConfig,
     #[serde(default)]
     pub(crate) telemetry: TelemetryConfig,
+    #[serde(default)]
+    pub(crate) exec: ExecConfig,
+}
+
+/// Bounds on interactive `exec` sessions.
+///
+/// Every field here exists because Docker gives us no way to kill an exec
+/// once it is running: there is no delete endpoint, and dropping the
+/// hijacked connection leaves the process alive in the container. The only
+/// leverage we have is refusing to start a session, and stopping to relay it.
+/// So the limits are enforced on our side of the wire, and a session that
+/// outlives them is disconnected rather than killed.
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct ExecConfig {
+    /// Whether `exec` is reachable at all. Off by default: handing out a
+    /// shell inside a workload is a capability an operator opts into, not
+    /// something that appears because Ring was upgraded.
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    /// Hard ceiling on a single session, in seconds. Reached, the session is
+    /// disconnected whatever it is doing.
+    #[serde(default = "default_exec_max_duration")]
+    pub(crate) max_duration_seconds: u64,
+    /// Disconnect after this many seconds with no traffic in either
+    /// direction. Catches the common leak: a client that vanished without
+    /// closing, leaving a shell waiting on a prompt nobody will ever type at.
+    #[serde(default = "default_exec_idle_timeout")]
+    pub(crate) idle_timeout_seconds: u64,
+    /// Maximum concurrent sessions across the daemon. A shell is far more
+    /// expensive than a request, and each one pins a task plus a connection
+    /// to the runtime.
+    #[serde(default = "default_exec_max_sessions")]
+    pub(crate) max_concurrent_sessions: usize,
+}
+
+fn default_exec_max_duration() -> u64 {
+    // Long enough for real debugging, short enough that a forgotten tab does
+    // not hold a shell open overnight.
+    4 * 3600
+}
+
+fn default_exec_idle_timeout() -> u64 {
+    15 * 60
+}
+
+fn default_exec_max_sessions() -> usize {
+    16
+}
+
+impl Default for ExecConfig {
+    fn default() -> Self {
+        ExecConfig {
+            enabled: false,
+            max_duration_seconds: default_exec_max_duration(),
+            idle_timeout_seconds: default_exec_idle_timeout(),
+            max_concurrent_sessions: default_exec_max_sessions(),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
