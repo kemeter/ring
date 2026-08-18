@@ -15,6 +15,7 @@ A context describes one client→server connection; it has no business deciding 
 [server]                                  # daemon config (shared)
 [server.scheduler]                        # optional
 [server.dashboard]                        # optional
+[server.exec]                             # opt-in: enabled = true
 [server.telemetry.traces]                 # opt-in: enabled = true
 [server.telemetry.metrics]                # opt-in: enabled = true
 [server.telemetry.logs]                   # opt-in: enabled = true
@@ -77,6 +78,41 @@ The daemon's own configuration, shared by every context in the file. All subsect
 |---|---|---|---|---|
 | `enabled` | bool | no | `false` | Spawn the embedded dashboard. Also flippable via `--dashboard` / `RING_DASHBOARD` |
 | `listen_address` | string | no | `"127.0.0.1:3031"` | `host:port` the dashboard binds to. Override with `RING_DASHBOARD_LISTEN` |
+
+### `[server.exec]`
+
+Interactive `ring deployment exec` sessions. Off by default: handing out a
+shell inside a running workload is a capability you switch on deliberately,
+not one that appears on upgrade. While disabled the endpoint answers `501`.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `enabled` | bool | no | `false` | Allow exec sessions at all |
+| `max_duration_seconds` | int | no | `14400` (4 h) | Hard ceiling on one session; it is disconnected when reached |
+| `idle_timeout_seconds` | int | no | `900` (15 min) | Disconnect after this long with no traffic either way |
+| `max_concurrent_sessions` | int | no | `16` | Daemon-wide limit; further requests get `503`. `0` disables exec |
+
+```toml
+[server.exec]
+enabled = true
+idle_timeout_seconds = 300
+max_concurrent_sessions = 4
+```
+
+The two timeouts exist because a container runtime gives no way to kill an
+exec once it has started: there is no delete call, and dropping the connection
+leaves the process running inside the container. Ring cannot close that gap, so
+it bounds its own participation instead: past these limits it stops relaying
+and frees the slot. A command that ignores its closed stdin keeps running until
+the container stops.
+
+The idle timeout is the one that matters in practice: a client that vanished
+without closing (a laptop lid, a dropped VPN) stops producing traffic long
+before anything else notices, and that is what would otherwise hold a slot
+open indefinitely.
+
+Only a session's own instance is reachable. An exec request naming a container
+Ring does not manage is refused the same way a non-existent one is.
 
 ### `[server.telemetry.traces]`
 

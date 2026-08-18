@@ -62,7 +62,7 @@ If `cors_origins` is configured in `config.toml`, the API serves the listed orig
 
 ## Timeouts
 
-Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoint `GET /deployments/{id}/logs` (used with `?follow=true`) is mounted in a separate router with **no** timeout, so SSE connections can stay open indefinitely.
+Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoints `GET /deployments/{id}/logs` (used with `?follow=true`) and `GET /deployments/{id}/exec` are mounted in a separate router with **no** timeout, so SSE and WebSocket connections can stay open indefinitely.
 
 ## Validation errors
 
@@ -387,6 +387,67 @@ The `instance` field is the Docker container name (`<namespace>_<name>_<8-hex>`)
 When `follow=true`, the response is an SSE stream (`Content-Type: text/event-stream`) where each `data:` line carries the same JSON shape as a single log entry.
 
 This route is mounted without the 10-second API timeout so streams can stay open.
+
+### `GET /deployments/{id}/exec`
+
+Open an interactive exec session over a **WebSocket**. Requires `[server.exec]
+enabled = true`; a server with exec off answers `501`.
+
+**Query parameters:**
+
+- `command`: the command to run, **repeated once per argument**
+  (`?command=/bin/sh&command=-c&command=echo%20hi`). Repetition is what keeps
+  argv a list: joining on spaces would make an argument containing a space
+  unrepresentable
+- `tty`: allocate a PTY (default: `true`)
+- `cols` / `rows`: initial terminal size, both or neither
+- `container`: instance to enter (default: the first running one)
+
+**Frames.** Both directions carry JSON. Payload bytes are base64-encoded,
+because terminal output is not text: a UTF-8 sequence can be split across
+reads and control bytes are not characters.
+
+Client to server:
+
+```json
+{"type": "stdin",  "data": "<base64>"}
+{"type": "resize", "cols": 120, "rows": 40}
+```
+
+Server to client:
+
+```json
+{"type": "stdout", "data": "<base64>"}
+{"type": "stderr", "data": "<base64>"}
+{"type": "exit",   "code": 0}
+{"type": "error",  "message": "session idle timeout"}
+```
+
+With `tty=true` the runtime folds stderr into `stdout`, which is what a
+terminal does. Ask for `tty=false` when you need the two apart.
+
+**Authentication.** A WebSocket handshake is a normal HTTP request, so a
+Bearer token works. Browsers cannot set headers on `WebSocket`, so they mint a
+stream ticket (`POST /auth/stream-ticket` with scope
+`deployment:exec:<id>`) and pass it as `?ticket=`. An exec ticket is bound to
+that scope alone: a ticket minted for logs cannot open a shell, and vice versa.
+
+**Status codes:**
+
+| Code | Meaning |
+|---|---|
+| `101` | Session open |
+| `400` | No command, or nonsensical `cols`/`rows` |
+| `401` / `403` | Missing credentials, or a token outside the deployment's namespace |
+| `404` | Unknown deployment, or no such running instance |
+| `501` | Exec disabled on this server, or a runtime with no exec support |
+| `503` | `max_concurrent_sessions` reached |
+
+Like the logs route, this one is mounted without the 10-second API timeout.
+
+Only instances Ring manages are reachable: the runtime re-checks the
+container's `ring_deployment` label before starting an exec, so an id naming
+someone else's container is refused exactly like a non-existent one.
 
 ### `GET /deployments/{id}/events`
 
