@@ -300,10 +300,43 @@ mod docker_daemon_tests {
     use super::*;
     use crate::hypervisor::lifecycle_trait::ExecRequest;
 
+    /// The image these tests run in. Any image with a shell would do; alpine
+    /// is the smallest one to pull on a cold CI runner.
+    const TEST_IMAGE: &str = "alpine:latest";
+
     async fn daemon() -> Option<Docker> {
         let docker = Docker::connect_with_local_defaults().ok()?;
         docker.ping().await.ok()?;
         Some(docker)
+    }
+
+    /// Pull [`TEST_IMAGE`] unless it is already local.
+    ///
+    /// Not an optimisation: a CI runner has a Docker daemon but an empty image
+    /// store, so assuming the image is present turns "no image" into a test
+    /// failure that reads like a broken ownership check. Returns whether the
+    /// image is usable, so a runner without network skips rather than fails on
+    /// something these tests are not about.
+    async fn ensure_image(docker: &Docker) -> bool {
+        use bollard::query_parameters::CreateImageOptionsBuilder;
+
+        if docker.inspect_image(TEST_IMAGE).await.is_ok() {
+            return true;
+        }
+
+        let options = CreateImageOptionsBuilder::new()
+            .from_image(TEST_IMAGE)
+            .build();
+
+        // The pull only completes once its progress stream is drained.
+        let mut pull = docker.create_image(Some(options), None, None);
+        while let Some(item) = pull.next().await {
+            if item.is_err() {
+                return false;
+            }
+        }
+
+        docker.inspect_image(TEST_IMAGE).await.is_ok()
     }
 
     /// Start a plain container, optionally labelled as Ring-managed, and
@@ -332,7 +365,7 @@ mod docker_daemon_tests {
         }
 
         let config = bollard::models::ContainerCreateBody {
-            image: Some("alpine:latest".to_string()),
+            image: Some(TEST_IMAGE.to_string()),
             cmd: Some(vec!["sleep".to_string(), "60".to_string()]),
             labels: Some(labels),
             ..Default::default()
@@ -344,7 +377,7 @@ mod docker_daemon_tests {
                 config,
             )
             .await
-            .expect("create container (is the alpine:latest image pulled?)");
+            .expect("create container");
 
         docker
             .start_container(
@@ -377,6 +410,10 @@ mod docker_daemon_tests {
             eprintln!("skipping: no Docker daemon");
             return;
         };
+        if !ensure_image(&docker).await {
+            eprintln!("skipping: could not obtain {TEST_IMAGE}");
+            return;
+        }
 
         let id = start_container(&docker, "ring-exec-unmanaged", false).await;
 
@@ -408,6 +445,10 @@ mod docker_daemon_tests {
             eprintln!("skipping: no Docker daemon");
             return;
         };
+        if !ensure_image(&docker).await {
+            eprintln!("skipping: could not obtain {TEST_IMAGE}");
+            return;
+        }
 
         let id = start_container(&docker, "ring-exec-managed", true).await;
 
