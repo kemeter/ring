@@ -32,6 +32,7 @@ use crate::exit_code::ExitCode;
 enum ClientFrame {
     Stdin { data: String },
     Resize { cols: u16, rows: u16 },
+    StdinClose,
 }
 
 /// Server→client frame. Mirrors the server's `ServerFrame`.
@@ -276,7 +277,23 @@ async fn relay(
                     Ok(ServerFrame::Exit { code }) => {
                         // Mirror the shell convention: the remote command's
                         // status becomes ours, so `ring exec … && next` works.
-                        exit_code = code.unwrap_or(0) as i32;
+                        //
+                        // `None` means the runtime could not determine the
+                        // outcome, which is not the same as success. Reporting
+                        // 0 there would let `ring exec … && deploy` proceed on
+                        // a command nobody can vouch for.
+                        exit_code = match code {
+                            Some(code) => code as i32,
+                            None => {
+                                let _ = stderr
+                                    .write_all(
+                                        b"\r\nring: command finished with an unknown exit code\r\n",
+                                    )
+                                    .await;
+                                let _ = stderr.flush().await;
+                                ExitCode::General as i32
+                            }
+                        };
                         break;
                     }
                     Ok(ServerFrame::Error { message }) => {
@@ -291,15 +308,19 @@ async fn relay(
 
             chunk = stdin_rx.recv(), if !stdin_done => {
                 let Some(bytes) = chunk else {
-                    // Local stdin is exhausted. Stop polling this branch, but
-                    // do NOT close the socket: a WebSocket close is a
-                    // *session* teardown, not an "stdin is done" signal, and
-                    // sending one here raced the command's own output away.
-                    // `ring exec … -- echo hi` inside `$(…)` reads EOF from
-                    // /dev/null instantly, so the close went out before the
-                    // container had written a byte and the result came back
-                    // empty. The session ends when the server reports `exit`.
+                    // Local stdin is exhausted. Tell the server so it can
+                    // close the process's stdin: without this, `cat` or a
+                    // shell given Ctrl-D waits forever for an EOF that never
+                    // arrives.
+                    //
+                    // `stdin_close` and not a WebSocket close: the latter
+                    // tears the session down, and doing that here raced the
+                    // command's own output away (`ring exec … -- echo hi`
+                    // inside `$(…)` sees EOF on /dev/null instantly, so the
+                    // close went out before the container had written a
+                    // byte). The session ends when the server reports `exit`.
                     stdin_done = true;
+                    let _ = send(&mut sink, &ClientFrame::StdinClose).await;
                     continue;
                 };
                 let frame = ClientFrame::Stdin { data: encode(&bytes) };

@@ -62,6 +62,21 @@ if [ "$EMPTY_STDIN_OUT" != "closed stdin" ]; then
 fi
 log "output survives an immediately-closed stdin"
 
+# === a command reading until EOF terminates ===
+# The other half of the stdin contract: the client must tell the server when
+# its input is over, or `cat` (and a shell given Ctrl-D) waits forever for an
+# EOF that never arrives. `timeout` is the assertion here: without the
+# `stdin_close` frame this call hangs until the timeout kills it.
+EOF_OUT=$(printf 'one\ntwo\n' | timeout 20 "$RING_BIN" deployment exec "$DEPLOYMENT_ID" --no-tty -- /bin/cat)
+EOF_RC=$?
+if [ "$EOF_RC" != "0" ]; then
+  fail "a command reading until EOF did not terminate (exit $EOF_RC)"
+fi
+if [ "$EOF_OUT" != "$(printf 'one\ntwo')" ]; then
+  fail "expected the piped input back, got '$EOF_OUT'"
+fi
+log "a command reading until EOF terminates"
+
 # === the command actually runs in the container ===
 # `/etc/hostname` inside a container is its own id, so this proves the command
 # ran there rather than on the host.

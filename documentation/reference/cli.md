@@ -306,8 +306,13 @@ Use `--no-tty` whenever you capture the output. With a TTY the container folds
 stdout and stderr into one stream (that is what a terminal is), so a pipeline
 that expects them apart will not get them apart.
 
+An exit code the runtime could not determine is reported as `1`, not `0`: a
+command nobody can vouch for must not let `&&` proceed.
+
 > **Exec is opt-in.** The server answers `501` until `[server.exec] enabled =
-> true` is set. See [config.toml](config-toml.md#serverexec).
+> true` is set. Because a shell can read every mounted secret and every file
+> the process can reach, the endpoint requires an `admin` token rather than
+> `deployments:write`. See [config.toml](config-toml.md#serverexec).
 
 ### `ring deployment events`
 

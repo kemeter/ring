@@ -18,6 +18,14 @@ pub(crate) struct StreamTicketOutput {
 
 /// Mints a single-use ticket bound to `scope` for the calling user.
 /// The ticket is valid for 30 seconds and is consumed on first use.
+///
+/// The requested scope is **not** re-authorised here, and a ticket bypasses
+/// the scope gate when it is presented (see `auth::auth_middleware`). What
+/// keeps that safe is that this route itself requires `admin`
+/// (`auth::scope_for_route`), so the only callers who can mint an
+/// `deployment:exec:<id>` ticket already hold full access. Loosening this
+/// route would hand a shell to anyone who could reach it: the scope requested
+/// here would have to be authorised per-scope first.
 pub(crate) async fn stream_ticket(
     user: User,
     State(store): State<TicketStoreState>,

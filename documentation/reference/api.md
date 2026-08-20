@@ -410,9 +410,16 @@ reads and control bytes are not characters.
 Client to server:
 
 ```json
-{"type": "stdin",  "data": "<base64>"}
-{"type": "resize", "cols": 120, "rows": 40}
+{"type": "stdin",        "data": "<base64>"}
+{"type": "stdin_close"}
+{"type": "resize",       "cols": 120, "rows": 40}
 ```
+
+`stdin_close` says "no more input", which is not the same as closing the
+socket: a command reading until EOF (`cat`, `sort`, a shell receiving Ctrl-D)
+needs its stdin closed while its stdout stays open long enough to deliver the
+result. Closing the WebSocket instead ends the whole session and loses that
+output.
 
 Server to client:
 

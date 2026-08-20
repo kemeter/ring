@@ -130,8 +130,20 @@ impl ExecQuery {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientFrame {
-    Stdin { data: String },
-    Resize { cols: u16, rows: u16 },
+    Stdin {
+        data: String,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
+    /// The client will send no more input.
+    ///
+    /// Distinct from a WebSocket close, which tears the whole session down:
+    /// a command reading until EOF (`cat`, `sort`, a shell receiving Ctrl-D)
+    /// needs its stdin closed while its stdout stays open long enough to
+    /// deliver the result.
+    StdinClose,
 }
 
 /// Server→client frame.
@@ -447,6 +459,14 @@ async fn relay(
                                     break;
                                 }
                                 let _ = input.flush().await;
+                            }
+                            Ok(ClientFrame::StdinClose) => {
+                                // Close the process's stdin and stop reading
+                                // input, but keep relaying output: the
+                                // command has only just learned it can stop
+                                // waiting for more.
+                                let _ = input.shutdown().await;
+                                client_gone = true;
                             }
                             Ok(ClientFrame::Resize { cols, rows }) => {
                                 if cols == 0
