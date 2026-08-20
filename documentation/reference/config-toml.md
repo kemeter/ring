@@ -114,6 +114,17 @@ open indefinitely.
 Only a session's own instance is reachable. An exec request naming a container
 Ring does not manage is refused the same way a non-existent one is.
 
+Every session that opens is written to the namespace's audit trail
+(`GET /namespaces/{id}/audit`, `action: "exec"`), alongside deployment and
+secret writes. A refused exec records nothing, so the trail reflects sessions
+that actually happened.
+
+What is recorded is *that* a session opened, by whom, on which deployment and
+when. The command is deliberately not stored (arguments carry credentials often
+enough), and neither is anything typed during the session. If you need to know
+what was done inside a shell, this is not that, and no configuration here
+provides it.
+
 ### `[server.telemetry.traces]`
 
 Opt-in OpenTelemetry span export over OTLP/gRPC. Off by default: with `enabled = false` no exporter is built and the server runs exactly as before. Only `ring server start` exports traces; the CLI commands stay console-only.

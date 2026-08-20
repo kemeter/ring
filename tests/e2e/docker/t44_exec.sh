@@ -117,6 +117,29 @@ set -e
 [ "$MISSING_EXIT" = "0" ] && fail "exec on an unknown deployment must not succeed"
 log "unknown deployment refused (exit $MISSING_EXIT)"
 
+# === the session is recorded in the audit trail ===
+# Exec is the most sensitive action Ring exposes, so it belongs in the same
+# trail as creating a deployment. This asserts the entry exists after a real
+# session; the companion Rust test asserts a *refused* exec records nothing.
+TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
+[ -z "$TOKEN" ] && fail "could not read the auth token"
+
+AUDIT=$(curl -sf -H "Authorization: Bearer $TOKEN"   "${RING_URL}/namespaces/ring-e2e/audit")
+
+EXEC_ENTRIES=$(echo "$AUDIT" | jq '[.[] | select(.action=="exec")] | length')
+if [ "$EXEC_ENTRIES" = "0" ] || [ -z "$EXEC_ENTRIES" ]; then
+  echo "$AUDIT" >&2
+  fail "exec sessions were not recorded in the audit log"
+fi
+
+# The entry must name the deployment, not the container id: the audit trail is
+# read by humans after the instance is long gone.
+AUDIT_TARGET=$(echo "$AUDIT" | jq -r '[.[] | select(.action=="exec")][0].target_name')
+if [ "$AUDIT_TARGET" != "exec-target" ]; then
+  fail "expected the audit entry to name the deployment, got '$AUDIT_TARGET'"
+fi
+log "exec sessions are recorded in the audit trail ($EXEC_ENTRIES entries)"
+
 # === unauthenticated access is refused ===
 # Straight at the endpoint: the CLI always sends a token, so this is the only
 # way to prove the route itself is guarded.

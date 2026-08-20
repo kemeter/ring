@@ -34,6 +34,7 @@ use crate::api::server::{Db, RuntimeMap};
 use crate::hypervisor::lifecycle_trait::{
     ExecError, ExecOutput, ExecRequest, ExecSession, TerminalSize,
 };
+use crate::models::audit_log;
 use crate::models::deployments;
 
 /// Scope string binding a stream ticket to one deployment's exec endpoint.
@@ -276,6 +277,30 @@ pub(crate) async fn exec(
             return (status, axum::Json(json!({ "error": public_message(&e) }))).into_response();
         }
     };
+
+    // Record once the session is actually open, matching the rest of the
+    // audit trail: the log says what happened, not what was attempted (a
+    // refused exec is a failed request, not an entry).
+    //
+    // Exec is the most sensitive action Ring exposes -- a shell reads every
+    // mounted secret and every file the process can reach -- so it belongs in
+    // the same trail as creating a deployment or rotating a token, and for the
+    // same reason: the entry outlives the deployment, so a post-mortem still
+    // works after cleanup.
+    //
+    // This records *that* a session opened, never what was typed in it. The
+    // command is deliberately not stored: it can carry credentials passed as
+    // arguments, and the audit log is readable by anyone with
+    // `namespaces:read` on the namespace.
+    let _ = audit_log::record(
+        &pool,
+        Some(&auth.user.id),
+        "exec",
+        "deployment",
+        &deployment.name,
+        Some(&deployment.namespace),
+    )
+    .await;
 
     let max_duration = slot.max_duration();
     let idle_timeout = slot.idle_timeout();
@@ -712,6 +737,43 @@ mod tests {
                 "expected {query} to be refused"
             );
         }
+    }
+
+    /// A refused exec must leave no trace: the audit trail records what
+    /// happened, and an entry for a session that never opened would both
+    /// misreport it and let anyone who can reach the endpoint flood the log.
+    #[tokio::test]
+    async fn a_refused_exec_records_nothing() {
+        use crate::api::dto::audit::AuditOutput;
+
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+
+        // Create a namespace so the audit endpoint has something to read.
+        let server = TestServer::new(app.clone()).unwrap();
+        server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": "audit-ns" }))
+            .await;
+
+        // An exec that cannot open: the deployment does not exist.
+        ws_server(app.clone())
+            .get_websocket("/deployments/does-not-exist/exec?command=/bin/sh")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        let entries = TestServer::new(app)
+            .unwrap()
+            .get("/namespaces/audit-ns/audit")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await
+            .json::<Vec<AuditOutput>>();
+
+        assert!(
+            entries.iter().all(|e| e.action != "exec"),
+            "a refused exec must not be recorded: {entries:?}"
+        );
     }
 
     #[tokio::test]
