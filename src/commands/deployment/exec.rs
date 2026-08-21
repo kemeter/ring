@@ -53,7 +53,7 @@ pub(crate) fn command_config() -> Command {
             Arg::new("container")
                 .long("container")
                 .short('c')
-                .help("Instance to enter (defaults to the first running one)"),
+                .help("Instance to enter (defaults to the first running one by name)"),
         )
         .arg(
             Arg::new("no-tty")
@@ -198,6 +198,11 @@ async fn run(url: &str, token: &str, want_tty: bool) -> i32 {
 
     debug_assert_eq!(response.status().as_u16(), 101);
 
+    // Say which replica this is, before the session takes over the screen.
+    // On a single-replica deployment it is reassurance; on an autoscaled one
+    // it is the difference between knowing where a command ran and guessing.
+    announce_instance(response.headers());
+
     // Raw mode goes on only once the session is actually open: bailing out
     // before this point must leave the terminal untouched.
     let restore = if want_tty { RawMode::enable() } else { None };
@@ -209,6 +214,31 @@ async fn run(url: &str, token: &str, want_tty: bool) -> i32 {
     drop(restore);
 
     code
+}
+
+/// Print which instance the session landed in.
+///
+/// Goes to stderr so `exec -- cmd > file` keeps capturing only the command's
+/// own output. Stays silent when the server said nothing, which keeps this
+/// client working against a Ring that predates the headers.
+fn announce_instance(headers: &tokio_tungstenite::tungstenite::http::HeaderMap) {
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    let number = |name: &str| text(name).and_then(|v| v.parse::<usize>().ok());
+
+    let Some(name) = text("x-ring-exec-instance") else {
+        return;
+    };
+
+    match (
+        number("x-ring-exec-instance-position"),
+        number("x-ring-exec-instance-total"),
+    ) {
+        // Only worth qualifying when there is more than one to choose from.
+        (Some(position), Some(total)) if total > 1 => {
+            eprintln!("Connecting to {name} ({position} of {total} running instances)...");
+        }
+        _ => eprintln!("Connecting to {name}..."),
+    }
 }
 
 async fn relay(
