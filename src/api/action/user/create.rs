@@ -12,6 +12,10 @@ use serde_json::json;
 use validator::Validate;
 
 // Scope (`users:write`) is enforced centrally by the auth middleware.
+// The error type is an axum `Response`, which is large by construction;
+// boxing it here would only move the allocation, as `require_scope` and the
+// token handlers already concluded.
+#[allow(clippy::result_large_err)]
 pub(crate) async fn create(
     State(pool): State<Db>,
     Json(input): Json<UserInput>,

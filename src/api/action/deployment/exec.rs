@@ -68,8 +68,9 @@ pub struct ExecQuery {
     tty: bool,
     cols: Option<u16>,
     rows: Option<u16>,
-    /// Which instance to enter. Defaults to the deployment's first running
-    /// instance, which is what a single-replica deployment always wants.
+    /// Which instance to enter. Defaults to the first running instance by
+    /// name, which is what a single-replica deployment always wants and
+    /// which stays stable across calls when there are several.
     container: Option<String>,
 }
 
@@ -265,13 +266,13 @@ pub(crate) async fn exec(
         size: terminal_size(&params),
     };
 
-    let session = match runtime.exec(&instance, request).await {
+    let session = match runtime.exec(&instance.id, request).await {
         Ok(session) => session,
         Err(e) => {
             let status = status_for(&e);
             tracing::warn!(
                 deployment = %deployment.id,
-                instance = %instance,
+                instance = %instance.id,
                 "exec refused: {e}"
             );
             return (status, axum::Json(json!({ "error": public_message(&e) }))).into_response();
@@ -305,14 +306,40 @@ pub(crate) async fn exec(
     let max_duration = slot.max_duration();
     let idle_timeout = slot.idle_timeout();
 
-    ws.on_upgrade(move |socket| async move {
-        // The slot lives until this future ends, however it ends. Moving it
-        // in is what ties capacity to the session rather than to the
-        // handshake.
-        let _slot = slot;
-        relay(socket, session, max_duration, idle_timeout).await;
-    })
-    .into_response()
+    let mut response = ws
+        .on_upgrade(move |socket| async move {
+            // The slot lives until this future ends, however it ends. Moving
+            // it in is what ties capacity to the session rather than to the
+            // handshake.
+            let _slot = slot;
+            relay(socket, session, max_duration, idle_timeout).await;
+        })
+        .into_response();
+
+    // Announce the instance on the handshake rather than as a first frame:
+    // the frame stream is the PTY, and anything injected there would have to
+    // be escaped out of the user's own output. A client that ignores these
+    // headers still gets a working session.
+    annotate_instance(response.headers_mut(), &instance);
+    response
+}
+
+/// Attach the resolved instance to the upgrade response.
+///
+/// Header values must be ASCII; a container name that somehow is not simply
+/// goes unannounced, which costs a line of output and never the session.
+fn annotate_instance(headers: &mut axum::http::HeaderMap, instance: &ResolvedInstance) {
+    if let Ok(value) = axum::http::HeaderValue::from_str(&instance.name) {
+        headers.insert("x-ring-exec-instance", value);
+    }
+    headers.insert(
+        "x-ring-exec-instance-position",
+        axum::http::HeaderValue::from(instance.position as u64),
+    );
+    headers.insert(
+        "x-ring-exec-instance-total",
+        axum::http::HeaderValue::from(instance.total as u64),
+    );
 }
 
 /// Reject nonsensical terminal dimensions before they reach the runtime.
@@ -359,33 +386,71 @@ fn public_message(error: &ExecError) -> String {
     }
 }
 
-/// Pick the instance to enter.
+/// Pick the instance to enter, and report which one plus how many were
+/// running.
 ///
 /// `list_instances_with_names` only ever returns containers Ring manages, so
 /// an explicitly requested container is matched against that list rather than
 /// passed through: it is the difference between naming one of your own
 /// instances and naming anything on the host.
+///
+/// With no explicit request the default is the **first by name**, not the
+/// first the runtime happened to list. `list_instances_with_names` imposes no
+/// order — it is whatever the Docker daemon returned — so picking `.next()`
+/// means two consecutive execs on an autoscaled deployment can land in
+/// different replicas. That is the failure mode where a fix appears not to
+/// have taken effect, and it is why the sort is here rather than left to the
+/// runtime: every runtime would otherwise have to remember to do it.
 async fn resolve_instance(
     runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
     deployment_id: &str,
     requested: Option<&str>,
-) -> Result<String, StatusCode> {
-    let instances = runtime
+) -> Result<ResolvedInstance, StatusCode> {
+    let mut instances = runtime
         .list_instances_with_names(deployment_id.to_string(), "running")
         .await;
 
-    match requested {
-        Some(name) => instances
+    // Name first, id as the tiebreaker: names are what a human reads, but two
+    // containers can share one, and an arbitrary order between them would put
+    // the non-determinism straight back.
+    instances.sort_by(|(left_id, left_name), (right_id, right_name)| {
+        left_name.cmp(right_name).then(left_id.cmp(right_id))
+    });
+
+    let total = instances.len();
+
+    let (id, name, position) = match requested {
+        Some(requested) => instances
             .into_iter()
-            .find(|(id, instance_name)| id == name || instance_name == name)
-            .map(|(id, _)| id)
-            .ok_or(StatusCode::NOT_FOUND),
-        None => instances
-            .into_iter()
-            .next()
-            .map(|(id, _)| id)
-            .ok_or(StatusCode::NOT_FOUND),
-    }
+            .enumerate()
+            .find(|(_, (id, name))| id == requested || name == requested)
+            .map(|(index, (id, name))| (id, name, index + 1))
+            .ok_or(StatusCode::NOT_FOUND)?,
+        None => {
+            let (id, name) = instances.into_iter().next().ok_or(StatusCode::NOT_FOUND)?;
+            (id, name, 1)
+        }
+    };
+
+    Ok(ResolvedInstance {
+        id,
+        name,
+        position,
+        total,
+    })
+}
+
+/// The instance an exec session was routed to.
+///
+/// `position` and `total` exist so a client can say *which* replica it landed
+/// in. Naming it is the difference between a default a user can predict and
+/// one they have to go and check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedInstance {
+    id: String,
+    name: String,
+    position: usize,
+    total: usize,
 }
 
 /// Pump bytes between the socket and the session until either side stops.
@@ -585,6 +650,167 @@ mod tests {
     use crate::api::server::tests::{login, new_test_app};
     use axum::Router;
     use axum_test::TestServer;
+
+    /// A runtime that returns a fixed instance list, in the order given.
+    ///
+    /// The order is the whole point: the Docker daemon imposes none, so the
+    /// mock hands back a deliberately unsorted list to prove the sort happens
+    /// here and not by luck.
+    struct InstanceListRuntime {
+        instances: Vec<(String, String)>,
+    }
+
+    impl InstanceListRuntime {
+        fn new(instances: &[(&str, &str)]) -> Self {
+            Self {
+                instances: instances
+                    .iter()
+                    .map(|(id, name)| (id.to_string(), name.to_string()))
+                    .collect(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::hypervisor::lifecycle_trait::RuntimeLifecycle for InstanceListRuntime {
+        async fn apply(
+            &self,
+            deployment: crate::models::deployments::Deployment,
+            _resolved_mounts: Vec<crate::models::volume::ResolvedMount>,
+        ) -> crate::models::deployments::Deployment {
+            deployment
+        }
+
+        async fn list_instances(&self, _deployment_id: String, _status: &str) -> Vec<String> {
+            self.instances.iter().map(|(id, _)| id.clone()).collect()
+        }
+
+        async fn list_instances_with_names(
+            &self,
+            _deployment_id: String,
+            _status: &str,
+        ) -> Vec<(String, String)> {
+            self.instances.clone()
+        }
+
+        async fn remove_instance(&self, _instance_id: String) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn default_instance_is_first_by_name_not_by_daemon_order() {
+        // Listed newest-first, as Docker tends to. Sorting by name means the
+        // pick does not move when the daemon reorders or the deployment
+        // autoscales.
+        let runtime = InstanceListRuntime::new(&[
+            ("id-c05e19", "web-c05e19"),
+            ("id-3b81d4", "web-3b81d4"),
+            ("id-7f9c2a", "web-7f9c2a"),
+        ]);
+
+        let resolved = resolve_instance(&runtime, "deployment", None)
+            .await
+            .expect("an instance is running");
+
+        assert_eq!(resolved.name, "web-3b81d4");
+        assert_eq!(resolved.id, "id-3b81d4");
+        assert_eq!(resolved.position, 1);
+        assert_eq!(resolved.total, 3);
+    }
+
+    #[tokio::test]
+    async fn default_instance_is_stable_across_reordering() {
+        // The same set in two different daemon orders must resolve to the
+        // same container: this is the property the whole change exists for.
+        let one = InstanceListRuntime::new(&[("id-b", "web-b"), ("id-a", "web-a")]);
+        let other = InstanceListRuntime::new(&[("id-a", "web-a"), ("id-b", "web-b")]);
+
+        let first = resolve_instance(&one, "deployment", None).await.unwrap();
+        let second = resolve_instance(&other, "deployment", None).await.unwrap();
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.name, "web-a");
+    }
+
+    #[tokio::test]
+    async fn duplicate_names_are_broken_by_id() {
+        // Docker allows one name per container, but a runtime that falls back
+        // to a truncated id can still collide; leaving that order arbitrary
+        // would reintroduce the non-determinism.
+        let runtime = InstanceListRuntime::new(&[("id-z", "web"), ("id-a", "web")]);
+
+        let resolved = resolve_instance(&runtime, "deployment", None)
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.id, "id-a");
+    }
+
+    #[tokio::test]
+    async fn requested_instance_reports_its_own_position() {
+        let runtime =
+            InstanceListRuntime::new(&[("id-c05e19", "web-c05e19"), ("id-3b81d4", "web-3b81d4")]);
+
+        let resolved = resolve_instance(&runtime, "deployment", Some("web-c05e19"))
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.name, "web-c05e19");
+        assert_eq!(resolved.position, 2);
+        assert_eq!(resolved.total, 2);
+    }
+
+    #[tokio::test]
+    async fn requested_instance_matches_on_id_too() {
+        let runtime = InstanceListRuntime::new(&[("id-3b81d4", "web-3b81d4")]);
+
+        let resolved = resolve_instance(&runtime, "deployment", Some("id-3b81d4"))
+            .await
+            .unwrap();
+
+        assert_eq!(resolved.id, "id-3b81d4");
+    }
+
+    #[tokio::test]
+    async fn unknown_instance_is_not_found() {
+        let runtime = InstanceListRuntime::new(&[("id-3b81d4", "web-3b81d4")]);
+
+        let error = resolve_instance(&runtime, "deployment", Some("web-nope"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn no_running_instance_is_not_found() {
+        let runtime = InstanceListRuntime::new(&[]);
+
+        let error = resolve_instance(&runtime, "deployment", None)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn resolved_instance_is_announced_on_the_handshake() {
+        let mut headers = axum::http::HeaderMap::new();
+        annotate_instance(
+            &mut headers,
+            &ResolvedInstance {
+                id: "id-3b81d4".to_string(),
+                name: "web-3b81d4".to_string(),
+                position: 1,
+                total: 3,
+            },
+        );
+
+        assert_eq!(headers["x-ring-exec-instance"], "web-3b81d4");
+        assert_eq!(headers["x-ring-exec-instance-position"], "1");
+        assert_eq!(headers["x-ring-exec-instance-total"], "3");
+    }
 
     #[test]
     fn scope_is_bound_to_one_deployment() {
