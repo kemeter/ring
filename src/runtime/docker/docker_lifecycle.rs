@@ -1,5 +1,7 @@
 use crate::api::dto::stats::InstanceStatsOutput;
-use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
+use crate::hypervisor::lifecycle_trait::{
+    ExecError, ExecRequest, ExecSession, Log, RuntimeLifecycle, classify_log, extract_date,
+};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
 use crate::models::volume::ResolvedMount;
@@ -179,6 +181,14 @@ impl RuntimeLifecycle for DockerLifecycle {
         command: &str,
     ) -> (HealthCheckStatus, Option<String>) {
         super::health_check::execute_command_check(&self.docker, instance_id, command).await
+    }
+
+    async fn exec(
+        &self,
+        instance_id: &str,
+        request: ExecRequest,
+    ) -> Result<ExecSession, ExecError> {
+        super::exec::exec(&self.docker, instance_id, request).await
     }
 
     async fn get_instance_stats(&self, deployment_id: &str) -> Vec<InstanceStatsOutput> {

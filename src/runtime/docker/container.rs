@@ -447,7 +447,10 @@ pub(crate) async fn create_container(
     );
 
     let mut labels = HashMap::new();
-    labels.insert("ring_deployment".to_string(), deployment.id.clone());
+    labels.insert(
+        super::RING_DEPLOYMENT_LABEL.to_string(),
+        deployment.id.clone(),
+    );
     for (key, value) in deployment.labels.iter() {
         labels.insert(key.clone(), value.clone());
     }

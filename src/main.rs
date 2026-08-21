@@ -201,6 +201,7 @@ fn build_cli() -> Command {
                 .subcommand(commands::deployment::inspect::command_config())
                 .subcommand(commands::deployment::delete::command_config())
                 .subcommand(commands::deployment::logs::command_config())
+                .subcommand(commands::deployment::exec::command_config())
                 .subcommand(commands::deployment::events::command_config())
                 .subcommand(commands::deployment::metrics::command_config())
                 .subcommand(commands::deployment::health_checks::command_config()),
@@ -348,6 +349,9 @@ async fn main() {
 
                 ("logs", sub_matches) => {
                     commands::deployment::logs::execute(sub_matches, config, &client).await;
+                }
+                ("exec", sub_matches) => {
+                    commands::deployment::exec::execute(sub_matches, config).await;
                 }
                 ("events", sub_matches) => {
                     commands::deployment::events::execute(sub_matches, config, &client).await;

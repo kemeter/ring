@@ -32,7 +32,7 @@ toml = "0.8.1"
 local-ip-address = "0.6.1"
 cli-table = "0.5.0"
 owo-colors = { version = "4", features = ["supports-colors"] }
-axum = { version = "0.8.4" }
+axum = { version = "0.8.4", features = ["ws"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
 tower-http = { version = "0.6", features = ["cors"] }
 axum-macros = "0.5.0"
@@ -71,6 +71,9 @@ mime_guess = "2"
 anyhow = "1"
 caps = "0.5.6"
 nix = { version = "0.31.3", features = ["signal"] }
+# WebSocket client for `ring deployment exec`. Already in the tree via axum's
+# own `ws` support, so this is a direct handle on a crate we compile anyway.
+tokio-tungstenite = "0.29"
 # containerd runtime: native gRPC over containerd's Unix socket. We drive the
 # raw containerd API (images, content, snapshots, containers, tasks) rather
 # than going through Docker — there is no daemon in between. `containerd-client`
@@ -105,4 +108,6 @@ tracing-opentelemetry = "0.33"
 opentelemetry-appender-tracing = "0.32"
 
 [dev-dependencies]
-axum-test = "17.3.0"
+axum-test = { version = "17.3.0", features = ["ws"] }
+# Only to build the `LogOutput` frames bollard hands back, in the exec tests.
+bytes = "1"

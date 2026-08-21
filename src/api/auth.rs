@@ -169,6 +169,16 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         // privilege-escalation path where a `users:write` PAT could rotate an
         // `admin` token (and receive a fresh admin secret) or revoke siblings.
         "/tokens" | "/tokens/{id}" | "/tokens/{id}/rotate" | "/auth/stream-ticket" => Some("admin"),
+        // Exec runs arbitrary code inside a workload, so it is `admin` and not
+        // `deployments:write`: an operator who may redeploy a service has not
+        // thereby been granted a shell inside it, where it can read every
+        // mounted secret and every file the process can reach.
+        //
+        // Deny-by-default already lands on the same answer for an unmapped
+        // route, but only as a side effect. Stating it here means the decision
+        // survives a future change to that fallback, and says which of the two
+        // scopes was chosen on purpose.
+        "/deployments/{id}/exec" => Some("admin"),
         _ => None,
     }
 }
@@ -197,7 +207,7 @@ pub(crate) async fn auth_middleware(
 
     // A stream ticket is already authorised at authentication time: it is only
     // accepted on the exact `/deployments/{id}/logs` route whose scope it was
-    // minted for (see `authenticate` / `logs_scope_from_path`). It carries no
+    // minted for (see `authenticate` / `ticket_scope_from_path`). It carries no
     // generic scope, so the scope table doesn't apply to it — skip straight to
     // the handler. Bearer and Token still go through the scope gate below.
     if matches!(source, AuthSource::Ticket { .. }) {
@@ -261,7 +271,7 @@ async fn authenticate(state: &AppState, req: &mut Request) -> Option<()> {
     // keeps the ticket strictly logs-only: a ticket presented on any other
     // path won't match a logs scope and is rejected here.
     if let Some(ticket) = ticket_param(req) {
-        if let Some(expected_scope) = logs_scope_from_path(req.uri().path())
+        if let Some(expected_scope) = ticket_scope_from_path(req.uri().path())
             && let Some(t) = state.ticket_store.consume(&ticket, &expected_scope)
             && let Ok(Some(user)) = users_model::find(&state.connection, &t.user_id).await
         {
@@ -408,19 +418,40 @@ fn forbidden(message: &str) -> Response {
     (StatusCode::FORBIDDEN, Json(json!({ "error": message }))).into_response()
 }
 
-/// Derive the expected ticket scope from the request path. Only the SSE logs
-/// route `/deployments/{id}/logs` can be reached with a ticket; any other path
-/// yields `None`, so the ticket can't authorise anything else. The scope
-/// string format is owned by `deployment::logs::logs_scope` — we call it here
-/// so the two never drift.
-fn logs_scope_from_path(path: &str) -> Option<String> {
+/// Derive the expected ticket scope from the request path.
+///
+/// Exactly two routes are reachable with a ticket — the SSE logs stream and
+/// the exec WebSocket — because both are opened by a browser API that cannot
+/// set an `Authorization` header. Any other path yields `None`, so a ticket
+/// authorises nothing else.
+///
+/// The two produce *different* scope strings, and the store compares scopes
+/// for equality. That is what stops a read-only ticket minted for logs from
+/// being replayed against exec to obtain a shell: the same ticket presented
+/// on the other route derives a scope it was never minted for and is
+/// rejected. The strings themselves are owned by the handlers
+/// (`logs_scope` / `exec_scope`) and called from here so the two never drift.
+fn ticket_scope_from_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/deployments/")?;
-    let id = rest.strip_suffix("/logs")?;
+
+    let (id, scope): (&str, fn(&str) -> String) = match rest {
+        r if r.ends_with("/logs") => (
+            r.trim_end_matches("/logs"),
+            crate::api::action::deployment::logs::logs_scope,
+        ),
+        r if r.ends_with("/exec") => (
+            r.trim_end_matches("/exec"),
+            crate::api::action::deployment::exec::exec_scope,
+        ),
+        _ => return None,
+    };
+
     // Reject nested/empty segments so only the exact route shape matches.
     if id.is_empty() || id.contains('/') {
         return None;
     }
-    Some(crate::api::action::deployment::logs::logs_scope(id))
+
+    Some(scope(id))
 }
 
 /// `User` is now a thin read of the [`AuthContext`] the middleware installed.
@@ -518,7 +549,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        AuthSource, Method, logs_scope_from_path, require_namespace, require_scope, scope_for_route,
+        AuthSource, Method, require_namespace, require_scope, scope_for_route,
+        ticket_scope_from_path,
     };
     use crate::api::server::tests::{login, new_test_app};
     use axum::http::StatusCode;
@@ -622,17 +654,67 @@ mod tests {
     #[test]
     fn scope_only_derived_for_exact_logs_route() {
         assert_eq!(
-            logs_scope_from_path("/deployments/abc/logs").as_deref(),
+            ticket_scope_from_path("/deployments/abc/logs").as_deref(),
             Some("deployment:logs:abc")
         );
         // Any other path must yield None so a ticket authorises nothing else.
-        assert_eq!(logs_scope_from_path("/deployments"), None);
-        assert_eq!(logs_scope_from_path("/deployments/abc"), None);
-        assert_eq!(logs_scope_from_path("/deployments/abc/events"), None);
-        assert_eq!(logs_scope_from_path("/deployments//logs"), None);
-        assert_eq!(logs_scope_from_path("/deployments/a/b/logs"), None);
-        assert_eq!(logs_scope_from_path("/secrets/abc"), None);
-        assert_eq!(logs_scope_from_path("/"), None);
+        assert_eq!(ticket_scope_from_path("/deployments"), None);
+        assert_eq!(ticket_scope_from_path("/deployments/abc"), None);
+        assert_eq!(ticket_scope_from_path("/deployments/abc/events"), None);
+        assert_eq!(ticket_scope_from_path("/deployments//logs"), None);
+        assert_eq!(ticket_scope_from_path("/deployments/a/b/logs"), None);
+        assert_eq!(ticket_scope_from_path("/secrets/abc"), None);
+        assert_eq!(ticket_scope_from_path("/"), None);
+    }
+
+    #[test]
+    fn minting_a_stream_ticket_requires_admin() {
+        // A ticket skips the scope gate when presented, so whoever can mint
+        // one decides what it unlocks. That is only safe while minting is
+        // itself admin-only: loosen this and an exec ticket becomes a
+        // privilege-escalation path to a shell.
+        assert_eq!(
+            scope_for_route(&Method::POST, "/auth/stream-ticket"),
+            Some("admin")
+        );
+    }
+
+    #[test]
+    fn exec_route_requires_admin_not_deployments_write() {
+        // Exec is a shell inside the workload: it reads every mounted secret
+        // and every file the process can reach. `deployments:write` is the
+        // tempting mapping and the wrong one, since it would hand a shell to
+        // every operator who may redeploy a service.
+        assert_eq!(
+            scope_for_route(&Method::GET, "/deployments/{id}/exec"),
+            Some("admin")
+        );
+        // Read-only siblings must stay read-only.
+        assert_eq!(
+            scope_for_route(&Method::GET, "/deployments/{id}/logs"),
+            Some("deployments:read")
+        );
+    }
+
+    #[test]
+    fn scope_derived_for_exact_exec_route() {
+        assert_eq!(
+            ticket_scope_from_path("/deployments/abc/exec").as_deref(),
+            Some("deployment:exec:abc")
+        );
+        assert_eq!(ticket_scope_from_path("/deployments//exec"), None);
+        assert_eq!(ticket_scope_from_path("/deployments/a/b/exec"), None);
+    }
+
+    #[test]
+    fn logs_and_exec_scopes_never_collide() {
+        // The boundary that keeps a read-only ticket read-only. The store
+        // matches scopes by equality, so a ticket minted for logs must derive
+        // a different string on the exec path (and vice versa) — otherwise
+        // `viewer` could mint a logs ticket and replay it to get a shell.
+        let logs = ticket_scope_from_path("/deployments/abc/logs").unwrap();
+        let exec = ticket_scope_from_path("/deployments/abc/exec").unwrap();
+        assert_ne!(logs, exec);
     }
 
     #[tokio::test]

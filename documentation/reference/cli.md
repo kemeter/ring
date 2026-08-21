@@ -268,6 +268,52 @@ ring deployment logs web-app --since 10m
 ring deployment logs web-app --container production_web-app   # name prefix, or full container ID prefix
 ```
 
+### `ring deployment exec`
+
+Run a command, or open a shell, inside a running instance.
+
+```bash
+ring deployment exec <DEPLOYMENT_ID> [OPTIONS] [-- COMMAND...]
+```
+
+Without a command, `/bin/sh` is used. Ring does not probe the image for a
+nicer shell: which interpreter to fall back to is your decision, so pass it
+explicitly (`-- /bin/bash`) when you want one.
+
+**Options:**
+
+- `-c` / `--container <NAME>`: instance to enter (default: the first running one)
+- `-T` / `--no-tty`: do not allocate a TTY, keeping stdout and stderr separate
+
+**Examples:**
+
+```bash
+ring deployment exec web-app                              # interactive shell
+ring deployment exec web-app -- /bin/bash                 # a specific shell
+ring deployment exec web-app --no-tty -- ls /app          # one-off command
+ring deployment exec web-app -- printenv DATABASE_URL     # read one variable
+ring deployment exec web-app --container production_web-app_1
+```
+
+The command's exit code becomes the exit code of `ring`, so it composes with
+the shell:
+
+```bash
+ring deployment exec web-app --no-tty -- test -f /app/ready && echo "ready"
+```
+
+Use `--no-tty` whenever you capture the output. With a TTY the container folds
+stdout and stderr into one stream (that is what a terminal is), so a pipeline
+that expects them apart will not get them apart.
+
+An exit code the runtime could not determine is reported as `1`, not `0`: a
+command nobody can vouch for must not let `&&` proceed.
+
+> **Exec is opt-in.** The server answers `501` until `[server.exec] enabled =
+> true` is set. Because a shell can read every mounted secret and every file
+> the process can reach, the endpoint requires an `admin` token rather than
+> `deployments:write`. See [config.toml](config-toml.md#serverexec).
+
 ### `ring deployment events`
 
 Show scheduler events for a deployment.
