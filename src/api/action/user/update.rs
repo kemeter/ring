@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use validator::Validate;
 
+// Same as `create`: the error is an axum `Response` and is large by nature.
+#[allow(clippy::result_large_err)]
 pub(crate) async fn update(
     State(pool): State<Db>,
     Path(id): Path<String>,
