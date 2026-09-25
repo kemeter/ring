@@ -23,7 +23,14 @@ pub(crate) fn command_config() -> Command {
             Arg::new("password")
                 .short('p')
                 .long("password")
-                .help("Your password")
+                .help("Your new password")
+                .required(false)
+                .requires("current-password"),
+        )
+        .arg(
+            Arg::new("current-password")
+                .long("current-password")
+                .help("Your current password, required to set a new one")
                 .required(false),
         )
 }
@@ -84,7 +91,11 @@ pub(crate) async fn execute(
     let values = if password.is_empty() {
         json!({"username": username})
     } else {
-        json!({"username": username, "password": password})
+        json!({
+            "username": username,
+            "password": password,
+            "current_password": args.get_one::<String>("current-password"),
+        })
     };
 
     let request = client

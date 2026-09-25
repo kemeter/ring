@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Role-based access control replaces the flat user/admin model.** Accounts now hold `admin`, `operator` or `viewer`, and a login session is issued the scopes of its role. Previously every login was minted with full-access scopes, so any authenticated user could do anything regardless of their role. Consequences when upgrading:
   - accounts that were `user` become `viewer` (read-only); promote them with `PUT /users/{id}` `{"role":"operator"}`
   - **every existing session and API token is revoked** by the migration, since a token carries the scopes it was minted with and is never re-evaluated. Everyone must log in again and re-issue their tokens
+  - **changing your own password now requires `current_password`** (`ring user update --current-password`), and your own username and password can only be changed from a login session: an API token is refused with `403`, whatever its scopes. A password change signs out the account's other sessions, and an admin reset signs out all of them; API tokens are kept
   - **deploying into a namespace that does not exist now requires `namespaces:write`.** Ring still auto-creates the namespace, but only for a caller allowed to create one; a token holding `deployments:write` alone returns `403` instead of provisioning one implicitly. Roles are unaffected (`operator` and `admin` both hold the scope); add `namespaces:write` to any narrow PAT that relied on implicit creation, or create the namespace up front
 
 ### Added

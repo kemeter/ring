@@ -798,16 +798,21 @@ Returns the user attached to the bearer token.
 
 ### `PUT /users/{id}`
 
-Update a user. Both fields are optional, so sending an empty body is a no-op that returns `200 OK`.
+Update a user. Every field is optional, so sending an empty body is a no-op that returns `200 OK`.
 
 ```json
 {
   "username": "alice",
-  "password": "newpassword"
+  "password": "newpassword",
+  "current_password": "oldpassword"
 }
 ```
 
 **Response:** `200 OK`
+
+Any account may update its own `username` and `password`, but only from a login session: an API token is refused with `403`, whatever its scopes. Changing your own password also requires `current_password` (`400` when missing, `403` when wrong). Updating **another** account requires the `admin` role and `users:write` on the presented token, and needs no `current_password`.
+
+A password change revokes the account's login sessions, except the one that made a self-service change. API tokens are not revoked. Changing `role` is admin-only and revokes every session and token of the account.
 
 **Validation** (see [Validation errors](#validation-errors)): same rules as `POST /users` applied to whichever fields are present in the body. Omitted fields are skipped.
 

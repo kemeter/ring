@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
+use crate::models::token::TokenKind;
 use crate::serializer::deserialize_null_default;
 
 /// A user's authorization role. Each role maps to a fixed set of token scopes
@@ -238,6 +239,51 @@ pub(crate) async fn update(pool: &SqlitePool, user: &User) -> Result<(), sqlx::E
     .await?;
 
     Ok(())
+}
+
+/// Set a user's password hash and revoke their login sessions as ONE atomic
+/// operation, returning the number of sessions revoked.
+///
+/// A password change is how an account recovers from a leaked credential, so
+/// the sessions opened with the old password must not survive it; committing
+/// both together means a failed revocation cannot leave the new password in
+/// place alongside live old sessions. `keep_token_id` spares the caller's own
+/// session on a self-service change, so the user is not logged out by it.
+///
+/// PATs are left alone: they are managed explicitly (`ring token`) and are not
+/// derived from the password.
+pub(crate) async fn change_password(
+    pool: &SqlitePool,
+    user_id: &str,
+    password_hash: &str,
+    keep_token_id: Option<&str>,
+) -> Result<u64, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("UPDATE user SET password = ?, updated_at = datetime() WHERE id = ?")
+        .bind(password_hash)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let revoked = sqlx::query(
+        "UPDATE token SET revoked_at = ? \
+         WHERE user_id = ? AND kind = ? AND revoked_at IS NULL \
+           AND (? IS NULL OR id != ?)",
+    )
+    .bind(&now)
+    .bind(user_id)
+    .bind(TokenKind::Session.as_str())
+    .bind(keep_token_id)
+    .bind(keep_token_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    tx.commit().await?;
+
+    Ok(revoked)
 }
 
 /// Outcome of [`change_role`].
