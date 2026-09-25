@@ -30,7 +30,7 @@ const TICK_BUDGET: Duration = Duration::from_secs(BATCH as u64 * DELIVERY_TIMEOU
 pub(crate) async fn run(pool: SqlitePool, interval_secs: u64) {
     let tick = Duration::from_secs(interval_secs.max(1));
     loop {
-        match timeout(TICK_BUDGET, process_due(&pool)).await {
+        match timeout(TICK_BUDGET, process_due(&pool, delivery::client())).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => warn!("Event worker tick failed: {}", e),
             Err(_) => warn!(
@@ -42,10 +42,12 @@ pub(crate) async fn run(pool: SqlitePool, interval_secs: u64) {
     }
 }
 
-async fn process_due(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+/// Deliver every due event with `client`: the SSRF-guarded delivery client in
+/// production (see `webhook::client`).
+async fn process_due(pool: &SqlitePool, client: &reqwest::Client) -> Result<(), sqlx::Error> {
     let due = event_queue::fetch_due(pool, BATCH).await?;
     for event in due {
-        deliver_event(pool, &event).await;
+        deliver_event(pool, client, &event).await;
     }
     Ok(())
 }
@@ -55,7 +57,7 @@ async fn process_due(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 /// the whole event (or dead-letters it past MAX_ATTEMPTS). Redelivery to
 /// already-succeeded subscribers on retry is acceptable — webhooks are
 /// at-least-once, receivers must be idempotent.
-async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
+async fn deliver_event(pool: &SqlitePool, client: &reqwest::Client, event: &QueuedEvent) {
     let subscribers = match webhook::subscribers_for(pool, &event.kind).await {
         Ok(s) => s,
         Err(e) => {
@@ -84,7 +86,7 @@ async fn deliver_event(pool: &SqlitePool, event: &QueuedEvent) {
     let results = futures::future::join_all(
         subscribers
             .iter()
-            .map(|hook| delivery::deliver(hook, &event.kind, body)),
+            .map(|hook| delivery::deliver(client, hook, &event.kind, body)),
     )
     .await;
 
@@ -150,6 +152,10 @@ mod tests {
     /// drive "fail twice then succeed" deterministically without wiremock.
     struct Mock {
         url: String,
+        /// Resolves the mock's host name straight to its loopback listener.
+        /// The production client refuses loopback by design, so the worker is
+        /// driven with this one; the guard has its own tests in `webhook`.
+        client: reqwest::Client,
         hits: Arc<AtomicUsize>,
         signed: Arc<AtomicUsize>,
     }
@@ -188,7 +194,12 @@ mod tests {
             }
         });
         Mock {
-            url: format!("http://{}/hook", addr),
+            url: format!("http://subscriber.test:{}/hook", addr.port()),
+            client: reqwest::Client::builder()
+                .resolve("subscriber.test", addr)
+                .no_proxy()
+                .build()
+                .unwrap(),
             hits,
             signed,
         }
@@ -215,7 +226,7 @@ mod tests {
             .await
             .unwrap();
 
-        process_due(&pool).await.unwrap();
+        process_due(&pool, &mock.client).await.unwrap();
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1, "one delivery");
         assert_eq!(mock.signed.load(Ordering::SeqCst), 1, "carried signature");
@@ -234,7 +245,7 @@ mod tests {
             .await
             .unwrap();
 
-        process_due(&pool).await.unwrap();
+        process_due(&pool, &mock.client).await.unwrap();
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 0, "filter excludes it");
         // No subscriber matched → event is marked delivered (nothing to do).
@@ -250,7 +261,7 @@ mod tests {
             .await
             .unwrap();
 
-        process_due(&pool).await.unwrap();
+        process_due(&pool, &mock.client).await.unwrap();
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1);
         // Rescheduled with a future next_attempt_at, so not currently due, but
@@ -286,7 +297,7 @@ mod tests {
             .await
             .unwrap();
 
-        process_due(&pool).await.unwrap();
+        process_due(&pool, &mock.client).await.unwrap();
 
         assert_eq!(mock.hits.load(Ordering::SeqCst), 1, "one final attempt");
         // Terminal: dead, and never claimed again.
@@ -321,7 +332,7 @@ mod tests {
             .await
             .unwrap();
 
-        process_due(&pool).await.unwrap();
+        process_due(&pool, &mock.client).await.unwrap();
 
         // Exactly one delivery: the subscribed kind. The other kind matched no
         // subscriber and was marked delivered without a POST.
