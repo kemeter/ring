@@ -27,6 +27,7 @@ use serde_json::json;
 
 use crate::api::server::AppState;
 use crate::models::token as token_model;
+use crate::models::token::TokenKind;
 use crate::models::users as users_model;
 use crate::models::users::User;
 
@@ -40,7 +41,15 @@ pub(crate) enum AuthSource {
     /// scoped `admin`). Carries the token's scopes and namespace boundary so
     /// handlers can enforce them via [`require_scope`]. An empty `namespaces`
     /// means all namespaces; a session is `scopes = ["admin"]`, `namespaces = []`.
+    ///
+    /// `kind` tells a session from a PAT: scopes alone cannot, since an admin
+    /// PAT and an admin session carry the same ones. Handlers that must never
+    /// be driven by a PAT (changing the owner's own credentials) branch on it.
+    /// `token_id` identifies the presented row, so such a handler can revoke
+    /// the account's other sessions while keeping the caller's.
     Token {
+        token_id: String,
+        kind: TokenKind,
         scopes: Vec<String>,
         namespaces: Vec<String>,
     },
@@ -321,6 +330,8 @@ async fn resolve_api_token(state: &AppState, req: &mut Request, clear: &str) -> 
     req.extensions_mut().insert(AuthContext {
         user,
         source: AuthSource::Token {
+            token_id: token.id,
+            kind: token.kind,
             scopes: token.scopes,
             namespaces: token.namespaces,
         },
@@ -559,6 +570,8 @@ mod tests {
 
     fn pat(scopes: &[&str], namespaces: &[&str]) -> AuthSource {
         AuthSource::Token {
+            token_id: "test-token".to_string(),
+            kind: crate::models::token::TokenKind::Pat,
             scopes: scopes.iter().map(|s| s.to_string()).collect(),
             namespaces: namespaces.iter().map(|s| s.to_string()).collect(),
         }

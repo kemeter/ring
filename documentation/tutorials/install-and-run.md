@@ -102,7 +102,7 @@ Docker
   1. Export the key above
   2. ring server start             # first boot creates the admin user (admin/changeme)
   3. ring login -u admin -p changeme
-  4. ring user update --password "<your password>"  # rotate the default password
+  4. ring user update --current-password changeme --password "<your password>"  # rotate the default password
 ```
 
 At the end, `ring init` runs the same diagnostics as [`ring doctor`](/documentation/reference/cli) on the runtime you just selected, so you find out *now* that Docker isn't running, KVM is missing, or a kernel image is absent, instead of at your first `ring apply`. A failing check (`[-]`) is only a warning: `init` already wrote your config, so it still exits `0`. Fix the flagged items and re-run `ring doctor` to confirm. Only the selected runtime is checked, so a Docker-only init won't nag about Cloud Hypervisor dependencies.
@@ -186,7 +186,7 @@ The CLI stores the resulting token in `~/.config/kemeter/ring/auth.json`. Every 
 You should now change the default password:
 
 ```bash
-ring user update --password "your-secure-password"
+ring user update --current-password changeme --password "your-secure-password"
 ```
 
 The default `admin/changeme` credentials only work until the password is changed.

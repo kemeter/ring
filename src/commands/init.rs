@@ -417,7 +417,9 @@ fn print_next_steps() {
         "  2. ring server start             # first boot creates the admin user (admin/changeme)"
     );
     println!("  3. ring login -u admin -p changeme");
-    println!("  4. ring user update --password \"<your password>\"  # rotate the default password");
+    println!(
+        "  4. ring user update --current-password changeme --password \"<your password>\"  # rotate the default password"
+    );
 }
 
 #[cfg(test)]

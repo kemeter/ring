@@ -1,9 +1,10 @@
 use crate::api::action::user::validation::{
     PASSWORD_MAX, PASSWORD_MIN, USERNAME_MAX, USERNAME_MIN, USERNAME_PATTERN,
 };
-use crate::api::auth::{Auth, require_scope};
+use crate::api::auth::{Auth, AuthSource, require_scope};
 use crate::api::server::Db;
-use crate::api::validation::ViolationList;
+use crate::api::validation::{ViolationList, problem_response};
+use crate::models::token::TokenKind;
 use crate::models::users as users_model;
 use crate::models::users::Role;
 use axum::extract::State;
@@ -41,6 +42,32 @@ pub(crate) async fn update(
         require_scope(&auth.source, "users:write").map_err(|r| r.into_response())?;
     }
 
+    // Self-service covers the owner's login credentials, and those are only
+    // ever changed from a login session, never from a PAT. A PAT is a delegated,
+    // attenuated credential: letting it rewrite the password would let it mint,
+    // through `/login`, a session carrying the owner's full role, shedding
+    // every scope and namespace restriction it was issued with. That holds
+    // whatever the PAT's scopes, `users:write` included.
+    //
+    // The session id is kept so the password change below can revoke the
+    // account's other sessions without logging the caller out.
+    let credentials_changed = input.username.is_some() || input.password.is_some();
+    let self_session = match &auth.source {
+        AuthSource::Token {
+            token_id,
+            kind: TokenKind::Session,
+            ..
+        } if is_self => Some(token_id.clone()),
+        _ => None,
+    };
+    if is_self && credentials_changed && self_session.is_none() {
+        return Err(problem_response(
+            StatusCode::FORBIDDEN,
+            "Forbidden",
+            "your own username and password can only be changed from a login session, not with an API token",
+        ));
+    }
+
     // `Validate` skips fields that are `None`, so an empty body falls
     // through cleanly. Whatever the user passes gets the same rules as
     // create — the regex / length attributes are declared once and shared
@@ -61,17 +88,45 @@ pub(crate) async fn update(
         user.username = username;
     }
 
-    if let Some(password) = input.password {
-        let password_hash = users_model::hash_password(&password).map_err(|_| {
+    // A session alone does not prove who is at the keyboard: changing your own
+    // password also requires the current one, so a session left open or lifted
+    // from a browser cannot lock its owner out. An admin resetting ANOTHER
+    // account does not know that password, and needs `users:write` instead
+    // (checked above).
+    if is_self && input.password.is_some() {
+        let Some(current) = input.current_password.as_deref() else {
+            return Err(problem_response(
+                StatusCode::BAD_REQUEST,
+                "Bad Request",
+                "current_password is required to change your own password",
+            ));
+        };
+        let matches = argon2::verify_encoded(&user.password, current.as_bytes()).map_err(|_| {
+            problem_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal Server Error",
+                "credential verification failed",
+            )
+        })?;
+        if !matches {
+            return Err(problem_response(
+                StatusCode::FORBIDDEN,
+                "Forbidden",
+                "current password is incorrect",
+            ));
+        }
+    }
+
+    let new_password_hash = match input.password {
+        Some(password) => Some(users_model::hash_password(&password).map_err(|_| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "errors": ["Password hashing failed"] })),
             )
                 .into_response()
-        })?;
-
-        user.password = password_hash;
-    }
+        })?),
+        None => None,
+    };
 
     // Changing a role is an administrative act, never self-service: a viewer
     // must not be able to promote itself by PUTing its own account. This is
@@ -102,6 +157,25 @@ pub(crate) async fn update(
             Json(json!({ "errors": ["Failed to update user"] })),
         )
             .into_response());
+    }
+
+    // The new hash and the revocation of the account's sessions commit
+    // together. On a self-service change the caller's own session survives; an
+    // admin reset of another account logs that account out everywhere.
+    if let Some(hash) = new_password_hash {
+        match users_model::change_password(&pool, &user.id, &hash, self_session.as_deref()).await {
+            Ok(revoked) => {
+                info!(user_id = %user.id, revoked, "password changed: revoked the account's other sessions");
+            }
+            Err(err) => {
+                error!(user_id = %user.id, error = %err, "failed to change password");
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "errors": ["Failed to change password"] })),
+                )
+                    .into_response());
+            }
+        }
     }
 
     // The role change and the credential revocation commit together, and the
@@ -169,6 +243,9 @@ pub(crate) struct UserInput {
         message = "must be 8 to 128 characters"
     ))]
     password: Option<String>,
+    /// The account's current password, required when changing your OWN
+    /// password. Not length-validated: it is compared, never stored.
+    current_password: Option<String>,
     /// Target role (`admin`, `operator`, `viewer`). Admin-only, and validated
     /// against the known roles in the handler rather than by a length rule.
     role: Option<String>,
@@ -408,11 +485,157 @@ mod tests {
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
-                "password": "newpassword"
+                "password": "newpassword",
+                "current_password": "changeme"
             }))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
+    }
+
+    /// Mint a PAT for `session`'s owner and return its clear value.
+    async fn mint_pat(server: &TestServer, session: &str, scopes: &[&str]) -> String {
+        let mint: TestResponse = server
+            .post("/tokens")
+            .add_header("Authorization", format!("Bearer {}", session))
+            .json(&json!({ "name": "pat", "scopes": scopes, "namespaces": [] }))
+            .await;
+        assert_eq!(mint.status_code(), StatusCode::CREATED);
+        mint.json::<serde_json::Value>()["token"]
+            .as_str()
+            .expect("minted token")
+            .to_string()
+    }
+
+    /// Whether `username` / `password` is accepted by `/login`.
+    async fn can_log_in(server: &TestServer, username: &str, password: &str) -> bool {
+        server
+            .post("/login")
+            .json(&json!({ "username": username, "password": password }))
+            .await
+            .status_code()
+            == StatusCode::OK
+    }
+
+    #[tokio::test]
+    async fn a_pat_cannot_change_its_owners_own_password() {
+        // A PAT must never be exchangeable, via a new password and `/login`,
+        // for a session carrying the owner's full role. Whatever its scopes:
+        // `users:write` does not make it a self-service credential either.
+        let app = new_test_app().await;
+        let session = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        for scopes in [&["users:read"][..], &["users:write"][..], &["admin"][..]] {
+            let pat = mint_pat(&server, &session, scopes).await;
+
+            let response: TestResponse = server
+                .put(&format!("/users/{ADMIN_ID}"))
+                .add_header("Authorization", format!("Bearer {}", pat))
+                .json(&json!({ "password": "taken-over", "current_password": "changeme" }))
+                .await;
+            assert_eq!(
+                response.status_code(),
+                StatusCode::FORBIDDEN,
+                "a PAT scoped {scopes:?} must not change its owner's password"
+            );
+
+            let rename: TestResponse = server
+                .put(&format!("/users/{ADMIN_ID}"))
+                .add_header("Authorization", format!("Bearer {}", pat))
+                .json(&json!({ "username": "renamed" }))
+                .await;
+            assert_eq!(
+                rename.status_code(),
+                StatusCode::FORBIDDEN,
+                "a PAT scoped {scopes:?} must not rename its owner"
+            );
+        }
+
+        assert!(
+            can_log_in(&server, "admin", "changeme").await,
+            "credentials must be unchanged"
+        );
+        assert!(!can_log_in(&server, "admin", "taken-over").await);
+    }
+
+    #[tokio::test]
+    async fn changing_your_own_password_requires_the_current_one() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let missing: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "password": "new-password" }))
+            .await;
+        assert_eq!(missing.status_code(), StatusCode::BAD_REQUEST);
+
+        let wrong: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "password": "new-password", "current_password": "not-it" }))
+            .await;
+        assert_eq!(wrong.status_code(), StatusCode::FORBIDDEN);
+
+        assert!(
+            can_log_in(&server, "john.doe", "changeme").await,
+            "password must be unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_your_own_password_revokes_your_other_sessions_only() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let current = login(app.clone(), "john.doe", "changeme").await;
+        let other = login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", current))
+            .json(&json!({ "password": "new-password", "current_password": "changeme" }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let me = |token: String| {
+            server
+                .get("/users/me")
+                .add_header("Authorization", format!("Bearer {}", token))
+        };
+        assert_eq!(
+            me(current).await.status_code(),
+            StatusCode::OK,
+            "caller stays logged in"
+        );
+        assert_eq!(
+            me(other).await.status_code(),
+            StatusCode::UNAUTHORIZED,
+            "other session revoked"
+        );
+        assert_eq!(live_credentials(&pool, JOHN_ID).await, 1);
+
+        assert!(can_log_in(&server, "john.doe", "new-password").await);
+        assert!(!can_log_in(&server, "john.doe", "changeme").await);
+    }
+
+    #[tokio::test]
+    async fn an_admin_reset_needs_no_current_password_and_logs_the_account_out() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let admin = login(app.clone(), "admin", "changeme").await;
+        login(app.clone(), "john.doe", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", admin))
+            .json(&json!({ "password": "reset-by-admin" }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        assert_eq!(live_credentials(&pool, JOHN_ID).await, 0);
+        assert!(can_log_in(&server, "john.doe", "reset-by-admin").await);
     }
 
     #[tokio::test]

@@ -381,18 +381,18 @@ ring user create --username <USERNAME> --password <PASSWORD>
 
 ### `ring user update`
 
-Update the **currently authenticated** user (the one whose token is in `auth.json`). At least one of `--username` or `--password` must be provided. There is no CLI command to update another user; for that, call `PUT /users/{id}` against the API directly.
+Update the **currently authenticated** user (the one whose token is in `auth.json`). At least one of `--username` or `--password` must be provided. Setting a new password requires `--current-password`, and signs out the account's other sessions (the current one stays valid). Both changes must be made from a login session: an API token is refused with `403`. There is no CLI command to update another user; for that, call `PUT /users/{id}` against the API directly.
 
 ```bash
-ring user update [--username <USERNAME>] [--password <NEW_PASSWORD>]
+ring user update [--username <USERNAME>] [--password <NEW_PASSWORD> --current-password <PASSWORD>]
 ```
 
 **Examples:**
 
 ```bash
-ring user update --password newsecret
+ring user update --current-password oldsecret --password newsecret
 ring user update --username alice
-ring user update --username alice --password newsecret
+ring user update --username alice --current-password oldsecret --password newsecret
 ```
 
 ### `ring user delete`

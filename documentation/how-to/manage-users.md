@@ -6,7 +6,7 @@ Ring ships with a default admin user (`admin` / `changeme`) created on first ser
 
 ```bash
 ring login --username admin --password changeme
-ring user update --password "your-new-password"
+ring user update --current-password changeme --password "your-new-password"
 ```
 
 The `update` command operates on the **currently authenticated user** (whose token is in `~/.config/kemeter/ring/auth.json`). Pass `--username` as well if you want to rename the admin account at the same time.
@@ -39,12 +39,14 @@ A freshly created user has no **Updated at** or **Login at** until it is edited 
 ## Update your own password
 
 ```bash
-ring user update --password "new-password"
+ring user update --current-password "old-password" --password "new-password"
 ```
 
 `ring user update` operates only on the **currently authenticated user** (the one whose token is in `auth.json`). Passing `--username new-name` **renames** the current user; it does not target a different one. There is no CLI command to change another user's password from your own session.
 
-Every role can do this, `viewer` included: changing your own password is self-service. Acting on **another** account is what requires `admin` plus a token carrying `users:write`.
+Every role can do this, `viewer` included: changing your own password is self-service. It requires your current password and a login session: an API token (PAT) cannot change its owner's username or password, whatever its scopes. Your other sessions are signed out; the one you used stays valid, and your API tokens are kept.
+
+Acting on **another** account is what requires `admin` plus a token carrying `users:write`. A reset does not need the account's current password, and signs out all of its sessions.
 
 To rotate another operator's password, either have them run `ring user update` themselves after logging in, or call the API directly:
 
