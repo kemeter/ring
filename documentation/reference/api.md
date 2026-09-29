@@ -1023,7 +1023,7 @@ The secret keys the HMAC signature your receiver verifies, so its strength is yo
 | `url`    | must be an http/https URL that does not target loopback (`localhost`, `127.0.0.1`, `::1`) or link-local (`169.254.0.0/16`, incl. `169.254.169.254`) | `webhook.url.format`     |
 | `events` | every entry is a known event kind | `webhook.events.unknown` |
 
-The URL restriction is an SSRF guard: Ring POSTs to the URL server-side, so a subscriber cannot point it at the host's own admin services or the cloud metadata endpoint. Private/internal cluster addresses (RFC-1918, e.g. `10.x`, `192.168.x`, `172.16–31.x`) **are** allowed, since they're the normal target for an internal subscriber. Redirects are not followed during delivery, so a subscriber can't bounce the request to a blocked target either.
+The URL restriction is an SSRF guard: Ring POSTs to the URL server-side, so a subscriber cannot point it at the host's own admin services or the cloud metadata endpoint. Private/internal cluster addresses (RFC-1918, e.g. `10.x`, `192.168.x`, `172.16–31.x`) **are** allowed, since they're the normal target for an internal subscriber. The same rules apply at delivery time to every address the URL's host name resolves to: a delivery is refused before connecting when any of them is loopback, link-local or unspecified, including an IPv4-mapped IPv6 form such as `::ffff:127.0.0.1`. Redirects are not followed and no HTTP proxy is used during delivery, so a subscriber can't route the request to a blocked target either.
 
 ### `GET /webhooks`
 

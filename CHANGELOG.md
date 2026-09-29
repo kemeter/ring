@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `volumes:read` and `volumes:write` scopes: the `/volumes` routes were not mapped to any scope, so deny-by-default made them admin-only and an `operator` could not manage the volumes of the workloads it administers
 
 ### Fixed
+- Webhook delivery now checks every address the subscriber's host name resolves to, and refuses to connect when any of them is loopback, link-local or unspecified. IPv4-mapped IPv6 addresses are held to the IPv4 rules, and delivery no longer goes through an HTTP proxy
 - Bump `rustls` to 0.23.45 and `rustls-webpki` to 0.103.15 to pick up the fix for RUSTSEC-2026-0285
 - The `/volumes` handlers never enforced a namespace boundary. This was masked while the routes were unreachable except by `admin`; with `volumes:*` scopes now granted to roles, a namespace-scoped token could otherwise have listed, read, created or deleted volumes in namespaces it was not allowed into (`host_path` included). `create`, `get`, `delete` now check the boundary and `list` filters by it, matching the deployments/configs/secrets handlers
 - OpenTelemetry distributed tracing (opt-in) via `[server.telemetry.traces]`: `ring server start` exports spans over OTLP/gRPC — one per HTTP request (stable HTTP-server semantic-convention attributes) and one per productive scheduler cycle. Endpoint, `service.name` and sampler are configurable, standard `OTEL_*` env vars override the TOML, and an unreachable collector degrades gracefully instead of failing the server

@@ -21,9 +21,9 @@ use uuid::Uuid;
 /// nothing new, while blocking it would break the normal use case.
 ///
 /// This is a syntactic guard, not a full SSRF defense: a hostname that resolves
-/// to a blocked IP via DNS is not caught here (that needs resolution at delivery
-/// time). It is paired with `redirect(Policy::none())` on the delivery client so
-/// a subscriber can't 3xx-bounce the request to a blocked target.
+/// to a blocked IP is not caught here. Delivery closes that gap: its client
+/// vets every resolved address against the same rules before connecting, and
+/// follows no redirect (see `webhook::build_client`).
 pub(crate) fn url_safety_violation(url: &str) -> Option<String> {
     let parsed = match url::Url::parse(url) {
         Ok(u) => u,
@@ -58,16 +58,25 @@ pub(crate) fn url_safety_violation(url: &str) -> Option<String> {
 /// admin services), link-local (`169.254.0.0/16` cloud metadata) and the
 /// unspecified address. Private RFC-1918 / ULA ranges are intentionally NOT
 /// blocked — see `url_safety_violation`.
-fn is_blocked_ip(ip: &IpAddr) -> bool {
+///
+/// Shared by the creation-time URL check and the delivery-time check of every
+/// resolved address.
+pub(crate) fn is_blocked_ip(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_link_local() || v4.is_unspecified(),
-        IpAddr::V6(v6) => {
-            v6.is_loopback()
-                || v6.is_unspecified()
-                // Link-local (fe80::/10). ULA (fc00::/7) is the IPv6 analogue of
-                // RFC-1918 and, like it, is allowed.
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
-        }
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            // An IPv4-mapped address (`::ffff:a.b.c.d`) reaches the IPv4 host on
+            // a dual-stack socket, so it gets the IPv4 rules: `::ffff:127.0.0.1`
+            // is loopback even though `Ipv6Addr::is_loopback` says otherwise.
+            Some(v4) => is_blocked_ip(&IpAddr::V4(v4)),
+            None => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    // Link-local (fe80::/10). ULA (fc00::/7) is the IPv6
+                    // analogue of RFC-1918 and, like it, is allowed.
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        },
     }
 }
 
@@ -321,5 +330,15 @@ mod tests {
         assert!(url_safety_violation("http://0.0.0.0/hook").is_some());
         assert!(url_safety_violation("http://[::1]/hook").is_some());
         assert!(url_safety_violation("http://[fe80::1]/hook").is_some());
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_gets_the_ipv4_rules() {
+        assert!(url_safety_violation("http://[::ffff:127.0.0.1]/hook").is_some());
+        assert!(url_safety_violation("http://[::ffff:169.254.169.254]/hook").is_some());
+        assert!(url_safety_violation("http://[::ffff:0.0.0.0]/hook").is_some());
+        // A mapped private or public address is allowed, like its IPv4 form.
+        assert!(url_safety_violation("http://[::ffff:10.0.0.5]/hook").is_none());
+        assert!(url_safety_violation("http://[::ffff:93.184.216.34]/hook").is_none());
     }
 }
