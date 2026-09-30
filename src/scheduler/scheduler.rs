@@ -1358,6 +1358,18 @@ async fn run_autoscaling(
     autoscaler.retain_known(&live);
 }
 
+/// Upper bound, in seconds, on a single deployment's `runtime.apply()`.
+///
+/// Shared with the API so it can refuse a `stop_timeout` that would outlast
+/// it: an apply that times out is abandoned, and the scheduler moves on to the
+/// next deployment while the instance it was stopping is still shutting down.
+pub(crate) fn apply_timeout_secs() -> u64 {
+    env::var("RING_APPLY_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300)
+}
+
 pub(crate) async fn schedule(
     pool: SqlitePool,
     config: crate::config::config::Config,
@@ -1371,10 +1383,7 @@ pub(crate) async fn schedule(
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(config.server.scheduler.interval);
 
-    let apply_timeout_secs = env::var("RING_APPLY_TIMEOUT")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(300);
+    let apply_timeout_secs = apply_timeout_secs();
     let apply_timeout = Duration::from_secs(apply_timeout_secs);
 
     let duration = Duration::from_secs(interval_seconds);

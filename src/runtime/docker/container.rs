@@ -42,6 +42,18 @@ fn get_privileged_config(
         .and_then(|u| u.privileged)
 }
 
+/// The deployment's stop grace period, in the shape Docker's `StopTimeout`
+/// takes. Set on the container itself rather than passed to each stop call, so
+/// every path that stops it (replacement, scale-down, restart) honours it.
+fn get_stop_timeout(
+    deployment_config: &Option<crate::models::deployments::DeploymentConfig>,
+) -> Option<i64> {
+    deployment_config
+        .as_ref()
+        .and_then(|c| c.stop_timeout)
+        .map(i64::from)
+}
+
 /// Pick the digest entry whose repository prefix matches `repo`. Docker stores
 /// one `RepoDigest` per registry an image is tagged with, so blindly taking
 /// the first entry could pin a digest from a sibling tag (e.g. `nginx` and
@@ -555,6 +567,7 @@ pub(crate) async fn create_container(
         user: user_config,
         healthcheck: build_health_config(&deployment.health_checks),
         exposed_ports,
+        stop_timeout: get_stop_timeout(&deployment.config),
         ..Default::default()
     };
 
@@ -817,6 +830,7 @@ mod tests {
             }),
             use_host_auth: false,
             image_pull_secret: None,
+            stop_timeout: None,
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -835,6 +849,7 @@ mod tests {
             }),
             use_host_auth: false,
             image_pull_secret: None,
+            stop_timeout: None,
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -891,6 +906,37 @@ mod tests {
     }
 
     #[test]
+    fn stop_timeout_is_forwarded_in_seconds() {
+        let config = Some(crate::models::deployments::DeploymentConfig {
+            image_pull_policy: String::from("always"),
+            server: None,
+            username: None,
+            password: None,
+            user: None,
+            use_host_auth: false,
+            image_pull_secret: None,
+            stop_timeout: Some(120),
+        });
+        assert_eq!(get_stop_timeout(&config), Some(120));
+    }
+
+    #[test]
+    fn stop_timeout_unset_leaves_the_runtime_default() {
+        let config = Some(crate::models::deployments::DeploymentConfig {
+            image_pull_policy: String::from("always"),
+            server: None,
+            username: None,
+            password: None,
+            user: None,
+            use_host_auth: false,
+            image_pull_secret: None,
+            stop_timeout: None,
+        });
+        assert_eq!(get_stop_timeout(&config), None);
+        assert_eq!(get_stop_timeout(&None), None);
+    }
+
+    #[test]
     fn test_get_privileged_config() {
         let config = Some(crate::models::deployments::DeploymentConfig {
             image_pull_policy: String::from("always"),
@@ -904,6 +950,7 @@ mod tests {
             }),
             use_host_auth: false,
             image_pull_secret: None,
+            stop_timeout: None,
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }

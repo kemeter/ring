@@ -122,6 +122,11 @@ struct DeploymentConfig {
     /// Mutually exclusive with inline credentials and `use_host_auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_pull_secret: Option<String>,
+
+    /// Seconds an instance is given to exit after the stop signal before it is
+    /// killed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stop_timeout: Option<u32>,
 }
 
 /// Numeric uid/gid the container runs as (forwarded to Docker's `User`).
@@ -1025,6 +1030,29 @@ mod tests {
         deployment.runtime = "docker".to_string();
         deployment.name = "".to_string();
         assert!(deployment.validate().is_err());
+    }
+
+    #[test]
+    fn stop_timeout_travels_from_manifest_to_payload() {
+        let yaml_content = r#"
+deployments:
+  db:
+    name: db
+    image: postgres:18
+    runtime: docker
+    namespace: ring
+    config:
+      stop_timeout: 120
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let deployment = config.deployments.get("db").unwrap();
+
+        assert_eq!(
+            deployment.config.as_ref().and_then(|c| c.stop_timeout),
+            Some(120)
+        );
+        let payload = serde_json::to_value(deployment).unwrap();
+        assert_eq!(payload["config"]["stop_timeout"], 120);
     }
 
     #[test]

@@ -238,6 +238,24 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
             "deployment.config.image_pull_secret.conflict",
         ));
     }
+
+    // The grace period is spent inside the scheduler's apply of the deployment
+    // being stopped. One that reaches the apply timeout would have the apply
+    // abandoned mid-stop and the successor created while its predecessor is
+    // still shutting down — the very overlap a long grace period is meant to
+    // avoid for a workload that owns a data directory.
+    if let Some(stop_timeout) = config.stop_timeout {
+        let apply_timeout = crate::scheduler::scheduler::apply_timeout_secs();
+        if u64::from(stop_timeout) >= apply_timeout {
+            errors.push(Violation::new(
+                "config.stop_timeout",
+                format!(
+                    "stop_timeout ({stop_timeout}s) must be shorter than the scheduler's apply timeout ({apply_timeout}s, RING_APPLY_TIMEOUT)"
+                ),
+                "deployment.config.stop_timeout.exceeds_apply_timeout",
+            ));
+        }
+    }
 }
 
 /// Per-port rules. The `DeploymentPort` struct already constrains
@@ -393,6 +411,25 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
 }
 
 fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
+    // Only the Docker-API runtimes carry a per-container stop grace period.
+    // Accepting the field elsewhere would leave an operator believing their
+    // workload is given time to shut down when it is not.
+    if input
+        .config
+        .as_ref()
+        .is_some_and(|c| c.stop_timeout.is_some())
+        && !matches!(input.runtime.as_str(), "docker" | "podman")
+    {
+        errors.push(Violation::new(
+            "config.stop_timeout",
+            format!(
+                "stop_timeout is not supported on the {} runtime (supported: docker, podman)",
+                input.runtime
+            ),
+            "deployment.config.stop_timeout.runtime_unsupported",
+        ));
+    }
+
     if input.runtime == "cloud-hypervisor" {
         // `command` health checks are now supported via the in-guest
         // `ring-agent` daemon (vsock). The guest image must ship the agent
@@ -3432,6 +3469,79 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    async fn stop_timeout_violation_codes(runtime: &str, stop_timeout: u64) -> Vec<String> {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": runtime,
+                "name": "db",
+                "namespace": "ring",
+                "image": "postgres:18",
+                "config": { "stop_timeout": stop_timeout }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: serde_json::Value = response.json();
+        body["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x["code"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn create_accepts_a_stop_timeout_and_stores_it() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "db",
+                "namespace": "ring",
+                "image": "postgres:18",
+                "config": { "stop_timeout": 120 }
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["config"]["stop_timeout"], 120);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_stop_timeout_reaching_the_apply_timeout() {
+        // The scheduler abandons an apply at RING_APPLY_TIMEOUT (300s unless
+        // overridden) and moves on, so a stop still in progress by then would
+        // overlap with the successor's start.
+        let codes = stop_timeout_violation_codes("docker", 300).await;
+        assert!(
+            codes.contains(&"deployment.config.stop_timeout.exceeds_apply_timeout".to_string()),
+            "expected the apply-timeout violation, got {:?}",
+            codes
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_stop_timeout_on_a_runtime_that_ignores_it() {
+        let codes = stop_timeout_violation_codes("containerd", 120).await;
+        assert!(
+            codes.contains(&"deployment.config.stop_timeout.runtime_unsupported".to_string()),
+            "expected the unsupported-runtime violation, got {:?}",
+            codes
+        );
     }
 
     #[tokio::test]

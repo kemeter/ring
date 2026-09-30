@@ -186,6 +186,12 @@ pub(crate) struct DeploymentConfig {
     /// Mutually exclusive with inline credentials and `use_host_auth`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) image_pull_secret: Option<String>,
+    /// Seconds an instance is given to exit after the stop signal before it is
+    /// killed. Absent leaves the runtime's default (10s), which a database
+    /// flushing to disk can exceed: killed mid-shutdown, it restarts on a data
+    /// directory that was not closed cleanly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stop_timeout: Option<u32>,
 }
 
 /// Transport protocol for a published port. TCP is the default, preserving the
