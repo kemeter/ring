@@ -614,6 +614,14 @@ pub(crate) async fn find_all(
     let base_query = format!("SELECT {} FROM deployment", SELECT_COLUMNS);
     let (query, values) =
         crate::models::query::build_filtered_query(&base_query, &filters, ALLOWED_FILTER_COLUMNS);
+    // Oldest first, stated rather than left to the query planner. The scheduler
+    // reconciles deployments in the order returned here, and a replaced
+    // deployment must have its containers removed before its successor's are
+    // created: both may mount the same volume, and a database started on a data
+    // directory its predecessor still holds can corrupt it. Without an explicit
+    // order that only held because a full table scan happens to yield rows in
+    // insertion order — an index on `status` would have reversed it.
+    let query = format!("{query} ORDER BY rowid");
 
     let mut q = sqlx::query_as::<_, DeploymentRow>(&query);
     for val in &values {
@@ -1094,6 +1102,42 @@ mod tests {
             .await
             .unwrap();
         row.0 as u32
+    }
+
+    /// A replaced deployment is `deleted`, its successor `creating`. An index
+    /// on `status` makes the planner walk rows in status order, which puts the
+    /// successor first; the explicit order must win over it.
+    #[tokio::test]
+    async fn find_all_returns_a_replaced_deployment_before_its_successor() {
+        let pool = test_pool().await;
+        sqlx::query("CREATE INDEX deployment_status ON deployment(status)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut replaced = worker("old", 0);
+        replaced.name = "db".to_string();
+        replaced.status = DeploymentStatus::Deleted;
+        create(&pool, &replaced).await.unwrap();
+
+        let mut successor = worker("new", 0);
+        successor.name = "db".to_string();
+        successor.status = DeploymentStatus::Creating;
+        create(&pool, &successor).await.unwrap();
+
+        let mut filters = HashMap::new();
+        filters.insert(
+            "status".to_string(),
+            RECONCILED_STATUSES.iter().map(|s| s.to_string()).collect(),
+        );
+        let ids: Vec<String> = find_all(&pool, filters)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+
+        assert_eq!(ids, vec!["old", "new"]);
     }
 
     #[tokio::test]
