@@ -471,8 +471,27 @@ config:
 | `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
+| `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker and Podman only. See below. |
 
 The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
+
+### `stop_timeout`: time to shut down
+
+When Ring stops an instance — a redeploy, a scale-down, a rolling update draining the old version — the runtime sends the stop signal, waits, then kills whatever is still running. The wait is 10 seconds unless you say otherwise.
+
+```yaml
+config:
+  stop_timeout: 120          # seconds
+```
+
+Raise it for a workload that has real work to do on the way out. A database flushing to disk is the usual case: killed mid-shutdown, it restarts on a data directory that was not closed cleanly and has to recover first.
+
+The value is recorded on the container when it is created, so it applies to the instances of the deployment that declares it. Changing it on a running workload takes one redeploy to reach the instances, and that first replacement still stops the old ones with their previous grace period.
+
+Two limits are enforced at apply time:
+
+- It must be shorter than the scheduler's apply timeout (`RING_APPLY_TIMEOUT`, 300s by default). An apply that times out is abandoned, and Ring would move on to the replacement while the old instance is still shutting down.
+- It is refused on runtimes that do not carry a per-instance grace period (containerd, cloud-hypervisor, firecracker), rather than accepted and ignored.
 
 ### `use_host_auth`: credentials from the host
 
