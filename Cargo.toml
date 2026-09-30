@@ -111,3 +111,14 @@ opentelemetry-appender-tracing = "0.32"
 axum-test = { version = "17.3.0", features = ["ws"] }
 # Only to build the `LogOutput` frames bollard hands back, in the exec tests.
 bytes = "1"
+
+# Argon2 is deliberately expensive, and unoptimized it is slower by an order of
+# magnitude: seconds per hash. The test suite logs in hundreds of times in
+# parallel, so a request that hashes more than once ran past the API's 10s
+# request timeout and failed with a 408. Optimizing just these two crates
+# keeps debug builds debuggable everywhere else.
+[profile.dev.package.rust-argon2]
+opt-level = 3
+
+[profile.dev.package.blake2b_simd]
+opt-level = 3
