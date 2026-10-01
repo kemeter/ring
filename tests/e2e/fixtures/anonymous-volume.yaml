@@ -5,3 +5,7 @@ deployments:
     runtime: docker
     image: ring-e2e-anon-vol:latest
     replicas: 1
+    config:
+      # The image is built locally by the test and exists in no registry, so
+      # the default `Always` policy would fail the pull.
+      image_pull_policy: IfNotPresent
