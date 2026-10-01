@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-01
+
 ### Breaking
 - **Role-based access control replaces the flat user/admin model.** Accounts now hold `admin`, `operator` or `viewer`, and a login session is issued the scopes of its role. Previously every login was minted with full-access scopes, so any authenticated user could do anything regardless of their role. Consequences when upgrading:
   - accounts that were `user` become `viewer` (read-only); promote them with `PUT /users/{id}` `{"role":"operator"}`
@@ -20,18 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Horizontal autoscaling, opt-in per deployment via an `autoscale` block (`min`, `max`, `target_cpu`): Ring adjusts the instance count from the average CPU per instance instead of holding `replicas` fixed. A deployment without the block never has its count changed by Ring, so an external controller can keep owning the count for its own deployments. `replicas` stays as the manifest declared it (the decision lives beside it), so re-running `ring apply` does not fight the autoscaler, and a rolling update carries the current capacity over to the new deployment. Decisions move one instance at a time, ignore CPU within 10 points of the target, wait 60s before adding and 300s before removing, and hold entirely when metrics are missing or older than 120s. Rejected for `kind: job`, for host networking with `max` above 1, and on the containerd runtime, which does not report CPU usage yet
 - Role-based access control: `admin` (full access), `operator` (read everything, write deployments, configs, secrets, volumes, webhooks and namespaces) and `viewer` (read-only). Changing an account's role revokes its sessions and tokens so the change takes effect immediately, and the last remaining admin can be neither demoted nor deleted (`409 Conflict`)
 - `volumes:read` and `volumes:write` scopes: the `/volumes` routes were not mapped to any scope, so deny-by-default made them admin-only and an `operator` could not manage the volumes of the workloads it administers
-
-### Fixed
-- The scheduler now reconciles deployments oldest first by explicit order. A replaced deployment has to lose its containers before its successor's are created, since both may mount the same volume; that ordering only held because an unordered query happened to return rows as inserted, and an index on `status` would have started the successor first.
-- Webhook delivery now checks every address the subscriber's host name resolves to, and refuses to connect when any of them is loopback, link-local or unspecified. IPv4-mapped IPv6 addresses are held to the IPv4 rules, and delivery no longer goes through an HTTP proxy
-- Bump `rustls` to 0.23.45 and `rustls-webpki` to 0.103.15 to pick up the fix for RUSTSEC-2026-0285
-- The `/volumes` handlers never enforced a namespace boundary. This was masked while the routes were unreachable except by `admin`; with `volumes:*` scopes now granted to roles, a namespace-scoped token could otherwise have listed, read, created or deleted volumes in namespaces it was not allowed into (`host_path` included). `create`, `get`, `delete` now check the boundary and `list` filters by it, matching the deployments/configs/secrets handlers
 - OpenTelemetry distributed tracing (opt-in) via `[server.telemetry.traces]`: `ring server start` exports spans over OTLP/gRPC — one per HTTP request (stable HTTP-server semantic-convention attributes) and one per productive scheduler cycle. Endpoint, `service.name` and sampler are configurable, standard `OTEL_*` env vars override the TOML, and an unreachable collector degrades gracefully instead of failing the server
 - OpenTelemetry metric export (opt-in, push) via `[server.telemetry.metrics]`: periodically pushes the per-deployment resource gauges (CPU, memory, network, disk, PIDs, instance and restart counts, labelled `{deployment, namespace, runtime}`) over OTLP/gRPC, read from the same stats cache the Prometheus `/metrics` endpoint uses so no extra runtime round-trip is added. Endpoint, `service.name` and push interval are configurable
 - OpenTelemetry log export (opt-in, push) via `[server.telemetry.logs]`: bridges the server's log events to an OTLP/gRPC collector in addition to the console. Each telemetry signal (traces, metrics, logs) is independently toggled; all three degrade gracefully when the collector is unreachable
 - `network.mode: host` is now accepted on the Podman runtime, not just Docker: Podman shares the Docker-compatible lifecycle and honours `NetworkMode: host`, so the container binds the host's network stack directly (Cloud Hypervisor and Firecracker still reject host mode)
 - `RING_LOG_FORMAT=json` switches the console logger to structured JSON (one object per line) for log shippers and structured ingestion; the default stays human-readable text. Independent of OTLP log export
 - `ring completions <bash|zsh|fish>` prints a shell completion script, so `<TAB>` completes commands, subcommands and flags. Generated from Ring's own command tree, so it never drifts from the CLI it ships with; regenerate after upgrading to pick up new commands
+
+### Fixed
+- The scheduler now reconciles deployments oldest first by explicit order. A replaced deployment has to lose its containers before its successor's are created, since both may mount the same volume; that ordering only held because an unordered query happened to return rows as inserted, and an index on `status` would have started the successor first.
+- Webhook delivery now checks every address the subscriber's host name resolves to, and refuses to connect when any of them is loopback, link-local or unspecified. IPv4-mapped IPv6 addresses are held to the IPv4 rules, and delivery no longer goes through an HTTP proxy
+- Bump `rustls` to 0.23.45 and `rustls-webpki` to 0.103.15 to pick up the fix for RUSTSEC-2026-0285
+- The `/volumes` handlers never enforced a namespace boundary. This was masked while the routes were unreachable except by `admin`; with `volumes:*` scopes now granted to roles, a namespace-scoped token could otherwise have listed, read, created or deleted volumes in namespaces it was not allowed into (`host_path` included). `create`, `get`, `delete` now check the boundary and `list` filters by it, matching the deployments/configs/secrets handlers
 
 ### Changed
 - `ring server start` shuts down gracefully on `SIGTERM` / `Ctrl-C`: it stops accepting new API connections, drains in-flight HTTP requests, tears down the scheduler, and exits on its own instead of being killed abruptly. Managed workloads keep running and are reconciled again on restart
