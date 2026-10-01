@@ -471,18 +471,13 @@ mod tests {
     }
 
     fn ext4_tools_or_skip(test: &str) -> bool {
-        for tool in ["mke2fs"] {
-            if std::process::Command::new(tool)
-                .arg("--help")
-                .output()
-                .is_err()
-            {
-                eprintln!(
-                    "skipping {}: {} not installed (dosfstools/mtools)",
-                    test, tool
-                );
-                return true;
-            }
+        if std::process::Command::new("mke2fs")
+            .arg("--help")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping {}: mke2fs not installed (e2fsprogs)", test);
+            return true;
         }
         false
     }
