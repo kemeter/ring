@@ -910,6 +910,46 @@ pub(crate) async fn find_referencing_volume(
     Ok(referencing)
 }
 
+/// Active deployments of `namespace` that mount the config `config_name`.
+///
+/// Like [`find_referencing_volume`], the SQL `LIKE` only pre-filters on the
+/// shared `source` field; each candidate is confirmed by parsing its volumes
+/// for a `type == "config"` mount of this source. Newest first, so the first
+/// deployment of a namespace/name is the current one.
+pub(crate) async fn find_referencing_config(
+    pool: &SqlitePool,
+    namespace: &str,
+    config_name: &str,
+) -> Result<Vec<Deployment>, sqlx::Error> {
+    let pattern = format!("%\"source\":\"{}\"%", config_name);
+    let sql = format!(
+        "SELECT {} FROM deployment WHERE namespace = ? AND volumes LIKE ? AND status NOT IN ('deleted', 'completed', 'failed') ORDER BY created_at DESC",
+        SELECT_COLUMNS
+    );
+
+    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+        .bind(namespace)
+        .bind(&pattern)
+        .fetch_all(pool)
+        .await?;
+
+    let referencing = rows
+        .into_iter()
+        .map(Deployment::from)
+        .filter(|deployment| {
+            serde_json::from_str::<Vec<DeploymentVolume>>(&deployment.volumes)
+                .map(|mounts| {
+                    mounts.iter().any(|mount| {
+                        mount.r#type == "config" && mount.source.as_deref() == Some(config_name)
+                    })
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+
+    Ok(referencing)
+}
+
 pub(crate) async fn delete_batch(
     pool: &SqlitePool,
     deleted: Vec<String>,

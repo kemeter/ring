@@ -320,6 +320,14 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn new_test_app_with_pool() -> (sqlx::SqlitePool, Router) {
+        new_test_app_with_runtimes(std::sync::Arc::new(std::collections::HashMap::new())).await
+    }
+
+    /// Like [`new_test_app_with_pool`], with the given runtimes registered, for
+    /// routes that act on running instances.
+    pub(crate) async fn new_test_app_with_runtimes(
+        runtimes: RuntimeMap,
+    ) -> (sqlx::SqlitePool, Router) {
         let configuration = Config::default();
 
         let pool = SqlitePoolOptions::new()
@@ -334,8 +342,6 @@ pub(crate) mod tests {
             .expect("Could not execute database migrations.");
 
         load_fixtures(&pool).await;
-
-        let runtimes: RuntimeMap = std::sync::Arc::new(std::collections::HashMap::new());
 
         // Exec on in tests: the interesting assertions are about what the
         // route refuses (auth, namespace, missing instance), and a disabled

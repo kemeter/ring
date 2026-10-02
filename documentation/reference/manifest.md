@@ -36,7 +36,7 @@ namespaces:
 
 ### `configs:` (optional)
 
-A map of config declarations. When present, Ring creates them after namespaces and before deployments, so a deployment that mounts one via a [`type: config` volume](#volumes) can resolve it on first apply. Already-existing configs (same `name` + `namespace`) are reported as "already exists, skipping": re-applying an unchanged manifest is idempotent and never errors. The map key is internal; Ring keys the config by its `name` + `namespace`.
+A map of config declarations. When present, Ring creates them after namespaces and before deployments, so a deployment that mounts one via a [`type: config` volume](#volumes) can resolve it on first apply. An already-existing config (same `name` + `namespace`) is updated in place with the manifest's content, so editing a config and applying again reaches the server; re-applying an unchanged manifest leaves it as it was. What an update does to the deployments mounting the config is set by their [`on_change`](#on_change-when-a-config-changes). The map key is internal; Ring keys the config by its `name` + `namespace`.
 
 ```yaml
 configs:
@@ -117,9 +117,9 @@ configs:
 
 > A manifest carrying its own `configs:` is self-sufficient: `ring apply -f manifest.yaml` creates the configs and the deployments that reference them in one pass, with no out-of-band `ring config create` needed.
 
-### `deployments:` (required)
+### `deployments:` (optional)
 
-A map of deployment declarations. The map key is internal; Ring keys the deployment by its `name` + `namespace` fields, not by the YAML key. By convention the YAML key matches the `name`.
+A map of deployment declarations. A manifest may carry `configs:` alone, to update configs without redeploying anything: applying a deployment always redeploys it, which a config mounted with `on_change: live` exists to avoid. The map key is internal; Ring keys the deployment by its `name` + `namespace` fields, not by the YAML key. By convention the YAML key matches the `name`.
 
 ## Deployment fields
 
@@ -206,6 +206,8 @@ A list of volume objects. **Four** types are supported:
 | `destination` | yes | all | Path inside the container. For `config` and `secret` volumes, this is the file path the payload will be written to. |
 | `driver` | no (default `local`) | `volume` (otherwise informational) | `local` or `nfs`. Only meaningful for `volume`. |
 | `permission` | no | `bind` and `volume` | `ro` or `rw`. Defaults to `rw` for `bind` and `volume`. **For `config` and `secret`, the API forces `ro`** regardless of what you write. |
+| `on_change` | no (default `none`) | `config` only | What happens to the running instances when the config changes: `none`, `live` or `rollout`. See [`on_change`](#on_change-when-a-config-changes). |
+| `reload_signal` | no | `config` with `on_change: live` | Signal sent to each instance's main process after a live rewrite: `SIGHUP`, `SIGUSR1` or `SIGUSR2`. |
 
 ```yaml
 volumes:
@@ -245,6 +247,35 @@ For `secret` volumes specifically:
 > **Wire-format vs `ring apply`.** The API DTO requires `driver` and `permission` to be present (no defaults at deserialization time). The `ring apply` CLI fills them in client-side before posting (`local` and `rw` respectively, except for `config` which becomes `ro`). If you `POST /deployments` directly with raw JSON, include both fields explicitly.
 
 > **A writable named volume cannot be shared across replicas.** A `type: volume` mount with `permission: rw` and `replicas > 1` is rejected at validation (`deployment.volumes.shared_rw_replicas`): every replica would mount the same volume read-write with no cross-writer coordination, which silently corrupts data (e.g. a database). Either drop `replicas` to `1`, or mount the volume `ro`, since read-only sharing is allowed.
+
+### `on_change`: when a config changes
+
+A `config` volume chooses what an update of its config (`PUT /configs/{id}`, or `ring apply` with the config edited) does to the deployments already running:
+
+| `on_change` | Effect | For |
+|---|---|---|
+| `none` (default) | Nothing. The running instances keep the content they started with; the next deployment gets the new one. | Choosing when a change goes out. |
+| `rollout` | The deployment is redeployed with the same spec, as if its manifest were applied again: a rolling update when it has health checks and publishes no host port, a replacement otherwise. | Applications that read their configuration at startup, which is most of them. |
+| `live` | The mounted file is rewritten under the running instances, which are neither restarted nor replaced. With `reload_signal`, Ring then sends that signal to the main process of every running instance. | Applications that watch their file (Envoy, Traefik, Vector with `--watch-config`, …) or reload on a signal (nginx on `SIGHUP`). |
+
+```yaml
+volumes:
+  - type: config
+    source: nginx-conf
+    key: default.conf
+    destination: /etc/nginx/conf.d/default.conf
+    on_change: live
+    reload_signal: SIGHUP
+```
+
+Things to know before choosing:
+
+- **`live` changes every instance at once.** There is no rollout, no health check and no way back: a broken config reaches every instance an application reloads it in. `rollout` keeps the protection of a rolling update.
+- **`live` rewrites the file in place**, so the instances keep seeing the same file. The rewrite is not atomic: an application reading the file at that very moment can see it partly written.
+- **`live` is supported on `docker` and `podman` only.** On `firecracker` and `cloud-hypervisor` a config reaches the guest as a disk image, which cannot change under a running VM; `containerd` does not support it yet. Use `rollout` there.
+- **Only a content change counts.** Renaming a config does not touch the deployments mounting it, which reference it by its former name.
+- **`ring apply` does not redeploy twice.** When the manifest also carries the deployments mounting the config, they are redeployed by the apply itself, and the config update leaves them out of their `on_change`.
+- Each action is recorded in the deployment's events: `config_reloaded` for a rewrite, `config_reload_signal` for a signal, `config_rollout` for a redeploy.
 
 Named volumes a deployment mounts are auto-registered as first-class [volumes](/documentation/reference/api#volumes), so they are traceable and can be managed via the `/volumes` API. Anonymous volumes (from an image's `VOLUME` directive) are removed with their container; named volumes are never deleted by a deployment's deletion.
 

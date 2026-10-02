@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use std::borrow::Cow;
 use uuid::Uuid;
 
@@ -25,6 +25,7 @@ use crate::models::deployments::{
     NetworkMode, Resource, default_image_pull_policy,
 };
 use crate::models::namespace;
+use crate::models::volume::{OnChange, ReloadSignal};
 
 fn default_replicas() -> u32 {
     1
@@ -430,6 +431,25 @@ fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationL
         ));
     }
 
+    // A live config is a host file bind-mounted into the instance and
+    // rewritten in place. The VM runtimes hand configs to the guest as a disk
+    // image, which cannot be changed under a running VM, and containerd does
+    // not keep the stable per-deployment file yet.
+    if !matches!(input.runtime.as_str(), "docker" | "podman") {
+        for (idx, volume) in input.volumes.iter().enumerate() {
+            if volume.on_change == OnChange::Live {
+                errors.push(Violation::new(
+                    format!("volumes[{}].on_change", idx),
+                    format!(
+                        "on_change: live is not supported on the {} runtime (supported: docker, podman); use rollout to redeploy on change",
+                        input.runtime
+                    ),
+                    "deployment.volumes.on_change.runtime_unsupported",
+                ));
+            }
+        }
+    }
+
     if input.runtime == "cloud-hypervisor" {
         // `command` health checks are now supported via the in-guest
         // `ring-agent` daemon (vsock). The guest image must ship the agent
@@ -543,6 +563,12 @@ pub struct Volume {
     pub destination: String,
     pub driver: Driver,
     pub permission: Permission,
+
+    #[serde(default, skip_serializing_if = "OnChange::is_none")]
+    pub on_change: OnChange,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reload_signal: Option<ReloadSignal>,
 }
 
 impl Validate for Volume {
@@ -661,6 +687,33 @@ impl Validate for Volume {
                     errors.add("permission", error);
                 }
             }
+        }
+
+        // Only a config has content Ring can push again: a bind or named
+        // volume is the operator's own storage, and a secret is out of scope.
+        if !matches!(self.r#type, VolumeType::Config) && !self.on_change.is_none() {
+            errors.add(
+                "on_change",
+                ValidationError {
+                    code: Cow::from("unsupported_volume_type"),
+                    message: Some(Cow::from("on_change applies only to config volumes")),
+                    params: HashMap::new(),
+                },
+            );
+        }
+
+        // The signal follows a live rewrite. With `rollout` the instances are
+        // replaced and start from the new content, and with `none` nothing
+        // happens, so a signal would never be sent.
+        if self.reload_signal.is_some() && self.on_change != OnChange::Live {
+            errors.add(
+                "reload_signal",
+                ValidationError {
+                    code: Cow::from("requires_live"),
+                    message: Some(Cow::from("reload_signal requires on_change: live")),
+                    params: HashMap::new(),
+                },
+            );
         }
 
         if errors.is_empty() {
@@ -801,111 +854,6 @@ pub(crate) async fn create(
         }
     }
 
-    let active_deployments =
-        deployments::find_active_by_namespace_name(&pool, &input.namespace, &input.name).await;
-
-    // Determine whether rolling update is possible:
-    // - only when there is exactly one active deployment (the current one)
-    // - it has health checks configured
-    // - --force flag is not set
-    let mut rolling_parent_id: Option<String> = None;
-    let mut inherited_desired_replicas: Option<u32> = None;
-    // Captured to log a `ForceReplace` event on the new deployment once
-    // it exists. We collect the reason here so the caller of the API
-    // gets a clear explanation for why rolling didn't happen, instead
-    // of having to compare timestamps across two deployments.
-    let mut replaced_deployment_ids: Vec<String> = Vec::new();
-    let mut replace_reason: Option<&'static str> = None;
-
-    match active_deployments {
-        Ok(deployments_list) => {
-            info!(
-                "Checking for existing deployments: namespace='{}', name='{}' - found: {}",
-                input.namespace,
-                input.name,
-                deployments_list.len()
-            );
-
-            if !deployments_list.is_empty() {
-                info!(
-                    "Found {} active deployments with the same namespace and name",
-                    deployments_list.len()
-                );
-
-                let has_health_checks = input
-                    .health_checks
-                    .as_ref()
-                    .map(|hc| !hc.is_empty())
-                    .unwrap_or(false);
-
-                // A published host port can be bound by only one container at a
-                // time. Rolling update creates the new container *before*
-                // draining the old one, so the new bind collides with the old
-                // ("port is already allocated") and the deployment loops in
-                // instance_creation_failed. For these deployments we must
-                // recreate (drop old, then create new) instead — a brief
-                // downtime, but deterministic and loop-free.
-                let publishes_host_port = input.ports.iter().any(|p| p.published > 0);
-
-                // Rolling update: keep old deployment running if conditions are met
-                if !params.force
-                    && has_health_checks
-                    && deployments_list.len() == 1
-                    && !publishes_host_port
-                {
-                    let existing = &deployments_list[0];
-                    info!(
-                        "Rolling update: keeping deployment {} running as parent",
-                        existing.id
-                    );
-                    rolling_parent_id = Some(existing.id.clone());
-                    // Carry the parent's scaled-up capacity into the child.
-                    // Without this a redeploy silently drops an autoscaled
-                    // deployment back to the manifest count — a service running
-                    // 8 instances under load would restart at 2 and have to
-                    // climb again, one cooldown at a time, exactly when it is
-                    // least able to afford it.
-                    inherited_desired_replicas = existing.desired_replicas;
-                } else {
-                    // Immediate replace. Pick the most specific reason so
-                    // operators can fix the root cause: `force=true` is a
-                    // deliberate caller choice, the others are config gaps,
-                    // and `host_port_published` is the rolling-incompatible case.
-                    replace_reason = Some(if params.force {
-                        "force"
-                    } else if !has_health_checks {
-                        "no_health_checks"
-                    } else if deployments_list.len() > 1 {
-                        "multiple_active_deployments"
-                    } else {
-                        "host_port_published"
-                    });
-                    for mut deployment in deployments_list {
-                        info!("Marking deployment {} as deleted", deployment.id);
-                        replaced_deployment_ids.push(deployment.id.clone());
-                        deployment.status = DeploymentStatus::Deleted;
-                        deployment.updated_at = Some(Utc::now().to_string());
-                        if let Err(e) = deployments::update(&pool, &deployment).await {
-                            error!(
-                                "Failed to mark deployment {} as deleted: {}",
-                                deployment.id, e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            error!("Database error while checking active deployments: {}", e);
-            let message = Message {
-                message: "Internal server error".to_string(),
-            };
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-        }
-    }
-
-    let utc: DateTime<Utc> = Utc::now();
-
     let volumes = match serde_json::to_string(&input.volumes) {
         Ok(json_str) => json_str,
         Err(e) => {
@@ -929,7 +877,7 @@ pub(crate) async fn create(
         image: input.image.clone(),
         config: input.config.clone(),
         status: DeploymentStatus::Creating,
-        created_at: utc.to_string(),
+        created_at: Utc::now().to_string(),
         updated_at: None,
         labels: input.labels,
         environment: input.environment,
@@ -941,100 +889,17 @@ pub(crate) async fn create(
         health_checks: input.health_checks.unwrap_or_default(),
         resources: input.resources,
         autoscale: input.autoscale.clone(),
-        // Inherited from the parent on a rolling update, so a redeploy keeps
-        // the capacity the autoscaler had reached. `None` for a fresh
-        // deployment: the first tick with usable metrics makes the first
-        // decision, and until then `target_replicas()` falls back to
-        // `replicas`.
-        desired_replicas: inherited_desired_replicas,
+        // Set by `deploy` when the deployment rolls over a running one.
+        desired_replicas: None,
         image_digest: None,
         ports: input.ports,
         pending_events: vec![],
-        parent_id: rolling_parent_id,
+        parent_id: None,
         network: input.network.clone(),
     };
 
-    match deployments::create(&pool, &deployment).await {
+    match deploy(&pool, deployment, params.force).await {
         Ok(deployment) => {
-            let _ = deployment_event::log_event(
-                &pool,
-                deployment.id.clone(),
-                "info",
-                format!("Deployment '{}' created successfully", deployment.name),
-                "api",
-                Some("deployment_created"),
-            )
-            .await;
-
-            // Cloud Hypervisor silently ignores some fields that Docker
-            // honours (no registry pull, sizing from `limits` only). Rather
-            // than drop them without a trace, surface a single warning event
-            // naming exactly what won't take effect, so an operator isn't left
-            // wondering why their `requests`/registry creds did nothing.
-            if deployment.runtime == "cloud-hypervisor" {
-                let ignored = cloud_hypervisor_ignored_fields(&deployment);
-                if !ignored.is_empty() {
-                    let _ = deployment_event::log_event(
-                        &pool,
-                        deployment.id.clone(),
-                        "warning",
-                        format!(
-                            "These fields are ignored by the cloud-hypervisor runtime and have no effect: {}",
-                            ignored.join(", ")
-                        ),
-                        "api",
-                        Some("cloud_hypervisor_ignored_fields"),
-                    )
-                    .await;
-                }
-            }
-
-            // When a previous active deployment was wiped instead of
-            // being kept as a rolling parent, surface the reason as a
-            // dedicated event. Operators inspecting "why didn't my
-            // rolling update happen?" find the answer in one place
-            // (event level: warning so it shows up under
-            // `--level warning` filters).
-            if let Some(reason) = replace_reason {
-                let replaced = if replaced_deployment_ids.len() == 1 {
-                    format!("deployment {}", replaced_deployment_ids[0])
-                } else {
-                    format!(
-                        "{} deployments ({})",
-                        replaced_deployment_ids.len(),
-                        replaced_deployment_ids.join(", ")
-                    )
-                };
-                let message = match reason {
-                    "force" => format!(
-                        "Replaced {} immediately because force=true was set on the request — rolling update skipped",
-                        replaced
-                    ),
-                    "no_health_checks" => format!(
-                        "Replaced {} immediately because no health checks are declared — rolling update requires at least one health check",
-                        replaced
-                    ),
-                    "multiple_active_deployments" => format!(
-                        "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
-                        replaced, deployment.namespace, deployment.name
-                    ),
-                    "host_port_published" => format!(
-                        "Replaced {} immediately because it publishes a host port — rolling update would collide on the port (it creates the new container before stopping the old), so Ring recreated it instead (brief downtime)",
-                        replaced
-                    ),
-                    other => format!("Replaced {} immediately ({})", replaced, other),
-                };
-                let _ = deployment_event::log_event(
-                    &pool,
-                    deployment.id.clone(),
-                    "warning",
-                    message,
-                    "api",
-                    Some("force_replace"),
-                )
-                .await;
-            }
-
             let _ = audit_log::record(
                 &pool,
                 Some(&auth.user.id),
@@ -1048,8 +913,13 @@ pub(crate) async fn create(
             let deployment_output = DeploymentOutput::from_to_model(deployment);
             (StatusCode::CREATED, Json(deployment_output)).into_response()
         }
-        Err(e) => {
-            error!("Failed to create deployment: {}", e);
+        Err(DeployError::Database) => {
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response()
+        }
+        Err(DeployError::Conflict) => {
             let message = Message {
                 message: format!(
                     "A deployment with name '{}' already exists in namespace '{}'",
@@ -1059,6 +929,215 @@ pub(crate) async fn create(
             (StatusCode::CONFLICT, Json(message)).into_response()
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DeployError {
+    /// Looking up the deployments it replaces failed.
+    #[error("the active deployments could not be looked up")]
+    Database,
+    /// The new deployment could not be stored.
+    #[error("the new deployment could not be stored")]
+    Conflict,
+}
+
+/// Store `deployment` as the new version of its namespace/name, taking over
+/// from the active deployments of the same name.
+///
+/// This is the redeploy rule shared by `POST /deployments` and by a config
+/// change on a deployment that asked to be rolled out (`on_change: rollout`):
+/// the current deployment stays up as the rolling parent when it can, and is
+/// replaced at once otherwise, with an event saying why. `deployment` comes in
+/// without a parent; its id, spec and status are stored as given.
+pub(crate) async fn deploy(
+    pool: &Db,
+    mut deployment: Deployment,
+    force: bool,
+) -> Result<Deployment, DeployError> {
+    let active_deployments =
+        deployments::find_active_by_namespace_name(pool, &deployment.namespace, &deployment.name)
+            .await;
+
+    // Determine whether rolling update is possible:
+    // - only when there is exactly one active deployment (the current one)
+    // - it has health checks configured
+    // - force is not set
+    //
+    // Captured to log a `ForceReplace` event on the new deployment once
+    // it exists. We collect the reason here so the caller of the API
+    // gets a clear explanation for why rolling didn't happen, instead
+    // of having to compare timestamps across two deployments.
+    let mut replaced_deployment_ids: Vec<String> = Vec::new();
+    let mut replace_reason: Option<&'static str> = None;
+
+    match active_deployments {
+        Ok(deployments_list) => {
+            info!(
+                "Checking for existing deployments: namespace='{}', name='{}' - found: {}",
+                deployment.namespace,
+                deployment.name,
+                deployments_list.len()
+            );
+
+            if !deployments_list.is_empty() {
+                info!(
+                    "Found {} active deployments with the same namespace and name",
+                    deployments_list.len()
+                );
+
+                let has_health_checks = !deployment.health_checks.is_empty();
+
+                // A published host port can be bound by only one container at a
+                // time. Rolling update creates the new container *before*
+                // draining the old one, so the new bind collides with the old
+                // ("port is already allocated") and the deployment loops in
+                // instance_creation_failed. For these deployments we must
+                // recreate (drop old, then create new) instead — a brief
+                // downtime, but deterministic and loop-free.
+                let publishes_host_port = deployment.ports.iter().any(|p| p.published > 0);
+
+                // Rolling update: keep old deployment running if conditions are met
+                if !force
+                    && has_health_checks
+                    && deployments_list.len() == 1
+                    && !publishes_host_port
+                {
+                    let existing = &deployments_list[0];
+                    info!(
+                        "Rolling update: keeping deployment {} running as parent",
+                        existing.id
+                    );
+                    deployment.parent_id = Some(existing.id.clone());
+                    // Carry the parent's scaled-up capacity into the child.
+                    // Without this a redeploy silently drops an autoscaled
+                    // deployment back to the manifest count — a service running
+                    // 8 instances under load would restart at 2 and have to
+                    // climb again, one cooldown at a time, exactly when it is
+                    // least able to afford it.
+                    deployment.desired_replicas = existing.desired_replicas;
+                } else {
+                    // Immediate replace. Pick the most specific reason so
+                    // operators can fix the root cause: `force=true` is a
+                    // deliberate caller choice, the others are config gaps,
+                    // and `host_port_published` is the rolling-incompatible case.
+                    replace_reason = Some(if force {
+                        "force"
+                    } else if !has_health_checks {
+                        "no_health_checks"
+                    } else if deployments_list.len() > 1 {
+                        "multiple_active_deployments"
+                    } else {
+                        "host_port_published"
+                    });
+                    for mut replaced in deployments_list {
+                        info!("Marking deployment {} as deleted", replaced.id);
+                        replaced_deployment_ids.push(replaced.id.clone());
+                        replaced.status = DeploymentStatus::Deleted;
+                        replaced.updated_at = Some(Utc::now().to_string());
+                        if let Err(e) = deployments::update(pool, &replaced).await {
+                            error!(
+                                "Failed to mark deployment {} as deleted: {}",
+                                replaced.id, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            error!("Database error while checking active deployments: {}", e);
+            return Err(DeployError::Database);
+        }
+    }
+
+    let deployment = match deployments::create(pool, &deployment).await {
+        Ok(deployment) => deployment,
+        Err(e) => {
+            error!("Failed to create deployment: {}", e);
+            return Err(DeployError::Conflict);
+        }
+    };
+
+    let _ = deployment_event::log_event(
+        pool,
+        deployment.id.clone(),
+        "info",
+        format!("Deployment '{}' created successfully", deployment.name),
+        "api",
+        Some("deployment_created"),
+    )
+    .await;
+
+    // Cloud Hypervisor silently ignores some fields that Docker
+    // honours (no registry pull, sizing from `limits` only). Rather
+    // than drop them without a trace, surface a single warning event
+    // naming exactly what won't take effect, so an operator isn't left
+    // wondering why their `requests`/registry creds did nothing.
+    if deployment.runtime == "cloud-hypervisor" {
+        let ignored = cloud_hypervisor_ignored_fields(&deployment);
+        if !ignored.is_empty() {
+            let _ = deployment_event::log_event(
+                pool,
+                deployment.id.clone(),
+                "warning",
+                format!(
+                    "These fields are ignored by the cloud-hypervisor runtime and have no effect: {}",
+                    ignored.join(", ")
+                ),
+                "api",
+                Some("cloud_hypervisor_ignored_fields"),
+            )
+            .await;
+        }
+    }
+
+    // When a previous active deployment was wiped instead of
+    // being kept as a rolling parent, surface the reason as a
+    // dedicated event. Operators inspecting "why didn't my
+    // rolling update happen?" find the answer in one place
+    // (event level: warning so it shows up under
+    // `--level warning` filters).
+    if let Some(reason) = replace_reason {
+        let replaced = if replaced_deployment_ids.len() == 1 {
+            format!("deployment {}", replaced_deployment_ids[0])
+        } else {
+            format!(
+                "{} deployments ({})",
+                replaced_deployment_ids.len(),
+                replaced_deployment_ids.join(", ")
+            )
+        };
+        let message = match reason {
+            "force" => format!(
+                "Replaced {} immediately because force=true was set on the request — rolling update skipped",
+                replaced
+            ),
+            "no_health_checks" => format!(
+                "Replaced {} immediately because no health checks are declared — rolling update requires at least one health check",
+                replaced
+            ),
+            "multiple_active_deployments" => format!(
+                "Replaced {} immediately because more than one active deployment was found for {}/{} — rolling update only applies when exactly one parent exists",
+                replaced, deployment.namespace, deployment.name
+            ),
+            "host_port_published" => format!(
+                "Replaced {} immediately because it publishes a host port — rolling update would collide on the port (it creates the new container before stopping the old), so Ring recreated it instead (brief downtime)",
+                replaced
+            ),
+            other => format!("Replaced {} immediately ({})", replaced, other),
+        };
+        let _ = deployment_event::log_event(
+            pool,
+            deployment.id.clone(),
+            "warning",
+            message,
+            "api",
+            Some("force_replace"),
+        )
+        .await;
+    }
+
+    Ok(deployment)
 }
 
 #[cfg(test)]
@@ -3768,5 +3847,166 @@ mod tests {
             "expected job/readiness violation, got {:?}",
             codes
         );
+    }
+
+    /// POST a deployment with one volume and return the response status and
+    /// the `(field, code)` of each violation.
+    async fn post_with_volume(
+        runtime: &str,
+        volume: serde_json::Value,
+    ) -> (StatusCode, Vec<(String, String)>) {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let image = if runtime == "cloud-hypervisor" {
+            "/var/lib/ring/images/app.raw"
+        } else {
+            "nginx:latest"
+        };
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": runtime,
+                "name": "app",
+                "namespace": "ring",
+                "image": image,
+                "volumes": [volume]
+            }))
+            .await;
+
+        let status = response.status_code();
+        // A body the JSON extractor rejects (an unknown enum value) comes back
+        // as plain text, with no violation list.
+        let body: serde_json::Value = serde_json::from_str(&response.text()).unwrap_or_default();
+        let violations = if status == StatusCode::UNPROCESSABLE_ENTITY {
+            body["violations"]
+                .as_array()
+                .map(|violations| {
+                    violations
+                        .iter()
+                        .map(|v| {
+                            (
+                                v["propertyPath"]
+                                    .as_str()
+                                    .or(v["field"].as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                v["code"].as_str().unwrap_or_default().to_string(),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        (status, violations)
+    }
+
+    fn on_change_config_volume(on_change: &str) -> serde_json::Value {
+        json!({
+            "type": "config",
+            "source": "app-config",
+            "key": "app.yaml",
+            "destination": "/etc/app.yaml",
+            "driver": "local",
+            "permission": "ro",
+            "on_change": on_change
+        })
+    }
+
+    #[tokio::test]
+    async fn create_accepts_every_on_change_mode_on_docker_and_podman() {
+        for runtime in ["docker", "podman"] {
+            for mode in ["none", "live", "rollout"] {
+                let (status, violations) =
+                    post_with_volume(runtime, on_change_config_volume(mode)).await;
+                assert_eq!(
+                    status,
+                    StatusCode::CREATED,
+                    "{runtime}/{mode}: {violations:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn create_accepts_a_reload_signal_on_a_live_config() {
+        let mut volume = on_change_config_volume("live");
+        volume["reload_signal"] = json!("SIGHUP");
+        let (status, violations) = post_with_volume("docker", volume).await;
+        assert_eq!(status, StatusCode::CREATED, "{violations:?}");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_live_on_runtimes_without_a_host_file_mount() {
+        for runtime in ["containerd", "firecracker", "cloud-hypervisor"] {
+            let (status, violations) =
+                post_with_volume(runtime, on_change_config_volume("live")).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{runtime}");
+            assert!(
+                violations
+                    .iter()
+                    .any(|(_, code)| code == "deployment.volumes.on_change.runtime_unsupported"),
+                "{runtime}: {violations:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_accepts_rollout_on_vm_runtimes() {
+        let (status, violations) =
+            post_with_volume("firecracker", on_change_config_volume("rollout")).await;
+        assert_eq!(status, StatusCode::CREATED, "{violations:?}");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_on_change_outside_config_volumes() {
+        let (status, violations) = post_with_volume(
+            "docker",
+            json!({
+                "type": "bind",
+                "source": "/srv/data",
+                "destination": "/data",
+                "driver": "local",
+                "permission": "ro",
+                "on_change": "live"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            violations
+                .iter()
+                .any(|(_, code)| code == "unsupported_volume_type"),
+            "{violations:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_reload_signal_without_live() {
+        for mode in ["none", "rollout"] {
+            let mut volume = on_change_config_volume(mode);
+            volume["reload_signal"] = json!("SIGHUP");
+            let (status, violations) = post_with_volume("docker", volume).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{mode}");
+            assert!(
+                violations.iter().any(|(_, code)| code == "requires_live"),
+                "{mode}: {violations:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_unknown_on_change_or_signal() {
+        let (status, _) = post_with_volume("docker", on_change_config_volume("restart")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let mut volume = on_change_config_volume("live");
+        volume["reload_signal"] = json!("SIGKILL");
+        let (status, _) = post_with_volume("docker", volume).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

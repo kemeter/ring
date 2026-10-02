@@ -326,6 +326,7 @@ impl CloudHypervisorLifecycle {
                 ResolvedMount::Content {
                     content,
                     destination,
+                    ..
                 } => {
                     let dest_path = Path::new(destination);
                     let parent = dest_path
@@ -1701,6 +1702,7 @@ mod tests {
         let mounts = vec![ResolvedMount::Content {
             content: "server { listen 80; }".to_string(),
             destination: "/etc/nginx/nginx.conf".to_string(),
+            live_slot: None,
         }];
 
         let instance_id = "ch-instance-content";
@@ -1872,6 +1874,7 @@ mod tests {
             ResolvedMount::Content {
                 content: "hello=world".to_string(),
                 destination: "/etc/conf/app.env".to_string(),
+                live_slot: None,
             },
         ];
 

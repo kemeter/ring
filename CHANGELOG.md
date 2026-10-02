@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `on_change` on `config` volumes sets what an update of the config does to the running deployments: `none` (the default, and the behaviour so far) leaves them alone, `rollout` redeploys them as a re-applied manifest would (rolling when the deployment allows it), and `live` rewrites the mounted file under the running instances without restarting them (Docker and Podman). With `live`, `reload_signal` (`SIGHUP`, `SIGUSR1` or `SIGUSR2`) is then sent to each instance's main process, for applications that reload on a signal. Each action is recorded in the deployment's events
+- `PUT /configs/{id}` accepts `skip_deployments`, the deployments the caller redeploys itself; `ring apply` sets it so a manifest carrying both a config and the deployments mounting it rolls them once instead of replacing them
+- A `ring apply` manifest may carry `configs:` alone, to update configs without redeploying anything
+
 ### Changed
 - Building from source uses the Rust version pinned in `rust-toolchain.toml` (1.99.0), which rustup installs on the first build, so a new stable release can no longer break the build or its lints without a code change
 

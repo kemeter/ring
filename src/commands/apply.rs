@@ -265,6 +265,12 @@ struct Volume {
     permission: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     key: Option<String>,
+    // Passed through as written: the server owns the accepted values and
+    // rejects an unknown one with a message naming them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on_change: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reload_signal: Option<String>,
 }
 
 fn default_driver() -> String {
@@ -309,6 +315,10 @@ struct ConfigFile {
     namespaces: HashMap<String, NamespaceDefinition>,
     #[serde(default)]
     configs: HashMap<String, ConfigDefinition>,
+    // Optional so a manifest can update configs alone: applying a deployment
+    // always redeploys it, which would defeat a config mounted with
+    // `on_change: live`.
+    #[serde(default)]
     deployments: HashMap<String, Deployment>,
 }
 
@@ -612,8 +622,38 @@ async fn create_namespace_on_server(
     }
 }
 
+/// Names of the deployments of the manifest that mount `config` and that this
+/// apply will post, resolved the way they are posted.
+fn deployments_mounting(
+    deployments: &HashMap<String, Deployment>,
+    env_vars: &HashMap<String, String>,
+    config: &ConfigDefinition,
+) -> Vec<String> {
+    let mut names: Vec<String> = deployments
+        .values()
+        .filter(|deployment| deployment.validate().is_ok())
+        .map(|deployment| {
+            let mut deployment = deployment.clone();
+            deployment.resolve_env_vars(env_vars);
+            deployment
+        })
+        .filter(|deployment| {
+            deployment.namespace == config.namespace
+                && deployment
+                    .volumes
+                    .iter()
+                    .any(|v| v.volume_type == "config" && v.source == config.name)
+        })
+        .map(|deployment| deployment.name)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 async fn create_config_on_server(
     config: &ConfigDefinition,
+    redeployed: &[String],
     api_url: &str,
     auth_token: &str,
     client: &reqwest::Client,
@@ -644,7 +684,7 @@ async fn create_config_on_server(
         // The config already exists. `apply` is declarative, so update it in
         // place instead of skipping — otherwise edits to a config (Grafana
         // dashboards, datasources, prometheus.yml, ...) never reach the server.
-        update_config_on_server(config, api_url, auth_token, client).await
+        update_config_on_server(config, redeployed, api_url, auth_token, client).await
     } else {
         let context = format!("Failed to create config '{}'", config.name);
         let code = render_response_error(&context, response).await;
@@ -654,8 +694,14 @@ async fn create_config_on_server(
 
 /// Look up an existing config by namespace + name and PUT the new content onto
 /// it, so a re-applied config map is updated rather than skipped.
+///
+/// `redeployed` names the deployments of this manifest that mount the config:
+/// this apply posts them right after, so the server is asked to leave them out
+/// of their `on_change`. Rolling one out on the config change and then again on
+/// the post would find two active deployments and replace both at once.
 async fn update_config_on_server(
     config: &ConfigDefinition,
+    redeployed: &[String],
     api_url: &str,
     auth_token: &str,
     client: &reqwest::Client,
@@ -688,8 +734,11 @@ async fn update_config_on_server(
     };
 
     let update_url = format!("{}/configs/{}", api_url, id);
-    let response = client
-        .put(&update_url)
+    let mut request = client.put(&update_url);
+    if !redeployed.is_empty() {
+        request = request.query(&[("skip_deployments", redeployed.join(","))]);
+    }
+    let response = request
         .header("Authorization", format!("Bearer {}", auth_token))
         .json(&json!(config))
         .send()
@@ -838,8 +887,14 @@ async fn apply_internal(
                 "DRY RUN - Would create config '{}' in namespace '{}'",
                 config.name, config.namespace
             );
-        } else if let Err(e) =
-            create_config_on_server(&config, &api_url, &auth_config.token, client).await
+        } else if let Err(e) = create_config_on_server(
+            &config,
+            &deployments_mounting(&config_file.deployments, &env_vars, &config),
+            &api_url,
+            &auth_config.token,
+            client,
+        )
+        .await
         {
             if !matches!(e, ApplyError::Reported(_)) {
                 eprintln!("Failed to create config '{}': {}", key, e);
@@ -1358,6 +1413,93 @@ deployments:
         assert_eq!(nginx.volumes[0].permission, "ro");
         assert_eq!(nginx.volumes[1].volume_type, "bind");
         assert_eq!(nginx.volumes[1].permission, "rw");
+    }
+
+    #[test]
+    fn deployments_mounting_names_the_manifest_deployments_of_the_config() {
+        let yaml_content = r#"
+configs:
+  app:
+    namespace: prod
+    name: app-config
+    data: '{"app.yaml":"level: debug"}'
+deployments:
+  api:
+    name: api
+    namespace: prod
+    image: api:1
+    volumes:
+      - type: config
+        source: app-config
+        key: app.yaml
+        destination: /etc/app.yaml
+  worker:
+    name: worker
+    namespace: prod
+    image: worker:1
+    volumes:
+      - type: config
+        source: other-config
+        key: app.yaml
+        destination: /etc/app.yaml
+  api-staging:
+    name: api
+    namespace: staging
+    image: api:1
+    volumes:
+      - type: config
+        source: app-config
+        key: app.yaml
+        destination: /etc/app.yaml
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let names =
+            deployments_mounting(&config.deployments, &HashMap::new(), &config.configs["app"]);
+        // Not `worker` (another config), not the staging `api` (another
+        // namespace, whose config of the same name is a different one).
+        assert_eq!(names, vec!["api".to_string()]);
+    }
+
+    #[test]
+    fn a_manifest_may_carry_configs_alone() {
+        let yaml_content = r#"
+configs:
+  app:
+    namespace: ring
+    name: app
+    data: '{"app.yaml":"level: debug"}'
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        assert_eq!(config.configs.len(), 1);
+        assert!(config.deployments.is_empty());
+    }
+
+    #[test]
+    fn config_volume_on_change_and_reload_signal_reach_the_api_payload() {
+        let yaml_content = r#"
+deployments:
+  nginx:
+    name: nginx
+    image: nginx:1.27
+    volumes:
+      - type: config
+        source: nginx-conf
+        key: default.conf
+        destination: /etc/nginx/conf.d/default.conf
+        on_change: live
+        reload_signal: SIGHUP
+      - type: bind
+        source: /tmp/data
+        destination: /data
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let volumes = serde_json::to_value(&config.deployments["nginx"].volumes).unwrap();
+
+        assert_eq!(volumes[0]["on_change"], "live");
+        assert_eq!(volumes[0]["reload_signal"], "SIGHUP");
+        // Left out when unset, so the server applies its own default.
+        assert!(volumes[1].get("on_change").is_none());
+        assert!(volumes[1].get("reload_signal").is_none());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
 use crate::models::health_check::HealthCheck;
-use crate::models::volume::ResolvedMount;
+use crate::models::volume::{ResolvedMount, live_config_path};
 use bollard::{
     Docker,
     auth::DockerCredentials,
@@ -695,17 +695,33 @@ async fn create_mount_from_resolved(
         ResolvedMount::Content {
             content,
             destination,
+            live_slot,
         } => {
             let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
             tokio::fs::create_dir_all(&temp_dir).await?;
 
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            content.hash(&mut hasher);
-            let hash = format!("{:x}", hasher.finish());
-            let temp_file = format!("{}/{}", temp_dir, hash);
-            if !tokio::fs::try_exists(&temp_file).await.unwrap_or(false) {
-                tokio::fs::write(&temp_file, content).await?;
-            }
+            let temp_file = match live_slot {
+                // A live config keeps one file for the whole deployment, which
+                // a config update rewrites under the running instances. Always
+                // rewritten here, in place, so the instance being created
+                // starts from the current content and the ones already
+                // mounting the file stay on the same inode.
+                Some(slot) => {
+                    let file = live_config_path(deployment_id, *slot);
+                    tokio::fs::write(&file, content).await?;
+                    file
+                }
+                None => {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    content.hash(&mut hasher);
+                    let hash = format!("{:x}", hasher.finish());
+                    let file = format!("{}/{}", temp_dir, hash);
+                    if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
+                        tokio::fs::write(&file, content).await?;
+                    }
+                    file
+                }
+            };
 
             debug!(
                 "Created temporary config file: {} -> {}",
@@ -976,6 +992,7 @@ mod tests {
         let resolved = ResolvedMount::Content {
             content: "server { listen 80; }".to_string(),
             destination: "/app/nginx.conf".to_string(),
+            live_slot: None,
         };
         let mount = create_mount_from_resolved(&resolved, "test-deployment")
             .await
@@ -988,6 +1005,37 @@ mod tests {
                 .contains("/tmp/ring_configs/test-deployment")
         );
         assert_eq!(mount.read_only, Some(true));
+    }
+
+    #[tokio::test]
+    async fn live_content_mount_is_rewritten_in_place_at_a_stable_path() {
+        use std::os::unix::fs::MetadataExt;
+
+        let deployment_id = format!("test-live-{}", uuid::Uuid::new_v4());
+        let mount_for = |content: &str| ResolvedMount::Content {
+            content: content.to_string(),
+            destination: "/etc/app.yaml".to_string(),
+            live_slot: Some(0),
+        };
+
+        let first = create_mount_from_resolved(&mount_for("level: info"), &deployment_id)
+            .await
+            .unwrap();
+        let path = live_config_path(&deployment_id, 0);
+        assert_eq!(first.source.as_deref(), Some(path.as_str()));
+        let inode = std::fs::metadata(&path).unwrap().ino();
+
+        // A new instance created after the config changed mounts the same
+        // file, rewritten without changing its inode, so the instances that
+        // already mount it see the new content too.
+        let second = create_mount_from_resolved(&mount_for("level: debug"), &deployment_id)
+            .await
+            .unwrap();
+        assert_eq!(second.source.as_deref(), Some(path.as_str()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "level: debug");
+        assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+
+        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", deployment_id));
     }
 
     #[tokio::test]

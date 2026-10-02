@@ -1,15 +1,17 @@
 use crate::api::dto::stats::InstanceStatsOutput;
+use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::lifecycle_trait::{
     ExecError, ExecRequest, ExecSession, Log, RuntimeLifecycle, classify_log, extract_date,
 };
 use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
-use crate::models::volume::ResolvedMount;
+use crate::models::volume::{ReloadSignal, ResolvedMount};
 use crate::runtime::registry_auth::HostAuthSettings;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use bollard::Docker;
+use bollard::query_parameters::KillContainerOptionsBuilder;
 use futures::stream::{self, Stream, StreamExt};
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -97,6 +99,46 @@ impl RuntimeLifecycle for DockerLifecycle {
         status: &str,
     ) -> Vec<(String, String)> {
         super::instances::list_instances_with_names(&self.docker, deployment_id, status).await
+    }
+
+    async fn signal_instances(
+        &self,
+        deployment_id: &str,
+        signal: ReloadSignal,
+    ) -> Result<usize, RuntimeError> {
+        let instances = self
+            .list_instances(deployment_id.to_string(), "running")
+            .await;
+
+        let mut signalled = 0;
+        let mut failures = Vec::new();
+        for instance_id in instances {
+            // The signal must always be explicit: the kill endpoint defaults
+            // to SIGKILL.
+            let options = KillContainerOptionsBuilder::new()
+                .signal(signal.as_str())
+                .build();
+            match self
+                .docker
+                .kill_container(&instance_id, Some(options))
+                .await
+            {
+                Ok(()) => signalled += 1,
+                Err(e) => failures.push(format!("{}: {}", instance_id, e)),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(signalled)
+        } else {
+            Err(RuntimeError::Other(format!(
+                "{} not delivered to {} of {} instances ({})",
+                signal.as_str(),
+                failures.len(),
+                failures.len() + signalled,
+                failures.join("; ")
+            )))
+        }
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {

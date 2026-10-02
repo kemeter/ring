@@ -229,6 +229,7 @@ impl FirecrackerLifecycle {
                 ResolvedMount::Content {
                     content,
                     destination,
+                    ..
                 } => {
                     // Stage the single rendered file under its basename, build
                     // an ext4 from that dir, and mount it at the destination's

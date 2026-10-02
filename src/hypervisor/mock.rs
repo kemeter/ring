@@ -1,16 +1,19 @@
 use crate::api::dto::stats::InstanceStatsOutput;
+use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
-use crate::models::volume::ResolvedMount;
+use crate::models::volume::{ReloadSignal, ResolvedMount};
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use std::convert::Infallible;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 pub(crate) struct MockRuntime {
     health_check_result: (HealthCheckStatus, Option<String>),
     instance_stats: Vec<InstanceStatsOutput>,
+    signals: Arc<Mutex<Vec<(String, ReloadSignal)>>>,
 }
 
 impl MockRuntime {
@@ -18,6 +21,7 @@ impl MockRuntime {
         Self {
             health_check_result: (HealthCheckStatus::Success, None),
             instance_stats: Vec::new(),
+            signals: Arc::default(),
         }
     }
 
@@ -25,6 +29,7 @@ impl MockRuntime {
         Self {
             health_check_result: (HealthCheckStatus::Failed, Some(message.to_string())),
             instance_stats: Vec::new(),
+            signals: Arc::default(),
         }
     }
 
@@ -33,6 +38,12 @@ impl MockRuntime {
     pub(crate) fn with_instance_stats(mut self, stats: Vec<InstanceStatsOutput>) -> Self {
         self.instance_stats = stats;
         self
+    }
+
+    /// Every `(deployment_id, signal)` passed to `signal_instances`, shared so
+    /// a test can keep a handle after the mock moves into a runtime map.
+    pub(crate) fn signal_log(&self) -> Arc<Mutex<Vec<(String, ReloadSignal)>>> {
+        self.signals.clone()
     }
 }
 
@@ -52,6 +63,18 @@ impl RuntimeLifecycle for MockRuntime {
 
     async fn remove_instance(&self, _instance_id: String) -> bool {
         true
+    }
+
+    async fn signal_instances(
+        &self,
+        deployment_id: &str,
+        signal: ReloadSignal,
+    ) -> Result<usize, RuntimeError> {
+        self.signals
+            .lock()
+            .unwrap()
+            .push((deployment_id.to_string(), signal));
+        Ok(1)
     }
 
     async fn execute_health_check(

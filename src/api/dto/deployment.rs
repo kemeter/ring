@@ -1,6 +1,7 @@
 use crate::models::deployments::{
     Deployment, DeploymentConfig, DeploymentPort, EnvValue, NetworkConfig, Resource,
 };
+use crate::models::volume::{OnChange, ReloadSignal};
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
@@ -149,4 +150,8 @@ pub(crate) struct DeploymentVolume {
     pub(crate) destination: String,
     pub(crate) driver: String,
     pub(crate) permission: String,
+    #[serde(default, skip_serializing_if = "OnChange::is_none")]
+    pub(crate) on_change: OnChange,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reload_signal: Option<ReloadSignal>,
 }
