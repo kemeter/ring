@@ -192,6 +192,9 @@ write_fixture "$FIXTURE_C1" "nginx:1.25-alpine" yes
 # Held in `creating` until its readiness file exists (gate on own status).
 wait_deployment_status "$NS" "ready-app" "creating" 60
 C_PARENT=$(get_deployment_id "$NS" "ready-app")
+# `creating` is also the status a deployment is stored with, before the
+# scheduler has started anything: wait for the container itself.
+wait_docker_container_count "$C_PARENT" 1 60
 
 # Mark the parent as "ready" so it reaches `running` and stays in the active
 # set with a healthy Docker status — the realistic state when an upgrade
@@ -210,6 +213,7 @@ write_fixture "$FIXTURE_C2" "nginx:1.26-alpine" yes
 # `running`) — which is also why it can't drain the parent.
 wait_deployment_by_image "$NS" "ready-app" "nginx:1.26-alpine" "creating" 90
 C_CHILD=$(get_deployment_id_by_image "$NS" "ready-app" "nginx:1.26-alpine")
+wait_docker_container_count "$C_CHILD" 1 60
 
 # Sit and watch for 30s. The parent must still have its container at the end.
 log "watching for 30s — parent container must stay alive while child is not ready"

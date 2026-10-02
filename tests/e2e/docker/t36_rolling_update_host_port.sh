@@ -21,8 +21,25 @@ log "== T36: rolling update with fixed host port =="
 start_ring
 ring_login
 
-# Apply v1 (host port 18080 + health checks)
-"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-hostport-v1.yaml"
+# The fixtures publish 18080. Move to a port nothing listens on, so a tunnel or
+# a dev server on this host cannot make the bind fail for reasons unrelated to
+# the rolling update. A refused connection means the port is free.
+HOST_PORT=""
+for candidate in $(seq 18080 18180); do
+  if ! (exec 3<>"/dev/tcp/127.0.0.1/$candidate") 2>/dev/null; then
+    HOST_PORT=$candidate
+    break
+  fi
+done
+[ -n "$HOST_PORT" ] || fail "no free host port in 18080-18180"
+for v in v1 v2; do
+  sed "s/published: 18080/published: $HOST_PORT/" \
+    "$SCRIPT_DIR/../fixtures/nginx-hostport-$v.yaml" > "$RING_TEST_DIR/nginx-hostport-$v.yaml"
+done
+log "publishing host port $HOST_PORT"
+
+# Apply v1 (host port + health checks)
+"$RING_BIN" apply --file "$RING_TEST_DIR/nginx-hostport-v1.yaml"
 wait_deployment_by_image "ring-e2e" "nginx-hostport" "nginx:1.25-alpine" "running" 90
 
 V1_ID=$(get_deployment_id_by_image "ring-e2e" "nginx-hostport" "nginx:1.25-alpine")
@@ -32,7 +49,7 @@ assert_docker_container_exists "$V1_ID"
 
 # Apply v2 (same name, same host port, new image). Ring must recreate: drop v1
 # first, then create v2 — so v2 reaches Running without a port collision loop.
-"$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-hostport-v2.yaml"
+"$RING_BIN" apply --file "$RING_TEST_DIR/nginx-hostport-v2.yaml"
 wait_deployment_by_image "ring-e2e" "nginx-hostport" "nginx:1.26-alpine" "running" 90
 
 V2_ID=$(get_deployment_id_by_image "ring-e2e" "nginx-hostport" "nginx:1.26-alpine")
