@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-02
+
 ### Added
 - `on_change` on `config` volumes sets what an update of the config does to the running deployments: `none` (the default, and the behaviour so far) leaves them alone, `rollout` redeploys them as a re-applied manifest would (rolling when the deployment allows it), and `live` rewrites the mounted file under the running instances without restarting them (Docker and Podman). With `live`, `reload_signal` (`SIGHUP`, `SIGUSR1` or `SIGUSR2`) is then sent to each instance's main process, for applications that reload on a signal. Each action is recorded in the deployment's events
 - `PUT /configs/{id}` accepts `skip_deployments`, the deployments the caller redeploys itself; `ring apply` sets it so a manifest carrying both a config and the deployments mounting it rolls them once instead of replacing them
