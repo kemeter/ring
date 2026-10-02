@@ -1091,6 +1091,12 @@ A config is a named blob (typically a config file or JSON document) attached to 
 
 Full replacement (not partial). All fields must be provided.
 
+When `data` changes and `name` does not, the deployments of the namespace that mount the config react as their volume's [`on_change`](/documentation/reference/manifest#on_change-when-a-config-changes) says: nothing, a live rewrite of the file, or a redeploy. This happens before the response is returned; a failure is reported in the deployment's events and never undoes the update.
+
+| Query parameter | Description |
+| --- | --- |
+| `skip_deployments` | Comma-separated names of deployments, in the config's namespace, to leave out of `on_change` because the caller redeploys them itself. `ring apply` sets it for the deployments of its manifest. |
+
 ```json
 {
   "name": "app-config",

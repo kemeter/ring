@@ -1,7 +1,8 @@
 use crate::api::dto::stats::InstanceStatsOutput;
+use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
-use crate::models::volume::ResolvedMount;
+use crate::models::volume::{ReloadSignal, ResolvedMount};
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use futures::future::BoxFuture;
@@ -349,6 +350,25 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
         Err(ExecError::UnsupportedRuntime(
             "no exec support for this runtime".to_string(),
         ))
+    }
+
+    /// Send `signal` to the main process of every running instance of the
+    /// deployment, and return how many were signalled.
+    ///
+    /// Used after a live config rewrite, for applications that reload on a
+    /// signal. A failure on one instance does not stop the others: the error
+    /// names the instances that could not be signalled. The default reports the
+    /// runtime as unsupported; API validation keeps live configs off such
+    /// runtimes, so reaching it means the two have drifted apart.
+    async fn signal_instances(
+        &self,
+        _deployment_id: &str,
+        signal: ReloadSignal,
+    ) -> Result<usize, RuntimeError> {
+        Err(RuntimeError::Other(format!(
+            "this runtime cannot send {} to its instances",
+            signal.as_str()
+        )))
     }
 
     /// Execute one health-check definition for one instance.

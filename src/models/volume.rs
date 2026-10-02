@@ -20,7 +20,66 @@ pub enum ResolvedMount {
     Content {
         content: String,
         destination: String,
+        /// Set for a config volume declared with `on_change: live`: the index
+        /// of the volume in the deployment, which names the file the runtime
+        /// keeps at a stable path (see [`live_config_path`]) so a config update
+        /// can rewrite it under the running instances. `None` for everything
+        /// else, which keeps the content-addressed file it has always had.
+        live_slot: Option<usize>,
     },
+}
+
+/// What happens to the running instances when a config they mount changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnChange {
+    /// Nothing: the new content is picked up by the next deployment.
+    #[default]
+    None,
+    /// Rewrite the mounted file in place, under the running instances.
+    Live,
+    /// Redeploy, rolling when the deployment allows it.
+    Rollout,
+}
+
+impl OnChange {
+    pub fn is_none(&self) -> bool {
+        matches!(self, OnChange::None)
+    }
+}
+
+/// Signal sent to an instance's main process after its config was rewritten
+/// live, for applications that reload on a signal rather than by watching the
+/// file. Limited to the signals applications use for that purpose: a
+/// terminating signal here would turn a config edit into an outage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReloadSignal {
+    #[serde(rename = "SIGHUP")]
+    Hup,
+    #[serde(rename = "SIGUSR1")]
+    Usr1,
+    #[serde(rename = "SIGUSR2")]
+    Usr2,
+}
+
+impl ReloadSignal {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ReloadSignal::Hup => "SIGHUP",
+            ReloadSignal::Usr1 => "SIGUSR1",
+            ReloadSignal::Usr2 => "SIGUSR2",
+        }
+    }
+}
+
+/// Host path of the file backing a live config volume.
+///
+/// It depends only on the deployment and the volume's position, never on the
+/// content, so every rewrite lands on the file the instances already mount. The
+/// file must be rewritten in place: a bind-mounted file is pinned to its inode,
+/// and replacing it with `rename(2)` would leave the instances on the old one.
+pub fn live_config_path(deployment_id: &str, slot: usize) -> String {
+    format!("/tmp/ring_configs/{}/live-{}", deployment_id, slot)
 }
 
 pub fn resolve_volumes(
@@ -33,7 +92,7 @@ pub fn resolve_volumes(
 
     let mut resolved = Vec::new();
 
-    for volume in volumes {
+    for (index, volume) in volumes.into_iter().enumerate() {
         let mount = match volume.r#type.as_str() {
             "bind" => {
                 let source = volume.source.ok_or("Bind volume requires a source")?;
@@ -81,6 +140,7 @@ pub fn resolve_volumes(
                 ResolvedMount::Content {
                     content,
                     destination: volume.destination,
+                    live_slot: (volume.on_change == OnChange::Live).then_some(index),
                 }
             }
             "secret" => {
@@ -104,6 +164,7 @@ pub fn resolve_volumes(
                 ResolvedMount::Content {
                     content,
                     destination: volume.destination,
+                    live_slot: None,
                 }
             }
             other => return Err(format!("Unknown volume type '{}'", other)),
@@ -236,9 +297,11 @@ mod tests {
             ResolvedMount::Content {
                 content,
                 destination,
+                live_slot,
             } => {
                 assert_eq!(content, "server { listen 80; }");
                 assert_eq!(destination, "/etc/nginx/nginx.conf");
+                assert_eq!(*live_slot, None);
             }
             _ => panic!("Expected Content mount"),
         }
@@ -321,9 +384,11 @@ mod tests {
             ResolvedMount::Content {
                 content,
                 destination,
+                live_slot,
             } => {
                 assert_eq!(content, "s3cr3t-bearer-token");
                 assert_eq!(destination, "/run/secrets/api-token");
+                assert_eq!(*live_slot, None);
             }
             _ => panic!("Expected Content mount for secret"),
         }
@@ -364,5 +429,57 @@ mod tests {
             ResolvedMount::Content { content, .. } => assert_eq!(content, "deadbeef"),
             _ => panic!("Expected Content mount"),
         }
+    }
+
+    fn live_test_configs() -> HashMap<String, Config> {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "app-config".to_string(),
+            make_config("app-config", r#"{"app.yaml":"level: debug"}"#),
+        );
+        configs
+    }
+
+    #[test]
+    fn resolve_live_config_volume_carries_its_slot() {
+        // The slot is the volume's position, so the bind volume before it
+        // pushes the live config to slot 1.
+        let json = r#"[
+            {"type":"bind","source":"/data","destination":"/data","driver":"local","permission":"ro"},
+            {"type":"config","source":"app-config","key":"app.yaml","destination":"/etc/app.yaml","driver":"local","permission":"ro","on_change":"live"}
+        ]"#;
+        let result = resolve_volumes(json, &live_test_configs(), &HashMap::new()).unwrap();
+
+        match &result[1] {
+            ResolvedMount::Content { live_slot, .. } => assert_eq!(*live_slot, Some(1)),
+            _ => panic!("Expected Content mount"),
+        }
+    }
+
+    #[test]
+    fn resolve_rollout_config_volume_has_no_live_slot() {
+        let json = r#"[{"type":"config","source":"app-config","key":"app.yaml","destination":"/etc/app.yaml","driver":"local","permission":"ro","on_change":"rollout"}]"#;
+        let result = resolve_volumes(json, &live_test_configs(), &HashMap::new()).unwrap();
+
+        match &result[0] {
+            ResolvedMount::Content { live_slot, .. } => assert_eq!(*live_slot, None),
+            _ => panic!("Expected Content mount"),
+        }
+    }
+
+    #[test]
+    fn live_config_path_depends_only_on_deployment_and_slot() {
+        assert_eq!(
+            live_config_path("dep-1", 2),
+            "/tmp/ring_configs/dep-1/live-2"
+        );
+    }
+
+    #[test]
+    fn reload_signal_serializes_as_the_signal_name() {
+        let signal: ReloadSignal = serde_json::from_str(r#""SIGUSR2""#).unwrap();
+        assert_eq!(signal, ReloadSignal::Usr2);
+        assert_eq!(signal.as_str(), "SIGUSR2");
+        assert!(serde_json::from_str::<ReloadSignal>(r#""SIGKILL""#).is_err());
     }
 }

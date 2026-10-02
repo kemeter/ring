@@ -1,15 +1,17 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, http::StatusCode};
 use serde::Deserialize;
+use std::collections::HashSet;
 use validator::Validate;
 
+use crate::api::action::config::on_change;
 use crate::api::action::config::validation::{
     CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
 };
 use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::config::ConfigOutput;
-use crate::api::server::Db;
+use crate::api::server::{Db, RuntimeMap};
 use crate::api::validation::{Violation, ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::config as ConfigModel;
@@ -48,9 +50,21 @@ pub(crate) struct UpdateConfigRequest {
     pub labels: Option<String>,
 }
 
+#[derive(Deserialize, Debug, Default)]
+pub(crate) struct UpdateConfigParams {
+    /// Comma-separated names of deployments, in the config's namespace, that
+    /// the caller is about to redeploy itself. Their `on_change` is skipped:
+    /// redeploying them twice in a row would turn a rolling update into a
+    /// replacement. `ring apply` sets it for the deployments of its manifest.
+    #[serde(default)]
+    skip_deployments: Option<String>,
+}
+
 pub(crate) async fn update(
     Path(id): Path<String>,
+    Query(params): Query<UpdateConfigParams>,
     State(pool): State<Db>,
+    State(runtimes): State<RuntimeMap>,
     auth: Auth,
     Json(request): Json<UpdateConfigRequest>,
 ) -> Response {
@@ -83,6 +97,10 @@ pub(crate) async fn update(
             if let Err(resp) = require_namespace(&auth.source, &config.namespace) {
                 return resp;
             }
+            // Deployments mount a config by name, so a rename leaves them
+            // pointing at a config that no longer exists: there is nothing to
+            // carry over to them, only content changes are.
+            let propagate = config.name == request.name && config.data != request.data;
             config.name = request.name;
             config.data = request.data;
             config.labels = request.labels.unwrap_or_default();
@@ -99,6 +117,18 @@ pub(crate) async fn update(
                         Some(&config.namespace),
                     )
                     .await;
+                    if propagate {
+                        let skip: HashSet<String> = params
+                            .skip_deployments
+                            .as_deref()
+                            .unwrap_or_default()
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_string)
+                            .collect();
+                        on_change::propagate(&pool, &runtimes, &config, &skip).await;
+                    }
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
                 }

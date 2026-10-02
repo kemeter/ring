@@ -818,6 +818,7 @@ async fn write_config_files(
         if let ResolvedMount::Content {
             content,
             destination,
+            ..
         } = m
         {
             tokio::fs::create_dir_all(&dir).await?;
