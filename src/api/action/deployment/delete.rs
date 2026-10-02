@@ -4,7 +4,7 @@ use axum::{extract::Path, http::StatusCode, response::IntoResponse};
 use crate::api::auth::{Auth, require_namespace};
 use crate::api::server::Db;
 use crate::models::audit_log;
-use crate::models::deployments::{self, DeploymentStatus};
+use crate::models::deployments;
 
 pub(crate) async fn delete(
     Path(id): Path<String>,
@@ -14,14 +14,13 @@ pub(crate) async fn delete(
     let option = deployments::find(&pool, &id).await;
 
     match option {
-        Ok(Some(mut deployment)) => {
+        Ok(Some(deployment)) => {
             // Scope (`deployments:write`) is enforced centrally; the namespace
             // boundary is checked here against the loaded deployment.
             if let Err(resp) = require_namespace(&auth.source, &deployment.namespace) {
                 return resp.into_response();
             }
-            deployment.status = DeploymentStatus::Deleted;
-            match deployments::update(&pool, &deployment).await {
+            match deployments::mark_deleted(&pool, &deployment.id).await {
                 Ok(_) => {
                     let _ = audit_log::record(
                         &pool,

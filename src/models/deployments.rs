@@ -734,14 +734,21 @@ pub(crate) async fn create(
     Ok(deployment.clone())
 }
 
-pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
-    // `deleted` is terminal, and the guard on it is what makes it so. The
-    // scheduler writes back a deployment it loaded at the start of its cycle;
-    // a `DELETE` landing in between would otherwise be overwritten by the
-    // stale status, and the deployment would keep running after the API
-    // answered that it was deleted.
+/// Write back the scheduler's view of a deployment: its status, image digest
+/// and rolling parent. Returns whether the write applied.
+///
+/// `deleted` is terminal, and the guard on it is what makes it so. The
+/// scheduler writes back a deployment it loaded at the start of its cycle; a
+/// `DELETE` landing in between would otherwise be overwritten by the stale
+/// status, and the deployment would keep running after the API answered that
+/// it was deleted. A write refused this way returns `false`, so the caller
+/// does not announce a status the deployment never took.
+pub(crate) async fn update(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+) -> Result<bool, sqlx::Error> {
     let status = deployment.status.to_string();
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE deployment SET status = ?, updated_at = datetime('now'), image_digest = ?, parent_id = ? \
          WHERE id = ? AND (status <> 'deleted' OR ? = 'deleted')"
     )
@@ -750,6 +757,22 @@ pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result
     .bind(&deployment.parent_id)
     .bind(&deployment.id)
     .bind(&status)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Mark a deployment deleted, and nothing else.
+///
+/// For callers that only want to delete: writing back a whole loaded copy, as
+/// [`update`] does, would also overwrite the image digest and rolling parent
+/// with whatever that copy held, undoing a change the scheduler made since.
+pub(crate) async fn mark_deleted(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE deployment SET status = 'deleted', updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(id)
     .execute(pool)
     .await?;
 
@@ -1206,11 +1229,30 @@ mod tests {
         deleted.status = DeploymentStatus::Deleted;
         update(&pool, &deleted).await.unwrap();
 
-        // ...and then writes that copy back.
-        update(&pool, &loaded).await.unwrap();
+        // ...and then writes that copy back, which is refused.
+        assert!(!update(&pool, &loaded).await.unwrap());
 
         let stored = find(&pool, "d1").await.unwrap().unwrap();
         assert_eq!(stored.status, DeploymentStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn mark_deleted_leaves_the_scheduler_fields_alone() {
+        let pool = test_pool().await;
+        let mut deployment = worker("d1", 0);
+        deployment.parent_id = Some("parent".to_string());
+        create(&pool, &deployment).await.unwrap();
+
+        // The scheduler finishes the rollout and clears the parent...
+        deployment.parent_id = None;
+        assert!(update(&pool, &deployment).await.unwrap());
+
+        // ...while the API deletes from a copy that still had it.
+        mark_deleted(&pool, "d1").await.unwrap();
+
+        let stored = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.status, DeploymentStatus::Deleted);
+        assert_eq!(stored.parent_id, None);
     }
 
     #[tokio::test]
