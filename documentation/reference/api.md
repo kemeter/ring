@@ -297,6 +297,13 @@ Environment values support two forms:
 | Environment keys must match `[A-Za-z_][A-Za-z0-9_]*`                         | `deployment.environment.key.invalid`                       |
 | `resources.{limits,requests}.{cpu,memory}` must parse                        | `deployment.resources.{limits,requests}.{cpu,memory}.invalid` |
 | `config.image_pull_policy` must be `Always`, `IfNotPresent`, or `Never`      | `deployment.config.image_pull_policy.unsupported`          |
+| `volumes[i].on_change` applies only to `config` volumes                       | `unsupported_volume_type`                                  |
+| `volumes[i].reload_signal` requires `on_change: live`                         | `requires_live`                                            |
+| `volumes[i].on_change: live` is docker/podman-only                            | `deployment.volumes.on_change.runtime_unsupported`         |
+
+**Errors** (in `application/problem+json`):
+
+- `503 Service Unavailable`: the requested `runtime` is not loaded on this node, because it is disabled or was unreachable when the server started. Nothing is stored.
 
 ### `GET /deployments/{id}`
 

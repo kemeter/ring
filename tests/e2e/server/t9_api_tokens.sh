@@ -164,6 +164,12 @@ RC3=$(code POST /deployments "$PAT" "$DEPLOY")
 log "3: PAT lacking deployments:write is refused (403)"
 
 # --- Invariant 4: namespace outside the boundary is refused ---
+# `prod` must exist: deploying into a missing namespace would create it, which
+# takes `namespaces:write` on top of `deployments:write`, and the 403 for that
+# missing scope would hide the boundary this invariant is about.
+curl -fsS -o /dev/null -X POST "$URL/namespaces" -H "Authorization: Bearer $SESSION" \
+  -H 'Content-Type: application/json' -d '{"name":"prod"}' \
+  || fail "4: could not create the prod namespace"
 PAT_NS=$("$RING_BIN" token create ci-prod --scope deployments:write --namespace prod 2>/dev/null)
 RC4=$(code POST /deployments "$PAT_NS" \
   '{"namespace":"staging","name":"web","runtime":"docker","kind":"worker","image":"nginx","replicas":1}')

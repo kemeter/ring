@@ -57,7 +57,7 @@ OUT=$(RING_CONFIG_DIR="$D3" "$RING_BIN" init --runtime lxc 2>&1)
 RC=$?
 set -e
 [ "$RC" -ne 0 ] || fail "3: invalid --runtime must exit non-zero"
-echo "$OUT" | grep -qiE "docker, podman, cloud-hypervisor, firecracker, both" \
+echo "$OUT" | grep -qiE "docker, podman, containerd, cloud-hypervisor, firecracker, both" \
   || { echo "$OUT" >&2; fail "3: expected accepted runtime values in the error"; }
 [ -f "$D3/config.toml" ] && fail "3: no config.toml should be written on rejection"
 log "3 (invalid runtime rejected): exit $RC, no config written"

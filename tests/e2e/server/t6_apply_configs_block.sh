@@ -23,7 +23,7 @@
 #   1. `ring apply` of a manifest with a `configs:` block succeeds.
 #   2. `ring config list -n <ns>` shows the config afterwards (it was created).
 #   3. Re-applying the same manifest is idempotent: succeeds, no duplicate,
-#      "already exists" is reported instead of erroring.
+#      and the existing config is updated in place instead of erroring.
 
 set -euo pipefail
 
@@ -137,8 +137,8 @@ if ! REAPPLY_OUT=$("$RING_BIN" apply -f "$CFG/manifest.yaml" 2>&1); then
   echo "$REAPPLY_OUT" >&2
   fail "3 (re-apply): exited non-zero — apply is not idempotent"
 fi
-echo "$REAPPLY_OUT" | grep -qF "Config '${CONFIG_NAME}' already exists" \
-  || { echo "$REAPPLY_OUT" >&2; fail "3 (re-apply): expected \"already exists, skipping\" for the config"; }
+echo "$REAPPLY_OUT" | grep -qF "Config '${CONFIG_NAME}' updated" \
+  || { echo "$REAPPLY_OUT" >&2; fail "3 (re-apply): expected the existing config to be updated"; }
 
 # And the config must not have been duplicated: exactly one row in the listing.
 COUNT=$("$RING_BIN" config list -n "$NS" 2>&1 | grep -cF "$CONFIG_NAME")
