@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A deployment deleted while the scheduler was handling it no longer gets a status change announced (deployment event and webhook) for a status it never took
+- Deleting a deployment no longer writes back its image digest and rolling parent from the copy the delete loaded, which could undo a change the scheduler had just made, such as the end of a rolling update
+
 ## [0.12.0] - 2026-10-02
 
 ### Added

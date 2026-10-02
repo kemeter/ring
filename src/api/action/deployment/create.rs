@@ -1045,12 +1045,10 @@ pub(crate) async fn deploy(
                     } else {
                         "host_port_published"
                     });
-                    for mut replaced in deployments_list {
+                    for replaced in deployments_list {
                         info!("Marking deployment {} as deleted", replaced.id);
                         replaced_deployment_ids.push(replaced.id.clone());
-                        replaced.status = DeploymentStatus::Deleted;
-                        replaced.updated_at = Some(Utc::now().to_string());
-                        if let Err(e) = deployments::update(pool, &replaced).await {
+                        if let Err(e) = deployments::mark_deleted(pool, &replaced.id).await {
                             error!(
                                 "Failed to mark deployment {} as deleted: {}",
                                 replaced.id, e

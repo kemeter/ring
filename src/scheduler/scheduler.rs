@@ -500,6 +500,20 @@ async fn run_health_checks(
     }
 }
 
+/// Store the outcome of this cycle for `deployment` and announce its status
+/// change. A deployment deleted through the API during the cycle refuses the
+/// write; nothing is announced then, since it never took that status.
+async fn write_back(pool: &SqlitePool, old_status: &DeploymentStatus, deployment: &Deployment) {
+    match deployments::update(pool, deployment).await {
+        Ok(true) => publish_status_change(pool, old_status, deployment).await,
+        Ok(false) => info!(
+            "Deployment {} was deleted during the scheduler cycle, its {} status was not stored",
+            deployment.id, deployment.status
+        ),
+        Err(e) => error!("Failed to update deployment {}: {}", deployment.id, e),
+    }
+}
+
 async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
     if deleted.is_empty() {
         return;
@@ -1022,7 +1036,7 @@ async fn handle_rolling_update(
             parent.id
         );
         parent.status = DeploymentStatus::Deleted;
-        if let Err(e) = deployments::update(pool, &parent).await {
+        if let Err(e) = deployments::mark_deleted(pool, &parent.id).await {
             error!("Failed to mark parent {} as deleted: {}", parent.id, e);
         }
         deleted.push(parent.id.clone());
@@ -1538,11 +1552,7 @@ pub(crate) async fn schedule(
                 persist_pending_events(&pool, &mut result).await;
                 handle_status_transitions(&pool, &mut result, &mut deleted).await;
 
-                if let Err(e) = deployments::update(&pool, &result).await {
-                    error!("Failed to update deployment {}: {}", result.id, e);
-                } else {
-                    publish_status_change(&pool, &old_status, &result).await;
-                }
+                write_back(&pool, &old_status, &result).await;
                 continue;
             }
 
@@ -1789,11 +1799,7 @@ pub(crate) async fn schedule(
                 }
             }
 
-            if let Err(e) = deployments::update(&pool, &result).await {
-                error!("Failed to update deployment {}: {}", result.id, e);
-            } else {
-                publish_status_change(&pool, &old_status, &result).await;
-            }
+            write_back(&pool, &old_status, &result).await;
         }
 
         cleanup_deleted(&pool, deleted).await;
@@ -2413,5 +2419,47 @@ mod tests {
             assert!(!has_live_container(&status, false));
             assert!(!has_live_container(&status, true));
         }
+    }
+
+    async fn queued_events(pool: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn write_back_announces_the_status_it_stored() {
+        let pool = new_test_pool().await;
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.status = DeploymentStatus::Creating;
+        deployments::create(&pool, &deployment).await.unwrap();
+
+        deployment.status = DeploymentStatus::Running;
+        write_back(&pool, &DeploymentStatus::Creating, &deployment).await;
+
+        assert_eq!(queued_events(&pool).await, 1);
+    }
+
+    #[tokio::test]
+    async fn write_back_announces_nothing_for_a_deployment_deleted_meanwhile() {
+        let pool = new_test_pool().await;
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.status = DeploymentStatus::Creating;
+        deployments::create(&pool, &deployment).await.unwrap();
+
+        // Deleted through the API while this cycle held the deployment.
+        deployments::mark_deleted(&pool, "d1").await.unwrap();
+
+        deployment.status = DeploymentStatus::Running;
+        write_back(&pool, &DeploymentStatus::Creating, &deployment).await;
+
+        assert_eq!(
+            queued_events(&pool).await,
+            0,
+            "no webhook for a status never stored"
+        );
+        let stored = deployments::find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.status, DeploymentStatus::Deleted);
     }
 }
