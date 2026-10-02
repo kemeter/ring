@@ -33,7 +33,7 @@ The release archive also contains a `.sha256` companion if you want to verify th
 
 ### From source
 
-If you're on macOS, ARM Linux, or want the latest unreleased changes, build from source. Requires Rust 1.85 or later ([rustup](https://rustup.rs/)) and OpenSSL headers:
+If you're on macOS, ARM Linux, or want the latest unreleased changes, build from source. Requires [rustup](https://rustup.rs/), which installs the toolchain pinned in `rust-toolchain.toml` on the first build, and OpenSSL headers:
 
 ```bash
 # Debian / Ubuntu
