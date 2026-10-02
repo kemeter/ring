@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `ring apply` manifest may carry `configs:` alone, to update configs without redeploying anything
 
 ### Fixed
+- Deleting a deployment could be silently undone: the scheduler writes back the deployment it loaded at the start of its cycle, and a `DELETE` landing during that cycle was overwritten by the stale status, leaving the deployment running after the API had answered that it was deleted. A deleted deployment can no longer change status
 - `POST /deployments` answers `503` when the requested runtime is not loaded on this node (disabled, or unreachable when the server started), instead of accepting a deployment the scheduler would never run, which stayed `creating` with no explanation
 
 ### Changed

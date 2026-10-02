@@ -735,13 +735,21 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn update(pool: &SqlitePool, deployment: &Deployment) -> Result<(), sqlx::Error> {
+    // `deleted` is terminal, and the guard on it is what makes it so. The
+    // scheduler writes back a deployment it loaded at the start of its cycle;
+    // a `DELETE` landing in between would otherwise be overwritten by the
+    // stale status, and the deployment would keep running after the API
+    // answered that it was deleted.
+    let status = deployment.status.to_string();
     sqlx::query(
-        "UPDATE deployment SET status = ?, updated_at = datetime('now'), image_digest = ?, parent_id = ? WHERE id = ?"
+        "UPDATE deployment SET status = ?, updated_at = datetime('now'), image_digest = ?, parent_id = ? \
+         WHERE id = ? AND (status <> 'deleted' OR ? = 'deleted')"
     )
-    .bind(deployment.status.to_string())
+    .bind(&status)
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
     .bind(&deployment.id)
+    .bind(&status)
     .execute(pool)
     .await?;
 
@@ -1184,6 +1192,39 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec!["old", "new"]);
+    }
+
+    #[tokio::test]
+    async fn a_stale_write_cannot_bring_a_deleted_deployment_back() {
+        let pool = test_pool().await;
+        let loaded = worker("d1", 0);
+        create(&pool, &loaded).await.unwrap();
+
+        // The API deletes the deployment while the scheduler holds a copy it
+        // loaded as running...
+        let mut deleted = loaded.clone();
+        deleted.status = DeploymentStatus::Deleted;
+        update(&pool, &deleted).await.unwrap();
+
+        // ...and then writes that copy back.
+        update(&pool, &loaded).await.unwrap();
+
+        let stored = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.status, DeploymentStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn a_deleted_deployment_can_still_be_written_as_deleted() {
+        let pool = test_pool().await;
+        let mut deployment = worker("d1", 0);
+        deployment.status = DeploymentStatus::Deleted;
+        create(&pool, &deployment).await.unwrap();
+
+        deployment.parent_id = Some("parent".to_string());
+        update(&pool, &deployment).await.unwrap();
+
+        let stored = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.parent_id.as_deref(), Some("parent"));
     }
 
     #[tokio::test]
