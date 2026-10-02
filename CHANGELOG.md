@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PUT /configs/{id}` accepts `skip_deployments`, the deployments the caller redeploys itself; `ring apply` sets it so a manifest carrying both a config and the deployments mounting it rolls them once instead of replacing them
 - A `ring apply` manifest may carry `configs:` alone, to update configs without redeploying anything
 
+### Fixed
+- `POST /deployments` answers `503` when the requested runtime is not loaded on this node (disabled, or unreachable when the server started), instead of accepting a deployment the scheduler would never run, which stayed `creating` with no explanation
+
 ### Changed
 - Building from source uses the Rust version pinned in `rust-toolchain.toml` (1.99.0), which rustup installs on the first build, so a new stable release can no longer break the build or its lints without a code change
 

@@ -15,8 +15,8 @@ use validator::{Validate, ValidationError};
 
 use crate::api::auth::{Auth, require_namespace, require_scope};
 use crate::api::dto::deployment::DeploymentOutput;
-use crate::api::server::Db;
-use crate::api::validation::{Violation, ViolationList};
+use crate::api::server::{Db, RuntimeMap};
+use crate::api::validation::{Violation, ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::deployment_event;
 use crate::models::deployments;
@@ -779,6 +779,7 @@ pub(crate) struct CreateQueryParams {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
+    State(runtimes): State<RuntimeMap>,
     auth: Auth,
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
@@ -813,6 +814,21 @@ pub(crate) async fn create(
     // mutation. A human session passes through unconditionally.
     if let Err(resp) = require_namespace(&auth.source, &input.namespace) {
         return resp;
+    }
+
+    // A runtime that is valid but was not loaded on this node (disabled, or
+    // skipped at startup because it was unreachable) would never schedule the
+    // deployment: the scheduler skips it on every tick and it stays `creating`
+    // with nothing saying why. Refuse it before anything is stored.
+    if !runtimes.contains_key(&input.runtime) {
+        return problem_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Service Unavailable",
+            format!(
+                "runtime '{}' is not available on this node: it is disabled, or it was unreachable when the server started",
+                input.runtime
+            ),
+        );
     }
 
     // Auto-create namespace if it doesn't exist
@@ -4008,5 +4024,51 @@ mod tests {
         volume["reload_signal"] = json!("SIGKILL");
         let (status, _) = post_with_volume("docker", volume).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn create_refuses_a_runtime_this_node_did_not_load() {
+        use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
+        use crate::hypervisor::mock::MockRuntime;
+        use std::sync::Arc;
+
+        // Only Docker came up on this node.
+        let mut map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
+        map.insert("docker".to_string(), Arc::new(MockRuntime::healthy()));
+        let (pool, app) =
+            crate::api::server::tests::new_test_app_with_runtimes(Arc::new(map)).await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let deploy = |runtime: &'static str| {
+            server
+                .post("/deployments")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({
+                    "runtime": runtime,
+                    "name": "app",
+                    "namespace": "unloaded",
+                    "image": "nginx:latest"
+                }))
+        };
+
+        let response = deploy("podman").await;
+        assert_eq!(response.status_code(), StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = response.json();
+        assert!(
+            body["detail"]
+                .as_str()
+                .unwrap()
+                .contains("runtime 'podman' is not available on this node")
+        );
+        // Refused before anything is stored, the namespace included.
+        assert!(
+            namespace::find_by_name(&pool, "unloaded")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        assert_eq!(deploy("docker").await.status_code(), StatusCode::CREATED);
     }
 }

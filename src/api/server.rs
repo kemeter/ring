@@ -320,7 +320,25 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn new_test_app_with_pool() -> (sqlx::SqlitePool, Router) {
-        new_test_app_with_runtimes(std::sync::Arc::new(std::collections::HashMap::new())).await
+        // Every runtime registered, as on a node where all of them are up:
+        // `POST /deployments` refuses a runtime the node did not load.
+        let mut runtimes: std::collections::HashMap<
+            String,
+            std::sync::Arc<dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle>,
+        > = std::collections::HashMap::new();
+        for name in [
+            "docker",
+            "podman",
+            "containerd",
+            "cloud-hypervisor",
+            "firecracker",
+        ] {
+            runtimes.insert(
+                name.to_string(),
+                std::sync::Arc::new(crate::hypervisor::mock::MockRuntime::healthy()),
+            );
+        }
+        new_test_app_with_runtimes(std::sync::Arc::new(runtimes)).await
     }
 
     /// Like [`new_test_app_with_pool`], with the given runtimes registered, for

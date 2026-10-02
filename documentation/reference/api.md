@@ -301,6 +301,10 @@ Environment values support two forms:
 | `volumes[i].reload_signal` requires `on_change: live`                         | `requires_live`                                            |
 | `volumes[i].on_change: live` is docker/podman-only                            | `deployment.volumes.on_change.runtime_unsupported`         |
 
+**Errors** (in `application/problem+json`):
+
+- `503 Service Unavailable`: the requested `runtime` is not loaded on this node, because it is disabled or was unreachable when the server started. Nothing is stored.
+
 ### `GET /deployments/{id}`
 
 Retrieve a deployment by UUID.
