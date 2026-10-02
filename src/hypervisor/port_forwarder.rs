@@ -244,19 +244,47 @@ mod tests {
         l.local_addr().unwrap().port()
     }
 
+    /// Spawn a TCP forwarder on a free host port and return it with the port.
+    ///
+    /// The port from `pick_free_port` is released before socat binds it, so a
+    /// test running in parallel can take it in between. Retry with another
+    /// port instead of failing on that race.
+    async fn spawn_on_free_port(
+        guest_ip: &str,
+        target_port: u16,
+        host_ip: Option<&str>,
+    ) -> (PortForwarder, u16) {
+        let mut last_error = None;
+        for _ in 0..10 {
+            let host_port = pick_free_port();
+            match spawn_forwarder(guest_ip, host_port, target_port, host_ip, PortProtocol::Tcp)
+                .await
+            {
+                Ok(fw) => return (fw, host_port),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        panic!("could not forward any free port: {:?}", last_error);
+    }
+
+    /// A listener on a port the OS picked, held for as long as the test keeps
+    /// it: unlike `pick_free_port`, no other test can take the port meanwhile.
+    fn hold_free_port(ip: &str) -> (TcpListener, u16) {
+        let holder = TcpListener::bind(format!("{}:0", ip)).unwrap();
+        let port = holder.local_addr().unwrap().port();
+        (holder, port)
+    }
+
     #[tokio::test]
     async fn forwarder_starts_and_drop_kills_socat() {
         if socat_or_skip("forwarder_starts_and_drop_kills_socat") {
             return;
         }
 
-        let host_port = pick_free_port();
         // The "guest" side is unreachable; that's fine — we only check that
         // socat actually binds the listening port and that Drop tears it
         // down. A connection attempt is the cheapest signal of "bound".
-        let fw = spawn_forwarder("127.0.0.99", host_port, 9999, None, PortProtocol::Tcp)
-            .await
-            .unwrap();
+        let (fw, host_port) = spawn_on_free_port("127.0.0.99", 9999, None).await;
 
         // socat must hold the port — a fresh bind to the same port should fail.
         let busy = TcpListener::bind(format!("127.0.0.1:{}", host_port));
@@ -287,10 +315,7 @@ mod tests {
         if socat_or_skip("fields_carry_through") {
             return;
         }
-        let host_port = pick_free_port();
-        let fw = spawn_forwarder("10.0.0.1", host_port, 5432, None, PortProtocol::Tcp)
-            .await
-            .unwrap();
+        let (fw, host_port) = spawn_on_free_port("10.0.0.1", 5432, None).await;
         assert_eq!(fw.published_port, host_port);
         assert_eq!(fw.target_port, 5432);
         drop(fw);
@@ -301,9 +326,7 @@ mod tests {
         // We do not need socat for this — the pre-check rejects before any
         // process is spawned. Skipping when socat is absent would hide a
         // regression that only surfaces in environments where socat exists.
-        let host_port = pick_free_port();
-        let _holder = TcpListener::bind(format!("0.0.0.0:{}", host_port))
-            .expect("test setup: holder must bind the port");
+        let (_holder, host_port) = hold_free_port("0.0.0.0");
 
         let err = spawn_forwarder("10.0.0.1", host_port, 5432, None, PortProtocol::Tcp)
             .await
@@ -324,16 +347,7 @@ mod tests {
             return;
         }
 
-        let host_port = pick_free_port();
-        let fw = spawn_forwarder(
-            "127.0.0.99",
-            host_port,
-            9999,
-            Some("127.0.0.1"),
-            PortProtocol::Tcp,
-        )
-        .await
-        .unwrap();
+        let (fw, host_port) = spawn_on_free_port("127.0.0.99", 9999, Some("127.0.0.1")).await;
 
         // socat holds 127.0.0.1:<port> — a fresh bind there must fail.
         let busy = TcpListener::bind(format!("127.0.0.1:{}", host_port));
@@ -350,9 +364,7 @@ mod tests {
     /// still report available on a different host IP.
     #[test]
     fn host_port_available_is_interface_scoped() {
-        let port = pick_free_port();
-        let _holder = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .expect("test setup: holder must bind loopback");
+        let (_holder, port) = hold_free_port("127.0.0.1");
 
         assert!(
             !host_port_available("127.0.0.1", port),
