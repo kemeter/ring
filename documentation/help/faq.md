@@ -35,7 +35,7 @@ Ring is suitable for small to medium single-node production workloads. It is not
 
 - Docker (recent version)
 - Linux (x86_64 or arm64). macOS works for development; Windows requires WSL2.
-- Rust 1.85 or later when compiling from source (Ring uses edition 2024).
+- rustup when compiling from source: the repository pins its Rust version in `rust-toolchain.toml`, and rustup installs it on the first build.
 
 ### How do I install Ring on Ubuntu?
 
@@ -45,7 +45,7 @@ sudo apt update
 sudo apt install docker.io
 sudo usermod -aG docker $USER  # then log out and back in
 
-# Install Rust 1.85+ via rustup
+# Install rustup (it fetches the pinned Rust version on the first build)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Install build dependencies

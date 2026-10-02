@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Building from source uses the Rust version pinned in `rust-toolchain.toml` (1.99.0), which rustup installs on the first build, so a new stable release can no longer break the build or its lints without a code change
+
 ## [0.11.0] - 2026-10-01
 
 ### Breaking

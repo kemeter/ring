@@ -1,0 +1,6 @@
+# Pin the toolchain so a new stable release (and the lints its clippy adds)
+# cannot turn CI red without a code change. Bump it deliberately, together with
+# whatever fixes the new clippy asks for.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
