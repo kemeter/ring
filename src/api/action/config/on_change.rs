@@ -13,7 +13,9 @@ use uuid::Uuid;
 use crate::api::action::deployment::create::deploy;
 use crate::api::dto::deployment::DeploymentVolume;
 use crate::api::server::{Db, RuntimeMap};
-use crate::models::config::Config;
+use crate::models::config::{self as config_model, Config};
+
+static PROPAGATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 use crate::models::deployment_event;
 use crate::models::deployments::{self, Deployment, DeploymentStatus};
 use crate::models::volume::{OnChange, ReloadSignal, live_config_path};
@@ -28,6 +30,26 @@ pub(crate) async fn propagate(
     config: &Config,
     skip: &HashSet<String>,
 ) {
+    // One propagation at a time, each from the config as stored once it holds
+    // the lock rather than from the request that triggered it. Two updates in
+    // quick succession could otherwise rewrite a live file in the wrong order
+    // and leave it on the older content; this way the last one to run always
+    // writes the latest.
+    let _serialized = PROPAGATION.lock().await;
+    let config = match config_model::find(pool, &config.id).await {
+        Ok(Some(current)) => current,
+        // Deleted since: nothing mounts it any more.
+        Ok(None) => return,
+        Err(e) => {
+            error!(
+                "Failed to reload config {}/{} before propagating it: {}",
+                config.namespace, config.name, e
+            );
+            return;
+        }
+    };
+    let config = &config;
+
     let referencing =
         match deployments::find_referencing_config(pool, &config.namespace, &config.name).await {
             Ok(referencing) => referencing,
@@ -527,5 +549,29 @@ mod tests {
         let active = h.active().await;
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].id, first);
+    }
+
+    #[tokio::test]
+    async fn a_late_propagation_writes_the_latest_content_not_its_own() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        let id = h.deploy(config_volume("live"), false).await;
+
+        // The update to v2 is stored, but the propagation of an earlier
+        // update to v1-bis only runs now, holding the content it was given.
+        h.update_config(&config_id, "app-config", r#"{"app.yaml":"v2"}"#)
+            .await;
+        let mut stale = crate::models::config::find(&h.pool, &config_id)
+            .await
+            .unwrap()
+            .unwrap();
+        stale.data = r#"{"app.yaml":"v1-bis"}"#.to_string();
+        let no_runtimes: RuntimeMap = Arc::new(HashMap::new());
+        super::propagate(&h.pool, &no_runtimes, &stale, &Default::default()).await;
+
+        let path = live_config_path(&id, 0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "v2");
+
+        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", id));
     }
 }

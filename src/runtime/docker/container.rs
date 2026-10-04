@@ -702,13 +702,14 @@ async fn create_mount_from_resolved(
 
             let temp_file = match live_slot {
                 // A live config keeps one file for the whole deployment, which
-                // a config update rewrites under the running instances. Always
-                // rewritten here, in place, so the instance being created
-                // starts from the current content and the ones already
-                // mounting the file stay on the same inode.
+                // a config update rewrites under the running instances. Only
+                // the first instance creates it; after that the file belongs
+                // to the config update. `content` was read at the start of the
+                // scheduler cycle, so writing it over an existing file could
+                // put back a config an update replaced in the meantime.
                 Some(slot) => {
                     let file = live_config_path(deployment_id, *slot);
-                    tokio::fs::write(&file, content).await?;
+                    create_if_absent(&file, content).await?;
                     file
                 }
                 None => {
@@ -736,6 +737,24 @@ async fn create_mount_from_resolved(
                 ..Default::default()
             })
         }
+    }
+}
+
+/// Create `path` with `content`, or leave it untouched if it already exists.
+/// The check and the creation are one step (`O_EXCL`), so a concurrent writer
+/// that created the file first always wins.
+async fn create_if_absent(path: &str, content: &str) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .await
+    {
+        Ok(mut file) => file.write_all(content.as_bytes()).await,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -1008,7 +1027,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_content_mount_is_rewritten_in_place_at_a_stable_path() {
+    async fn live_content_mount_is_created_once_at_a_stable_path() {
         use std::os::unix::fs::MetadataExt;
 
         let deployment_id = format!("test-live-{}", uuid::Uuid::new_v4());
@@ -1025,10 +1044,12 @@ mod tests {
         assert_eq!(first.source.as_deref(), Some(path.as_str()));
         let inode = std::fs::metadata(&path).unwrap().ino();
 
-        // A new instance created after the config changed mounts the same
-        // file, rewritten without changing its inode, so the instances that
-        // already mount it see the new content too.
-        let second = create_mount_from_resolved(&mount_for("level: debug"), &deployment_id)
+        // A config update rewrites the file in place...
+        std::fs::write(&path, "level: debug").unwrap();
+
+        // ...and a later instance, created from content resolved before that
+        // update, mounts the same file without writing its stale copy over it.
+        let second = create_mount_from_resolved(&mount_for("level: info"), &deployment_id)
             .await
             .unwrap();
         assert_eq!(second.source.as_deref(), Some(path.as_str()));
