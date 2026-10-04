@@ -11,7 +11,8 @@ use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use bollard::Docker;
-use bollard::query_parameters::KillContainerOptionsBuilder;
+use bollard::query_parameters::{InspectContainerOptions, KillContainerOptionsBuilder};
+use chrono::{DateTime, Utc};
 use futures::stream::{self, Stream, StreamExt};
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -99,6 +100,18 @@ impl RuntimeLifecycle for DockerLifecycle {
         status: &str,
     ) -> Vec<(String, String)> {
         super::instances::list_instances_with_names(&self.docker, deployment_id, status).await
+    }
+
+    async fn instance_started_at(&self, instance_id: &str) -> Option<DateTime<Utc>> {
+        let details = self
+            .docker
+            .inspect_container(instance_id, None::<InspectContainerOptions>)
+            .await
+            .ok()?;
+        let started_at = details.state?.started_at?;
+        DateTime::parse_from_rfc3339(&started_at)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
     }
 
     async fn signal_instances(
@@ -261,5 +274,47 @@ impl RuntimeLifecycle for DockerLifecycle {
         }
 
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The start time comes from the daemon's own format, so only a real
+    /// daemon can tell whether it parses.
+    #[tokio::test]
+    async fn instance_started_at_reads_the_daemon_start_time() {
+        use crate::runtime::docker::test_support::{
+            TEST_IMAGE, daemon, ensure_image, remove, start_container,
+        };
+
+        let Some(docker) = daemon().await else {
+            eprintln!("skipping: no Docker daemon");
+            return;
+        };
+        if !ensure_image(&docker).await {
+            eprintln!("skipping: could not obtain {TEST_IMAGE}");
+            return;
+        }
+
+        let before = chrono::Utc::now() - chrono::Duration::seconds(5);
+        let id = start_container(&docker, "ring-started-at", true).await;
+        let lifecycle = DockerLifecycle::new(
+            docker.clone(),
+            IntentionalShutdowns::new(),
+            HostAuthSettings::default(),
+        );
+
+        let started_at = lifecycle.instance_started_at(&id).await;
+        let unknown = lifecycle.instance_started_at("no-such-container").await;
+        remove(&docker, &id).await;
+
+        let started_at = started_at.expect("a running container has a start time");
+        assert!(
+            started_at >= before && started_at <= chrono::Utc::now(),
+            "start time {started_at} is not around now"
+        );
+        assert_eq!(unknown, None);
     }
 }

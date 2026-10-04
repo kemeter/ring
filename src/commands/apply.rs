@@ -127,6 +127,11 @@ struct DeploymentConfig {
     /// killed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stop_timeout: Option<u32>,
+
+    /// Age after which an instance is replaced, e.g. `"24h"`. Passed through as
+    /// written: the server parses and validates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restart_interval: Option<String>,
 }
 
 /// Numeric uid/gid the container runs as (forwarded to Docker's `User`).
@@ -1458,6 +1463,21 @@ deployments:
         // Not `worker` (another config), not the staging `api` (another
         // namespace, whose config of the same name is a different one).
         assert_eq!(names, vec!["api".to_string()]);
+    }
+
+    #[test]
+    fn restart_interval_travels_from_manifest_to_payload() {
+        let yaml_content = r#"
+deployments:
+  vector:
+    name: vector
+    image: timberio/vector:0.41.0-alpine
+    config:
+      restart_interval: 24h
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let payload = serde_json::to_value(&config.deployments["vector"]).unwrap();
+        assert_eq!(payload["config"]["restart_interval"], "24h");
     }
 
     #[test]

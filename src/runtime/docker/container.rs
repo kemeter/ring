@@ -873,6 +873,7 @@ mod tests {
             use_host_auth: false,
             image_pull_secret: None,
             stop_timeout: None,
+            restart_interval: None,
         });
         assert_eq!(build_user_config(&config), Some("1000:1000".to_string()));
     }
@@ -892,6 +893,7 @@ mod tests {
             use_host_auth: false,
             image_pull_secret: None,
             stop_timeout: None,
+            restart_interval: None,
         });
         assert_eq!(build_user_config(&config), Some("1000".to_string()));
     }
@@ -958,6 +960,7 @@ mod tests {
             use_host_auth: false,
             image_pull_secret: None,
             stop_timeout: Some(120),
+            restart_interval: None,
         });
         assert_eq!(get_stop_timeout(&config), Some(120));
     }
@@ -973,6 +976,7 @@ mod tests {
             use_host_auth: false,
             image_pull_secret: None,
             stop_timeout: None,
+            restart_interval: None,
         });
         assert_eq!(get_stop_timeout(&config), None);
         assert_eq!(get_stop_timeout(&None), None);
@@ -993,6 +997,7 @@ mod tests {
             use_host_auth: false,
             image_pull_secret: None,
             stop_timeout: None,
+            restart_interval: None,
         });
         assert_eq!(get_privileged_config(&config), Some(true));
     }

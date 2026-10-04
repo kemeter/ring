@@ -257,6 +257,27 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
             ));
         }
     }
+
+    if let Some(interval) = &config.restart_interval {
+        match crate::models::deployments::parse_interval(interval) {
+            Err(message) => errors.push(Violation::new(
+                "config.restart_interval",
+                message,
+                "deployment.config.restart_interval.invalid",
+            )),
+            Ok(duration) if duration < crate::models::deployments::MIN_RESTART_INTERVAL => {
+                errors.push(Violation::new(
+                    "config.restart_interval",
+                    format!(
+                        "restart_interval ({}) must be at least 5m: a tighter interval is a restart loop, not a maintenance schedule",
+                        interval
+                    ),
+                    "deployment.config.restart_interval.too_short",
+                ))
+            }
+            Ok(_) => {}
+        }
+    }
 }
 
 /// Per-port rules. The `DeploymentPort` struct already constrains
@@ -385,6 +406,21 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
         ));
     }
 
+    // `kind: job + restart_interval`: a job runs to completion; replacing it
+    // on a schedule would run it again from the start.
+    if matches!(input.kind, DeploymentKind::Job)
+        && input
+            .config
+            .as_ref()
+            .is_some_and(|c| c.restart_interval.is_some())
+    {
+        errors.push(Violation::new(
+            "config.restart_interval",
+            "kind=job runs once and exits; it cannot be restarted on a schedule",
+            "deployment.config.restart_interval.job_unsupported",
+        ));
+    }
+
     // `kind: job + autoscale`: same reasoning as the replicas guard above, and
     // there is nothing to measure anyway — a job has no steady-state CPU, it
     // runs and exits, so a controller aiming at a CPU setpoint is meaningless.
@@ -448,6 +484,25 @@ fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationL
                 ));
             }
         }
+    }
+
+    // The age of an instance comes from the container runtime; the VM
+    // runtimes and containerd do not report it yet, so an interval there would
+    // never trigger anything.
+    if input
+        .config
+        .as_ref()
+        .is_some_and(|c| c.restart_interval.is_some())
+        && !matches!(input.runtime.as_str(), "docker" | "podman")
+    {
+        errors.push(Violation::new(
+            "config.restart_interval",
+            format!(
+                "restart_interval is not supported on the {} runtime (supported: docker, podman)",
+                input.runtime
+            ),
+            "deployment.config.restart_interval.runtime_unsupported",
+        ));
     }
 
     if input.runtime == "cloud-hypervisor" {
@@ -4068,5 +4123,83 @@ mod tests {
         );
 
         assert_eq!(deploy("docker").await.status_code(), StatusCode::CREATED);
+    }
+
+    async fn restart_interval_response(
+        runtime: &str,
+        kind: &str,
+        interval: &str,
+    ) -> (StatusCode, Vec<String>) {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": runtime,
+                "kind": kind,
+                "name": "vector",
+                "namespace": "ring",
+                "image": "timberio/vector:0.41.0-alpine",
+                "config": { "restart_interval": interval }
+            }))
+            .await;
+
+        let status = response.status_code();
+        let body: serde_json::Value = serde_json::from_str(&response.text()).unwrap_or_default();
+        let codes = body["violations"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .map(|x| x["code"].as_str().unwrap_or_default().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        (status, codes)
+    }
+
+    #[tokio::test]
+    async fn create_accepts_a_restart_interval_and_stores_it() {
+        let (status, codes) = restart_interval_response("docker", "worker", "24h").await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+        let (status, codes) = restart_interval_response("podman", "worker", "1h30m").await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_restart_interval_under_five_minutes() {
+        let (status, codes) = restart_interval_response("docker", "worker", "2m").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            codes.contains(&"deployment.config.restart_interval.too_short".to_string()),
+            "{codes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_unreadable_restart_interval() {
+        let (status, codes) = restart_interval_response("docker", "worker", "daily").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            codes.contains(&"deployment.config.restart_interval.invalid".to_string()),
+            "{codes:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_restart_interval_where_it_would_never_trigger() {
+        let (_, codes) = restart_interval_response("containerd", "worker", "24h").await;
+        assert!(
+            codes.contains(&"deployment.config.restart_interval.runtime_unsupported".to_string()),
+            "{codes:?}"
+        );
+
+        let (_, codes) = restart_interval_response("docker", "job", "24h").await;
+        assert!(
+            codes.contains(&"deployment.config.restart_interval.job_unsupported".to_string()),
+            "{codes:?}"
+        );
     }
 }

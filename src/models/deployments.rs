@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 
@@ -192,6 +193,52 @@ pub(crate) struct DeploymentConfig {
     /// directory that was not closed cleanly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) stop_timeout: Option<u32>,
+    /// Age after which Ring replaces an instance, one at a time, e.g. `"24h"`.
+    /// For processes that leak without ever failing a health check. Absent,
+    /// instances run until they stop on their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) restart_interval: Option<String>,
+}
+
+/// Shortest `restart_interval` accepted: anything tighter is a restart loop
+/// rather than a maintenance schedule.
+pub(crate) const MIN_RESTART_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// Parse an interval written as a sequence of `<number><unit>` with the units
+/// `s`, `m`, `h` and `d`, e.g. `"30m"`, `"24h"` or `"1h30m"`.
+pub(crate) fn parse_interval(value: &str) -> Result<Duration, String> {
+    let invalid = || {
+        format!(
+            "'{}' is not a valid interval (expected e.g. \"30m\", \"24h\" or \"1h30m\")",
+            value
+        )
+    };
+
+    let mut total = Duration::ZERO;
+    let mut digits = String::new();
+    for c in value.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        let unit = match c {
+            's' => 1,
+            'm' => 60,
+            'h' => 60 * 60,
+            'd' => 24 * 60 * 60,
+            _ => return Err(invalid()),
+        };
+        let amount: u64 = digits.parse().map_err(|_| invalid())?;
+        digits.clear();
+        total = amount
+            .checked_mul(unit)
+            .and_then(|secs| total.checked_add(Duration::from_secs(secs)))
+            .ok_or_else(invalid)?;
+    }
+    if !digits.is_empty() || total.is_zero() {
+        return Err(invalid());
+    }
+    Ok(total)
 }
 
 /// Transport protocol for a published port. TCP is the default, preserving the
@@ -1215,6 +1262,25 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec!["old", "new"]);
+    }
+
+    #[test]
+    fn parse_interval_reads_compound_durations() {
+        assert_eq!(parse_interval("30m"), Ok(Duration::from_secs(30 * 60)));
+        assert_eq!(parse_interval("24h"), Ok(Duration::from_secs(24 * 3600)));
+        assert_eq!(
+            parse_interval("1h30m"),
+            Ok(Duration::from_secs(3600 + 30 * 60))
+        );
+        assert_eq!(parse_interval("2d"), Ok(Duration::from_secs(2 * 86400)));
+        assert_eq!(parse_interval("90s"), Ok(Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn parse_interval_rejects_what_it_cannot_read() {
+        for bad in ["", "h", "10", "5x", "0m", "1h30", "-5m", "1.5h"] {
+            assert!(parse_interval(bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 
     #[tokio::test]

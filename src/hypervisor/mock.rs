@@ -14,6 +14,9 @@ pub(crate) struct MockRuntime {
     health_check_result: (HealthCheckStatus, Option<String>),
     instance_stats: Vec<InstanceStatsOutput>,
     signals: Arc<Mutex<Vec<(String, ReloadSignal)>>>,
+    started_at: std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>,
+    removed: Arc<Mutex<Vec<String>>>,
+    refuse_removal: bool,
 }
 
 impl MockRuntime {
@@ -22,6 +25,9 @@ impl MockRuntime {
             health_check_result: (HealthCheckStatus::Success, None),
             instance_stats: Vec::new(),
             signals: Arc::default(),
+            started_at: std::collections::HashMap::new(),
+            removed: Arc::default(),
+            refuse_removal: false,
         }
     }
 
@@ -30,6 +36,9 @@ impl MockRuntime {
             health_check_result: (HealthCheckStatus::Failed, Some(message.to_string())),
             instance_stats: Vec::new(),
             signals: Arc::default(),
+            started_at: std::collections::HashMap::new(),
+            removed: Arc::default(),
+            refuse_removal: false,
         }
     }
 
@@ -38,6 +47,27 @@ impl MockRuntime {
     pub(crate) fn with_instance_stats(mut self, stats: Vec<InstanceStatsOutput>) -> Self {
         self.instance_stats = stats;
         self
+    }
+
+    /// Report `started_at` as the start of `instance_id`.
+    pub(crate) fn with_started_at(
+        mut self,
+        instance_id: &str,
+        started_at: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        self.started_at.insert(instance_id.to_string(), started_at);
+        self
+    }
+
+    /// Make `remove_instance` fail, as a runtime refusing a removal would.
+    pub(crate) fn refusing_removal(mut self) -> Self {
+        self.refuse_removal = true;
+        self
+    }
+
+    /// Every instance id passed to `remove_instance`.
+    pub(crate) fn removed_log(&self) -> Arc<Mutex<Vec<String>>> {
+        self.removed.clone()
     }
 
     /// Every `(deployment_id, signal)` passed to `signal_instances`, shared so
@@ -61,8 +91,16 @@ impl RuntimeLifecycle for MockRuntime {
         Vec::new()
     }
 
-    async fn remove_instance(&self, _instance_id: String) -> bool {
-        true
+    async fn remove_instance(&self, instance_id: String) -> bool {
+        self.removed.lock().unwrap().push(instance_id);
+        !self.refuse_removal
+    }
+
+    async fn instance_started_at(
+        &self,
+        instance_id: &str,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.started_at.get(instance_id).copied()
     }
 
     async fn signal_instances(

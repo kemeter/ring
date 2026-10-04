@@ -300,6 +300,10 @@ Environment values support two forms:
 | `volumes[i].on_change` applies only to `config` volumes                       | `unsupported_volume_type`                                  |
 | `volumes[i].reload_signal` requires `on_change: live`                         | `requires_live`                                            |
 | `volumes[i].on_change: live` is docker/podman-only                            | `deployment.volumes.on_change.runtime_unsupported`         |
+| `config.restart_interval` must parse (e.g. `24h`, `1h30m`)                    | `deployment.config.restart_interval.invalid`               |
+| `config.restart_interval` must be at least `5m`                               | `deployment.config.restart_interval.too_short`             |
+| `config.restart_interval` is docker/podman-only                               | `deployment.config.restart_interval.runtime_unsupported`   |
+| `kind: job` cannot take a `config.restart_interval`                           | `deployment.config.restart_interval.job_unsupported`       |
 
 **Errors** (in `application/problem+json`):
 
