@@ -92,6 +92,10 @@ pub(crate) enum FailureAction {
 pub(crate) struct HealthCheckResult {
     pub(crate) id: String,
     pub(crate) deployment_id: String,
+    /// The instance the check probed. `None` for results stored before the
+    /// instance was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) instance_id: Option<String>,
     pub(crate) check_type: String,
     pub(crate) status: HealthCheckStatus,
     pub(crate) message: Option<String>,

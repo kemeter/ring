@@ -152,6 +152,7 @@ impl HealthChecker {
                 return HealthCheckResult {
                     id: Uuid::new_v4().to_string(),
                     deployment_id: deployment.id.clone(),
+                    instance_id: Some(instance_id.to_string()),
                     check_type: health_check.check_type().to_string(),
                     status: HealthCheckStatus::Failed,
                     message: Some(format!("Invalid timeout duration: {}", e)),
@@ -175,6 +176,7 @@ impl HealthChecker {
             Ok(check_result) => HealthCheckResult {
                 id: Uuid::new_v4().to_string(),
                 deployment_id: deployment.id.clone(),
+                instance_id: Some(instance_id.to_string()),
                 check_type: health_check.check_type().to_string(),
                 status: check_result.0,
                 message: check_result.1,
@@ -185,6 +187,7 @@ impl HealthChecker {
             Err(_) => HealthCheckResult {
                 id: Uuid::new_v4().to_string(),
                 deployment_id: deployment.id.clone(),
+                instance_id: Some(instance_id.to_string()),
                 check_type: health_check.check_type().to_string(),
                 status: HealthCheckStatus::Timeout,
                 message: Some("Health check timed out".to_string()),
@@ -209,10 +212,11 @@ impl HealthChecker {
 
         let message = result.message.as_deref();
         if let Err(e) = sqlx::query(
-            "INSERT INTO health_check (id, deployment_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO health_check (id, deployment_id, instance_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&result.id)
             .bind(&result.deployment_id)
+            .bind(&result.instance_id)
             .bind(&result.check_type)
             .bind(status_str)
             .bind(message)
@@ -429,6 +433,11 @@ mod tests {
             outcome.results[0].status,
             HealthCheckStatus::Success
         ));
+        assert_eq!(
+            outcome.results[0].instance_id.as_ref(),
+            deployment.instances.first(),
+            "a result records the instance it probed"
+        );
         assert!(outcome.instances_to_remove.is_empty());
         assert!(outcome.proposed_status.is_none());
     }
@@ -671,6 +680,7 @@ mod tests {
         let result = HealthCheckResult {
             id: uuid::Uuid::new_v4().to_string(),
             deployment_id: "test-persist".to_string(),
+            instance_id: Some("instance-1".to_string()),
             check_type: "tcp".to_string(),
             status: HealthCheckStatus::Success,
             message: Some("OK".to_string()),
@@ -681,8 +691,8 @@ mod tests {
 
         checker.store_result(&result).await;
 
-        let row = sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT id, deployment_id, check_type, status FROM health_check WHERE id = ?",
+        let row = sqlx::query_as::<_, (String, String, String, String, Option<String>)>(
+            "SELECT id, deployment_id, check_type, status, instance_id FROM health_check WHERE id = ?",
         )
         .bind(&result.id)
         .fetch_one(&pool)
@@ -693,6 +703,7 @@ mod tests {
         assert_eq!(row.1, "test-persist");
         assert_eq!(row.2, "tcp");
         assert_eq!(row.3, "success");
+        assert_eq!(row.4.as_deref(), Some("instance-1"));
     }
 
     // ---- creating-phase readiness probing ----

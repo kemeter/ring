@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 pub(crate) struct HealthCheckResultRecord {
     pub(crate) id: String,
     pub(crate) deployment_id: String,
+    pub(crate) instance_id: Option<String>,
     pub(crate) check_type: String,
     pub(crate) status: String,
     pub(crate) message: Option<String>,
@@ -26,6 +27,7 @@ impl From<HealthCheckResultRecord> for HealthCheckResult {
         HealthCheckResult {
             id: record.id,
             deployment_id: record.deployment_id,
+            instance_id: record.instance_id,
             check_type: record.check_type,
             status,
             message: record.message,
@@ -44,7 +46,7 @@ pub(crate) async fn find_by_deployment(
     let limit_val = limit.unwrap_or(100) as i32;
 
     sqlx::query_as::<_, HealthCheckResultRecord>(
-        "SELECT id, deployment_id, check_type, status, message, created_at, started_at, finished_at
+        "SELECT id, deployment_id, instance_id, check_type, status, message, created_at, started_at, finished_at
          FROM health_check WHERE deployment_id = ? ORDER BY started_at DESC LIMIT ?",
     )
     .bind(&deployment_id)
@@ -58,7 +60,7 @@ pub(crate) async fn find_latest_by_deployment(
     deployment_id: String,
 ) -> Result<Vec<HealthCheckResultRecord>, sqlx::Error> {
     sqlx::query_as::<_, HealthCheckResultRecord>(
-        "SELECT hcr.id, hcr.deployment_id, hcr.check_type, hcr.status, hcr.message,
+        "SELECT hcr.id, hcr.deployment_id, hcr.instance_id, hcr.check_type, hcr.status, hcr.message,
                 hcr.created_at, hcr.started_at, hcr.finished_at
          FROM health_check hcr
          INNER JOIN (
