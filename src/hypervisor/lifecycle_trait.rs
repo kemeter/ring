@@ -5,6 +5,7 @@ use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::{ReloadSignal, ResolvedMount};
 use async_trait::async_trait;
 use axum::response::sse::Event;
+use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use futures::stream;
 use regex::Regex;
@@ -350,6 +351,16 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
         Err(ExecError::UnsupportedRuntime(
             "no exec support for this runtime".to_string(),
         ))
+    }
+
+    /// When the instance's current process started, as the runtime reports it.
+    ///
+    /// Drives `config.restart_interval`, which replaces instances past a given
+    /// age. Read from the runtime rather than stored, so a restart of Ring
+    /// leaves the ages correct. `None` when the runtime cannot tell, in which
+    /// case no instance is ever replaced for its age.
+    async fn instance_started_at(&self, _instance_id: &str) -> Option<DateTime<Utc>> {
+        None
     }
 
     /// Send `signal` to the main process of every running instance of the

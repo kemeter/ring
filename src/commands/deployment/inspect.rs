@@ -104,6 +104,13 @@ pub(crate) async fn execute(
                 _ => println!("Replicas      : {}", deployment.replicas),
             }
             println!("Restart count : {}", deployment.restart_count);
+            if let Some(interval) = deployment
+                .config
+                .as_ref()
+                .and_then(|c| c.restart_interval.as_deref())
+            {
+                println!("Restart every : {}", interval);
+            }
             println!("Created at    : {}", deployment.created_at);
             println!("Updated at    : {}", deployment.updated_at);
             println!();
