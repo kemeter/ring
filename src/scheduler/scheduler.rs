@@ -525,9 +525,17 @@ fn pick_aged_instance(
 /// `config.restart_interval`. The instance is removed the way a failed health
 /// check removes one, so it does not count toward `restart_count`, and the
 /// next cycle creates its replacement.
+///
+/// Nothing is replaced unless the deployment is steady: a running worker
+/// outside any rolling update (`in_rollout`), at full strength with the same
+/// instances as at the end of the previous cycle (`last_instances`, so not
+/// while the runtime is scaling it or replacing a crashed instance), and with
+/// no failed health check since its youngest instance started.
 async fn replace_aged_instance(
+    pool: &SqlitePool,
     deployment: &mut Deployment,
-    rolling_parents: &std::collections::HashSet<String>,
+    in_rollout: bool,
+    last_instances: &mut HashMap<String, Vec<String>>,
     runtime: &dyn RuntimeLifecycle,
 ) {
     let Some(interval) = deployment
@@ -536,15 +544,19 @@ async fn replace_aged_instance(
         .and_then(|c| c.restart_interval.as_deref())
         .and_then(|raw| deployments::parse_interval(raw).ok())
     else {
+        last_instances.remove(&deployment.id);
         return;
     };
 
-    // Only a worker running at full strength, outside any rolling update: with
-    // an instance missing, its replacement is not up yet.
+    let mut current = deployment.instances.clone();
+    current.sort();
+    let unchanged = last_instances.get(&deployment.id) == Some(&current);
+    last_instances.insert(deployment.id.clone(), current);
+
     if deployment.kind != "worker"
         || deployment.status != DeploymentStatus::Running
-        || deployment.parent_id.is_some()
-        || rolling_parents.contains(&deployment.id)
+        || in_rollout
+        || !unchanged
         || (deployment.instances.len() as u32) < deployment.target_replicas()
     {
         return;
@@ -552,13 +564,17 @@ async fn replace_aged_instance(
 
     let now = chrono::Utc::now();
     let mut ages = Vec::with_capacity(deployment.instances.len());
+    let mut youngest_start = None;
     for instance_id in &deployment.instances {
         // An age the runtime cannot tell: decide nothing rather than guess.
         let Some(started_at) = runtime.instance_started_at(instance_id).await else {
             return;
         };
-        let age = (now - started_at).to_std().unwrap_or_default();
-        ages.push((instance_id.clone(), age));
+        youngest_start = youngest_start.max(Some(started_at));
+        ages.push((
+            instance_id.clone(),
+            (now - started_at).to_std().unwrap_or_default(),
+        ));
     }
 
     let Some((instance_id, age)) =
@@ -567,14 +583,38 @@ async fn replace_aged_instance(
         return;
     };
 
+    if let Some(since) = youngest_start
+        && !healthy_since(pool, deployment, since).await
+    {
+        debug!(
+            "Deployment {}: not replacing {} yet, its instances have not all proven healthy",
+            deployment.id, instance_id
+        );
+        return;
+    }
+
     info!(
         "Deployment {}: replacing instance {} after {}s (restart_interval)",
         deployment.id,
         instance_id,
         age.as_secs()
     );
-    runtime.remove_instance(instance_id.clone()).await;
+    if !runtime.remove_instance(instance_id.clone()).await {
+        deployment.emit_event(
+            "warning",
+            format!(
+                "Could not remove instance {} for its restart_interval; it keeps running",
+                &instance_id[..instance_id.len().min(12)]
+            ),
+            "scheduler",
+            Some("scheduled_restart"),
+        );
+        return;
+    }
     deployment.instances.retain(|id| id != &instance_id);
+    let mut remaining = deployment.instances.clone();
+    remaining.sort();
+    last_instances.insert(deployment.id.clone(), remaining);
     deployment.emit_event(
         "info",
         format!(
@@ -590,6 +630,42 @@ async fn replace_aged_instance(
         "scheduler",
         Some("scheduled_restart"),
     );
+}
+
+/// Whether the health checks of `deployment` vouch for every instance started
+/// up to `since`: no failure recorded after it and, when the deployment has
+/// readiness checks, at least one success. The results are recorded per
+/// deployment, not per instance, so a failure from any instance holds the
+/// replacements back.
+async fn healthy_since(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+    since: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if deployment.health_checks.is_empty() {
+        return true;
+    }
+    let Ok(records) =
+        health_check_logs::find_by_deployment(pool, deployment.id.clone(), Some(500)).await
+    else {
+        return false;
+    };
+
+    let mut succeeded = false;
+    for record in records {
+        let Ok(finished_at) = chrono::DateTime::parse_from_rfc3339(&record.finished_at) else {
+            continue;
+        };
+        if finished_at < since {
+            continue;
+        }
+        if record.status != "success" {
+            return false;
+        }
+        succeeded = true;
+    }
+
+    succeeded || !deployment.health_checks.iter().any(|hc| hc.is_readiness())
 }
 
 fn format_age(age: Duration) -> String {
@@ -1521,6 +1597,11 @@ pub(crate) async fn schedule(
     // that carry an `autoscale` policy — see `run_autoscaling`.
     let mut autoscaler = Autoscaler::new();
 
+    // Instances each deployment with a `restart_interval` had at the end of
+    // the previous cycle. A replacement only happens once that set held still
+    // for a whole cycle — see `replace_aged_instance`.
+    let mut last_instances: HashMap<String, Vec<String>> = HashMap::new();
+
     info!(
         "Starting scheduler with interval: {}s, apply timeout: {}s",
         interval_seconds, apply_timeout_secs
@@ -1611,6 +1692,7 @@ pub(crate) async fn schedule(
             .iter()
             .filter_map(|d| d.parent_id.clone())
             .collect();
+        last_instances.retain(|id, _| list_deployments.iter().any(|d| &d.id == id));
 
         async {
         for deployment in list_deployments.into_iter() {
@@ -1858,8 +1940,20 @@ pub(crate) async fn schedule(
             )
             .await;
             gate_running_on_readiness(&pool, &old_status, &mut result).await;
+            // Taken before the rolling step, which clears `parent_id` on the
+            // cycle a rollout completes: the deployment it just finished
+            // draining must not lose an instance in that same cycle.
+            let in_rollout =
+                result.parent_id.is_some() || rolling_parents.contains(&result.id);
             handle_rolling_update(&pool, &mut result, &mut deleted, runtime.as_ref()).await;
-            replace_aged_instance(&mut result, &rolling_parents, runtime.as_ref()).await;
+            replace_aged_instance(
+                &pool,
+                &mut result,
+                in_rollout,
+                &mut last_instances,
+                runtime.as_ref(),
+            )
+            .await;
             persist_pending_events(&pool, &mut result).await;
 
             // Log the creating -> running transition only now that the status
@@ -2630,17 +2724,62 @@ mod tests {
         chrono::Utc::now() - chrono::Duration::hours(hours)
     }
 
+    /// Run the replacement step once, as a scheduler cycle would.
+    async fn cycle(
+        pool: &SqlitePool,
+        deployment: &mut Deployment,
+        in_rollout: bool,
+        last_instances: &mut HashMap<String, Vec<String>>,
+        runtime: &dyn RuntimeLifecycle,
+    ) {
+        replace_aged_instance(pool, deployment, in_rollout, last_instances, runtime).await;
+    }
+
+    /// The set of instances `deployment` had at the end of a previous cycle,
+    /// as the scheduler would have recorded it.
+    fn steady(deployment: &Deployment) -> HashMap<String, Vec<String>> {
+        let mut instances = deployment.instances.clone();
+        instances.sort();
+        HashMap::from([(deployment.id.clone(), instances)])
+    }
+
+    async fn record_check(pool: &SqlitePool, deployment_id: &str, status: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO health_check (id, deployment_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, 'tcp', ?, NULL, ?, ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(deployment_id)
+        .bind(status)
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    fn readiness_check() -> HealthCheck {
+        serde_json::from_value(serde_json::json!({
+            "type": "tcp", "port": 80, "interval": "2s", "timeout": "1s",
+            "threshold": 2, "on_failure": "restart", "readiness": true
+        }))
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn replace_aged_instance_removes_one_instance_per_cycle() {
         use crate::hypervisor::mock::MockRuntime;
 
+        let pool = new_test_pool().await;
         let runtime = MockRuntime::healthy()
             .with_started_at("a", hours_ago(30))
             .with_started_at("b", hours_ago(26));
         let removed = runtime.removed_log();
         let mut deployment = rotating(&["a", "b"], "24h");
+        let mut last = steady(&deployment);
 
-        replace_aged_instance(&mut deployment, &Default::default(), &runtime).await;
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
 
         // Both are past 24h; only the oldest goes, and not as a crash.
         assert_eq!(*removed.lock().unwrap(), vec!["a".to_string()]);
@@ -2655,26 +2794,64 @@ mod tests {
 
         // Next cycle, before the replacement exists: one instance short, so
         // `b` is left alone.
-        replace_aged_instance(&mut deployment, &Default::default(), &runtime).await;
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
         assert_eq!(removed.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_waits_for_a_first_steady_cycle() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy().with_started_at("a", hours_ago(30));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a"], "24h");
+        let mut last = HashMap::new();
+
+        // First sight of the deployment: nothing to compare with yet.
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+        assert!(removed.lock().unwrap().is_empty());
+
+        // Same instances one cycle later: now it is steady.
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+        assert_eq!(*removed.lock().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_skips_a_cycle_that_changed_the_instances() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        // An autoscaler scale-down: the runtime removed `c` this cycle, which
+        // leaves the deployment exactly at its new, lower target.
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .with_started_at("b", hours_ago(26));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a", "b"], "24h");
+        let mut last = HashMap::from([(
+            deployment.id.clone(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        )]);
+
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+
+        assert!(removed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn replace_aged_instance_leaves_a_rolling_update_alone() {
         use crate::hypervisor::mock::MockRuntime;
 
+        let pool = new_test_pool().await;
         let runtime = MockRuntime::healthy().with_started_at("a", hours_ago(30));
         let removed = runtime.removed_log();
 
-        // The parent being drained...
-        let mut parent = rotating(&["a"], "24h");
-        let parents = std::collections::HashSet::from([parent.id.clone()]);
-        replace_aged_instance(&mut parent, &parents, &runtime).await;
-
-        // ...and the child replacing it.
-        let mut child = rotating(&["a"], "24h");
-        child.parent_id = Some("parent".to_string());
-        replace_aged_instance(&mut child, &Default::default(), &runtime).await;
+        // A deployment in a rollout at the start of the cycle, including one
+        // whose rollout just completed and lost its `parent_id`.
+        let mut deployment = rotating(&["a"], "24h");
+        let mut last = steady(&deployment);
+        cycle(&pool, &mut deployment, true, &mut last, &runtime).await;
 
         assert!(removed.lock().unwrap().is_empty());
     }
@@ -2684,12 +2861,76 @@ mod tests {
         use crate::hypervisor::mock::MockRuntime;
 
         // `b`'s start time is unknown to the runtime.
+        let pool = new_test_pool().await;
         let runtime = MockRuntime::healthy().with_started_at("a", hours_ago(30));
         let removed = runtime.removed_log();
         let mut deployment = rotating(&["a", "b"], "24h");
+        let mut last = steady(&deployment);
 
-        replace_aged_instance(&mut deployment, &Default::default(), &runtime).await;
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
 
         assert!(removed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_waits_for_failing_checks_to_clear() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        // `b` replaced an instance an hour ago and has been failing since.
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .with_started_at("b", hours_ago(1));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a", "b"], "24h");
+        deployment.health_checks = vec![readiness_check()];
+        let mut last = steady(&deployment);
+        record_check(&pool, &deployment.id, "success").await;
+        record_check(&pool, &deployment.id, "failed").await;
+
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+
+        assert!(removed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_waits_for_readiness_to_be_proven() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .with_started_at("b", hours_ago(1));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a", "b"], "24h");
+        deployment.health_checks = vec![readiness_check()];
+        let mut last = steady(&deployment);
+
+        // No readiness result since `b` started: not proven ready.
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+        assert!(removed.lock().unwrap().is_empty());
+
+        record_check(&pool, &deployment.id, "success").await;
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+        assert_eq!(*removed.lock().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_keeps_an_instance_the_runtime_would_not_remove() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .refusing_removal();
+        let mut deployment = rotating(&["a"], "24h");
+        let mut last = steady(&deployment);
+
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+
+        assert_eq!(deployment.instances, vec!["a".to_string()]);
+        let event = deployment.pending_events.last().unwrap();
+        assert_eq!(event.level, "warning");
+        assert!(event.message.contains("keeps running"));
     }
 }

@@ -536,10 +536,10 @@ config:
 
 How the replacement happens:
 
-- **One instance at a time.** Ring removes the oldest instance past the interval, and the next cycle creates its replacement. It waits for every expected instance to be present, and for the replacement to have run for its anti-flap window (10s, or the readiness checks' `min_healthy_time`), before taking the next one. Several replicas are never down at once; a single replica is, briefly, while its replacement starts.
+- **One instance at a time.** Ring removes the oldest instance past the interval, and the next cycle creates its replacement. Before taking the next one, it waits until every expected instance is present and unchanged for a whole cycle, the replacement has run for its anti-flap window (10s, or the readiness checks' `min_healthy_time`), and no health check has failed since the replacement started; with readiness checks, one must also have passed since. Several replicas are never down at once; a single replica is, briefly, while its replacement starts.
 - **Not a crash.** The removal goes through the same path as a failed health check, so it does not count toward `restart_count` and never leads to `CrashLoopBackOff`.
 - **The age comes from the runtime**, not from Ring's own records, so restarting Ring does not reset it.
-- **Never during a rolling update**, on either the deployment being replaced or its replacement.
+- **Never during a rolling update**, on either the deployment being replaced or its replacement, nor while the instance count is changing (a scale up or down, a crashed instance being recreated).
 - Each replacement is recorded in the deployment's events with the reason `scheduled_restart`, the instance and its uptime.
 
 It is refused below `5m`, which would be a restart loop rather than a maintenance schedule, on `kind: job`, which runs once, and on runtimes that do not report an instance's start time (containerd, cloud-hypervisor, firecracker).

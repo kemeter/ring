@@ -16,6 +16,7 @@ pub(crate) struct MockRuntime {
     signals: Arc<Mutex<Vec<(String, ReloadSignal)>>>,
     started_at: std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>,
     removed: Arc<Mutex<Vec<String>>>,
+    refuse_removal: bool,
 }
 
 impl MockRuntime {
@@ -26,6 +27,7 @@ impl MockRuntime {
             signals: Arc::default(),
             started_at: std::collections::HashMap::new(),
             removed: Arc::default(),
+            refuse_removal: false,
         }
     }
 
@@ -36,6 +38,7 @@ impl MockRuntime {
             signals: Arc::default(),
             started_at: std::collections::HashMap::new(),
             removed: Arc::default(),
+            refuse_removal: false,
         }
     }
 
@@ -53,6 +56,12 @@ impl MockRuntime {
         started_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         self.started_at.insert(instance_id.to_string(), started_at);
+        self
+    }
+
+    /// Make `remove_instance` fail, as a runtime refusing a removal would.
+    pub(crate) fn refusing_removal(mut self) -> Self {
+        self.refuse_removal = true;
         self
     }
 
@@ -84,7 +93,7 @@ impl RuntimeLifecycle for MockRuntime {
 
     async fn remove_instance(&self, instance_id: String) -> bool {
         self.removed.lock().unwrap().push(instance_id);
-        true
+        !self.refuse_removal
     }
 
     async fn instance_started_at(
