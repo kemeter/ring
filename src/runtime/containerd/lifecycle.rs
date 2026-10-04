@@ -25,10 +25,11 @@ use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
 use crate::models::health_check::HealthCheckStatus;
-use crate::models::volume::ResolvedMount;
+use crate::models::volume::{ReloadSignal, ResolvedMount};
 use crate::runtime::docker::ImagePullPolicy;
 use async_trait::async_trait;
 use axum::response::sse::Event;
+use chrono::{DateTime, Utc};
 use containerd_client::services::v1::container::Runtime;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::snapshots::snapshots_client::SnapshotsClient;
@@ -36,7 +37,7 @@ use containerd_client::services::v1::snapshots::{PrepareSnapshotRequest, RemoveS
 use containerd_client::services::v1::tasks_client::TasksClient;
 use containerd_client::services::v1::{
     Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
-    DeleteTaskRequest, GetRequest, KillRequest, StartRequest, WaitRequest,
+    DeleteTaskRequest, GetContainerRequest, GetRequest, KillRequest, StartRequest, WaitRequest,
 };
 use containerd_client::types::Mount;
 use containerd_client::types::v1::Status as TaskStatus;
@@ -50,6 +51,16 @@ use tonic::Request;
 /// SIGTERM / SIGKILL signal numbers (Linux). Used for graceful then forced kill.
 const SIGTERM: u32 = 15;
 const SIGKILL: u32 = 9;
+
+/// Number of a reload signal, which is what the task API takes.
+fn signal_number(signal: ReloadSignal) -> u32 {
+    let number = match signal {
+        ReloadSignal::Hup => libc::SIGHUP,
+        ReloadSignal::Usr1 => libc::SIGUSR1,
+        ReloadSignal::Usr2 => libc::SIGUSR2,
+    };
+    number as u32
+}
 
 /// How long an instance gets to exit after SIGTERM before we SIGKILL it. Matches
 /// Docker's default 10s stop grace period.
@@ -138,6 +149,74 @@ impl RuntimeLifecycle for ContainerdLifecycle {
             return false;
         };
         self.teardown_instance(&client, &instance_id).await
+    }
+
+    /// Ring creates a container per instance and starts its task once: a
+    /// crashed instance is torn down and created again, never restarted in
+    /// place. The container's creation time is therefore when the instance's
+    /// process started.
+    async fn instance_started_at(&self, instance_id: &str) -> Option<DateTime<Utc>> {
+        let client = self.connect().await.ok()?;
+        let mut containers = ContainersClient::new(client.channel());
+        let req = with_namespace!(
+            GetContainerRequest {
+                id: instance_id.to_string(),
+            },
+            self.config.namespace
+        );
+        let created_at = containers
+            .get(req)
+            .await
+            .ok()?
+            .into_inner()
+            .container?
+            .created_at?;
+        DateTime::from_timestamp(created_at.seconds, u32::try_from(created_at.nanos).ok()?)
+    }
+
+    async fn signal_instances(
+        &self,
+        deployment_id: &str,
+        signal: ReloadSignal,
+    ) -> Result<usize, RuntimeError> {
+        let client = self.connect().await?;
+        let running =
+            instances::list_instances(&client, &self.config.namespace, deployment_id, "running")
+                .await;
+
+        let mut tasks = TasksClient::new(client.channel());
+        let mut signalled = 0;
+        let mut failures = Vec::new();
+        for instance_id in running {
+            let req = with_namespace!(
+                KillRequest {
+                    container_id: instance_id.clone(),
+                    exec_id: String::new(),
+                    signal: signal_number(signal),
+                    // The main process only, as `docker kill --signal` does: a
+                    // reload signal is for the application, not every process
+                    // it spawned.
+                    all: false,
+                },
+                self.config.namespace
+            );
+            match tasks.kill(req).await {
+                Ok(_) => signalled += 1,
+                Err(e) => failures.push(format!("{}: {}", instance_id, e)),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(signalled)
+        } else {
+            Err(RuntimeError::Other(format!(
+                "{} not delivered to {} of {} instances ({})",
+                signal.as_str(),
+                failures.len(),
+                failures.len() + signalled,
+                failures.join("; ")
+            )))
+        }
     }
 
     async fn get_logs(
@@ -815,24 +894,38 @@ async fn write_config_files(
     let mut out = Vec::new();
     let dir = config_dir(&deployment.id);
     for m in resolved_mounts {
-        if let ResolvedMount::Content {
-            content,
-            destination,
-            ..
-        } = m
-        {
-            tokio::fs::create_dir_all(&dir).await?;
-            // Derive the filename from a *stable* content hash. DefaultHasher is
-            // seeded randomly per process, so it would produce a new filename on
-            // every daemon restart — the try_exists guard would never hit and
-            // stale files would accumulate. Sha256 keys the same content to the
-            // same file across restarts.
-            let digest = Sha256::digest(content.as_bytes());
-            let file = format!("{}/{:x}", dir, digest);
-            if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
-                tokio::fs::write(&file, content).await?;
+        match m {
+            // A live config keeps one file per deployment at a stable path, so
+            // a config update can rewrite it under the running instances.
+            ResolvedMount::Content {
+                content,
+                destination,
+                live_slot: Some(slot),
+            } => {
+                let file =
+                    crate::models::volume::create_live_config(&deployment.id, *slot, content)
+                        .await?;
+                out.push((file, destination.clone()));
             }
-            out.push((file, destination.clone()));
+            ResolvedMount::Content {
+                content,
+                destination,
+                live_slot: None,
+            } => {
+                tokio::fs::create_dir_all(&dir).await?;
+                // Derive the filename from a *stable* content hash. DefaultHasher is
+                // seeded randomly per process, so it would produce a new filename on
+                // every daemon restart — the try_exists guard would never hit and
+                // stale files would accumulate. Sha256 keys the same content to the
+                // same file across restarts.
+                let digest = Sha256::digest(content.as_bytes());
+                let file = format!("{}/{:x}", dir, digest);
+                if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
+                    tokio::fs::write(&file, content).await?;
+                }
+                out.push((file, destination.clone()));
+            }
+            _ => {}
         }
     }
     Ok(out)

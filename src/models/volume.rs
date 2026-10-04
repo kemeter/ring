@@ -82,6 +82,46 @@ pub fn live_config_path(deployment_id: &str, slot: usize) -> String {
     format!("/tmp/ring_configs/{}/live-{}", deployment_id, slot)
 }
 
+/// Create the file backing a live config volume if it does not exist yet, and
+/// return its path.
+///
+/// Only the first instance creates it; after that the file belongs to the
+/// config update, which rewrites it in place. `content` was read at the start
+/// of a scheduler cycle, so writing it over an existing file could put back a
+/// config an update replaced in the meantime. The check and the creation are
+/// one step (`O_EXCL`), so a concurrent writer that created the file first
+/// always wins.
+pub async fn create_live_config(
+    deployment_id: &str,
+    slot: usize,
+    content: &str,
+) -> std::io::Result<String> {
+    use tokio::io::AsyncWriteExt;
+
+    let path = live_config_path(deployment_id, slot);
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    match tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await
+    {
+        // `write_all` on a tokio file can return while the bytes are still
+        // queued for a background thread; only `flush` waits for them. Without
+        // it the write could land after a config update rewrote the file, and
+        // put the older content back.
+        Ok(mut file) => {
+            file.write_all(content.as_bytes()).await?;
+            file.flush().await?;
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    Ok(path)
+}
+
 pub fn resolve_volumes(
     volumes_json: &str,
     configs: &HashMap<String, Config>,

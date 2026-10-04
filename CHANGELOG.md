@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker and Podman workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
+- `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker, Podman and containerd workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
+- containerd supports `on_change: live` and `reload_signal`, which were refused on it
 
 ### Fixed
 - On containerd 2.x, Ring did not see a deployment's running instances and created a new one on every scheduler cycle: `ListTasks` no longer fills a task's container id, which the instances were matched on. They are now matched on the task's own id when the container id is empty
