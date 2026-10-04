@@ -279,7 +279,7 @@ Environment values support two forms:
 
 | Rule                                                                         | Code                                                       |
 |------------------------------------------------------------------------------|------------------------------------------------------------|
-| `runtime` must be `docker` or `cloud-hypervisor`                             | `deployment.runtime.unsupported`                           |
+| `runtime` must be `docker`, `podman`, `containerd`, `cloud-hypervisor` or `firecracker` | `deployment.runtime.unsupported`              |
 | Cloud Hypervisor refuses custom `command`                                    | `deployment.command.cloud_hypervisor_unsupported`          |
 | Cloud Hypervisor needs an absolute path image                                | `deployment.image.cloud_hypervisor_requires_absolute_path` |
 | `network.mode=host` is docker-only                                           | `deployment.network.host_runtime_unsupported`              |

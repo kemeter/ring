@@ -752,7 +752,14 @@ async fn create_if_absent(path: &str, content: &str) -> std::io::Result<()> {
         .open(path)
         .await
     {
-        Ok(mut file) => file.write_all(content.as_bytes()).await,
+        // `write_all` on a tokio file can return while the bytes are still
+        // queued for a background thread; only `flush` waits for them. Without
+        // it the write could land after a config update rewrote the file, and
+        // put the older content back.
+        Ok(mut file) => {
+            file.write_all(content.as_bytes()).await?;
+            file.flush().await
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }
