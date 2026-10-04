@@ -200,15 +200,23 @@ fn aggregate(
                 instances.iter().map(|i| i.cpu_usage_percent).sum::<f64>() / instances.len() as f64,
             )
         },
-        memory_usage_bytes: instances.iter().map(|i| i.memory.usage_bytes).sum(),
-        memory_limit_bytes: instances.iter().map(|i| i.memory.limit_bytes).sum(),
-        network_rx_bytes: instances.iter().map(|i| i.network.rx_bytes).sum(),
-        network_tx_bytes: instances.iter().map(|i| i.network.tx_bytes).sum(),
-        disk_read_bytes: instances.iter().map(|i| i.disk_io.read_bytes).sum(),
-        disk_write_bytes: instances.iter().map(|i| i.disk_io.write_bytes).sum(),
-        pids: instances.iter().map(|i| i.pids.current).sum(),
-        restarts: instances.iter().map(|i| i.restart_count).sum(),
+        memory_usage_bytes: total(instances.iter().map(|i| i.memory.usage_bytes)),
+        memory_limit_bytes: total(instances.iter().map(|i| i.memory.limit_bytes)),
+        network_rx_bytes: total(instances.iter().map(|i| i.network.rx_bytes)),
+        network_tx_bytes: total(instances.iter().map(|i| i.network.tx_bytes)),
+        disk_read_bytes: total(instances.iter().map(|i| i.disk_io.read_bytes)),
+        disk_write_bytes: total(instances.iter().map(|i| i.disk_io.write_bytes)),
+        pids: total(instances.iter().map(|i| i.pids.current)),
+        restarts: total(instances.iter().map(|i| i.restart_count)),
     }
+}
+
+/// Sum per-instance counters without overflowing. A runtime reports an
+/// unlimited memory limit as `u64::MAX`, so two unlimited instances already
+/// exceed the type: the sum saturates instead, and an unlimited total stays
+/// `u64::MAX`.
+fn total(values: impl Iterator<Item = u64>) -> u64 {
+    values.fold(0, u64::saturating_add)
 }
 
 #[cfg(test)]
@@ -341,5 +349,12 @@ mod tests {
         assert!(guard.deployments.is_empty());
         // The refresh still ran, so the timestamp advances.
         assert_eq!(guard.last_refresh_unix, 1);
+    }
+
+    #[test]
+    fn totals_saturate_instead_of_overflowing() {
+        assert_eq!(total([u64::MAX, u64::MAX].into_iter()), u64::MAX);
+        assert_eq!(total([1, 2, 3].into_iter()), 6);
+        assert_eq!(total(std::iter::empty()), 0);
     }
 }
