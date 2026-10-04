@@ -13,7 +13,7 @@ use containerd_client::services::v1::ListContainersRequest;
 use containerd_client::services::v1::ListTasksRequest;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
-use containerd_client::types::v1::Status as TaskStatus;
+use containerd_client::types::v1::{Process, Status as TaskStatus};
 use containerd_client::with_namespace;
 use std::collections::HashMap;
 use tonic::Request;
@@ -24,6 +24,27 @@ fn is_active(status: i32) -> bool {
         TaskStatus::try_from(status),
         Ok(TaskStatus::Running) | Ok(TaskStatus::Paused) | Ok(TaskStatus::Pausing)
     )
+}
+
+/// Status of each task, keyed by the container it runs in.
+///
+/// A task's `container_id` is not always filled in `ListTasks` (containerd 2.x
+/// leaves it empty), and keying on it then matched no container: every running
+/// instance was missed, and the scheduler created a new one on every cycle.
+/// The init process of a task carries the container's id as its own `id`, so
+/// that is the fallback.
+fn task_status_by_container(tasks: Vec<Process>) -> HashMap<String, i32> {
+    tasks
+        .into_iter()
+        .map(|t| {
+            let container = if t.container_id.is_empty() {
+                t.id
+            } else {
+                t.container_id
+            };
+            (container, t.status)
+        })
+        .collect()
 }
 
 /// List container ids for a deployment, filtered by `status` ("all" or
@@ -104,12 +125,7 @@ async fn list_instances_inner(
         namespace
     );
     let task_status: HashMap<String, i32> = match tasks.list(task_req).await {
-        Ok(resp) => resp
-            .into_inner()
-            .tasks
-            .into_iter()
-            .map(|t| (t.container_id, t.status))
-            .collect(),
+        Ok(resp) => task_status_by_container(resp.into_inner().tasks),
         Err(e) => {
             debug!("containerd ListTasks failed: {}", e);
             HashMap::new()
@@ -121,4 +137,36 @@ async fn list_instances_inner(
         .filter(|id| task_status.get(id).copied().is_some_and(is_active))
         .map(|id| (id.clone(), id))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(container_id: &str, id: &str, status: TaskStatus) -> Process {
+        Process {
+            container_id: container_id.to_string(),
+            id: id.to_string(),
+            status: status as i32,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tasks_are_keyed_by_their_container() {
+        let statuses = task_status_by_container(vec![task("c1", "c1", TaskStatus::Running)]);
+        assert_eq!(statuses.get("c1"), Some(&(TaskStatus::Running as i32)));
+    }
+
+    #[test]
+    fn a_task_without_container_id_falls_back_to_its_id() {
+        // What containerd 2.x returns from ListTasks.
+        let statuses = task_status_by_container(vec![
+            task("", "c1", TaskStatus::Running),
+            task("", "c2", TaskStatus::Stopped),
+        ]);
+        assert!(statuses.get("c1").copied().is_some_and(is_active));
+        assert!(!statuses.get("c2").copied().is_some_and(is_active));
+        assert!(!statuses.contains_key(""));
+    }
 }
