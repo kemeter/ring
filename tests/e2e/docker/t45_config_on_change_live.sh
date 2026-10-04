@@ -79,7 +79,7 @@ COUNT=$("$RING_BIN" deployment list --output json \
   | jq '[.[] | select(.namespace=="ring-e2e" and .name=="live-app")] | length')
 [ "$COUNT" = "1" ] || fail "expected one deployment, found $COUNT"
 
-"$RING_BIN" deployment events "$DEPLOYMENT_ID" | grep -qF "Rewrote /etc/app/app.conf" \
+grep -qF "Rewrote /etc/app/app.conf" <<< "$("$RING_BIN" deployment events "$DEPLOYMENT_ID")" \
   || fail "no event recorded for the live rewrite"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"

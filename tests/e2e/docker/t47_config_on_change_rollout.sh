@@ -84,7 +84,7 @@ content=$(docker exec "$V2_CID" cat /usr/share/nginx/html/index.html)
 [ "$content" = "version-2" ] || fail "new container serves '$content' instead of version-2"
 log "new container $V2_CID serves version-2"
 
-"$RING_BIN" deployment events "$V2_ID" | grep -qF "Redeployed because config 'rollout-conf' changed" \
+grep -qF "Redeployed because config 'rollout-conf' changed" <<< "$("$RING_BIN" deployment events "$V2_ID")" \
   || fail "no event recorded for the config rollout"
 
 "$RING_BIN" deployment delete "$V2_ID"

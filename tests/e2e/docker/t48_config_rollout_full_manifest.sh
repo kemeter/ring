@@ -66,7 +66,7 @@ V2_ID=$(echo "$IDS" | grep -v "$V1_ID")
 PARENT=$("$RING_BIN" deployment list --output json \
   | jq -r --arg id "$V2_ID" '.[] | select(.id==$id) | .parent_id // empty')
 [ "$PARENT" = "$V1_ID" ] || fail "new deployment $V2_ID does not roll over v1 (parent: '${PARENT:-<none>}')"
-if "$RING_BIN" deployment events "$V2_ID" | grep -qF "Replaced"; then
+if grep -qF "Replaced" <<< "$("$RING_BIN" deployment events "$V2_ID")"; then
   fail "the re-apply replaced the deployment instead of rolling it"
 fi
 log "one rolling update: $V2_ID rolls over $V1_ID"
