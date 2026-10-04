@@ -272,7 +272,7 @@ Things to know before choosing:
 
 - **`live` changes every instance at once.** There is no rollout, no health check and no way back: a broken config reaches every instance an application reloads it in. `rollout` keeps the protection of a rolling update.
 - **`live` rewrites the file in place**, so the instances keep seeing the same file. The rewrite is not atomic: an application reading the file at that very moment can see it partly written.
-- **`live` is supported on `docker` and `podman` only.** On `firecracker` and `cloud-hypervisor` a config reaches the guest as a disk image, which cannot change under a running VM; `containerd` does not support it yet. Use `rollout` there.
+- **`live` is supported on `docker`, `podman` and `containerd`.** On `firecracker` and `cloud-hypervisor` a config reaches the guest as a disk image, which cannot change under a running VM. Use `rollout` there.
 - **Only a content change counts.** Renaming a config does not touch the deployments mounting it, which reference it by its former name.
 - **`ring apply` does not redeploy twice.** When the manifest also carries the deployments mounting the config, they are redeployed by the apply itself, and the config update leaves them out of their `on_change`.
 - Each action is recorded in the deployment's events: `config_reloaded` for a rewrite, `config_reload_signal` for a signal, `config_rollout` for a redeploy.
@@ -503,7 +503,7 @@ config:
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
 | `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker and Podman only. See below. |
-| `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`. Docker and Podman workers only. See below. |
+| `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`. Workers on `docker`, `podman` and `containerd`. See below. |
 
 The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
 
@@ -542,7 +542,7 @@ How the replacement happens:
 - **Never during a rolling update**, on either the deployment being replaced or its replacement, nor while the instance count is changing (a scale up or down, a crashed instance being recreated).
 - Each replacement is recorded in the deployment's events with the reason `scheduled_restart`, the instance and its uptime.
 
-It is refused below `5m`, which would be a restart loop rather than a maintenance schedule, on `kind: job`, which runs once, and on runtimes that do not report an instance's start time (containerd, cloud-hypervisor, firecracker).
+It is refused below `5m`, which would be a restart loop rather than a maintenance schedule, on `kind: job`, which runs once, and on runtimes that do not report an instance's start time (cloud-hypervisor, firecracker).
 
 ### `use_host_auth`: credentials from the host
 

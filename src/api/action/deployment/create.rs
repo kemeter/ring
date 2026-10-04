@@ -469,15 +469,14 @@ fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationL
 
     // A live config is a host file bind-mounted into the instance and
     // rewritten in place. The VM runtimes hand configs to the guest as a disk
-    // image, which cannot be changed under a running VM, and containerd does
-    // not keep the stable per-deployment file yet.
-    if !matches!(input.runtime.as_str(), "docker" | "podman") {
+    // image, which cannot be changed under a running VM.
+    if !matches!(input.runtime.as_str(), "docker" | "podman" | "containerd") {
         for (idx, volume) in input.volumes.iter().enumerate() {
             if volume.on_change == OnChange::Live {
                 errors.push(Violation::new(
                     format!("volumes[{}].on_change", idx),
                     format!(
-                        "on_change: live is not supported on the {} runtime (supported: docker, podman); use rollout to redeploy on change",
+                        "on_change: live is not supported on the {} runtime (supported: docker, podman, containerd); use rollout to redeploy on change",
                         input.runtime
                     ),
                     "deployment.volumes.on_change.runtime_unsupported",
@@ -487,18 +486,18 @@ fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationL
     }
 
     // The age of an instance comes from the container runtime; the VM
-    // runtimes and containerd do not report it yet, so an interval there would
-    // never trigger anything.
+    // runtimes do not report it, so an interval there would never trigger
+    // anything.
     if input
         .config
         .as_ref()
         .is_some_and(|c| c.restart_interval.is_some())
-        && !matches!(input.runtime.as_str(), "docker" | "podman")
+        && !matches!(input.runtime.as_str(), "docker" | "podman" | "containerd")
     {
         errors.push(Violation::new(
             "config.restart_interval",
             format!(
-                "restart_interval is not supported on the {} runtime (supported: docker, podman)",
+                "restart_interval is not supported on the {} runtime (supported: docker, podman, containerd)",
                 input.runtime
             ),
             "deployment.config.restart_interval.runtime_unsupported",
@@ -3987,8 +3986,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_accepts_every_on_change_mode_on_docker_and_podman() {
-        for runtime in ["docker", "podman"] {
+    async fn create_accepts_every_on_change_mode_on_container_runtimes() {
+        for runtime in ["docker", "podman", "containerd"] {
             for mode in ["none", "live", "rollout"] {
                 let (status, violations) =
                     post_with_volume(runtime, on_change_config_volume(mode)).await;
@@ -4011,7 +4010,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_live_on_runtimes_without_a_host_file_mount() {
-        for runtime in ["containerd", "firecracker", "cloud-hypervisor"] {
+        for runtime in ["firecracker", "cloud-hypervisor"] {
             let (status, violations) =
                 post_with_volume(runtime, on_change_config_volume("live")).await;
             assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{runtime}");
@@ -4166,6 +4165,8 @@ mod tests {
         assert_eq!(status, StatusCode::CREATED, "{codes:?}");
         let (status, codes) = restart_interval_response("podman", "worker", "1h30m").await;
         assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+        let (status, codes) = restart_interval_response("containerd", "worker", "2d").await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
     }
 
     #[tokio::test]
@@ -4190,7 +4191,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_a_restart_interval_where_it_would_never_trigger() {
-        let (_, codes) = restart_interval_response("containerd", "worker", "24h").await;
+        let (_, codes) = restart_interval_response("firecracker", "worker", "24h").await;
         assert!(
             codes.contains(&"deployment.config.restart_interval.runtime_unsupported".to_string()),
             "{codes:?}"

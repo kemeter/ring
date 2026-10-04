@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker and Podman workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
+- `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker, Podman and containerd workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
+- containerd supports `on_change: live` and `reload_signal`, which were refused on it
 
 ### Fixed
 - A config mounted with `on_change: live` could be put back to its previous content: an instance created while the config was being updated wrote the content the scheduler had read before the update over the new one. Only the first instance now creates the file, and updates of the config are applied one at a time from the stored config, so two updates in quick succession leave the latest content

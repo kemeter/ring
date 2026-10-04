@@ -4,7 +4,7 @@ use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
 use crate::models::health_check::HealthCheck;
-use crate::models::volume::{ResolvedMount, live_config_path};
+use crate::models::volume::{ResolvedMount, create_live_config};
 use bollard::{
     Docker,
     auth::DockerCredentials,
@@ -707,11 +707,7 @@ async fn create_mount_from_resolved(
                 // to the config update. `content` was read at the start of the
                 // scheduler cycle, so writing it over an existing file could
                 // put back a config an update replaced in the meantime.
-                Some(slot) => {
-                    let file = live_config_path(deployment_id, *slot);
-                    create_if_absent(&file, content).await?;
-                    file
-                }
+                Some(slot) => create_live_config(deployment_id, *slot, content).await?,
                 None => {
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     content.hash(&mut hasher);
@@ -737,31 +733,6 @@ async fn create_mount_from_resolved(
                 ..Default::default()
             })
         }
-    }
-}
-
-/// Create `path` with `content`, or leave it untouched if it already exists.
-/// The check and the creation are one step (`O_EXCL`), so a concurrent writer
-/// that created the file first always wins.
-async fn create_if_absent(path: &str, content: &str) -> std::io::Result<()> {
-    use tokio::io::AsyncWriteExt;
-
-    match tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .await
-    {
-        // `write_all` on a tokio file can return while the bytes are still
-        // queued for a background thread; only `flush` waits for them. Without
-        // it the write could land after a config update rewrote the file, and
-        // put the older content back.
-        Ok(mut file) => {
-            file.write_all(content.as_bytes()).await?;
-            file.flush().await
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e),
     }
 }
 
@@ -1040,6 +1011,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_content_mount_is_created_once_at_a_stable_path() {
+        use crate::models::volume::live_config_path;
         use std::os::unix::fs::MetadataExt;
 
         let deployment_id = format!("test-live-{}", uuid::Uuid::new_v4());
