@@ -6,6 +6,8 @@ mod instances;
 mod lifecycle;
 mod logs;
 mod stats;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 use crate::hypervisor::error::RuntimeError;
 use bollard::Docker;
