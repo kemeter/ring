@@ -37,7 +37,7 @@ wait_docker_container_count "$DEPLOYMENT_ID" 2 60
 ORIGINAL=$(docker ps -q --no-trunc --filter "label=ring_deployment=$DEPLOYMENT_ID" | sort)
 log "original containers: $(echo $ORIGINAL | tr '\n' ' ')"
 
-"$RING_BIN" deployment inspect "$DEPLOYMENT_ID" | grep -qF "Restart every : 5m" \
+grep -qF "Restart every : 5m" <<< "$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID")" \
   || fail "inspect does not show the restart interval"
 
 # Both originals reach 5m together; Ring must replace them one after the

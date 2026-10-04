@@ -77,7 +77,7 @@ log "process received SIGHUP and read version-2"
 STILL=$(docker ps -q --filter "label=ring_deployment=$DEPLOYMENT_ID" | head -n1)
 [ "$STILL" = "$CID" ] || fail "container was replaced ($CID -> ${STILL:-<none>})"
 
-"$RING_BIN" deployment events "$DEPLOYMENT_ID" | grep -qF "Sent SIGHUP to 1 instance(s)" \
+grep -qF "Sent SIGHUP to 1 instance(s)" <<< "$("$RING_BIN" deployment events "$DEPLOYMENT_ID")" \
   || fail "no event recorded for the reload signal"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"

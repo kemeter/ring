@@ -508,6 +508,7 @@ Retrieve recent health-check results.
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "deployment_id": "f3a8b2c4-...",
+    "instance_id": "ring-e2e_nginx_3f2a9c1b",
     "check_type": "tcp",
     "status": "success",
     "message": null,
@@ -517,6 +518,8 @@ Retrieve recent health-check results.
   }
 ]
 ```
+
+`instance_id` is the instance the check probed. It is absent from results recorded before Ring stored it.
 
 ### `GET /deployments/{id}/metrics`
 

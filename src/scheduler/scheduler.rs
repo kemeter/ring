@@ -564,13 +564,18 @@ async fn replace_aged_instance(
 
     let now = chrono::Utc::now();
     let mut ages = Vec::with_capacity(deployment.instances.len());
-    let mut youngest_start = None;
+    let mut youngest: Option<(String, chrono::DateTime<chrono::Utc>)> = None;
     for instance_id in &deployment.instances {
         // An age the runtime cannot tell: decide nothing rather than guess.
         let Some(started_at) = runtime.instance_started_at(instance_id).await else {
             return;
         };
-        youngest_start = youngest_start.max(Some(started_at));
+        if youngest
+            .as_ref()
+            .is_none_or(|(_, start)| started_at > *start)
+        {
+            youngest = Some((instance_id.clone(), started_at));
+        }
         ages.push((
             instance_id.clone(),
             (now - started_at).to_std().unwrap_or_default(),
@@ -583,8 +588,8 @@ async fn replace_aged_instance(
         return;
     };
 
-    if let Some(since) = youngest_start
-        && !healthy_since(pool, deployment, since).await
+    if let Some((youngest_id, since)) = &youngest
+        && !healthy_since(pool, deployment, youngest_id, *since).await
     {
         debug!(
             "Deployment {}: not replacing {} yet, its instances have not all proven healthy",
@@ -632,14 +637,18 @@ async fn replace_aged_instance(
     );
 }
 
-/// Whether the health checks of `deployment` vouch for every instance started
-/// up to `since`: no failure recorded after it and, when the deployment has
-/// readiness checks, at least one success. The results are recorded per
-/// deployment, not per instance, so a failure from any instance holds the
-/// replacements back.
+/// Whether the health checks of `deployment` vouch for its instances since
+/// `since`, when its youngest instance (`youngest_id`) started: no failure
+/// recorded since then for an instance still running and, when the deployment
+/// has readiness checks, at least one success for the youngest one.
+///
+/// A failure from an instance that is gone (the one just replaced, failing on
+/// its way out) does not count. A failure stored without its instance, from
+/// before instances were recorded, counts for all of them.
 async fn healthy_since(
     pool: &SqlitePool,
     deployment: &Deployment,
+    youngest_id: &str,
     since: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     if deployment.health_checks.is_empty() {
@@ -651,7 +660,7 @@ async fn healthy_since(
         return false;
     };
 
-    let mut succeeded = false;
+    let mut youngest_proven = false;
     for record in records {
         let Ok(finished_at) = chrono::DateTime::parse_from_rfc3339(&record.finished_at) else {
             continue;
@@ -659,13 +668,17 @@ async fn healthy_since(
         if finished_at < since {
             continue;
         }
+        let instance = record.instance_id.as_deref();
         if record.status != "success" {
-            return false;
+            if instance.is_none_or(|id| deployment.instances.iter().any(|i| i == id)) {
+                return false;
+            }
+        } else if instance == Some(youngest_id) {
+            youngest_proven = true;
         }
-        succeeded = true;
     }
 
-    succeeded || !deployment.health_checks.iter().any(|hc| hc.is_readiness())
+    youngest_proven || !deployment.health_checks.iter().any(|hc| hc.is_readiness())
 }
 
 fn format_age(age: Duration) -> String {
@@ -2743,13 +2756,19 @@ mod tests {
         HashMap::from([(deployment.id.clone(), instances)])
     }
 
-    async fn record_check(pool: &SqlitePool, deployment_id: &str, status: &str) {
+    async fn record_check(
+        pool: &SqlitePool,
+        deployment_id: &str,
+        instance_id: Option<&str>,
+        status: &str,
+    ) {
         let now = chrono::Utc::now().to_rfc3339();
         sqlx::query(
-            "INSERT INTO health_check (id, deployment_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, 'tcp', ?, NULL, ?, ?, ?)",
+            "INSERT INTO health_check (id, deployment_id, instance_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, ?, 'tcp', ?, NULL, ?, ?, ?)",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(deployment_id)
+        .bind(instance_id)
         .bind(status)
         .bind(&now)
         .bind(&now)
@@ -2885,8 +2904,8 @@ mod tests {
         let mut deployment = rotating(&["a", "b"], "24h");
         deployment.health_checks = vec![readiness_check()];
         let mut last = steady(&deployment);
-        record_check(&pool, &deployment.id, "success").await;
-        record_check(&pool, &deployment.id, "failed").await;
+        record_check(&pool, &deployment.id, Some("b"), "success").await;
+        record_check(&pool, &deployment.id, Some("b"), "failed").await;
 
         cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
 
@@ -2910,9 +2929,56 @@ mod tests {
         cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
         assert!(removed.lock().unwrap().is_empty());
 
-        record_check(&pool, &deployment.id, "success").await;
+        // A success from `a` says nothing about `b`.
+        record_check(&pool, &deployment.id, Some("a"), "success").await;
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+        assert!(removed.lock().unwrap().is_empty());
+
+        record_check(&pool, &deployment.id, Some("b"), "success").await;
         cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
         assert_eq!(*removed.lock().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_ignores_failures_of_an_instance_already_gone() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        // `old` failed while it was being replaced by `b`; it no longer runs.
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .with_started_at("b", hours_ago(1));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a", "b"], "24h");
+        deployment.health_checks = vec![readiness_check()];
+        let mut last = steady(&deployment);
+        record_check(&pool, &deployment.id, Some("old"), "failed").await;
+        record_check(&pool, &deployment.id, Some("b"), "success").await;
+
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+
+        assert_eq!(*removed.lock().unwrap(), vec!["a".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn replace_aged_instance_holds_on_a_failure_of_unknown_instance() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        // A result stored before instances were recorded.
+        let pool = new_test_pool().await;
+        let runtime = MockRuntime::healthy()
+            .with_started_at("a", hours_ago(30))
+            .with_started_at("b", hours_ago(1));
+        let removed = runtime.removed_log();
+        let mut deployment = rotating(&["a", "b"], "24h");
+        deployment.health_checks = vec![readiness_check()];
+        let mut last = steady(&deployment);
+        record_check(&pool, &deployment.id, Some("b"), "success").await;
+        record_check(&pool, &deployment.id, None, "failed").await;
+
+        cycle(&pool, &mut deployment, false, &mut last, &runtime).await;
+
+        assert!(removed.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -51,7 +51,7 @@ done
 [ "$replaced" = "true" ] || fail "the original container was not replaced in time"
 log "instance replaced by $CURRENT"
 
-"$RING_BIN" deployment events "$DEPLOYMENT_ID" --limit 100 | grep -qF "restart_interval 5m" \
+grep -qF "restart_interval 5m" <<< "$("$RING_BIN" deployment events "$DEPLOYMENT_ID" --limit 100)" \
   || fail "no scheduled restart event"
 RESTARTS=$(get_restart_count "ring-e2e" "ctr-rotating")
 [ "$RESTARTS" = "0" ] || fail "the scheduled restart was counted as a crash (restart_count=$RESTARTS)"
