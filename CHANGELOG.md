@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - containerd supports `on_change: live` and `reload_signal`, which were refused on it
 
 ### Fixed
+- On containerd 2.x, Ring did not see a deployment's running instances and created a new one on every scheduler cycle: `ListTasks` no longer fills a task's container id, which the instances were matched on. They are now matched on the task's own id when the container id is empty
+- The per-deployment resource totals overflowed when instances report an unlimited memory limit (`u64::MAX`, as containerd does), panicking the stats refresh in debug builds and reporting a wrong total otherwise. Totals now saturate
 - A config mounted with `on_change: live` could be put back to its previous content: an instance created while the config was being updated wrote the content the scheduler had read before the update over the new one. Only the first instance now creates the file, and updates of the config are applied one at a time from the stored config, so two updates in quick succession leave the latest content
 - A deployment deleted while the scheduler was handling it no longer gets a status change announced (deployment event and webhook) for a status it never took
 - Deleting a deployment no longer writes back its image digest and rolling parent from the copy the delete loaded, which could undo a change the scheduler had just made, such as the end of a rolling update
