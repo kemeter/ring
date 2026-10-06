@@ -63,9 +63,41 @@ deployments:
 ring apply -f app.yaml
 ```
 
-What Ring does: copies the rootfs per instance, spawns a `firecracker` process, drives its REST API to set the kernel / rootfs / network / machine config, then boots. Networking is a Ring-owned TAP (a /30 subnet per VM) with `socat` host-port forwarding; outbound NAT lets guests reach external networks.
+What Ring does: copies the rootfs per instance (or, for a squashfs image, adds a writable layer over it — see [Squashfs images](#squashfs-images)), spawns a `firecracker` process, drives its REST API to set the kernel / rootfs / network / machine config, then boots. Networking is a Ring-owned TAP (a /30 subnet per VM) with `socat` host-port forwarding; outbound NAT lets guests reach external networks.
 
 Before any of that, the deployment's memory ask is admitted against the host's available memory. A microVM reserves its whole RAM at boot, so an over-ask would otherwise die on an opaque allocation failure — and only after a full rootfs copy. The check reads `resources.requests.memory`, falling back to `resources.limits.memory`; a deployment declaring neither is not gated. Refusal is terminal (`insufficient_resources`) rather than a crash loop, since a retry won't free memory.
+
+## Squashfs images
+
+An ext4 image is copied in full for every microVM: ten replicas of a 300 MB image take 3 GB of disk, and each copy is made before its VM boots. A **squashfs** image is shared instead. Ring attaches it read-only to every microVM of the deployment and gives each one its own writable ext4 layer, stacked over it with overlayfs. The layer is sparse, so it only takes the space the guest actually writes to it, and it is removed with its instance.
+
+Ring recognises a squashfs by its content, not its name: point `image:` at one and nothing else changes in the manifest.
+
+```bash
+curl -sSL -o /var/lib/ring/firecracker/rootfs.squashfs "$BASE/ubuntu-22.04.squashfs"
+```
+
+The layers are stacked inside the guest by `ring-init`, a small static binary Ring boots as the microVM's initramfs before handing over to the image's own `/sbin/init`. Install it on the host once, from the release assets (`ring-init-<version>-x86_64-unknown-linux-musl.tar.gz`) or built from source:
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl -p ring-init
+sudo install -m 0755 target/x86_64-unknown-linux-musl/release/ring-init /var/lib/ring/firecracker/ring-init
+```
+
+```toml
+[server.runtime.firecracker]
+enabled = true
+init_path = "/var/lib/ring/firecracker/ring-init"   # default: $RING_CONFIG_DIR/firecracker/ring-init
+overlay_size_mib = 1024                             # the most a VM can write, sparse on disk
+```
+
+What the image and kernel need:
+
+- The kernel must support squashfs (with the image's compression), overlayfs, ext4 and devtmpfs. The CI kernel above does; erofs, for instance, is not in it.
+- The image needs nothing from Ring: no cloud-init and no init script. Ring passes the devices on the kernel command line (`ring.lower=/dev/vda ring.upper=/dev/vdb`), so the squashfs is `/dev/vda`, the layer `/dev/vdb`, and volumes start at `/dev/vdc`.
+- What a guest writes lives in its layer only, and is gone when the instance is replaced, as with an ext4 copy. Use a named volume for data that must survive.
+
+If ring-init cannot assemble the root, it prints the reason on the console (`ring-init: …`) and the microVM stops; `ring deployment logs` shows it.
 
 ## Logs
 
@@ -184,7 +216,7 @@ Bind and config/secret images are ephemeral and reaped when the instance stops; 
 
 ## Known gaps (experimental)
 
-- `image:` must be a host rootfs file, with no registry pull.
+- `image:` must be a host rootfs file (ext4 or squashfs), with no registry pull.
 - `command` health checks need `ring-agent` installed in the guest image, and the vsock device that carries them is attached at boot only (see [Command health checks](#command-health-checks)).
 - `labels:` are stored and filterable as Ring metadata, but not applied to the VM.
 

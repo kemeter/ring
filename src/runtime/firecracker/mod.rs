@@ -8,6 +8,7 @@
 //! of CH's monolithic `vm.create`).
 
 mod client;
+mod initramfs;
 mod lifecycle;
 
 pub(crate) use lifecycle::{FirecrackerLifecycle, FirecrackerRuntimeConfig};

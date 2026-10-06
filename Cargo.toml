@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/ring-agent"]
+members = ["crates/ring-agent", "crates/ring-init"]
 
 [package]
 name = "ring-server"

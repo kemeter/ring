@@ -57,6 +57,11 @@ pub(crate) struct FirecrackerRuntimeConfig {
     pub max_console_log_bytes: u64,
     /// How many rotated console log backups to keep. Defaults to 3.
     pub max_console_log_backups: u32,
+    /// Path to the `ring-init` binary, the initramfs of a microVM booted from
+    /// a squashfs image.
+    pub init_path: String,
+    /// Size (MiB) of the sparse writable layer over a squashfs image.
+    pub overlay_size_mib: u64,
 }
 
 impl Default for FirecrackerRuntimeConfig {
@@ -69,6 +74,8 @@ impl Default for FirecrackerRuntimeConfig {
             boot_args: "console=ttyS0 reboot=k panic=1 pci=off".to_string(),
             max_console_log_bytes: 10 * 1024 * 1024,
             max_console_log_backups: 3,
+            init_path: format!("{}/firecracker/ring-init", base_dir),
+            overlay_size_mib: 1024,
         }
     }
 }
@@ -100,6 +107,51 @@ impl FirecrackerRuntimeConfig {
             max_console_log_backups: user
                 .max_console_log_backups
                 .unwrap_or(defaults.max_console_log_backups),
+            init_path: user.init_path.clone().unwrap_or(defaults.init_path),
+            overlay_size_mib: user.overlay_size_mib.unwrap_or(defaults.overlay_size_mib),
+        }
+    }
+}
+
+/// The disks a microVM boots from.
+enum RootDisks<'a> {
+    /// A private copy of an ext4 image, the root device itself.
+    Copy { rootfs: &'a str },
+    /// A squashfs shared read-only by every VM (`/dev/vda`), the VM's own
+    /// writable layer (`/dev/vdb`), and the initramfs that stacks the two.
+    Overlay {
+        lower: &'a str,
+        upper: &'a str,
+        initrd: &'a Path,
+    },
+}
+
+impl RootDisks<'_> {
+    /// The drives to attach, in guest device order.
+    fn drives(&self) -> Vec<Drive> {
+        match self {
+            RootDisks::Copy { rootfs } => vec![Drive {
+                drive_id: "rootfs".to_string(),
+                path_on_host: rootfs.to_string(),
+                is_root_device: true,
+                is_read_only: false,
+            }],
+            // Not a root device: the kernel boots the initramfs, and
+            // ring-init mounts both drives itself.
+            RootDisks::Overlay { lower, upper, .. } => vec![
+                Drive {
+                    drive_id: "rootfs".to_string(),
+                    path_on_host: lower.to_string(),
+                    is_root_device: false,
+                    is_read_only: true,
+                },
+                Drive {
+                    drive_id: "overlay".to_string(),
+                    path_on_host: upper.to_string(),
+                    is_root_device: false,
+                    is_read_only: false,
+                },
+            ],
         }
     }
 }
@@ -184,16 +236,18 @@ impl FirecrackerLifecycle {
         instance_id: &str,
         deployment: &Deployment,
         resolved_mounts: &[ResolvedMount],
+        root_drives: usize,
     ) -> Result<Vec<crate::hypervisor::cloud_init::GuestMount>, String> {
-        // /dev/vda is root and cidata takes the free letter after the last
-        // volume, so volumes can use vdb..=vdy at most — 24 of them. Past that
-        // the device letters would overflow into punctuation ('{', '|', …) and
-        // silently corrupt the boot; fail loudly instead.
-        const MAX_VOLUMES: usize = 24;
-        if resolved_mounts.len() > MAX_VOLUMES {
+        // The root drives come first (/dev/vda, plus /dev/vdb for the writable
+        // layer of a squashfs) and cidata takes the free letter after the last
+        // volume, so volumes end at vdy at most. Past that the device letters
+        // would overflow into punctuation ('{', '|', …) and silently corrupt
+        // the boot; fail loudly instead.
+        let max_volumes = 25 - root_drives;
+        if resolved_mounts.len() > max_volumes {
             return Err(format!(
-                "firecracker supports at most {} volumes, got {}",
-                MAX_VOLUMES,
+                "firecracker supports at most {} volumes with this image, got {}",
+                max_volumes,
                 resolved_mounts.len()
             ));
         }
@@ -201,8 +255,8 @@ impl FirecrackerLifecycle {
         let mut guest_mounts = Vec::with_capacity(resolved_mounts.len());
 
         for (idx, m) in resolved_mounts.iter().enumerate() {
-            // /dev/vda is root; volumes start at vdb.
-            let dev_letter = (b'b' + idx as u8) as char;
+            // Volumes follow the root drives.
+            let dev_letter = (b'a' + (root_drives + idx) as u8) as char;
             let device = format!("/dev/vd{}", dev_letter);
             let label = format!("ringvol{}", idx);
 
@@ -410,16 +464,53 @@ impl FirecrackerLifecycle {
 
         let instance_id = format!("{}-{}", deployment.id, tiny_id());
         let socket_path = self.socket_path(&instance_id);
+        // The VM's own writable disk: a full copy of an ext4 image, or the
+        // writable layer over a squashfs one. Either way it is private to the
+        // instance and removed with it.
         let rootfs_rw = self.rootfs_path(&instance_id);
 
-        // Firecracker mutates the rootfs in place; give each VM a private copy
-        // so replicas and reboots don't share guest state.
-        std::fs::copy(&deployment.image, &rootfs_rw).map_err(|e| {
-            RuntimeError::VmStartFailed(format!(
-                "could not copy rootfs '{}' -> '{}': {}",
-                deployment.image, rootfs_rw, e
-            ))
-        })?;
+        let initrd = if super::initramfs::is_squashfs(Path::new(&deployment.image)) {
+            // A squashfs is attached read-only and shared by every VM; each
+            // gets a sparse ext4 layer on top, stacked by `ring-init` at boot.
+            let initrd = super::initramfs::ensure(
+                Path::new(&self.config.init_path),
+                Path::new(&self.config.socket_dir),
+            )?;
+            if let Err(e) = vol::create_empty_ext4(
+                Path::new(&rootfs_rw),
+                self.config.overlay_size_mib,
+                "ringroot",
+            )
+            .await
+            {
+                // mke2fs may have created the file before failing, and no
+                // instance exists yet for the usual teardown to find it.
+                let _ = std::fs::remove_file(&rootfs_rw);
+                return Err(RuntimeError::VmStartFailed(format!(
+                    "could not create the writable layer '{}': {}",
+                    rootfs_rw, e
+                )));
+            }
+            Some(initrd)
+        } else {
+            // Firecracker mutates the rootfs in place; give each VM a private
+            // copy so replicas and reboots don't share guest state.
+            std::fs::copy(&deployment.image, &rootfs_rw).map_err(|e| {
+                RuntimeError::VmStartFailed(format!(
+                    "could not copy rootfs '{}' -> '{}': {}",
+                    deployment.image, rootfs_rw, e
+                ))
+            })?;
+            None
+        };
+        let rootfs = match &initrd {
+            Some(initrd) => RootDisks::Overlay {
+                lower: &deployment.image,
+                upper: &rootfs_rw,
+                initrd,
+            },
+            None => RootDisks::Copy { rootfs: &rootfs_rw },
+        };
 
         // Persist the guest serial console (stdout) to a per-instance file so
         // boot/runtime issues are diagnosable and log shippers can tail it.
@@ -519,7 +610,7 @@ impl FirecrackerLifecycle {
             .configure_and_boot(
                 &client,
                 &instance_id,
-                &rootfs_rw,
+                &rootfs,
                 deployment,
                 net_alloc.as_ref(),
                 resolved_mounts,
@@ -605,7 +696,7 @@ impl FirecrackerLifecycle {
         &self,
         client: &FirecrackerClient,
         instance_id: &str,
-        rootfs_rw: &str,
+        rootfs: &RootDisks<'_>,
         deployment: &Deployment,
         net_alloc: Option<&InstanceNet>,
         resolved_mounts: &[ResolvedMount],
@@ -617,7 +708,7 @@ impl FirecrackerLifecycle {
         //   ip=<client>::<gw>:<netmask>:<hostname>:<device>:off
         // (off = no autoconf). When the deployment has no network this is empty
         // and the base boot_args are used unchanged.
-        let boot_args = match net_alloc {
+        let mut boot_args = match net_alloc {
             Some(n) => format!(
                 "{} ip={}::{}:{}::eth0:off",
                 self.config.boot_args,
@@ -627,33 +718,40 @@ impl FirecrackerLifecycle {
             ),
             None => self.config.boot_args.clone(),
         };
+        if let RootDisks::Overlay { .. } = rootfs {
+            // Spelled out rather than left to ring-init's defaults, so the
+            // drive order below and the guest agree by construction.
+            boot_args.push_str(" ring.lower=/dev/vda ring.upper=/dev/vdb");
+        }
 
         client
             .put_boot_source(&BootSource {
                 kernel_image_path: self.config.kernel_path.clone(),
                 boot_args: Some(boot_args),
-                initrd_path: None,
+                initrd_path: match rootfs {
+                    RootDisks::Overlay { initrd, .. } => Some(initrd.to_string_lossy().to_string()),
+                    RootDisks::Copy { .. } => None,
+                },
             })
             .await
             .map_err(|e| e.to_string())?;
 
-        // rootfs is /dev/vda.
-        client
-            .put_drive(&Drive {
-                drive_id: "rootfs".to_string(),
-                path_on_host: rootfs_rw.to_string(),
-                is_root_device: true,
-                is_read_only: false,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
+        for drive in rootfs.drives() {
+            client.put_drive(&drive).await.map_err(|e| e.to_string())?;
+        }
 
         // Volumes attach next as virtio-block devices /dev/vdb, /dev/vdc, …
         // (in declaration order, right after the root device). Each backing
         // ext4 image is built on the host; the guest mounts the device at the
         // requested destination via cloud-init.
         let guest_mounts = self
-            .prepare_volume_drives(client, instance_id, deployment, resolved_mounts)
+            .prepare_volume_drives(
+                client,
+                instance_id,
+                deployment,
+                resolved_mounts,
+                rootfs.drives().len(),
+            )
             .await?;
 
         // A cidata drive is attached whenever cloud-init has something to do:
@@ -2176,6 +2274,38 @@ mod tests {
     }
 
     #[test]
+    fn an_ext4_image_boots_from_its_private_copy() {
+        let drives = RootDisks::Copy {
+            rootfs: "/run/fc/vm.ext4",
+        }
+        .drives();
+        assert_eq!(drives.len(), 1);
+        assert!(drives[0].is_root_device);
+        assert!(!drives[0].is_read_only);
+        assert_eq!(drives[0].path_on_host, "/run/fc/vm.ext4");
+    }
+
+    #[test]
+    fn a_squashfs_is_shared_read_only_under_a_private_writable_layer() {
+        let initrd = PathBuf::from("/run/fc/ring-init.cpio");
+        let drives = RootDisks::Overlay {
+            lower: "/images/ubuntu.squashfs",
+            upper: "/run/fc/vm.ext4",
+            initrd: &initrd,
+        }
+        .drives();
+
+        // The order is what ring-init is told: vda the squashfs, vdb the layer.
+        assert_eq!(drives.len(), 2);
+        assert_eq!(drives[0].path_on_host, "/images/ubuntu.squashfs");
+        assert!(drives[0].is_read_only, "shared by every VM");
+        assert_eq!(drives[1].path_on_host, "/run/fc/vm.ext4");
+        assert!(!drives[1].is_read_only);
+        // The kernel boots the initramfs, not a root device.
+        assert!(drives.iter().all(|d| !d.is_root_device));
+    }
+
+    #[test]
     fn from_user_config_overrides_only_set_fields() {
         let user = FirecrackerConfig {
             enabled: true,
@@ -2185,10 +2315,13 @@ mod tests {
             boot_args: None,
             max_console_log_bytes: None,
             max_console_log_backups: None,
+            init_path: Some("/opt/fc/ring-init".to_string()),
+            overlay_size_mib: None,
         };
         let cfg = FirecrackerRuntimeConfig::from_user_config(&user);
         assert_eq!(cfg.binary_path, "/opt/fc/firecracker");
         assert_eq!(cfg.socket_dir, "/var/run/fc");
+        assert_eq!(cfg.init_path, "/opt/fc/ring-init");
         // Unset fields fall back to defaults.
         let defaults = FirecrackerRuntimeConfig::default();
         assert_eq!(cfg.kernel_path, defaults.kernel_path);
@@ -2198,6 +2331,7 @@ mod tests {
             cfg.max_console_log_backups,
             defaults.max_console_log_backups
         );
+        assert_eq!(cfg.overlay_size_mib, 1024);
     }
 
     #[test]

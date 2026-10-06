@@ -302,6 +302,13 @@ pub(crate) struct FirecrackerConfig {
     /// How many rotated console log backups to keep alongside the live file
     /// (`.console.log.1`, `.console.log.2`, ...). Defaults to 3.
     pub(crate) max_console_log_backups: Option<u32>,
+    /// Path to the `ring-init` binary, booted as the initramfs of a microVM
+    /// whose image is a squashfs. Defaults to `<config dir>/firecracker/ring-init`.
+    pub(crate) init_path: Option<String>,
+    /// Size (MiB) of the writable layer each microVM gets over a squashfs
+    /// image. The file is sparse: only what the guest writes takes disk space.
+    /// Defaults to 1024.
+    pub(crate) overlay_size_mib: Option<u64>,
 }
 
 /// User-facing configuration for the embedded web dashboard. Off by default
