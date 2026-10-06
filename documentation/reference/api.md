@@ -291,9 +291,9 @@ Environment values support two forms:
 | `kind: job` requires `replicas: 1`                                           | `deployment.replicas.job_must_be_one`                      |
 | `kind: job` doesn't take readiness checks                                    | `deployment.health_checks.job_readiness_unsupported`       |
 | `kind: job` cannot be autoscaled                                             | `deployment.autoscale.job_unsupported`                     |
+| `autoscale` on containerd needs a cgroup v2 host                              | `deployment.autoscale.runtime_unsupported`                 |
 | `autoscale` needs `min >= 1`, `max >= min`, `0 < target_cpu < 100`           | `deployment.autoscale.invalid`                             |
 | `network.mode=host` forbids `autoscale.max > 1`                              | `deployment.autoscale.host_network_conflict`               |
-| `autoscale` is unsupported on containerd (no CPU metric yet)                 | `deployment.autoscale.runtime_unsupported`                 |
 | Environment keys must match `[A-Za-z_][A-Za-z0-9_]*`                         | `deployment.environment.key.invalid`                       |
 | `resources.{limits,requests}.{cpu,memory}` must parse                        | `deployment.resources.{limits,requests}.{cpu,memory}.invalid` |
 | `config.image_pull_policy` must be `Always`, `IfNotPresent`, or `Never`      | `deployment.config.image_pull_policy.unsupported`          |
@@ -528,6 +528,7 @@ Live resource usage for a deployment and each of its instances.
 Coverage by runtime:
 
 - **Docker**: every field populated from the Docker stats endpoint (CPU, memory, network, disk I/O, PIDs).
+- **containerd**: `cpu_usage_percent` from the task's cgroup v2 CPU time between two readings, `memory` and `pids` from its cgroup. `network` and `disk_io` are reported as zero. On a cgroup v1 host, every field is zero, and `autoscale` is refused on containerd.
 - **Cloud Hypervisor**: `cpu_usage_percent` and `memory.usage_bytes` / `memory.limit_bytes` are populated by sampling `/proc/<pid>/stat` and `/proc/<pid>/status` of the cloud-hypervisor process. `network`, `disk_io` and `pids` are reported as zero in this first pass; full parity with Docker is tracked separately.
 
 **Response:**

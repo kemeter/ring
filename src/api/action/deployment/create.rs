@@ -141,19 +141,29 @@ fn validate_autoscale(input: &DeploymentInput, errors: &mut ViolationList) {
         ));
     }
 
-    // containerd reports `cpu_usage_percent` as a hard-coded 0 (see
-    // src/runtime/containerd/stats.rs — a percentage needs two samples, and the
-    // sampling loop does not exist yet). A CPU-driven controller fed a constant
-    // zero reads "idle" forever and walks the deployment down to `min` whatever
-    // the real load. Refusing is the honest answer; silently scaling on a fake
-    // measurement is not.
-    if input.runtime == "containerd" {
-        errors.push(Violation::new(
-            "autoscale",
-            "the containerd runtime does not report CPU usage yet, so it cannot be autoscaled on a CPU target",
-            "deployment.autoscale.runtime_unsupported",
-        ));
+    if let Some(violation) = autoscale_runtime_violation(&input.runtime, cgroup_v2_host()) {
+        errors.push(violation);
     }
+}
+
+/// Whether the host uses the unified cgroup v2 hierarchy, which is where
+/// containerd reports a task's CPU time. Ring runs on the same host as the
+/// runtimes it drives.
+fn cgroup_v2_host() -> bool {
+    std::path::Path::new("/sys/fs/cgroup/cgroup.controllers").exists()
+}
+
+/// containerd measures CPU from cgroup v2 only. On a cgroup v1 host every
+/// instance would read 0%, and a CPU-driven controller fed that walks the
+/// deployment down to `min` whatever the real load.
+fn autoscale_runtime_violation(runtime: &str, cgroup_v2: bool) -> Option<Violation> {
+    (runtime == "containerd" && !cgroup_v2).then(|| {
+        Violation::new(
+            "autoscale",
+            "the containerd runtime reports CPU usage on cgroup v2 hosts only, and this host uses cgroup v1",
+            "deployment.autoscale.runtime_unsupported",
+        )
+    })
 }
 
 fn validate_resources(input: &DeploymentInput, errors: &mut ViolationList) {
@@ -4202,5 +4212,40 @@ mod tests {
             codes.contains(&"deployment.config.restart_interval.job_unsupported".to_string()),
             "{codes:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn create_accepts_autoscale_on_every_container_runtime() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+
+        for runtime in ["docker", "podman", "containerd"] {
+            let response: TestResponse = server
+                .post("/deployments")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({
+                    "runtime": runtime,
+                    "name": format!("web-{runtime}"),
+                    "namespace": "ring",
+                    "image": "nginx:latest",
+                    "autoscale": { "min": 1, "max": 3, "target_cpu": 70 }
+                }))
+                .await;
+            assert_eq!(
+                response.status_code(),
+                StatusCode::CREATED,
+                "{runtime}: {}",
+                response.text()
+            );
+        }
+    }
+
+    #[test]
+    fn containerd_autoscale_needs_a_cgroup_v2_host() {
+        assert!(autoscale_runtime_violation("containerd", true).is_none());
+        let violation = autoscale_runtime_violation("containerd", false).expect("refused on v1");
+        assert_eq!(violation.code, "deployment.autoscale.runtime_unsupported");
+        assert!(autoscale_runtime_violation("docker", false).is_none());
     }
 }

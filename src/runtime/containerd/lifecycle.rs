@@ -317,16 +317,13 @@ impl RuntimeLifecycle for ContainerdLifecycle {
         let instances = self
             .list_instances_with_names(deployment_id.to_string(), "all")
             .await;
-        let mut results = Vec::new();
-        for (id, name) in instances {
-            if let Some(stats) =
-                super::stats::fetch_instance_stats(&client, &self.config.namespace, &id, &name)
-                    .await
-            {
-                results.push(stats);
-            }
-        }
-        results
+        super::stats::fetch_instances_stats(
+            &client,
+            &self.config.namespace,
+            &instances,
+            &self.cpu_samples,
+        )
+        .await
     }
 }
 
@@ -830,8 +827,11 @@ impl ContainerdLifecycle {
         self.delete_container_object(client, instance_id).await;
         self.remove_snapshot(client, instance_id).await;
 
-        // Clean up the instance log file.
+        // Clean up the instance log file and its last CPU reading.
         let _ = std::fs::remove_file(log_path(instance_id));
+        if let Ok(mut samples) = self.cpu_samples.lock() {
+            samples.remove(instance_id);
+        }
         true
     }
 
