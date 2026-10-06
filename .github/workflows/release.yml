@@ -69,7 +69,7 @@ jobs:
             ring-*.tar.gz.sha256
 
   ring-agent:
-    name: Build ring-agent (x86_64-unknown-linux-musl)
+    name: Build ring-agent and ring-init (x86_64-unknown-linux-musl)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -80,27 +80,30 @@ jobs:
       # target/ artifacts separate from the gnu build above.
       - uses: Swatinem/rust-cache@v2
 
-      # ring-agent must be a static binary so users can drop it into any
-      # guest image regardless of its libc — musl is the standard choice.
+      # Both run inside guests whose libc Ring knows nothing about (ring-agent
+      # in the guest image, ring-init as its initramfs), so they are static
+      # binaries — musl is the standard choice.
       - name: Install musl toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
           rustup target add x86_64-unknown-linux-musl
 
-      - name: Build release binary
-        run: cargo build --release --target x86_64-unknown-linux-musl -p ring-agent
+      - name: Build release binaries
+        run: cargo build --release --target x86_64-unknown-linux-musl -p ring-agent -p ring-init
 
       - name: Package
         run: |
           set -euo pipefail
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          PKG="ring-agent-${TAG}-x86_64-unknown-linux-musl"
-          mkdir -p "dist/${PKG}"
-          cp target/x86_64-unknown-linux-musl/release/ring-agent "dist/${PKG}/"
-          cp LICENSE "dist/${PKG}/" 2>/dev/null || true
-          tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
-          sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+          for BIN in ring-agent ring-init; do
+            PKG="${BIN}-${TAG}-x86_64-unknown-linux-musl"
+            mkdir -p "dist/${PKG}"
+            cp "target/x86_64-unknown-linux-musl/release/${BIN}" "dist/${PKG}/"
+            cp LICENSE "dist/${PKG}/" 2>/dev/null || true
+            tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
+            sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
+          done
 
       - uses: actions/upload-artifact@v7
         with:
@@ -108,6 +111,8 @@ jobs:
           path: |
             ring-agent-*.tar.gz
             ring-agent-*.tar.gz.sha256
+            ring-init-*.tar.gz
+            ring-init-*.tar.gz.sha256
 
   publish:
     name: Attach to GitHub release

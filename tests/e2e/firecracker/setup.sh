@@ -12,6 +12,10 @@ RING_E2E_CACHE_DIR="${RING_E2E_CACHE_DIR:-$HOME/.cache/ring-e2e}/firecracker"
 FC_CI_BASE="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64"
 RING_E2E_FC_KERNEL="${RING_E2E_FC_KERNEL:-$RING_E2E_CACHE_DIR/vmlinux-6.1.102}"
 RING_E2E_FC_ROOTFS="${RING_E2E_FC_ROOTFS:-$RING_E2E_CACHE_DIR/ubuntu-22.04.ext4}"
+RING_E2E_FC_SQUASHFS="${RING_E2E_FC_SQUASHFS:-$RING_E2E_CACHE_DIR/ubuntu-22.04.squashfs}"
+# A squashfs image boots through ring-init, a static binary built from this
+# repository: `cargo build --release --target x86_64-unknown-linux-musl -p ring-init`.
+RING_E2E_RING_INIT="${RING_E2E_RING_INIT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/target/x86_64-unknown-linux-musl/release/ring-init}"
 RING_E2E_FC_SOCKET_DIR=""
 
 setup_fc() {
@@ -49,9 +53,13 @@ setup_fc() {
     echo "[fc-setup] downloading rootfs ubuntu-22.04.ext4 (~280 MB)..."
     curl -sSL -o "$RING_E2E_FC_ROOTFS" "$FC_CI_BASE/ubuntu-22.04.ext4"
   fi
+  if [ ! -f "$RING_E2E_FC_SQUASHFS" ]; then
+    echo "[fc-setup] downloading rootfs ubuntu-22.04.squashfs (~75 MB)..."
+    curl -sSL -o "$RING_E2E_FC_SQUASHFS" "$FC_CI_BASE/ubuntu-22.04.squashfs"
+  fi
 
   RING_E2E_FC_SOCKET_DIR="${RING_E2E_FC_SOCKET_DIR:-$(mktemp -d -t ring-e2e-fc-sockets-XXXXXX)}"
-  export RING_E2E_FC_KERNEL RING_E2E_FC_ROOTFS RING_E2E_FC_SOCKET_DIR
+  export RING_E2E_FC_KERNEL RING_E2E_FC_ROOTFS RING_E2E_FC_SQUASHFS RING_E2E_FC_SOCKET_DIR RING_E2E_RING_INIT
 
   # Snapshot pre-existing ring-* taps so cleanup only reaps taps THIS run leaked
   # (e.g. t4 SIGKILLs ring-server mid-run, leaving a tap with no graceful
@@ -66,6 +74,7 @@ setup_fc() {
 enabled = true
 kernel_path = "$RING_E2E_FC_KERNEL"
 socket_dir = "$RING_E2E_FC_SOCKET_DIR"
+init_path = "$RING_E2E_RING_INIT"
 EOF
 )
   export RING_EXTRA_CONFIG

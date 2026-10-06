@@ -1,0 +1,11 @@
+[package]
+name = "ring-init"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ring-init"
+path = "src/main.rs"
+
+[dependencies]
+nix = { version = "0.31.3", features = ["mount", "fs", "process"] }

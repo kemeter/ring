@@ -229,10 +229,12 @@ Both are required: a deployment requesting host auth on a runtime that did not a
 | `enabled` | bool | `false` | Register the Firecracker runtime. Must be `true` for Ring to use it. When `true` and `binary_path` can't be resolved at startup, Ring fails fast |
 | `binary_path` | string | `firecracker` (from `$PATH`) | Absolute path to the `firecracker` binary |
 | `kernel_path` | string | `$RING_CONFIG_DIR/firecracker/vmlinux` | Path to the uncompressed kernel image. Firecracker boots a kernel directly, so there is no firmware step |
-| `socket_dir` | string | `$RING_CONFIG_DIR/firecracker/sockets` | Where Ring puts per-VM API sockets and per-instance rootfs copies |
+| `socket_dir` | string | `$RING_CONFIG_DIR/firecracker/sockets` | Where Ring puts per-VM API sockets, per-instance rootfs copies and writable layers, and the generated initramfs |
 | `boot_args` | string | `console=ttyS0 reboot=k panic=1 pci=off` | Kernel command line passed to every microVM |
 | `max_console_log_bytes` | int | `10485760` (10 MiB) | Size at which a per-VM console log is rotated. `0` disables rotation. Firecracker rotates by copy-truncate (it holds the log by inode), so the live file keeps its path across rotations |
 | `max_console_log_backups` | int | `3` | How many rotated backups (`<id>.console.log.1`, `.2`, …) to keep |
+| `init_path` | string | `$RING_CONFIG_DIR/firecracker/ring-init` | Path to the `ring-init` binary, booted as the initramfs of a microVM whose image is a squashfs. See [Squashfs images](/documentation/runtimes/firecracker#squashfs-images) |
+| `overlay_size_mib` | int | `1024` | Size of the writable layer each microVM gets over a squashfs image. Sparse: only what the guest writes takes disk space |
 
 ## Examples
 

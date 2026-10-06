@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker, Podman and containerd workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
 - containerd supports `on_change: live` and `reload_signal`, which were refused on it
+- Firecracker boots squashfs images: the image is shared read-only by every microVM of the deployment, each with its own sparse writable layer stacked over it by `ring-init`, a static binary booted as the initramfs and published with the release. A squashfs is recognised by its content; ext4 images keep being copied per instance. Configured with `init_path` and `overlay_size_mib` under `[server.runtime.firecracker]`
 - Health check results record the instance they probed, returned as `instance_id` by `GET /deployments/{id}/health-checks`. `restart_interval` uses it: a failure from an instance that is already gone no longer holds the next replacement back, and the readiness that lets it proceed has to come from the replacement itself
 
 ### Fixed
