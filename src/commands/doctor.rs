@@ -1,5 +1,6 @@
 use crate::config::config::{Config, get_config_dir};
 use clap::{ArgMatches, Command};
+use std::path::Path;
 use std::process::Command as ShellCommand;
 
 pub(crate) fn command_config() -> Command {
@@ -9,6 +10,9 @@ pub(crate) fn command_config() -> Command {
 pub(crate) struct Check {
     name: String,
     passed: bool,
+    /// A finding that only matters for some deployments: reported, but not a
+    /// failure of the host as a whole.
+    warning: bool,
     detail: String,
 }
 
@@ -17,6 +21,7 @@ impl Check {
         Self {
             name: name.to_string(),
             passed: true,
+            warning: false,
             detail: detail.to_string(),
         }
     }
@@ -25,6 +30,16 @@ impl Check {
         Self {
             name: name.to_string(),
             passed: false,
+            warning: false,
+            detail: detail.to_string(),
+        }
+    }
+
+    fn warn(name: &str, detail: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            passed: true,
+            warning: true,
             detail: detail.to_string(),
         }
     }
@@ -154,7 +169,10 @@ fn check_firecracker(config: &Config) -> Vec<Check> {
     checks.push(check_binary(binary, "--version"));
 
     checks.push(check_kvm());
-    checks.push(check_capabilities(binary));
+    // Unlike Cloud Hypervisor, whose VMM creates its own tap, Firecracker
+    // expects the tap to exist: Ring creates it, so the capability belongs on
+    // the Ring binary, not on `firecracker`.
+    checks.push(check_ring_net_admin());
 
     let default_kernel = format!("{}/firecracker/vmlinux", get_config_dir());
     let kernel = config
@@ -169,7 +187,147 @@ fn check_firecracker(config: &Config) -> Vec<Check> {
     // Port forwarding is socat-based, same as CH.
     checks.push(check_socat());
 
+    // Only squashfs images need these, so a gap is a warning: a host running
+    // ext4 images alone is fine without them.
+    let default_init = format!("{}/firecracker/ring-init", get_config_dir());
+    let init = config
+        .server
+        .runtime
+        .firecracker
+        .init_path
+        .as_deref()
+        .unwrap_or(&default_init);
+    checks.push(check_ring_init(init));
+    if Path::new(kernel).exists() {
+        checks.push(match std::fs::read(kernel) {
+            Ok(kernel_image) => check_squashfs_kernel(&kernel_image),
+            Err(e) => Check::warn(
+                "Kernel squashfs support",
+                &format!("cannot read {} to check it: {}", kernel, e),
+            ),
+        });
+    }
+
     checks
+}
+
+/// `CAP_NET_ADMIN` on the running Ring binary, which creates the taps of
+/// Firecracker microVMs.
+///
+/// `doctor` can only check the binary running it, which is the one that runs
+/// the server only when both are started the same way. When the `ring` found
+/// in `PATH` is another file, the result says so.
+fn check_ring_net_admin() -> Check {
+    let Ok(ring) = std::env::current_exe() else {
+        return Check::fail("Capabilities", "cannot locate the ring binary");
+    };
+    let mut check = match ShellCommand::new("getcap").arg(&ring).output() {
+        Ok(output) => net_admin_check(
+            &ring.display().to_string(),
+            &String::from_utf8_lossy(&output.stdout),
+        ),
+        Err(_) => {
+            return Check::fail(
+                "Capabilities",
+                "'getcap' not found (install libcap2-bin / libcap)",
+            );
+        }
+    };
+
+    let in_path = ShellCommand::new("which")
+        .arg("ring")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string());
+    if let Some(other) = in_path
+        && std::fs::canonicalize(&other).ok() != std::fs::canonicalize(&ring).ok()
+    {
+        check.detail.push_str(&format!(
+            "; this is the binary running doctor, while `ring` in PATH is {}: the capability must be on the one that runs the server",
+            other
+        ));
+    }
+    check
+}
+
+/// Judge the `getcap` output for the Ring binary at `ring`.
+fn net_admin_check(ring: &str, getcap_output: &str) -> Check {
+    if getcap_output.contains("cap_net_admin") {
+        Check::ok("Capabilities", &format!("cap_net_admin set on {}", ring))
+    } else {
+        Check::fail(
+            "Capabilities",
+            &format!(
+                "missing cap_net_admin on {} (run: sudo setcap cap_net_admin+ep {})",
+                ring, ring
+            ),
+        )
+    }
+}
+
+/// `ring-init`, the initramfs a squashfs image boots through.
+///
+/// Ring only reads the file, to build the initramfs in which it gets its own
+/// executable mode, so what matters is that it can be read.
+fn check_ring_init(path: &str) -> Check {
+    match std::fs::File::open(path) {
+        Ok(_) if Path::new(path).is_file() => Check::ok("ring-init", path),
+        Ok(_) => Check::warn(
+            "ring-init",
+            &format!("{} is not a file; squashfs images will not boot", path),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Check::warn(
+            "ring-init",
+            &format!(
+                "not found at {}; only needed to boot squashfs images (see init_path)",
+                path
+            ),
+        ),
+        Err(e) => Check::warn(
+            "ring-init",
+            &format!(
+                "cannot read {} ({}); squashfs images will not boot",
+                path, e
+            ),
+        ),
+    }
+}
+
+/// What a squashfs image needs from the kernel, each with a message the
+/// kernel only carries when that code is built in. Firecracker guests load no
+/// modules, so built in is the only way they can have it.
+const SQUASHFS_KERNEL_FEATURES: [(&str, &[u8]); 3] = [
+    ("squashfs", b"squashfs: version"),
+    ("overlayfs", b"overlayfs: "),
+    ("devtmpfs", b"devtmpfs: initialized"),
+];
+
+/// The features of [`SQUASHFS_KERNEL_FEATURES`] missing from `kernel_image`.
+fn missing_squashfs_features(kernel_image: &[u8]) -> Vec<&'static str> {
+    SQUASHFS_KERNEL_FEATURES
+        .iter()
+        .filter(|(_, marker)| !kernel_image.windows(marker.len()).any(|w| w == *marker))
+        .map(|(name, _)| *name)
+        .collect()
+}
+
+fn check_squashfs_kernel(kernel_image: &[u8]) -> Check {
+    let missing = missing_squashfs_features(kernel_image);
+    if missing.is_empty() {
+        Check::ok(
+            "Kernel squashfs support",
+            "squashfs, overlayfs and devtmpfs built in",
+        )
+    } else {
+        Check::warn(
+            "Kernel squashfs support",
+            &format!(
+                "{} not detected; squashfs images will not boot with this kernel unless they are built in",
+                missing.join(", ")
+            ),
+        )
+    }
 }
 
 fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
@@ -323,7 +481,11 @@ pub(crate) fn report_checks(groups: &[(&str, Vec<Check>)]) -> bool {
     for (runtime, checks) in groups {
         println!("{}", runtime);
         for check in checks {
-            let icon = if check.passed { "+" } else { "-" };
+            let icon = match (check.passed, check.warning) {
+                (false, _) => "-",
+                (true, true) => "!",
+                (true, false) => "+",
+            };
             println!("  [{}] {}: {}", icon, check.name, check.detail);
             if !check.passed {
                 has_failure = true;
@@ -340,5 +502,90 @@ pub(crate) fn execute(_args: &ArgMatches, config: Config) {
 
     if has_failure {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kernel_with_every_feature_misses_none() {
+        let kernel = b"..squashfs: version 4.0..overlayfs: missing..devtmpfs: initialized..";
+        assert!(missing_squashfs_features(kernel).is_empty());
+        assert!(!check_squashfs_kernel(kernel).warning);
+    }
+
+    #[test]
+    fn missing_features_are_named_and_only_warned_about() {
+        let kernel = b"..squashfs: version 4.0..";
+        assert_eq!(
+            missing_squashfs_features(kernel),
+            vec!["overlayfs", "devtmpfs"]
+        );
+        let check = check_squashfs_kernel(kernel);
+        assert!(check.passed, "an ext4-only host is still healthy");
+        assert!(check.warning);
+        assert!(check.detail.contains("overlayfs, devtmpfs not detected"));
+    }
+
+    #[test]
+    fn a_missing_ring_init_is_a_warning() {
+        let check = check_ring_init("/nonexistent/ring-init");
+        assert!(check.passed);
+        assert!(check.warning);
+        assert!(check.detail.contains("squashfs"));
+    }
+
+    #[test]
+    fn a_readable_ring_init_passes_whatever_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ring-doctor-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ring-init");
+        std::fs::write(&path, b"x").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        // It only has to be read: the initramfs gives it its executable mode.
+        let check = check_ring_init(path.to_str().unwrap());
+        assert!(check.passed && !check.warning, "{}", check.detail);
+
+        // A directory at that path is not usable.
+        let check = check_ring_init(dir.to_str().unwrap());
+        assert!(check.warning);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn firecracker_needs_net_admin_on_ring_itself() {
+        let check = net_admin_check(
+            "/usr/local/bin/ring",
+            "/usr/local/bin/ring cap_net_admin=ep\n",
+        );
+        assert!(check.passed);
+
+        let check = net_admin_check("/usr/local/bin/ring", "");
+        assert!(!check.passed);
+        assert!(
+            check
+                .detail
+                .contains("sudo setcap cap_net_admin+ep /usr/local/bin/ring"),
+            "{}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn warnings_do_not_fail_the_report() {
+        let groups = vec![(
+            "Firecracker",
+            vec![
+                Check::ok("firecracker", "1.10"),
+                Check::warn("ring-init", "not found"),
+            ],
+        )];
+        assert!(!report_checks(&groups));
     }
 }

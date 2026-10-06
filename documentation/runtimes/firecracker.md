@@ -97,6 +97,8 @@ What the image and kernel need:
 - The image needs nothing from Ring: no cloud-init and no init script. Ring passes the devices on the kernel command line (`ring.lower=/dev/vda ring.upper=/dev/vdb`), so the squashfs is `/dev/vda`, the layer `/dev/vdb`, and volumes start at `/dev/vdc`.
 - What a guest writes lives in its layer only, and is gone when the instance is replaced, as with an ext4 copy. Use a named volume for data that must survive.
 
+`ring doctor` warns when ring-init is missing or not executable, and when the configured kernel lacks squashfs, overlayfs or devtmpfs. These are warnings rather than failures, since a host running ext4 images needs none of it.
+
 If ring-init cannot assemble the root, it prints the reason on the console (`ring-init: …`) and the microVM stops; `ring deployment logs` shows it.
 
 ## Logs
