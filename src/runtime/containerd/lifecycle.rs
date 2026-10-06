@@ -63,8 +63,40 @@ fn signal_number(signal: ReloadSignal) -> u32 {
 }
 
 /// How long an instance gets to exit after SIGTERM before we SIGKILL it. Matches
-/// Docker's default 10s stop grace period.
+/// Docker's default 10s stop grace period, used when the deployment sets no
+/// `config.stop_timeout`.
 const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Container label carrying the deployment's `config.stop_timeout`, in
+/// seconds. Recorded at creation, as Docker records it on its containers, so
+/// an instance stopped by its id alone still gets the grace period of the
+/// deployment that created it.
+const STOP_TIMEOUT_LABEL: &str = "ring.stop_timeout";
+
+/// The labels of a deployment's containerd containers: the owning deployment
+/// id (for list/remove filtering) plus the user's labels, matching the Docker
+/// runtime's label set, and the grace period.
+fn container_labels(deployment: &Deployment) -> std::collections::HashMap<String, String> {
+    let mut labels = deployment.labels.clone();
+    // The grace period comes from the validated `config.stop_timeout` only: a
+    // user label of the same name is dropped, or it would set one that skipped
+    // validation.
+    labels.remove(STOP_TIMEOUT_LABEL);
+    if let Some(secs) = deployment.config.as_ref().and_then(|c| c.stop_timeout) {
+        labels.insert(STOP_TIMEOUT_LABEL.to_string(), secs.to_string());
+    }
+    labels.insert(RING_DEPLOYMENT_LABEL.to_string(), deployment.id.clone());
+    labels
+}
+
+/// The grace period recorded on a container, or the default.
+fn grace_period(labels: &std::collections::HashMap<String, String>) -> std::time::Duration {
+    labels
+        .get(STOP_TIMEOUT_LABEL)
+        .and_then(|secs| secs.parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(STOP_GRACE_PERIOD)
+}
 
 /// Host directory where Ring keeps per-instance log files written by the task's
 /// stdio. Mirrors how the shim's fifo/file stdio is consumed.
@@ -555,14 +587,7 @@ impl ContainerdLifecycle {
 
         // 4. Register the container object, tagged with the owning deployment.
         if let Err(e) = self
-            .create_container_object(
-                client,
-                &instance_id,
-                &deployment.id,
-                &deployment.labels,
-                &image.reference,
-                spec,
-            )
+            .create_container_object(client, &instance_id, deployment, &image.reference, spec)
             .await
         {
             self.remove_snapshot(client, &instance_id).await;
@@ -627,18 +652,11 @@ impl ContainerdLifecycle {
         &self,
         client: &containerd_client::Client,
         instance_id: &str,
-        deployment_id: &str,
-        user_labels: &std::collections::HashMap<String, String>,
+        deployment: &Deployment,
         image_ref: &str,
         spec: prost_types::Any,
     ) -> Result<(), RuntimeError> {
-        // Carry the owning deployment id (for list/remove filtering) plus any
-        // user-supplied labels, matching the Docker runtime's label set.
-        let mut labels = std::collections::HashMap::new();
-        labels.insert(RING_DEPLOYMENT_LABEL.to_string(), deployment_id.to_string());
-        for (k, v) in user_labels {
-            labels.insert(k.clone(), v.clone());
-        }
+        let labels = container_labels(deployment);
 
         let container = Container {
             id: instance_id.to_string(),
@@ -762,6 +780,9 @@ impl ContainerdLifecycle {
     ) -> bool {
         let mut tasks = TasksClient::new(client.channel());
 
+        // Read before anything is torn down: the container object holds it.
+        let grace = self.container_grace_period(client, instance_id).await;
+
         // Capture the pid for CNI teardown before we kill the task.
         let netns = self
             .task_pid(client, instance_id)
@@ -793,7 +814,7 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         ));
-        let _ = tokio::time::timeout(STOP_GRACE_PERIOD, wait).await;
+        let _ = tokio::time::timeout(grace, wait).await;
 
         let _ = tasks
             .kill(with_namespace!(
@@ -833,6 +854,30 @@ impl ContainerdLifecycle {
             samples.remove(instance_id);
         }
         true
+    }
+
+    /// The grace period recorded on the instance's container, or the default
+    /// when it carries none or cannot be read.
+    async fn container_grace_period(
+        &self,
+        client: &containerd_client::Client,
+        instance_id: &str,
+    ) -> std::time::Duration {
+        let mut containers = ContainersClient::new(client.channel());
+        let req = with_namespace!(
+            GetContainerRequest {
+                id: instance_id.to_string(),
+            },
+            self.config.namespace
+        );
+        match containers.get(req).await {
+            Ok(resp) => resp
+                .into_inner()
+                .container
+                .map(|c| grace_period(&c.labels))
+                .unwrap_or(STOP_GRACE_PERIOD),
+            Err(_) => STOP_GRACE_PERIOD,
+        }
     }
 
     async fn task_status(
@@ -1132,5 +1177,52 @@ mod tests {
 
         assert_eq!(deployment.restart_count, 0);
         assert_eq!(deployment.status, DeploymentStatus::ImagePullBackOff);
+    }
+
+    #[test]
+    fn grace_period_comes_from_the_container_label() {
+        let labels = HashMap::from([(STOP_TIMEOUT_LABEL.to_string(), "120".to_string())]);
+        assert_eq!(grace_period(&labels), std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn grace_period_defaults_without_a_usable_label() {
+        assert_eq!(grace_period(&HashMap::new()), STOP_GRACE_PERIOD);
+        let labels = HashMap::from([(STOP_TIMEOUT_LABEL.to_string(), "soon".to_string())]);
+        assert_eq!(grace_period(&labels), STOP_GRACE_PERIOD);
+    }
+
+    #[test]
+    fn container_labels_record_the_configured_grace_period() {
+        let mut deployment = worker();
+        deployment.labels = HashMap::from([("team".to_string(), "data".to_string())]);
+        deployment.config =
+            Some(serde_json::from_value(serde_json::json!({"stop_timeout": 120})).unwrap());
+
+        let labels = container_labels(&deployment);
+        assert_eq!(
+            labels.get(STOP_TIMEOUT_LABEL).map(String::as_str),
+            Some("120")
+        );
+        assert_eq!(labels.get("team").map(String::as_str), Some("data"));
+        assert_eq!(labels.get(RING_DEPLOYMENT_LABEL), Some(&deployment.id));
+    }
+
+    #[test]
+    fn a_user_label_cannot_set_the_grace_period() {
+        let mut deployment = worker();
+        deployment.labels = HashMap::from([
+            (STOP_TIMEOUT_LABEL.to_string(), "0".to_string()),
+            (
+                RING_DEPLOYMENT_LABEL.to_string(),
+                "someone-else".to_string(),
+            ),
+        ]);
+        deployment.config = None;
+
+        let labels = container_labels(&deployment);
+        assert_eq!(labels.get(STOP_TIMEOUT_LABEL), None);
+        assert_eq!(grace_period(&labels), STOP_GRACE_PERIOD);
+        assert_eq!(labels.get(RING_DEPLOYMENT_LABEL), Some(&deployment.id));
     }
 }
