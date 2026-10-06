@@ -425,7 +425,7 @@ Rejected combinations, reported at `ring apply` time:
 
 - **`kind: job`** — a job runs once and exits, it has no steady-state CPU to aim at.
 - **`network.mode: host` with `max` above 1** — every instance would compete for the same host ports.
-- **the `containerd` runtime** — it does not report CPU usage yet, so a CPU target would be measured against a constant zero and walk the deployment down to `min`.
+- **the `containerd` runtime on a cgroup v1 host** — containerd reports CPU from cgroup v2 only, so a CPU target would be measured against a constant zero and walk the deployment down to `min`.
 
 ## `health_checks`
 

@@ -54,11 +54,17 @@ impl ContainerdRuntimeConfig {
 #[derive(Clone)]
 pub(crate) struct ContainerdLifecycle {
     pub(crate) config: ContainerdRuntimeConfig,
+    /// The last CPU reading of each instance, to compute its CPU percentage
+    /// from the next one.
+    pub(crate) cpu_samples: super::stats::CpuSamples,
 }
 
 impl ContainerdLifecycle {
     pub(crate) fn new(config: ContainerdRuntimeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            cpu_samples: Default::default(),
+        }
     }
 
     /// Open a gRPC client to the configured socket.
