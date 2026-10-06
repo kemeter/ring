@@ -458,19 +458,19 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
 }
 
 fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
-    // Only the Docker-API runtimes carry a per-container stop grace period.
+    // Only the container runtimes carry a per-instance stop grace period.
     // Accepting the field elsewhere would leave an operator believing their
     // workload is given time to shut down when it is not.
     if input
         .config
         .as_ref()
         .is_some_and(|c| c.stop_timeout.is_some())
-        && !matches!(input.runtime.as_str(), "docker" | "podman")
+        && !matches!(input.runtime.as_str(), "docker" | "podman" | "containerd")
     {
         errors.push(Violation::new(
             "config.stop_timeout",
             format!(
-                "stop_timeout is not supported on the {} runtime (supported: docker, podman)",
+                "stop_timeout is not supported on the {} runtime (supported: docker, podman, containerd)",
                 input.runtime
             ),
             "deployment.config.stop_timeout.runtime_unsupported",
@@ -3676,6 +3676,19 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
         let body: serde_json::Value = response.json();
         assert_eq!(body["config"]["stop_timeout"], 120);
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "containerd",
+                "name": "db-ctr",
+                "namespace": "ring",
+                "image": "postgres:18",
+                "config": { "stop_timeout": 120 }
+            }))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
     }
 
     #[tokio::test]
@@ -3693,7 +3706,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_rejects_a_stop_timeout_on_a_runtime_that_ignores_it() {
-        let codes = stop_timeout_violation_codes("containerd", 120).await;
+        let codes = stop_timeout_violation_codes("firecracker", 120).await;
         assert!(
             codes.contains(&"deployment.config.stop_timeout.runtime_unsupported".to_string()),
             "expected the unsupported-runtime violation, got {:?}",

@@ -387,6 +387,20 @@ fn resolve_registry_auth(
     .map_err(|e| RuntimeError::ImagePullFailed(e.to_string()))
 }
 
+/// The labels of a deployment's containers: the user's labels, then the one
+/// Ring finds its containers by, which a user label of the same name must not
+/// replace.
+fn container_labels(
+    deployment: &crate::models::deployments::Deployment,
+) -> HashMap<String, String> {
+    let mut labels = deployment.labels.clone();
+    labels.insert(
+        super::RING_DEPLOYMENT_LABEL.to_string(),
+        deployment.id.clone(),
+    );
+    labels
+}
+
 pub(crate) async fn create_container(
     deployment: &mut Deployment,
     docker: &Docker,
@@ -458,14 +472,7 @@ pub(crate) async fn create_container(
         deployment.namespace, deployment.name, temporary_id
     );
 
-    let mut labels = HashMap::new();
-    labels.insert(
-        super::RING_DEPLOYMENT_LABEL.to_string(),
-        deployment.id.clone(),
-    );
-    for (key, value) in deployment.labels.iter() {
-        labels.insert(key.clone(), value.clone());
-    }
+    let labels = container_labels(deployment);
 
     let envs: Vec<String> = deployment.environment
         .iter()
@@ -828,6 +835,35 @@ async fn create_network(docker: Docker, network_name: String) -> Result<(), Runt
 mod tests {
     use super::*;
     use crate::models::deployments::UserConfig;
+
+    #[test]
+    fn a_user_label_cannot_take_over_the_deployment_label() {
+        let mut deployment: crate::models::deployments::Deployment =
+            serde_json::from_value(serde_json::json!({
+                "id": "dep-1", "created_at": "now", "status": "running",
+                "namespace": "ns", "name": "app", "image": "nginx",
+                "runtime": "docker", "kind": "worker", "replicas": 1,
+                "command": [], "instances": [], "labels": {}, "environment": {},
+                "volumes": "[]", "restart_count": 0
+            }))
+            .unwrap_or_else(|_| panic!("fixture"));
+        deployment.labels = HashMap::from([
+            ("team".to_string(), "data".to_string()),
+            (
+                super::super::RING_DEPLOYMENT_LABEL.to_string(),
+                "someone-else".to_string(),
+            ),
+        ]);
+
+        let labels = container_labels(&deployment);
+        assert_eq!(
+            labels
+                .get(super::super::RING_DEPLOYMENT_LABEL)
+                .map(String::as_str),
+            Some("dep-1")
+        );
+        assert_eq!(labels.get("team").map(String::as_str), Some("data"));
+    }
 
     #[test]
     fn test_build_user_config_with_uid_and_gid() {
