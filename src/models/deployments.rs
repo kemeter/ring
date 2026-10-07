@@ -1228,6 +1228,50 @@ mod tests {
         row.0 as u32
     }
 
+    /// Earlier versions left workers that exited 0 in `completed`, out of
+    /// reconciliation for good. The migration must put them back under
+    /// reconciliation with a fresh restart budget, and leave completed jobs
+    /// alone — a job is the only kind that can legitimately be completed.
+    #[tokio::test]
+    async fn migration_resumes_completed_workers_but_not_jobs() {
+        let pool = test_pool().await;
+        for (id, kind) in [("w1", "worker"), ("j1", "job")] {
+            sqlx::query(
+                "INSERT INTO deployment (id, created_at, status, namespace, runtime, kind, name, restart_count) \
+                 VALUES (?, '2024-01-01', 'completed', 'prod', 'docker', ?, ?, 3)",
+            )
+            .bind(id)
+            .bind(kind)
+            .bind(format!("d-{id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        sqlx::raw_sql(include_str!(
+            "../../migrations/20220101000026_resume_completed_workers.sql"
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let status = |id: &'static str| {
+            let pool = pool.clone();
+            async move {
+                let row: (String,) = sqlx::query_as("SELECT status FROM deployment WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                row.0
+            }
+        };
+        assert_eq!(status("w1").await, "running");
+        assert_eq!(count_in_db(&pool, "w1").await, 0);
+        assert_eq!(status("j1").await, "completed");
+        assert_eq!(count_in_db(&pool, "j1").await, 3);
+    }
+
     /// A replaced deployment is `deleted`, its successor `creating`. An index
     /// on `status` makes the planner walk rows in status order, which puts the
     /// successor first; the explicit order must win over it.
