@@ -522,14 +522,15 @@ async fn publish_status_change(
     }
 }
 
-/// Returns how many instances a failed liveness check removed.
+/// Returns the instances a failed liveness check removed, with the end of
+/// their output read before the removal took it away.
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     old_status: &DeploymentStatus,
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
-) -> usize {
+) -> Vec<restart_state::Termination> {
     // Health checks run in `Running` (full set, drives `on_failure`) and, for
     // readiness gating, in `Creating` (readiness-only, record-only — see
     // `HealthChecker::execute_checks`). `execute_checks` enforces the
@@ -542,7 +543,7 @@ async fn run_health_checks(
         _ => false,
     };
     if !runnable || deployment.health_checks.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     debug!("Executing health checks for deployment {}", deployment.id);
@@ -584,11 +585,26 @@ async fn run_health_checks(
         deployment.status = new_status;
     }
 
+    let mut removed = Vec::new();
     for instance_id in &outcome.instances_to_remove {
+        let tail = restart_state::LOGS_TAIL_LINES.to_string();
+        let lines: Vec<String> = runtime
+            .get_logs(&deployment.id, Some(&tail), None, Some(instance_id))
+            .await
+            .into_iter()
+            .map(|log| log.message)
+            .collect();
         runtime.remove_instance(instance_id.clone()).await;
         deployment.instances.retain(|id| id != instance_id);
+        removed.push(restart_state::Termination {
+            instance_id: instance_id.clone(),
+            exit_code: None,
+            finished_at: chrono::Utc::now(),
+            started: true,
+            logs_tail: restart_state::logs_tail(&lines),
+        });
     }
-    outcome.instances_to_remove.len()
+    removed
 }
 
 /// Pick the instance `restart_interval` should replace this cycle: the oldest,
@@ -2069,7 +2085,7 @@ pub(crate) async fn schedule(
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
             handle_status_transitions(&pool, &mut result, &mut deleted, driver.is_none()).await;
-            let liveness_kills = run_health_checks(
+            let killed = run_health_checks(
                 &pool,
                 &mut result,
                 &old_status,
@@ -2077,14 +2093,17 @@ pub(crate) async fn schedule(
                 runtime.as_ref(),
             )
             .await;
-            // An instance a liveness check removed failed, like one that exited.
-            if driver.is_some() && liveness_kills > 0 {
+            // An instance a liveness check removed failed, like one that exited,
+            // and keeps the end of its output like one.
+            if driver.is_some() && !killed.is_empty() {
+                let kills = killed.len();
+                state.last_termination = killed.into_iter().last();
                 reconcile::record_liveness_kills(
                     &deployment_policy,
                     result.workload_kind(),
                     &mut result,
                     &mut state,
-                    liveness_kills,
+                    kills,
                     now,
                     &mut rng,
                 );
