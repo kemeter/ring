@@ -6,9 +6,8 @@ deployments:
     image: alpine:3.19
     # Reproduces the production case: an entrypoint that fails like a git clone
     # against a repo it can't authenticate to. `git` exits 128 on an auth
-    # failure, and 128 is RETRYABLE per the exit-code classifier, so the only
-    # way this converges is the restart-count path — exactly the prod bug:
-    # the container must reach CrashLoopBackOff after MAX_RESTART_COUNT and
-    # STOP being recreated, not loop forever.
+    # failure, and 128 is RETRYABLE per the exit-code classifier: the worker
+    # must keep being retried, spaced out by the restart backoff instead of
+    # recreated on every scheduler tick.
     command: ["sh", "-c", "echo 'fatal: Authentication failed for https://example.com/private.git' >&2; exit 128"]
     replicas: 1

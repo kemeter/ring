@@ -15,16 +15,22 @@ pub(crate) const MAX_RESTART_COUNT: u32 = 5;
 /// them derived from one array is what stops the two drifting apart — a status
 /// added here while still reported as "skipped" would be retried forever with
 /// no restart budget to stop it.
+///
+/// `crash_loop_back_off` and `insufficient_resources` are reconciled too: a
+/// worker in either is backing off, not abandoned, and is started again once
+/// its backoff elapses. Only `completed` and `failed` are left alone.
 pub(crate) const RECONCILED_STATUSES: &[DeploymentStatus] = &[
     DeploymentStatus::Pending,
     DeploymentStatus::Creating,
     DeploymentStatus::Running,
     DeploymentStatus::Deleted,
+    DeploymentStatus::CrashLoopBackOff,
     DeploymentStatus::CreateContainerError,
     DeploymentStatus::ImagePullBackOff,
     DeploymentStatus::NetworkError,
     DeploymentStatus::ConfigError,
     DeploymentStatus::FileSystemError,
+    DeploymentStatus::InsufficientResources,
     DeploymentStatus::Error,
 ];
 

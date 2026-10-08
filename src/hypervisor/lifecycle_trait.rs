@@ -239,6 +239,12 @@ pub(crate) trait RuntimeLifecycle: Send + Sync {
         resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment;
 
+    /// Instance-level operations, for runtimes whose workers the scheduler
+    /// reconciles itself. `None` keeps the runtime on [`Self::apply`].
+    fn instance_driver(&self) -> Option<&dyn crate::hypervisor::instance_driver::InstanceDriver> {
+        None
+    }
+
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String>;
 
     /// Resolve the running instance ids for many deployments at once, keyed by

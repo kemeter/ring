@@ -155,14 +155,14 @@ See [how-to: deploy with secrets → private registry credentials](/documentatio
 
 ### `crash_loop_back_off`
 
-The container has crashed more than `MAX_RESTART_COUNT` times. Look at:
+The worker's instances keep dying. On Docker and Podman, Ring keeps restarting it, waiting longer between attempts (up to 5 minutes); on the other runtimes it gave up after 5 attempts. Look at:
 
 ```bash
-ring deployment events <DEPLOYMENT_ID> --level warning   # crashes show up here
+ring deployment events <DEPLOYMENT_ID> --level error     # one container_crashed per exit, with its code
 ring deployment logs <DEPLOYMENT_ID> --tail 200          # what the app said
 ```
 
-After fixing the root cause, re-apply the manifest. Ring resets the counter on a fresh apply.
+On Docker and Podman, fixing the cause (a config, a dependency) is enough: the next attempt picks it up. Re-apply the manifest to start again right away with a fresh counter, or scale the worker to 0 to stop the retries.
 
 ### `insufficient_resources`
 
@@ -173,9 +173,9 @@ ring deployment events <DEPLOYMENT_ID> --level error --limit 5
 # insufficient host memory for 'web': needs 4096 MiB but only 1800 MiB is available — …
 ```
 
-This status is **terminal**: Ring does not retry, because the memory isn't going to reappear on its own. Two ways out:
+Ring retries on the backoff curve, so the deployment starts by itself once enough memory is free. To get it running sooner:
 
-- Free memory on the host (stop other workloads), then re-apply the manifest.
+- Free memory on the host (stop other workloads).
 - Lower the deployment's `resources.requests.memory` (or `resources.limits.memory` if no request is set) to fit, then re-apply.
 
 The check compares against memory available *at that moment*; it's a guard against gross over-asks, not a precise reservation system. CPU is not gated; CPU overcommit is allowed.

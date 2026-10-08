@@ -68,6 +68,13 @@ pub(crate) async fn execute(
         std::process::exit(1);
     }
 
+    // Same reasoning for the restart policy: a typo'd duration must stop the
+    // daemon now, not leave the scheduler without a policy later.
+    if let Err(e) = configuration.server.restart.policy() {
+        error!("Refusing to start: {}", e);
+        std::process::exit(1);
+    }
+
     let pool = get_database_pool().await;
 
     migrate_from_refinery_if_needed(&pool).await;

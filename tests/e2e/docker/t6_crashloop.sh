@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# T6: a worker that exits non-zero must hit CrashLoopBackOff after MAX_RESTART_COUNT
-# instead of being respawned forever. Today (without the docker-events listener)
-# this test FAILS: restart_count stays at 0 and the scheduler keeps creating new
-# containers indefinitely, leaving stopped containers piling up on disk.
+# T6: a worker that exits non-zero over and over is never abandoned. Each crash
+# is counted, the dead container is removed, and the worker is started again
+# after a backoff, well past the 5 attempts after which Ring used to give up.
+#
+# A short restart policy keeps the test fast: retries come at most 2s apart.
 
 set -euo pipefail
 
@@ -10,17 +11,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T6: crash loop must converge to CrashLoopBackOff =="
+log "== T6: a crash loop backs off and never gives up =="
+
+export RING_EXTRA_CONFIG='[server.restart]
+base = "1s"
+cap = "2s"'
 
 start_ring
 ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/crashloop.yaml"
 
-# Give the scheduler time to react. With a 1s scheduler interval, 90s leaves
-# comfortable headroom for restart_count to climb past MAX_RESTART_COUNT (5).
-log "waiting 90s for the scheduler to react to repeated crashes..."
-sleep 90
+log "waiting 45s for repeated crashes..."
+sleep 45
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "crashloop")
 if [ -z "$DEPLOYMENT_ID" ]; then
@@ -28,7 +31,6 @@ if [ -z "$DEPLOYMENT_ID" ]; then
 fi
 log "deployment id: $DEPLOYMENT_ID"
 
-# Count every container ever created for this deployment (running + exited).
 TOTAL_CONTAINERS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
 RESTART_COUNT=$(get_restart_count "ring-e2e" "crashloop")
 STATUS=$("$RING_BIN" deployment list --output json \
@@ -38,21 +40,21 @@ STATUS=$("$RING_BIN" deployment list --output json \
 
 log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
 
-# Hard cap: restart_count must not exceed MAX_RESTART_COUNT (5 today).
-if [ "${RESTART_COUNT:-0}" -lt 5 ]; then
-  fail "expected restart_count >= 5, got $RESTART_COUNT (the scheduler is not counting runtime crashes)"
+# Still retrying past the old budget of 5: the worker was not abandoned.
+if [ "${RESTART_COUNT:-0}" -le 5 ]; then
+  fail "expected restart_count > 5, got $RESTART_COUNT (the worker was abandoned or crashes are not counted)"
 fi
 
-# The deployment must have transitioned to CrashLoopBackOff.
-if [ "$STATUS" != "crash_loop_back_off" ]; then
-  fail "expected status crash_loop_back_off, got '$STATUS'"
-fi
+# Between two attempts the worker waits in crash_loop_back_off; caught right
+# after a start, it is creating or running.
+case "$STATUS" in
+  crash_loop_back_off|creating|running) ;;
+  *) fail "expected crash_loop_back_off (or a fresh start), got '$STATUS'" ;;
+esac
 
-# Sanity: the total number of containers ever spawned for this deployment must
-# stay bounded. Without a cap on restarts, this number grows linearly with time.
-# Allowing a small headroom over MAX_RESTART_COUNT for races.
-if [ "$TOTAL_CONTAINERS" -gt 10 ]; then
-  fail "too many containers spawned ($TOTAL_CONTAINERS) — restart loop is not bounded"
+# Every dead container is removed once its exit is recorded: they never pile up.
+if [ "$TOTAL_CONTAINERS" -gt 1 ]; then
+  fail "$TOTAL_CONTAINERS containers left for the deployment — crashed containers are not removed"
 fi
 
 log "== T6: PASS =="

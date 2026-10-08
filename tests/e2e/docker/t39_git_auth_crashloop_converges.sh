@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# T39: THE production case. A container whose entrypoint fails like a git clone
-# auth failure (writes "fatal: Authentication failed" and exits 128) must
-# converge to CrashLoopBackOff and STOP being recreated — not loop forever.
+# T39: a container whose entrypoint fails like a git clone auth failure (writes
+# "fatal: Authentication failed" and exits 128) keeps being retried, but slowly:
+# the default restart policy backs off from 10s up to 5 minutes between
+# attempts, instead of recreating it on every scheduler tick.
 #
-# This is the exact shape of the bug that bit us in prod: exit 128 is the real
-# git auth exit code, and per the classifier 128 is RETRYABLE, so this can only
-# converge via the restart-count path (it is NOT short-circuited by the
-# fast-fail terminal classification). If the in-tick crash counter regresses,
-# restart_count stays low, the scheduler recreates the container every tick, and
-# containers pile up without bound. This test would have caught that.
+# With a 1s scheduler interval, a loop without backoff would create a container
+# every tick (~90 over this window). The default backoff allows only a handful.
 
 set -euo pipefail
 
@@ -16,17 +13,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T39: git-auth-style crash loop must converge to CrashLoopBackOff =="
+log "== T39: git-auth-style crash loop is retried on the backoff curve =="
 
 start_ring
 ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/git-auth-crashloop.yaml"
 
-# Give the scheduler time to react. With a 1s scheduler interval, 90s leaves
-# comfortable headroom for restart_count to climb past MAX_RESTART_COUNT (5)
-# through the restart-count path (128 is retryable, not fast-failed).
-log "waiting 90s for the scheduler to react to repeated exit-128 crashes..."
+log "waiting 90s for repeated exit-128 crashes..."
 sleep 90
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "git-auth-crashloop")
@@ -35,31 +29,31 @@ if [ -z "$DEPLOYMENT_ID" ]; then
 fi
 log "deployment id: $DEPLOYMENT_ID"
 
-# Count every container ever created for this deployment (running + exited).
 TOTAL_CONTAINERS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
 RESTART_COUNT=$(get_restart_count "ring-e2e" "git-auth-crashloop")
-STATUS=$("$RING_BIN" deployment list --output json \
-  | jq -r --arg ns "ring-e2e" --arg n "git-auth-crashloop" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
-  | head -n1)
+TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
+CRASH_EVENTS=$(curl -fsS "$RING_URL/deployments/$DEPLOYMENT_ID/events" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq -r '[.[] | select(.reason == "container_crashed" and (.message | test("code 128")))] | length')
 
-log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
+log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT crash_events=$CRASH_EVENTS"
 
-# 1) restart_count must reach MAX_RESTART_COUNT (5) — it is counted via the
-#    retryable restart-count path, exactly like prod.
-if [ "${RESTART_COUNT:-0}" -lt 5 ]; then
-  fail "expected restart_count >= 5, got $RESTART_COUNT (exit-128 crashes are not being counted)"
+# 1) The crashes are counted, with their exit code.
+if [ "${RESTART_COUNT:-0}" -lt 2 ]; then
+  fail "expected restart_count >= 2, got $RESTART_COUNT (exit-128 crashes are not being counted)"
+fi
+if [ "${CRASH_EVENTS:-0}" -lt 2 ]; then
+  fail "expected container_crashed events naming exit code 128, got $CRASH_EVENTS"
 fi
 
-# 2) The deployment must converge to CrashLoopBackOff and STOP recreating.
-if [ "$STATUS" != "crash_loop_back_off" ]; then
-  fail "expected status crash_loop_back_off, got '$STATUS'"
+# 2) The backoff keeps the retries rare: delays of up to 10s, 20s, 40s, 80s.
+if [ "$RESTART_COUNT" -gt 15 ]; then
+  fail "restart_count reached $RESTART_COUNT in 90s — retries are not backing off"
 fi
 
-# 3) Total containers ever spawned must stay bounded. Without the cap this grows
-#    linearly with time (one new container per tick = ~90 over this window).
-if [ "$TOTAL_CONTAINERS" -gt 10 ]; then
-  fail "too many containers spawned ($TOTAL_CONTAINERS) — restart loop is not bounded (prod bug)"
+# 3) Dead containers are removed once recorded: they never pile up.
+if [ "$TOTAL_CONTAINERS" -gt 1 ]; then
+  fail "$TOTAL_CONTAINERS containers left for the deployment — crashed containers are not removed"
 fi
 
 log "== T39: PASS =="

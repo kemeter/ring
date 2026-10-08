@@ -261,9 +261,9 @@ Clients of the API (CLI, dashboard, webhook consumers) must be updated together 
 Each step is a separate pull request that builds, passes the suite, and can ship on its own.
 
 1. **Policy module.** `scheduler/restart.rs` with its tests: backoff curve and jitter bounds, reset after `stable_after`, worker vs job exhaustion, `on_exhaustion = "fail"`, start-error starting points, resolution of a manifest override over the server defaults. Not wired yet.
-2. **Persisted restart state.** Migration for `next_attempt_at`, `running_since`, `last_termination`. The scheduler reads and writes them; `RetryBackoff` and `HealthyWindow` are removed. The `[restart]` server section and the manifest `restart` block are parsed and validated.
-3. **Runtime interface.** `observe` / `start_instance` / `stop_instance`, implemented for Docker and Podman. Scaling, rolling updates and the readiness gate move into the scheduler. The policy module is wired in for these runtimes, and liveness kills are counted as restarts.
-4. **Remaining runtimes.** containerd, then Firecracker and Cloud Hypervisor, each deleting its own `handle_*` and restart-count code.
+2. **Docker and Podman workers.** Persisted restart state (`next_attempt_at`, `running_since`, `last_termination`), the `[restart]` server section, and the instance interface (`observe` / `start_instance` / `stop_instance` / `discard_instance`) implemented for Docker and Podman. The scheduler reconciles their workers with the policy module and counts liveness kills as restarts. `RetryBackoff` is removed; the other runtimes keep their `apply` path but get their retries spaced on the persisted backoff. Persisting the state alone would not have shipped on its own: the runtimes still decided when to give up, and a longer reset window without that change would have abandoned workers that are restarted indefinitely today.
+3. **Jobs and manifest overrides.** `backoff_limit` and the `restart` block in the manifest, then Docker and Podman jobs on the policy module.
+4. **Remaining runtimes.** containerd, then Firecracker and Cloud Hypervisor, each deleting its own `handle_*` and restart-count code. `HealthyWindow` goes with the last one.
 5. **Phase and reason.** Migration of the status column, API, CLI, dashboard and webhook changes, documentation (`deployment-status-lifecycle.md`, `reconciliation.md`, troubleshooting).
 6. **Image digest reuse and start rate limiting.**
 7. **Metrics and events.**

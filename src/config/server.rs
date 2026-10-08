@@ -24,6 +24,95 @@ pub(crate) struct ServerConfig {
     pub(crate) telemetry: TelemetryConfig,
     #[serde(default)]
     pub(crate) exec: ExecConfig,
+    #[serde(default)]
+    pub(crate) restart: RestartConfig,
+}
+
+/// `[server.restart]`: how the scheduler restarts failed workloads. See
+/// `documentation/design/restart-policy.md`. Durations accept `s`, `m`, `h`
+/// and `d` units (`"10s"`, `"5m"`, `"1h30m"`).
+#[derive(Deserialize, Debug, Clone)]
+pub(crate) struct RestartConfig {
+    /// Upper bound of the delay before the first retry.
+    #[serde(default = "default_restart_base")]
+    pub(crate) base: String,
+    /// Upper bound of the delay between two retries, however many failed.
+    #[serde(default = "default_restart_cap")]
+    pub(crate) cap: String,
+    /// Uninterrupted running time after which the attempt counter resets.
+    #[serde(default = "default_restart_stable_after")]
+    pub(crate) stable_after: String,
+    /// What a worker does once its failures would exceed `max_attempts`:
+    /// `"backoff"` keeps retrying at `cap`, `"fail"` marks it failed.
+    #[serde(default = "default_restart_on_exhaustion")]
+    pub(crate) on_exhaustion: String,
+    /// Only read when `on_exhaustion = "fail"`.
+    #[serde(default = "default_restart_max_attempts")]
+    pub(crate) max_attempts: u32,
+}
+
+fn default_restart_base() -> String {
+    "10s".to_string()
+}
+
+fn default_restart_cap() -> String {
+    "5m".to_string()
+}
+
+fn default_restart_stable_after() -> String {
+    "10m".to_string()
+}
+
+fn default_restart_on_exhaustion() -> String {
+    "backoff".to_string()
+}
+
+fn default_restart_max_attempts() -> u32 {
+    crate::scheduler::restart::DEFAULT_MAX_ATTEMPTS
+}
+
+impl Default for RestartConfig {
+    fn default() -> Self {
+        RestartConfig {
+            base: default_restart_base(),
+            cap: default_restart_cap(),
+            stable_after: default_restart_stable_after(),
+            on_exhaustion: default_restart_on_exhaustion(),
+            max_attempts: default_restart_max_attempts(),
+        }
+    }
+}
+
+impl RestartConfig {
+    /// The validated policy this section describes.
+    pub(crate) fn policy(&self) -> Result<crate::scheduler::restart::RestartPolicy, String> {
+        use crate::models::deployments::parse_interval;
+        use crate::scheduler::restart::{OnExhaustion, RestartPolicy};
+
+        let duration = |key: &str, value: &str| {
+            parse_interval(value).map_err(|e| format!("[server.restart] {key}: {e}"))
+        };
+        let on_exhaustion = match self.on_exhaustion.as_str() {
+            "backoff" => OnExhaustion::Backoff,
+            "fail" => OnExhaustion::Fail,
+            other => {
+                return Err(format!(
+                    "[server.restart] on_exhaustion: '{other}' is not one of \"backoff\", \"fail\""
+                ));
+            }
+        };
+        let policy = RestartPolicy {
+            base: duration("base", &self.base)?,
+            cap: duration("cap", &self.cap)?,
+            stable_after: duration("stable_after", &self.stable_after)?,
+            on_exhaustion,
+            max_attempts: self.max_attempts,
+        };
+        policy
+            .validate()
+            .map_err(|e| format!("[server.restart] {e}"))?;
+        Ok(policy)
+    }
 }
 
 /// Bounds on interactive `exec` sessions.
@@ -646,5 +735,56 @@ mod telemetry_tests {
         assert_eq!(cfg.telemetry.traces.endpoint, "http://collector:4317");
         assert_eq!(cfg.telemetry.traces.service_name, "ring-prod");
         assert_eq!(cfg.telemetry.traces.sampler, "ratio:0.25");
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+    use crate::scheduler::restart::{OnExhaustion, RestartPolicy};
+    use std::time::Duration;
+
+    #[test]
+    fn absent_section_yields_the_default_policy() {
+        let cfg: ServerConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.restart.policy(), Ok(RestartPolicy::default()));
+    }
+
+    #[test]
+    fn section_overrides_parse() {
+        let cfg: ServerConfig = toml::from_str(
+            r#"
+            [restart]
+            base = "5s"
+            cap = "1h"
+            stable_after = "30m"
+            on_exhaustion = "fail"
+            max_attempts = 3
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.restart.policy(),
+            Ok(RestartPolicy {
+                base: Duration::from_secs(5),
+                cap: Duration::from_secs(3600),
+                stable_after: Duration::from_secs(1800),
+                on_exhaustion: OnExhaustion::Fail,
+                max_attempts: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_values_are_rejected() {
+        for toml in [
+            "[restart]\nbase = \"soon\"",
+            "[restart]\non_exhaustion = \"never\"",
+            "[restart]\nbase = \"10m\"\ncap = \"1m\"",
+            "[restart]\nmax_attempts = 0",
+        ] {
+            let cfg: ServerConfig = toml::from_str(toml).unwrap();
+            assert!(cfg.restart.policy().is_err(), "accepted: {toml}");
+        }
     }
 }

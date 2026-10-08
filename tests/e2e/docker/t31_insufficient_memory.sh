@@ -5,8 +5,8 @@
 # than the host has would start anyway and get OOM-killed at runtime (or, with
 # no limit, take the host down). Now `create_container` checks the requested
 # memory against the host's available memory *before* pulling/creating, and
-# fails fast with a terminal `insufficient_resources` status and an actionable
-# event.
+# refuses with an `insufficient_resources` status and an actionable event. The
+# refusal is retried on the backoff curve, since memory gets freed.
 #
 # Deterministic: 999Ti is more memory than any real host, so the check fails
 # every run regardless of the machine. No OOM is actually triggered.
@@ -63,13 +63,14 @@ if docker ps -a --format '{{.Names}}' | grep -q "ring-e2e_oversized_"; then
 fi
 log "no container was created — admission control ran before create"
 
-# Terminal: the status must not flap to crash_loop_back_off on later ticks.
+# Retried, but still refused: the status stays insufficient_resources rather
+# than flapping to another one.
 sleep 3
 STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
   | jq -r --arg id "$DEP_ID" '.[] | select(.id == $id) | .status')
 [ "$STATUS" = "insufficient_resources" ] || \
-  fail "status drifted from insufficient_resources to '$STATUS' (should be terminal)"
-log "status stayed terminal at insufficient_resources"
+  fail "status drifted from insufficient_resources to '$STATUS'"
+log "status stayed at insufficient_resources"
 
 # Cleanup
 "$RING_BIN" deployment delete "$DEP_ID"

@@ -6,32 +6,32 @@
 //! A container that stops shows up two ways: Docker emits a `die` event, and the
 //! reconcile pass sees it as an `exited` instance. Either can stem from a crash,
 //! an OOM kill, or a graceful `docker stop` we sent ourselves. The reconcile
-//! pass (`detect_and_count_crashes`) counts each unexpected exit toward
-//! `restart_count`; once it reaches `MAX_RESTART_COUNT` the deployment flips to
-//! `CrashLoopBackOff`. Without this filter, every scale-down, delete, rolling
-//! update step or health-check eviction would be counted as a crash and could
-//! push a perfectly healthy deployment into `CrashLoopBackOff`.
+//! pass (the Docker instance driver's `observe`) reports each unexpected exit,
+//! and the scheduler counts it toward `restart_count` and backs off. Without
+//! this filter, every scale-down, delete, rolling update step or health-check
+//! eviction would be counted as a crash and delay the deployment's next start.
 //!
 //! # How it works
 //!
 //! Before the runtime stops a container on purpose, it calls
 //! [`IntentionalShutdowns::mark`] with the container id. Two consumers call
-//! [`IntentionalShutdowns::take`]: `detect_and_count_crashes` skips the exited
-//! container so it is reaped without bumping `restart_count`, and
+//! [`IntentionalShutdowns::take`]: the instance driver's `observe` skips the
+//! exited container so it is reaped without being reported, and
 //! `apply_docker_event` skips the matching `die` event so it is not logged as a
 //! crash. The first to observe the stop consumes the entry.
 //!
 //! # Where to mark
 //!
 //! Mark every Ring-initiated stop. Today that's:
-//! - scale-down (`runtime/docker/lifecycle.rs`)
+//! - scale-down, via the instance driver's `stop_instance`
+//!   (`runtime/docker/docker_lifecycle.rs`)
 //! - delete / `remove_all_instances` (`runtime/docker/lifecycle.rs`)
 //! - rolling update + health-check eviction, both via `remove_instance`
 //!   (`runtime/docker/docker_lifecycle.rs`)
 //!
 //! Do NOT mark a container when the *container itself* failed (a real crash,
-//! an OOM, an exit). Those must reach `detect_and_count_crashes` so they count
-//! toward `restart_count`.
+//! an OOM, an exit). Those must reach the instance driver's `observe` so they
+//! count toward `restart_count`.
 //!
 //! # TTL
 //!

@@ -7,6 +7,7 @@ pub(crate) mod health_check;
 pub(crate) mod health_check_logs;
 pub(crate) mod namespace;
 pub(crate) mod query;
+pub(crate) mod restart_state;
 pub(crate) mod secret;
 pub(crate) mod token;
 pub(crate) mod users;

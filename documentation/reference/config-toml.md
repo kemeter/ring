@@ -14,6 +14,7 @@ A context describes one client→server connection; it has no business deciding 
 ```toml
 [server]                                  # daemon config (shared)
 [server.scheduler]                        # optional
+[server.restart]                          # optional
 [server.dashboard]                        # optional
 [server.exec]                             # opt-in: enabled = true
 [server.telemetry.traces]                 # opt-in: enabled = true
@@ -71,6 +72,20 @@ The daemon's own configuration, shared by every context in the file. All subsect
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
 | `interval` | int (seconds) | no | `10` | Reconciliation tick interval. Overridden by `RING_SCHEDULER_INTERVAL` if set |
+
+### `[server.restart]`
+
+How the scheduler restarts a failed worker. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy). Durations accept `s`, `m`, `h` and `d` (`"10s"`, `"5m"`, `"1h30m"`). A value Ring cannot parse stops the server at startup.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `base` | duration | no | `"10s"` | Upper bound of the delay before the first retry |
+| `cap` | duration | no | `"5m"` | Upper bound of the delay between two retries, however many failed. Must not be lower than `base` |
+| `stable_after` | duration | no | `"10m"` | Uninterrupted running time after which the attempt counter resets |
+| `on_exhaustion` | string | no | `"backoff"` | `"backoff"` keeps retrying at `cap` forever; `"fail"` marks the worker `failed` once its failures exceed `max_attempts` |
+| `max_attempts` | int | no | `5` | Only read when `on_exhaustion = "fail"` |
+
+Applies to workers on Docker and Podman. Other runtimes and jobs still give up after 5 failed attempts.
 
 ### `[server.dashboard]`
 

@@ -104,6 +104,53 @@ pub(crate) async fn list_running_instances_grouped(
     grouped
 }
 
+/// Whether a container is live (`Some(true)`), has ended (`Some(false)`), or is
+/// on its way out and belongs to neither (`None`).
+///
+/// A container stuck in `created` has ended: Docker accepted the spec but it
+/// never ran, and counting it as live would hide the failure.
+fn liveness(state: Option<&ContainerSummaryStateEnum>) -> Option<bool> {
+    match state? {
+        ContainerSummaryStateEnum::RUNNING
+        | ContainerSummaryStateEnum::RESTARTING
+        | ContainerSummaryStateEnum::PAUSED => Some(true),
+        ContainerSummaryStateEnum::EXITED
+        | ContainerSummaryStateEnum::DEAD
+        | ContainerSummaryStateEnum::CREATED => Some(false),
+        ContainerSummaryStateEnum::REMOVING | ContainerSummaryStateEnum::EMPTY => None,
+    }
+}
+
+/// The containers of a deployment split into live and ended ones, in a single
+/// list call.
+pub(crate) async fn list_live_and_ended(docker: &Docker, id: &str) -> (Vec<String>, Vec<String>) {
+    let mut live = Vec::new();
+    let mut ended = Vec::new();
+
+    match docker
+        .list_containers(Some(build_list_options("all")))
+        .await
+    {
+        Ok(containers) => {
+            for container in containers {
+                if let Some(labels) = &container.labels
+                    && labels.get(super::RING_DEPLOYMENT_LABEL).map(String::as_str) == Some(id)
+                    && let Some(container_id) = container.id
+                {
+                    match liveness(container.state.as_ref()) {
+                        Some(true) => live.push(container_id),
+                        Some(false) => ended.push(container_id),
+                        None => {}
+                    }
+                }
+            }
+        }
+        Err(e) => debug!("Docker list instances error: {}", e),
+    }
+
+    (live, ended)
+}
+
 pub(crate) async fn list_instances_with_names(
     docker: &Docker,
     id: String,
@@ -140,6 +187,21 @@ pub(crate) async fn list_instances_with_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn liveness_splits_live_from_ended() {
+        use ContainerSummaryStateEnum::*;
+        for state in [RUNNING, RESTARTING, PAUSED] {
+            assert_eq!(liveness(Some(&state)), Some(true), "{state:?}");
+        }
+        for state in [EXITED, DEAD, CREATED] {
+            assert_eq!(liveness(Some(&state)), Some(false), "{state:?}");
+        }
+        for state in [REMOVING, EMPTY] {
+            assert_eq!(liveness(Some(&state)), None, "{state:?}");
+        }
+        assert_eq!(liveness(None), None);
+    }
 
     #[test]
     fn active_counts_running_and_restarting() {
