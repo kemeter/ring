@@ -85,7 +85,7 @@ How the scheduler restarts a failed worker. See [Reconciliation → restart poli
 | `on_exhaustion` | string | no | `"backoff"` | `"backoff"` keeps retrying at `cap` forever; `"fail"` marks the worker `failed` once its failures exceed `max_attempts` |
 | `max_attempts` | int | no | `5` | Only read when `on_exhaustion = "fail"` |
 
-Applies to workers on Docker and Podman. Other runtimes and jobs still give up after 5 failed attempts.
+Applies on Docker and Podman; a manifest can override any key for one deployment with its [`restart`](/documentation/reference/manifest#restart) block. On the other runtimes, workers and jobs still give up after 5 failed attempts.
 
 ### `[server.dashboard]`
 

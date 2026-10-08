@@ -64,8 +64,8 @@ A `kind: job` runs one instance to completion (`replicas` is ignored).
 ```
 pending → creating → running ──→ completed   (exit 0 / clean guest shutdown)
                           │
-                          ├──→ failed         (non-zero exit, OOM, signal, host-side timeout)
-                          └──→ failed         (5 failed starts)
+                          └──→ failed         (non-zero exit, OOM, signal; once
+                                               `restart.backoff_limit` more runs failed too)
 ```
 
 - On Cloud Hypervisor the host can't read the guest's exit code, so any clean VM shutdown is `completed`. Use a worker if you need precise exit-code semantics on CH.
@@ -87,7 +87,9 @@ Without any readiness check, the legacy behaviour is preserved: `running` as soo
 
 On **Docker and Podman**, a worker is never abandoned. Each failure pushes its next start out on a randomized exponential backoff, from up to 10 s after the first failure to at most 5 minutes, and the counter resets after 10 minutes of uninterrupted running. Failures that need an operator (a missing config, a rejected spec, an exit code `126`/`127`) wait up to 5 minutes from the first attempt on, and are still retried, so fixing the cause is picked up without a re-apply. The backoff is stored in the database and survives a `ring server` restart. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy) and [`[server.restart]`](/documentation/reference/config-toml#server-restart).
 
-On **containerd, Cloud Hypervisor and Firecracker**, and for **jobs** on every runtime, the previous budget still applies: once `restart_count` reaches 5, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops retrying until the manifest is re-applied. Failures that cannot fix themselves (a missing image, config or firmware, a rejected spec) exhaust the budget at once.
+A **job** on Docker and Podman completes on exit 0. A run that exits non-zero fails it, unless its manifest sets `restart.backoff_limit`, in which case it is run again up to that many times on the same backoff. A job that cannot start (an image that cannot be pulled, a missing config, not enough memory) ran nothing, so it is retried without limit and does not count against `backoff_limit`. See [`restart`](/documentation/reference/manifest#restart).
+
+On **containerd, Cloud Hypervisor and Firecracker**, the previous budget still applies: once `restart_count` reaches 5, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops retrying until the manifest is re-applied. Failures that cannot fix themselves (a missing image, config or firmware, a rejected spec) exhaust the budget at once.
 
 Health-check failure counters live in memory only, so each `(deployment, instance, check)` triple starts back at zero after a server restart.
 

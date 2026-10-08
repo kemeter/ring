@@ -118,7 +118,7 @@ It has no I/O and is tested exhaustively without a runtime.
 | Kind | Restart on | Exhaustion |
 |---|---|---|
 | `worker` | Any exit, any start error | Never. Keeps retrying at the backoff cap. |
-| `job` | Non-zero exit, start error | `failed` after `backoff_limit` attempts (default 6, as Kubernetes) |
+| `job` | Non-zero exit, start error | `failed` once runs that exited non-zero exceed `backoff_limit` (default 0). Start errors never exhaust a job |
 
 A worker exiting `0` is restarted like any other exit. Only a job can complete.
 
@@ -150,7 +150,7 @@ on_exhaustion = "backoff"
 max_attempts = 5            # only read when on_exhaustion = "fail"
 ```
 
-Jobs take `backoff_limit` from their manifest.
+Jobs take `backoff_limit` from the manifest's `restart` block. It defaults to 0, not to Kubernetes' 6: a job that half-ran (a migration, a dump) is not safe to run again unless its author says so. A start error, on the other hand, never counts against it: nothing ran, so the job is retried on the backoff curve without limit, as Kubernetes keeps a pod in `ImagePullBackOff` without counting it.
 
 **Per-deployment overrides**
 
