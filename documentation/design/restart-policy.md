@@ -152,6 +152,28 @@ max_attempts = 5            # only read when on_exhaustion = "fail"
 
 Jobs take `backoff_limit` from their manifest.
 
+**Per-deployment overrides**
+
+A manifest can override any of these settings for one deployment with an optional `restart` block. Keys left out fall back to the server configuration, key by key:
+
+```yaml
+restart:
+  cap: 30s                  # a critical worker that should come back quickly
+  stable_after: 30m         # or a slow-starting one
+  on_exhaustion: fail       # or an optional one that should stop rather than retry
+  max_attempts: 3
+```
+
+The policy module never reads the configuration itself: it receives a resolved `RestartPolicy`, built from the server defaults with the manifest's `restart` block merged over them. Overrides are validated at apply time (`base <= cap`, `max_attempts >= 1`, durations > 0).
+
+**Liveness restarts count**
+
+A liveness check with `on_failure: restart` currently removes the instance without counting a restart, so an instance killed by its liveness check every few seconds is never throttled. Under this proposal a liveness kill is a termination like any other: it increments the attempt counter and the replacement waits on the backoff curve, as Kubernetes does.
+
+**No special case for `insufficient_resources`**
+
+It follows the same curve and cap as every other reason. On a permanently undersized host, that is one failed attempt every five minutes per deployment, which is cheap and keeps the policy uniform.
+
 ### 3. Restart state is persisted
 
 New columns on `deployment`:
@@ -238,19 +260,13 @@ Clients of the API (CLI, dashboard, webhook consumers) must be updated together 
 
 Each step is a separate pull request that builds, passes the suite, and can ship on its own.
 
-1. **Policy module.** `scheduler/restart.rs` with its tests: backoff curve and jitter bounds, reset after `stable_after`, worker vs job exhaustion, `on_exhaustion = "fail"`, start-error starting points. Not wired yet.
-2. **Persisted restart state.** Migration for `next_attempt_at`, `running_since`, `last_termination`. The scheduler reads and writes them; `RetryBackoff` and `HealthyWindow` are removed.
-3. **Runtime interface.** `observe` / `start_instance` / `stop_instance`, implemented for Docker and Podman. Scaling, rolling updates and the readiness gate move into the scheduler. The policy module is wired in for these runtimes.
+1. **Policy module.** `scheduler/restart.rs` with its tests: backoff curve and jitter bounds, reset after `stable_after`, worker vs job exhaustion, `on_exhaustion = "fail"`, start-error starting points, resolution of a manifest override over the server defaults. Not wired yet.
+2. **Persisted restart state.** Migration for `next_attempt_at`, `running_since`, `last_termination`. The scheduler reads and writes them; `RetryBackoff` and `HealthyWindow` are removed. The `[restart]` server section and the manifest `restart` block are parsed and validated.
+3. **Runtime interface.** `observe` / `start_instance` / `stop_instance`, implemented for Docker and Podman. Scaling, rolling updates and the readiness gate move into the scheduler. The policy module is wired in for these runtimes, and liveness kills are counted as restarts.
 4. **Remaining runtimes.** containerd, then Firecracker and Cloud Hypervisor, each deleting its own `handle_*` and restart-count code.
 5. **Phase and reason.** Migration of the status column, API, CLI, dashboard and webhook changes, documentation (`deployment-status-lifecycle.md`, `reconciliation.md`, troubleshooting).
 6. **Image digest reuse and start rate limiting.**
 7. **Metrics and events.**
-
-## Open questions
-
-- **Per-deployment overrides.** Should a manifest be able to override `base`, `cap` or `on_exhaustion` for one worker, as Kubernetes is starting to allow? Proposed: not in the first iteration.
-- **Liveness `on_failure: restart`.** It currently removes the instance without counting a restart. Kubernetes counts a liveness kill as a restart and backs off. Proposed: count it, so an instance that is restarted by its liveness check every few seconds is throttled like any crash loop.
-- **`insufficient_resources`.** Retrying at the cap is cheap, but a host that is permanently undersized will log one failure every five minutes per deployment. Acceptable, or should this reason have its own, longer cap?
 
 ## References
 
