@@ -1129,8 +1129,13 @@ pub(crate) async fn deploy(
                 // downtime, but deterministic and loop-free.
                 let publishes_host_port = deployment.ports.iter().any(|p| p.published > 0);
 
+                // A job runs once and has no instance left to hand traffic
+                // over to: it always replaces its predecessor.
+                let is_job = deployment.kind == "job";
+
                 // Rolling update: keep old deployment running if conditions are met
                 if !force
+                    && !is_job
                     && has_health_checks
                     && deployments_list.len() == 1
                     && !publishes_host_port
@@ -1155,6 +1160,8 @@ pub(crate) async fn deploy(
                     // and `host_port_published` is the rolling-incompatible case.
                     replace_reason = Some(if force {
                         "force"
+                    } else if is_job {
+                        "job"
                     } else if !has_health_checks {
                         "no_health_checks"
                     } else if deployments_list.len() > 1 {
@@ -1241,6 +1248,10 @@ pub(crate) async fn deploy(
         let message = match reason {
             "force" => format!(
                 "Replaced {} immediately because force=true was set on the request — rolling update skipped",
+                replaced
+            ),
+            "job" => format!(
+                "Replaced {} immediately because a job runs once — rolling update applies to workers only",
                 replaced
             ),
             "no_health_checks" => format!(
@@ -2932,6 +2943,59 @@ mod tests {
             .await
             .json();
         assert_eq!(parent["status"], "running");
+    }
+
+    #[tokio::test]
+    async fn a_job_replaces_its_predecessor_instead_of_rolling() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let job = |image: &str| {
+            json!({
+                "runtime": "docker",
+                "kind": "job",
+                "name": "migrate",
+                "namespace": "jobs-ns",
+                "image": image,
+                "health_checks": [{
+                    "type": "command",
+                    "command": "/bin/true",
+                    "interval": "10s",
+                    "timeout": "2s",
+                    "on_failure": "restart"
+                }]
+            })
+        };
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&job("migrate:1"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&job("migrate:2"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let second: serde_json::Value = response.json();
+
+        assert!(second["parent_id"].is_null(), "a job never rolls: {second}");
+        let (status,): (String,) = sqlx::query_as("SELECT status FROM deployment WHERE id = ?")
+            .bind(&first_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "deleted");
     }
 
     #[tokio::test]
