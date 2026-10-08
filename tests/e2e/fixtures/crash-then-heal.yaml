@@ -4,14 +4,13 @@ deployments:
     namespace: ring-e2e
     runtime: docker
     image: alpine:3.19
-    # Phase 1 windowed restart_count reset. Docker re-runs the SAME command on
+    # Windowed restart_count reset. Docker re-runs the SAME command on
     # every (re)spawn, so the "crash a few times then stay healthy" behaviour is
     # driven by state on a host bind mount: each start increments a counter in
     # /state/count. While count <= 3 the container exits 1 (a crash Ring counts
     # toward restart_count); on the 4th start it stops crashing and sleeps
-    # forever (stays Running). Once it has been continuously Running past the
-    # anti-flap window (DEFAULT_MIN_HEALTHY_TIME = 10s), the scheduler forgives
-    # the accrued restart_count and resets it to 0.
+    # forever (stays Running). Once it has been continuously Running for the
+    # restart policy's `stable_after`, the scheduler resets restart_count to 0.
     command:
       - "sh"
       - "-c"

@@ -19,12 +19,13 @@
 # where the old gate left restart_count monotonic.
 #
 # Invariants:
-#   1. The crash phase registers: restart_count climbs to 3 (< MAX = 5), so a
-#      *windowed* reset is exercised rather than CrashLoopBackOff.
+#   1. The crash phase registers: restart_count climbs to 3.
 #   2. The worker then settles in `creating` (readiness can't pass on host net)
 #      and STAYS there — it must never reach `running` or `failed`.
-#   3. After the anti-flap window elapses the scheduler forgives the accrued
-#      count: restart_count is reset to 0 while the status is still `creating`.
+#   3. After the restart policy's `stable_after` the scheduler forgives the
+#      accrued count: restart_count is reset to 0 while the status is still
+#      `creating`. A short policy (retries at most 2s apart, reset after 15s)
+#      keeps the test fast.
 
 set -euo pipefail
 
@@ -43,15 +44,18 @@ STATE_DIR="/tmp/ring-e2e-t43"
 rm -rf "$STATE_DIR"
 mkdir -p "$STATE_DIR"
 
+export RING_EXTRA_CONFIG='[server.restart]
+base = "1s"
+cap = "2s"
+stable_after = "15s"'
+
 start_ring
 ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/crash-then-stuck-creating.yaml"
 
 # Invariant 1: the container crashes 3 times. Wait for restart_count to reach 3,
-# which proves the crash phase registered. It must stop at 3 (the 4th start stays
-# up), well short of MAX_RESTART_COUNT (5) — otherwise we couldn't test a
-# *windowed* reset, only a CrashLoopBackOff.
+# which proves the crash phase registered. It stops at 3: the 4th start stays up.
 log "waiting for the crash phase to accrue restart_count=3..."
 REACHED=0
 for _ in $(seq 1 60); do
@@ -67,13 +71,13 @@ if [ "$REACHED" -ne 1 ]; then
 fi
 log "crash phase registered: restart_count=$RC"
 
-if [ "${RC:-0}" -ge 5 ]; then
-  fail "restart_count reached the CrashLoopBackOff bound ($RC); cannot test the windowed reset"
+if [ "${RC:-0}" -gt 3 ]; then
+  fail "restart_count reached $RC; the fixture crashes exactly 3 times"
 fi
 
 # Invariant 2: the 4th container stays up but can never pass readiness on host
 # networking, so it settles in `creating`. Wait for that, then confirm it STAYS
-# there past the anti-flap window (DEFAULT_MIN_HEALTHY_TIME = 10s) — it must
+# there past `stable_after` (15s) — it must
 # never be promoted to `running` nor failed by the rollout deadline (deferred by
 # the 300s start_period).
 wait_deployment_status "$NS" "$NAME" "creating" 60

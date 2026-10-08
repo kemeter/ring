@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# T41: Phase 3 fast-fail on a non-retryable exit code. A container that RUNS but
-# exec's a binary that doesn't exist exits 127 (command not found). 127 is
-# Terminal in the classifier, so the deployment must fail FAST — jump straight
-# to a terminal status without burning all MAX_RESTART_COUNT (5) restart cycles.
+# T41: a non-retryable exit code. A container that RUNS but exec's a binary
+# that doesn't exist exits 127 (command not found). The program can never run
+# until someone fixes the image or the command, so the worker lands on
+# `create_container_error` at once and its next attempt waits up to the
+# backoff cap (5 minutes by default) instead of climbing the curve from 10s.
 #
 # This is distinct from t23: there Docker `start` itself fails (a create/start
 # boundary error). Here `create`/`start` succeed and the container actually runs;
-# it is the EXIT CODE at the crash boundary (127) that is non-retryable. We
-# assert convergence happens in noticeably FEWER cycles than the full
-# crash-loop path: very few containers spawned, and restart_count does not have
-# to climb tick-by-tick to 5.
+# it is the EXIT CODE at the crash boundary (127) that is non-retryable.
 
 set -euo pipefail
 
@@ -17,18 +15,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T41: exit 127 must fail fast, not burn the whole restart budget =="
+log "== T41: exit 127 lands on create_container_error and waits for an operator =="
 
 start_ring
 ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/command-not-found.yaml"
 
-# Fast-fail should land on a terminal status within a handful of ticks. 30s is
-# far short of the ~5+ ticks the slow restart-count path needs but is generous
-# for the fast path; it also lets us assert "few containers spawned" before a
-# slow loop could have created many.
-log "waiting 30s for the fast-fail terminal convergence..."
+log "waiting 30s..."
 sleep 30
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "command-not-found")
@@ -46,20 +40,19 @@ STATUS=$("$RING_BIN" deployment list --output json \
 
 log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
 
-# 1) Must have reached a terminal status quickly. The classifier maps a 127 exit
-#    to CreateContainerError; CrashLoopBackOff is also acceptable as a terminal
-#    convergence, but the point is it must be terminal, not still trying.
-case "$STATUS" in
-  create_container_error|crash_loop_back_off) ;;
-  *) fail "expected a terminal status (create_container_error / crash_loop_back_off) via fast-fail, got '$STATUS'" ;;
-esac
+# 1) The exit code is recognised as needing an operator.
+if [ "$STATUS" != "create_container_error" ]; then
+  fail "expected create_container_error after an exit 127, got '$STATUS'"
+fi
 
-# 2) Fast-fail means FEWER containers spawned than the slow path. The slow path
-#    (counting one crash per tick to 5) would spawn at least ~5 containers over
-#    several ticks; the fast path lands terminal almost immediately. Require the
-#    count to stay small.
-if [ "$TOTAL_CONTAINERS" -gt 3 ]; then
-  fail "too many containers spawned ($TOTAL_CONTAINERS) — exit 127 is NOT failing fast (burning restart cycles)"
+# 2) Its retries start at the cap: in 30s, at most a couple of attempts.
+if [ "${RESTART_COUNT:-0}" -lt 1 ] || [ "$RESTART_COUNT" -gt 3 ]; then
+  fail "expected 1 to 3 attempts in 30s, got restart_count=$RESTART_COUNT"
+fi
+
+# 3) The dead container is removed once its exit is recorded.
+if [ "$TOTAL_CONTAINERS" -gt 1 ]; then
+  fail "$TOTAL_CONTAINERS containers left for the deployment — crashed containers are not removed"
 fi
 
 log "== T41: PASS =="

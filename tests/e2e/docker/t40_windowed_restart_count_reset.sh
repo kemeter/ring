@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# T40: Phase 1 windowed restart_count reset. A worker that crashes a few times
-# (N < MAX_RESTART_COUNT) and then runs healthy past the anti-flap window must
-# have its restart_count forgiven (reset to 0), so an isolated later crash
-# doesn't trip CrashLoopBackOff.
+# T40: windowed restart_count reset. A worker that crashes a few times and then
+# runs without a failure for the restart policy's `stable_after` must have its
+# restart_count reset to 0, so a later crash starts back at the shortest delay.
+# A short policy (retries at most 2s apart, reset after 15s) keeps it fast.
 #
 # Docker re-runs the SAME command on every (re)spawn, so the "crash then heal"
 # behaviour is driven by state on a host bind mount: each start increments a
@@ -22,6 +22,11 @@ source "$SCRIPT_DIR/../lib.sh"
 
 log "== T40: restart_count is forgiven after a healthy window =="
 
+export RING_EXTRA_CONFIG='[server.restart]
+base = "1s"
+cap = "2s"
+stable_after = "15s"'
+
 # Host-side state directory the container increments a counter in. Start clean
 # so the counter begins at 0 even across re-runs of this test.
 STATE_DIR="/tmp/ring-e2e-t40"
@@ -34,9 +39,7 @@ ring_login
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/crash-then-heal.yaml"
 
 # Phase 1: the container crashes 3 times. Wait for restart_count to reach 3,
-# which proves the crash phase registered. It must stop at 3 (the 4th start
-# stays up), well short of MAX_RESTART_COUNT (5) — otherwise we couldn't test a
-# *windowed* reset, only a CrashLoopBackOff.
+# which proves the crash phase registered. It stops at 3: the 4th start stays up.
 log "waiting for the crash phase to accrue restart_count=3..."
 REACHED=0
 for _ in $(seq 1 60); do
@@ -52,14 +55,11 @@ if [ "$REACHED" -ne 1 ]; then
 fi
 log "crash phase registered: restart_count=$RC"
 
-# It must not have blown past the CrashLoopBackOff bound; if it did, the windowed
-# reset can't be exercised.
-if [ "${RC:-0}" -ge 5 ]; then
-  fail "restart_count reached the CrashLoopBackOff bound ($RC); cannot test the windowed reset"
+if [ "${RC:-0}" -gt 3 ]; then
+  fail "restart_count reached $RC; the fixture crashes exactly 3 times"
 fi
 
-# Phase 2: the 4th container stays up (sleep 3600). Wait for it to be Running
-# and STAY Running, then let the anti-flap window (DEFAULT_MIN_HEALTHY_TIME=10s)
+# Phase 2: the 4th container stays up (sleep 3600). Let `stable_after` (15s)
 # elapse so the scheduler forgives the accrued count. 40s is generous headroom.
 log "waiting 40s for the worker to stay healthy past the window and forgive restart_count..."
 sleep 40
