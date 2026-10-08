@@ -111,6 +111,7 @@ mod tests {
             pending_events: vec![],
             parent_id: None,
             network: None,
+            restart: None,
         }
     }
 

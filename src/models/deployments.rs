@@ -439,6 +439,57 @@ pub(crate) fn parse_memory_string(s: &str) -> Result<i64, String> {
     Ok((value * multiplier as f64) as i64)
 }
 
+/// The `restart` block of a manifest: how this deployment is restarted, key by
+/// key over the server's `[server.restart]`. Durations take `s`, `m`, `h` and
+/// `d` units, like the server section.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RestartSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) stable_after: Option<String>,
+    /// Workers only: `"backoff"` or `"fail"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) on_exhaustion: Option<String>,
+    /// Workers only, read when `on_exhaustion` is `"fail"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_attempts: Option<u32>,
+    /// Jobs only: how many times a run that exited non-zero is run again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) backoff_limit: Option<u32>,
+}
+
+impl RestartSpec {
+    /// The policy for this deployment: `server` with this block's keys over
+    /// it, validated as a whole.
+    pub(crate) fn resolve(
+        &self,
+        server: &crate::scheduler::restart::RestartPolicy,
+    ) -> Result<crate::scheduler::restart::RestartPolicy, String> {
+        let duration = |key: &str, value: &Option<String>| {
+            value
+                .as_deref()
+                .map(|v| parse_interval(v).map_err(|e| format!("restart.{key}: {e}")))
+                .transpose()
+        };
+        let overrides = crate::scheduler::restart::RestartOverride {
+            base: duration("base", &self.base)?,
+            cap: duration("cap", &self.cap)?,
+            stable_after: duration("stable_after", &self.stable_after)?,
+            on_exhaustion: self
+                .on_exhaustion
+                .as_deref()
+                .map(|v| v.parse().map_err(|e| format!("restart.on_exhaustion: {e}")))
+                .transpose()?,
+            max_attempts: self.max_attempts,
+        };
+        server.with_override(&overrides).map_err(|e| e.to_string())
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct Deployment {
     pub(crate) id: String,
@@ -481,6 +532,45 @@ pub(crate) struct Deployment {
     pub(crate) parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) network: Option<NetworkConfig>,
+    /// The manifest's `restart` block, `None` when it has none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) restart: Option<RestartSpec>,
+}
+
+impl Deployment {
+    /// The restart policy for this deployment, or the server's when its
+    /// `restart` block no longer validates (it did when it was applied).
+    pub(crate) fn restart_policy(
+        &self,
+        server: &crate::scheduler::restart::RestartPolicy,
+    ) -> crate::scheduler::restart::RestartPolicy {
+        match &self.restart {
+            Some(spec) => spec.resolve(server).unwrap_or_else(|e| {
+                warn!(
+                    "Invalid restart block on deployment {}: {} — using the server policy",
+                    self.id, e
+                );
+                *server
+            }),
+            None => *server,
+        }
+    }
+
+    /// How this deployment is run, for the restart policy.
+    pub(crate) fn workload_kind(&self) -> crate::scheduler::restart::WorkloadKind {
+        use crate::scheduler::restart::{DEFAULT_BACKOFF_LIMIT, WorkloadKind};
+        if self.kind == "job" {
+            WorkloadKind::Job {
+                backoff_limit: self
+                    .restart
+                    .as_ref()
+                    .and_then(|r| r.backoff_limit)
+                    .unwrap_or(DEFAULT_BACKOFF_LIMIT),
+            }
+        } else {
+            WorkloadKind::Worker
+        }
+    }
 }
 
 impl Deployment {
@@ -546,6 +636,7 @@ struct DeploymentRow {
     parent_id: Option<String>,
     ports: Option<String>,
     network_mode: Option<String>,
+    restart: Option<String>,
 }
 
 fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
@@ -641,6 +732,10 @@ impl From<DeploymentRow> for Deployment {
                 })
                 .unwrap_or_default(),
             pending_events: vec![],
+            restart: row
+                .restart
+                .filter(|s| !s.is_empty())
+                .and_then(|s| serde_json::from_str(&s).ok()),
             parent_id: row.parent_id,
             network: row.network_mode.as_deref().and_then(|s| {
                 NetworkMode::from_str(s)
@@ -661,7 +756,7 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode
+    replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
@@ -751,12 +846,16 @@ pub(crate) async fn create(
         .network
         .as_ref()
         .map(|n| n.mode.as_str().to_string());
+    let restart_json = deployment
+        .restart
+        .as_ref()
+        .map(|r| serde_json::to_string(r).unwrap_or_else(|_| "null".to_string()));
 
     sqlx::query(
         "INSERT INTO deployment (
             id, created_at, status, restart_count, namespace, name, image,
-            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
@@ -781,6 +880,7 @@ pub(crate) async fn create(
     .bind(&deployment.parent_id)
     .bind(&ports_json)
     .bind(&network_mode)
+    .bind(&restart_json)
     .execute(pool)
     .await?;
 
@@ -1062,6 +1162,56 @@ mod tests {
     }
 
     #[test]
+    fn restart_block_overrides_the_server_policy_key_by_key() {
+        use crate::scheduler::restart::{OnExhaustion, RestartPolicy};
+        let spec = RestartSpec {
+            cap: Some("30s".to_string()),
+            on_exhaustion: Some("fail".to_string()),
+            ..Default::default()
+        };
+        let server = RestartPolicy::default();
+        assert_eq!(
+            spec.resolve(&server),
+            Ok(RestartPolicy {
+                cap: Duration::from_secs(30),
+                on_exhaustion: OnExhaustion::Fail,
+                ..server
+            })
+        );
+    }
+
+    #[test]
+    fn restart_block_is_checked_against_the_server_values() {
+        let spec = RestartSpec {
+            cap: Some("5s".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            spec.resolve(&crate::scheduler::restart::RestartPolicy::default())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_job_is_not_run_again_unless_its_manifest_says_so() {
+        use crate::scheduler::restart::WorkloadKind;
+        let mut job = worker("j", 0);
+        job.kind = "job".to_string();
+        assert_eq!(job.workload_kind(), WorkloadKind::Job { backoff_limit: 0 });
+        job.restart = Some(RestartSpec {
+            backoff_limit: Some(3),
+            ..Default::default()
+        });
+        assert_eq!(job.workload_kind(), WorkloadKind::Job { backoff_limit: 3 });
+        assert_eq!(worker("w", 0).workload_kind(), WorkloadKind::Worker);
+    }
+
+    #[test]
+    fn restart_block_rejects_unknown_keys() {
+        assert!(serde_json::from_str::<RestartSpec>(r#"{"backof_limit": 3}"#).is_err());
+    }
+
+    #[test]
     fn a_deployment_without_a_policy_is_never_autoscaled() {
         // The opt-in guarantee, at the one place every runtime reads. A
         // deployment with no `autoscale` block must reconcile against exactly
@@ -1222,6 +1372,7 @@ mod tests {
             pending_events: vec![],
             parent_id: None,
             network: None,
+            restart: None,
         }
     }
 

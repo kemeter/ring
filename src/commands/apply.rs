@@ -82,6 +82,10 @@ struct Deployment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     autoscale: Option<Autoscale>,
 
+    /// How the deployment is restarted, over the server's `[server.restart]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    restart: Option<Restart>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     health_checks: Vec<HealthCheck>,
 
@@ -181,6 +185,26 @@ struct Autoscale {
     min: u32,
     max: u32,
     target_cpu: f64,
+}
+
+/// The `restart` block as written in a manifest. Mirrors the API payload,
+/// which validates the values. Unknown keys are refused here already, so a
+/// typo is not silently dropped on the way to the server.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct Restart {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cap: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on_exhaustion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_attempts: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backoff_limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1077,6 +1101,7 @@ mod tests {
             command: Vec::new(),
             resources: None,
             autoscale: None,
+            restart: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
             network: None,
@@ -1275,6 +1300,44 @@ deployments:
     }
 
     #[test]
+    fn restart_block_is_sent_as_written() {
+        let yaml_content = r#"
+deployments:
+  backup:
+    name: backup
+    kind: job
+    image: myapp:latest
+    restart:
+      backoff_limit: 3
+      cap: 1m
+  api:
+    name: api
+    image: myapp:latest
+"#;
+        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let payload = serde_json::to_value(&config.deployments["backup"]).unwrap();
+        assert_eq!(
+            payload["restart"],
+            serde_json::json!({ "backoff_limit": 3, "cap": "1m" })
+        );
+        let payload = serde_json::to_string(&config.deployments["api"]).unwrap();
+        assert!(!payload.contains("restart"), "{payload}");
+    }
+
+    #[test]
+    fn a_typo_in_the_restart_block_is_refused() {
+        let yaml_content = r#"
+deployments:
+  backup:
+    name: backup
+    image: myapp:latest
+    restart:
+      backof_limit: 3
+"#;
+        assert!(serde_yaml::from_str::<ConfigFile>(yaml_content).is_err());
+    }
+
+    #[test]
     fn a_deployment_without_autoscale_omits_it_from_the_payload() {
         // `skip_serializing_if` matters here: sending `"autoscale": null` would
         // still be an absent policy server-side, but keeping the payload shape
@@ -1378,6 +1441,7 @@ deployments:
             ],
             resources: None,
             autoscale: None,
+            restart: None,
             health_checks: Vec::new(),
             ports: Vec::new(),
             network: None,
