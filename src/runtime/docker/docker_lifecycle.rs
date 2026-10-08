@@ -158,14 +158,12 @@ impl RuntimeLifecycle for DockerLifecycle {
     async fn apply(
         &self,
         deployment: Deployment,
-        resolved_mounts: Vec<ResolvedMount>,
+        _resolved_mounts: Vec<ResolvedMount>,
     ) -> Deployment {
         super::lifecycle::apply(
             deployment,
             self.docker.clone(),
-            resolved_mounts,
             self.intentional_shutdowns.clone(),
-            self.host_auth.clone(),
         )
         .await
     }
@@ -399,6 +397,7 @@ mod tests {
             pending_events: vec![],
             parent_id: None,
             network: None,
+            restart: None,
         }
     }
 

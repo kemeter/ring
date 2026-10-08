@@ -1,4 +1,4 @@
-//! Reconciliation of workers on runtimes that implement [`InstanceDriver`].
+//! Reconciliation of deployments on runtimes that implement [`InstanceDriver`].
 //!
 //! The runtime reports which instances run and which ended; this module decides
 //! what to do about it with the restart policy, and asks the runtime to start
@@ -12,6 +12,9 @@
 //! - Once the instances have run for `stable_after` without a failure, the
 //!   counter resets.
 //! - A worker never gives up unless the policy says `on_exhaustion = "fail"`.
+//! - A job runs one instance. It completes on exit 0 and fails once its runs
+//!   that exited non-zero exceed `backoff_limit`; the instance of a finished job
+//!   is kept, with its logs. A job that cannot start is retried without limit.
 
 use crate::hypervisor::classifier::{
     Disposition, classify_create_error, classify_exit_code, create_error_outcome,
@@ -24,11 +27,13 @@ use crate::scheduler::restart::{self, Decision, Event, RestartPolicy, StartFailu
 use chrono::{DateTime, Utc};
 use rand::Rng;
 
-/// One reconciliation pass over a worker. Returns the deployment with its new
-/// status, instances, `restart_count` and pending events, and updates `state`.
-pub(crate) async fn reconcile_worker(
+/// One reconciliation pass. Returns the deployment with its new status,
+/// instances, `restart_count` and pending events, and updates `state`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn reconcile(
     driver: &dyn InstanceDriver,
     policy: &RestartPolicy,
+    kind: WorkloadKind,
     mut deployment: Deployment,
     resolved_mounts: &[ResolvedMount],
     state: &mut RestartState,
@@ -38,6 +43,7 @@ pub(crate) async fn reconcile_worker(
     let mut counter = restart::RestartState {
         restart_count: deployment.restart_count,
         running_since: state.running_since,
+        run_failures: state.run_failures,
     };
 
     let observation = driver.observe(&deployment).await;
@@ -47,7 +53,7 @@ pub(crate) async fn reconcile_worker(
     for termination in observation.terminated {
         let decision = restart::decide(
             policy,
-            WorkloadKind::Worker,
+            kind,
             &mut counter,
             Event::Exited {
                 exit_code: termination.exit_code,
@@ -55,6 +61,18 @@ pub(crate) async fn reconcile_worker(
             now,
             rng,
         );
+        if decision == Decision::Complete {
+            deployment.status = DeploymentStatus::Completed;
+            deployment.emit_event(
+                "info",
+                "Job completed".to_string(),
+                "scheduler",
+                Some("job_completed"),
+            );
+            state.last_termination = Some(termination);
+            state.next_attempt_at = None;
+            break;
+        }
         deployment.emit_event(
             "error",
             format!(
@@ -81,13 +99,21 @@ pub(crate) async fn reconcile_worker(
             );
             deployment.status = status;
         }
-        driver.discard_instance(&termination.instance_id).await;
+        // A finished job keeps its instance, and the logs with it.
+        let job_done = matches!(kind, WorkloadKind::Job { .. }) && decision == Decision::Fail;
+        if !job_done {
+            driver.discard_instance(&termination.instance_id).await;
+        }
         state.last_termination = Some(termination);
         apply_decision(&mut deployment, state, decision, counter.restart_count);
     }
 
-    if deployment.status == DeploymentStatus::Failed {
+    if matches!(
+        deployment.status,
+        DeploymentStatus::Failed | DeploymentStatus::Completed
+    ) {
         deployment.restart_count = counter.restart_count;
+        state.run_failures = counter.run_failures;
         state.running_since = None;
         return deployment;
     }
@@ -101,6 +127,7 @@ pub(crate) async fn reconcile_worker(
     scale(
         driver,
         policy,
+        kind,
         &mut deployment,
         resolved_mounts,
         state,
@@ -112,7 +139,7 @@ pub(crate) async fn reconcile_worker(
 
     if deployment.instances.is_empty() {
         counter.running_since = None;
-    } else if !failed_this_pass {
+    } else if !failed_this_pass && kind == WorkloadKind::Worker {
         restart::on_running(&mut counter, now);
         if restart::reset_if_stable(policy, &mut counter, now) {
             deployment.emit_event(
@@ -129,6 +156,7 @@ pub(crate) async fn reconcile_worker(
 
     deployment.restart_count = counter.restart_count;
     state.running_since = counter.running_since;
+    state.run_failures = counter.run_failures;
     deployment
 }
 
@@ -145,6 +173,7 @@ pub(crate) fn record_liveness_kills(
     let mut counter = restart::RestartState {
         restart_count: deployment.restart_count,
         running_since: state.running_since,
+        run_failures: state.run_failures,
     };
     for _ in 0..kills {
         let decision = restart::decide(
@@ -165,6 +194,7 @@ pub(crate) fn record_liveness_kills(
 async fn scale(
     driver: &dyn InstanceDriver,
     policy: &RestartPolicy,
+    kind: WorkloadKind,
     deployment: &mut Deployment,
     resolved_mounts: &[ResolvedMount],
     state: &mut RestartState,
@@ -173,9 +203,14 @@ async fn scale(
     rng: &mut (impl Rng + Send),
 ) {
     let current = deployment.instances.len();
-    let target = usize::try_from(deployment.target_replicas()).unwrap_or(usize::MAX);
+    // A job runs exactly one instance, whatever `replicas` says, and a running
+    // one is never stopped to scale down.
+    let target = match kind {
+        WorkloadKind::Job { .. } => 1,
+        WorkloadKind::Worker => usize::try_from(deployment.target_replicas()).unwrap_or(usize::MAX),
+    };
 
-    if current > target {
+    if current > target && kind == WorkloadKind::Worker {
         let Some(instance_id) = deployment.instances.first().cloned() else {
             return;
         };
@@ -196,7 +231,7 @@ async fn scale(
         return;
     }
 
-    if current == target {
+    if current >= target {
         return;
     }
 
@@ -241,14 +276,8 @@ async fn scale(
                 ) => StartFailure::NeedsOperator,
                 _ => StartFailure::Transient,
             };
-            let decision = restart::decide(
-                policy,
-                WorkloadKind::Worker,
-                counter,
-                Event::StartFailed(failure),
-                now,
-                rng,
-            );
+            let decision =
+                restart::decide(policy, kind, counter, Event::StartFailed(failure), now, rng);
             apply_decision(deployment, state, decision, counter.restart_count);
         }
     }
@@ -269,10 +298,7 @@ fn apply_decision(
                 deployment.status = DeploymentStatus::Failed;
                 deployment.emit_event(
                     "error",
-                    format!(
-                        "Giving up after {} failed attempts (on_exhaustion = \"fail\")",
-                        attempts
-                    ),
+                    format!("Giving up after {} failed attempts", attempts),
                     "scheduler",
                     Some("restart_limit_reached"),
                 );
@@ -420,6 +446,7 @@ mod tests {
             pending_events: vec![],
             parent_id: None,
             network: None,
+            restart: None,
         }
     }
 
@@ -431,7 +458,17 @@ mod tests {
         at: DateTime<Utc>,
     ) -> Deployment {
         let mut rng = StdRng::seed_from_u64(7);
-        reconcile_worker(driver, policy, deployment, &[], state, at, &mut rng).await
+        reconcile(
+            driver,
+            policy,
+            WorkloadKind::Worker,
+            deployment,
+            &[],
+            state,
+            at,
+            &mut rng,
+        )
+        .await
     }
 
     fn reasons(d: &Deployment) -> Vec<String> {
@@ -707,6 +744,112 @@ mod tests {
         .await;
 
         assert_eq!(*driver.stopped.lock().unwrap(), ["a"]);
+    }
+
+    async fn job_pass(
+        driver: &FakeDriver,
+        backoff_limit: u32,
+        deployment: Deployment,
+        state: &mut RestartState,
+        at: DateTime<Utc>,
+    ) -> Deployment {
+        let mut rng = StdRng::seed_from_u64(7);
+        reconcile(
+            driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Job { backoff_limit },
+            deployment,
+            &[],
+            state,
+            at,
+            &mut rng,
+        )
+        .await
+    }
+
+    fn job() -> Deployment {
+        let mut d = worker(3);
+        d.kind = "job".to_string();
+        d.status = DeploymentStatus::Pending;
+        d
+    }
+
+    #[tokio::test]
+    async fn a_job_runs_one_instance_whatever_its_replicas() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = job_pass(&driver, 0, job(), &mut state, now()).await;
+        d = job_pass(&driver, 0, d, &mut state, now() + secs(1)).await;
+        assert_eq!(driver.starts(), 1);
+        assert_eq!(d.instances, ["new-1"]);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_exits_zero_completes_and_keeps_its_instance() {
+        let driver = FakeDriver::running(&["j"]);
+        driver.crash("j", Some(0));
+        let mut state = RestartState::default();
+
+        let d = job_pass(&driver, 0, job(), &mut state, now()).await;
+
+        assert_eq!(d.status, DeploymentStatus::Completed);
+        assert!(driver.discarded.lock().unwrap().is_empty());
+        assert!(reasons(&d).contains(&"job_completed".to_string()));
+        assert_eq!(d.restart_count, 0);
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_is_not_run_again_by_default() {
+        let driver = FakeDriver::running(&["j"]);
+        driver.crash("j", Some(1));
+        let mut state = RestartState::default();
+
+        let d = job_pass(&driver, 0, job(), &mut state, now()).await;
+
+        assert_eq!(d.status, DeploymentStatus::Failed);
+        assert!(driver.discarded.lock().unwrap().is_empty(), "logs are kept");
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(state.run_failures, 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_job_is_run_again_up_to_its_backoff_limit() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = job();
+        let mut t = now();
+        for run in 1..=3 {
+            t = state.next_attempt_at.unwrap_or(t).max(t) + secs(1);
+            d = job_pass(&driver, 2, d, &mut state, t).await;
+            let id = driver.running.lock().unwrap().last().cloned().unwrap();
+            driver.crash(&id, Some(1));
+            t += secs(1);
+            d = job_pass(&driver, 2, d, &mut state, t).await;
+            assert_eq!(state.run_failures, run);
+        }
+        assert_eq!(driver.starts(), 3);
+        assert_eq!(d.status, DeploymentStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn a_job_that_cannot_start_keeps_retrying() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = job();
+        let mut t = now();
+        for _ in 0..10 {
+            driver.fail_starts_with(RuntimeError::ImagePullFailed("registry down".to_string()));
+            t = state.next_attempt_at.unwrap_or(t).max(t) + secs(1);
+            d = job_pass(&driver, 0, d, &mut state, t).await;
+            assert_ne!(d.status, DeploymentStatus::Failed);
+        }
+        assert_eq!(d.restart_count, 10);
+        assert_eq!(state.run_failures, 0);
+
+        // The registry is back: the job finally runs.
+        t = state.next_attempt_at.unwrap_or(t).max(t) + secs(1);
+        job_pass(&driver, 0, d, &mut state, t).await;
+        assert_eq!(driver.starts(), 1);
     }
 
     #[test]

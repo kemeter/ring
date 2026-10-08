@@ -301,11 +301,11 @@ async fn log_apply_timeout(pool: &SqlitePool, deployment_id: &str, apply_timeout
     }
 }
 
-/// Reconcile a worker on a runtime that reports its instances, applying the
-/// restart policy here rather than in the runtime. Bounded like
+/// Reconcile a deployment on a runtime that reports its instances, applying
+/// the restart policy here rather than in the runtime. Bounded like
 /// [`apply_runtime`].
 #[tracing::instrument(
-    name = "scheduler.reconcile_worker",
+    name = "scheduler.reconcile",
     skip_all,
     fields(
         otel.kind = "internal",
@@ -328,9 +328,11 @@ async fn reconcile_driven(
     rng: &mut rand::rngs::StdRng,
 ) -> Option<Deployment> {
     let id = resolved.id.clone();
-    let pass = reconcile::reconcile_worker(
+    let kind = resolved.workload_kind();
+    let pass = reconcile::reconcile(
         driver,
         policy,
+        kind,
         resolved,
         &resolved_mounts,
         state,
@@ -1841,17 +1843,16 @@ pub(crate) async fn schedule(
                 continue;
             }
 
-            // Workers on an instance driver are reconciled by the scheduler,
-            // which applies the restart policy itself. Everything else still
-            // goes through the runtime's `apply`.
-            let driver = runtime
-                .instance_driver()
-                .filter(|_| deployment.kind == "worker");
+            // Deployments on an instance driver are reconciled by the
+            // scheduler, which applies the restart policy itself. The other
+            // runtimes still go through their `apply`.
+            let driver = runtime.instance_driver();
+            let deployment_policy = deployment.restart_policy(&policy);
             let mut state = restart_states.remove(&deployment.id).unwrap_or_default();
             let state_before = state.clone();
             let now = chrono::Utc::now();
 
-            // Honour the retry backoff. A driven worker is still reconciled
+            // Honour the retry backoff. A driven deployment is still reconciled
             // while backing off (an extra instance is stopped, a crash is
             // counted); only starting a new instance waits. (Deletes are
             // handled above and never reach this point.)
@@ -1978,7 +1979,7 @@ pub(crate) async fn schedule(
                     reconcile_driven(
                         &pool,
                         driver,
-                        &policy,
+                        &deployment_policy,
                         resolved,
                         resolved_mounts,
                         &mut state,
@@ -2018,7 +2019,13 @@ pub(crate) async fn schedule(
                     && result.status != DeploymentStatus::CrashLoopBackOff
                     && result.status != DeploymentStatus::Failed
                 {
-                    restart::retry_at(&policy, result.restart_count, false, now, &mut rng)
+                    restart::retry_at(
+                        &deployment_policy,
+                        result.restart_count,
+                        false,
+                        now,
+                        &mut rng,
+                    )
                 } else {
                     None
                 };
@@ -2054,9 +2061,9 @@ pub(crate) async fn schedule(
             )
             .await;
             // An instance a liveness check removed failed, like one that exited.
-            if driver.is_some() && liveness_kills > 0 {
+            if driver.is_some() && result.kind == "worker" && liveness_kills > 0 {
                 reconcile::record_liveness_kills(
-                    &policy,
+                    &deployment_policy,
                     &mut result,
                     &mut state,
                     liveness_kills,
@@ -2207,6 +2214,7 @@ mod tests {
             pending_events: vec![],
             parent_id: Some("parent-id".to_string()),
             network: None,
+            restart: None,
         }
     }
 
