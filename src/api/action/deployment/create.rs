@@ -174,10 +174,14 @@ fn validate_restart(
                 "deployment.restart.job_only".to_string(),
             ));
         }
-        DeploymentKind::Job if spec.on_exhaustion.is_some() || spec.max_attempts.is_some() => {
+        DeploymentKind::Job
+            if spec.on_exhaustion.is_some()
+                || spec.max_attempts.is_some()
+                || spec.stable_after.is_some() =>
+        {
             errors.push(Violation::new(
-                "restart.on_exhaustion".to_string(),
-                "on_exhaustion and max_attempts apply to workers only; a job uses backoff_limit"
+                "restart".to_string(),
+                "on_exhaustion, max_attempts and stable_after apply to workers only; a job uses backoff_limit"
                     .to_string(),
                 "deployment.restart.worker_only".to_string(),
             ));
@@ -4377,12 +4381,18 @@ mod tests {
             "{codes:?}"
         );
 
-        let (status, codes, _) = post_restart("job", json!({ "on_exhaustion": "fail" })).await;
-        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert!(
-            codes.contains(&"deployment.restart.worker_only".to_string()),
-            "{codes:?}"
-        );
+        for restart in [
+            json!({ "on_exhaustion": "fail" }),
+            json!({ "max_attempts": 2 }),
+            json!({ "stable_after": "1h" }),
+        ] {
+            let (status, codes, _) = post_restart("job", restart.clone()).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{restart}");
+            assert!(
+                codes.contains(&"deployment.restart.worker_only".to_string()),
+                "{restart}: {codes:?}"
+            );
+        }
     }
 
     #[test]

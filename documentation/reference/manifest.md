@@ -447,7 +447,7 @@ restart:
 | `max_attempts` | workers | Read when `on_exhaustion` is `fail` |
 | `backoff_limit` | jobs | How many times a run that exited non-zero is run again. Default `0`: a failed job is not run again |
 
-Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`). Ring rejects at `ring apply` time a block that does not parse, a `cap` below the effective `base`, an unknown key, `backoff_limit` on a worker and `on_exhaustion` or `max_attempts` on a job.
+Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`). Ring rejects at `ring apply` time a block that does not parse, a `cap` below the effective `base`, an unknown key, `backoff_limit` on a worker and `on_exhaustion`, `max_attempts` or `stable_after` on a job.
 
 A job that cannot even start (an image that cannot be pulled, a missing config, not enough memory) is retried without limit on the backoff curve: nothing ran, so nothing can be run twice. `backoff_limit` only counts runs that exited non-zero.
 
