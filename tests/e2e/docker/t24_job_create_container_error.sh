@@ -62,9 +62,11 @@ if [ "${RESTART_COUNT:-0}" -le 5 ]; then
   fail "expected restart_count > 5, got $RESTART_COUNT — the job stopped retrying"
 fi
 
-# 3) Each failed start cleans up after itself.
+# 3) Each failed start cleans up after itself. A retry comes every couple of
+#    seconds, so one container may belong to the attempt in flight; a leak
+#    would have left one per attempt.
 ORPHANS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
-if [ "$ORPHANS" -gt 0 ]; then
+if [ "$ORPHANS" -gt 1 ]; then
   fail "$ORPHANS container(s) left behind by failed starts"
 fi
 
