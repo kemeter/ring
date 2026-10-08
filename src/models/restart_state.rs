@@ -17,9 +17,17 @@ pub(crate) struct Termination {
     /// `None` when the runtime could not tell.
     pub(crate) exit_code: Option<i64>,
     pub(crate) finished_at: DateTime<Utc>,
+    /// Whether the instance's program ever started. One that never did (the
+    /// runtime refused to start it) failed to start; it did not run and exit.
+    #[serde(default = "started_by_default")]
+    pub(crate) started: bool,
     /// Last lines of the instance's output, at most [`LOGS_TAIL_BYTES`].
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) logs_tail: Option<String>,
+}
+
+fn started_by_default() -> bool {
+    true
 }
 
 /// Lines of output kept from a terminated instance.
@@ -166,6 +174,7 @@ mod tests {
                 instance_id: "c1".to_string(),
                 exit_code: Some(1),
                 finished_at: at("2026-01-01T00:00:00Z"),
+                started: true,
                 logs_tail: Some("boom".to_string()),
             }),
             run_failures: 2,

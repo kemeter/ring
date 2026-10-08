@@ -57,6 +57,30 @@ pub(crate) async fn reconcile(
 
     let failed_this_pass = !observation.terminated.is_empty();
     for termination in observation.terminated {
+        if !termination.started {
+            // Its start was refused and the leftover could not be cleaned up
+            // at the time: a failed start, whatever exit code it reports.
+            let decision = restart::decide(
+                policy,
+                kind,
+                &mut counter,
+                Event::StartFailed(StartFailure::Transient),
+                now,
+                rng,
+            );
+            deployment.emit_event(
+                "error",
+                format!(
+                    "Instance {} never started; removing it",
+                    short_id(&termination.instance_id)
+                ),
+                &deployment.runtime.clone(),
+                Some("instance_never_started"),
+            );
+            driver.discard_instance(&termination.instance_id).await;
+            apply_decision(&mut deployment, state, decision, counter.restart_count);
+            continue;
+        }
         let decision = restart::decide(
             policy,
             kind,
@@ -374,6 +398,7 @@ mod tests {
                 instance_id: id.to_string(),
                 exit_code: code,
                 finished_at: now(),
+                started: true,
                 logs_tail: Some("panic".to_string()),
             });
         }
@@ -795,6 +820,26 @@ mod tests {
         d = job_pass(&driver, 0, d, &mut state, now() + secs(1)).await;
         assert_eq!(driver.starts(), 1);
         assert_eq!(d.instances, ["new-1"]);
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_never_started_does_not_complete_a_job() {
+        let driver = FakeDriver::default();
+        driver.terminated.lock().unwrap().push(Termination {
+            instance_id: "j".to_string(),
+            exit_code: Some(0),
+            finished_at: now(),
+            started: false,
+            logs_tail: None,
+        });
+        let mut state = RestartState::default();
+
+        let d = job_pass(&driver, 0, job(), &mut state, now()).await;
+
+        assert_ne!(d.status, DeploymentStatus::Completed);
+        assert_ne!(d.status, DeploymentStatus::Failed);
+        assert_eq!(state.run_failures, 0, "nothing ran");
+        assert!(reasons(&d).contains(&"instance_never_started".to_string()));
     }
 
     #[tokio::test]

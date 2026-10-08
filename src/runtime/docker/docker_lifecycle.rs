@@ -129,6 +129,13 @@ impl DockerLifecycle {
             .ok()
             .and_then(|details| details.state);
         let exit_code = state.as_ref().and_then(|s| s.exit_code);
+        // A container that never ran (still `created`, its start refused)
+        // reports the zero start time, and may report exit code 0 with it.
+        let started = state
+            .as_ref()
+            .and_then(|s| s.started_at.as_deref())
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .is_some_and(|t| t.timestamp() > 0);
         // A container that never ran reports the zero time; fall back to now.
         let finished_at = state
             .as_ref()
@@ -144,6 +151,7 @@ impl DockerLifecycle {
             instance_id,
             exit_code,
             finished_at,
+            started,
             logs_tail: logs_tail(&lines),
         }
     }
