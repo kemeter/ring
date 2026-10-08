@@ -421,10 +421,14 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
     deployment.pending_events.clear();
 }
 
+/// `promote` moves a Creating deployment that has instances to Running. The
+/// reconcile pass of a runtime with an instance driver promotes by itself, once
+/// a new instance has been seen running, so it passes `false`.
 async fn handle_status_transitions(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     deleted: &mut Vec<String>,
+    promote: bool,
 ) {
     if deployment.status == DeploymentStatus::Deleted && deployment.instances.is_empty() {
         info!("Marking deployment {} for cleanup", deployment.id);
@@ -446,7 +450,10 @@ async fn handle_status_transitions(
         deleted.push(deployment.id.clone());
     }
 
-    if deployment.status == DeploymentStatus::Creating && !deployment.instances.is_empty() {
+    if promote
+        && deployment.status == DeploymentStatus::Creating
+        && !deployment.instances.is_empty()
+    {
         info!(
             "Deployment {} transition: creating -> running",
             deployment.id
@@ -1837,7 +1844,7 @@ pub(crate) async fn schedule(
 
                 let old_status = deployment.status.clone();
                 persist_pending_events(&pool, &mut result).await;
-                handle_status_transitions(&pool, &mut result, &mut deleted).await;
+                handle_status_transitions(&pool, &mut result, &mut deleted, true).await;
 
                 write_back(&pool, &old_status, &result).await;
                 continue;
@@ -1856,6 +1863,13 @@ pub(crate) async fn schedule(
             // while backing off (an extra instance is stopped, a crash is
             // counted); only starting a new instance waits. (Deletes are
             // handled above and never reach this point.)
+            // A runtime still on `apply` gives up for good on
+            // crash_loop_back_off: its worker path has no guard of its own, and
+            // would otherwise restart the deployment on every tick.
+            if driver.is_none() && deployment.status == DeploymentStatus::CrashLoopBackOff {
+                continue;
+            }
+
             if driver.is_none() && state.backing_off(now) {
                 // Emit this at info as a structured event, not a bare debug line:
                 // a deployment being skipped by backoff is the single most useful
@@ -2014,8 +2028,11 @@ pub(crate) async fn schedule(
             // Nor is there any wait once the budget is spent: the next apply
             // only lands the deployment on its terminal status.
             if driver.is_none() {
+                // A memory refusal is retried past the budget, so it keeps
+                // its backoff instead of being retried on every tick.
                 state.next_attempt_at = if result.restart_count > restart_count_before
-                    && result.restart_count < deployments::MAX_RESTART_COUNT
+                    && (result.restart_count < deployments::MAX_RESTART_COUNT
+                        || result.status == DeploymentStatus::InsufficientResources)
                     && result.status != DeploymentStatus::CrashLoopBackOff
                     && result.status != DeploymentStatus::Failed
                 {
@@ -2051,7 +2068,7 @@ pub(crate) async fn schedule(
             // an already-established `Running` (which it must not touch), and
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
-            handle_status_transitions(&pool, &mut result, &mut deleted).await;
+            handle_status_transitions(&pool, &mut result, &mut deleted, driver.is_none()).await;
             let liveness_kills = run_health_checks(
                 &pool,
                 &mut result,

@@ -48,6 +48,12 @@ pub(crate) async fn reconcile(
 
     let observation = driver.observe(&deployment).await;
     deployment.instances = observation.running;
+    // An instance started on an earlier pass and still running now has proven
+    // it stays up: that, not the start itself, is what promotes a Creating
+    // deployment. The readiness gate then has its say on this promotion.
+    if deployment.status == DeploymentStatus::Creating && !deployment.instances.is_empty() {
+        deployment.status = DeploymentStatus::Running;
+    }
 
     let failed_this_pass = !observation.terminated.is_empty();
     for termination in observation.terminated {
@@ -188,6 +194,12 @@ pub(crate) fn record_liveness_kills(
     }
     deployment.restart_count = counter.restart_count;
     state.running_since = counter.running_since;
+    // The check removed the last instance: the worker is waiting for its next
+    // start like after a crash, not running.
+    if kills > 0 && deployment.instances.is_empty() && deployment.status != DeploymentStatus::Failed
+    {
+        deployment.status = DeploymentStatus::CrashLoopBackOff;
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -252,13 +264,13 @@ async fn scale(
                 &deployment.runtime.clone(),
                 Some("scale_up"),
             );
-            // The new instance only counts once the next pass has seen it
-            // running. Counted now, a container that dies on start would be
-            // promoted to Running for a pass, and a worker restarted from a
-            // failure status would reach Running without going through the
-            // readiness gate, which only holds a deployment that was Creating.
-            deployment.instances.pop();
-            if deployment.status != DeploymentStatus::Running {
+            // Creating until the next pass sees the instance still running.
+            // Promoted now, a container that dies on start would show Running
+            // for a pass, and a worker restarted with nothing live would reach
+            // Running without going through the readiness gate, which only
+            // holds a deployment that was Creating. A worker that still has
+            // other live instances stays Running.
+            if deployment.status != DeploymentStatus::Running || current == 0 {
                 deployment.status = DeploymentStatus::Creating;
             }
         }
@@ -543,14 +555,11 @@ mod tests {
 
         assert_eq!(driver.starts(), 1);
         assert_eq!(d.status, DeploymentStatus::Creating);
-        assert!(
-            d.instances.is_empty(),
-            "a new instance counts once it has been seen running"
-        );
+        assert_eq!(d.instances, ["new-1"], "the scale-up reports the new count");
         assert_eq!(state.next_attempt_at, None);
         assert_eq!(d.restart_count, 3, "a start is not a reset");
 
-        // Seen running on the next pass: now it counts.
+        // Seen still running on the next pass: now it is Running.
         let d = pass(
             &driver,
             &RestartPolicy::default(),
@@ -560,6 +569,7 @@ mod tests {
         )
         .await;
         assert_eq!(d.instances, ["new-1"]);
+        assert_eq!(d.status, DeploymentStatus::Running);
         assert_eq!(driver.starts(), 1);
     }
 
@@ -850,6 +860,40 @@ mod tests {
         t = state.next_attempt_at.unwrap_or(t).max(t) + secs(1);
         job_pass(&driver, 0, d, &mut state, t).await;
         assert_eq!(driver.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_worker_whose_last_instance_was_killed_is_not_running() {
+        let policy = RestartPolicy::default();
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = worker(1);
+        let mut rng = StdRng::seed_from_u64(1);
+
+        // The liveness check removed the only instance.
+        record_liveness_kills(&policy, &mut d, &mut state, 1, now(), &mut rng);
+        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
+
+        // Its replacement starts in Creating, so it goes through the readiness
+        // gate like any other start.
+        let at = state.next_attempt_at.unwrap_or(now()) + secs(1);
+        let d = pass(&driver, &policy, d, &mut state, at).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+    }
+
+    #[tokio::test]
+    async fn an_instance_that_dies_on_start_is_never_reported_running() {
+        let driver = FakeDriver::default();
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+        let mut d = worker(1);
+        d.status = DeploymentStatus::Pending;
+
+        d = pass(&driver, &policy, d, &mut state, now()).await;
+        assert_eq!(d.status, DeploymentStatus::Creating);
+        driver.crash("new-1", Some(1));
+        let d = pass(&driver, &policy, d, &mut state, now() + secs(1)).await;
+        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
     }
 
     #[test]
