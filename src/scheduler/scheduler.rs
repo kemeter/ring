@@ -2078,9 +2078,10 @@ pub(crate) async fn schedule(
             )
             .await;
             // An instance a liveness check removed failed, like one that exited.
-            if driver.is_some() && result.kind == "worker" && liveness_kills > 0 {
+            if driver.is_some() && liveness_kills > 0 {
                 reconcile::record_liveness_kills(
                     &deployment_policy,
+                    result.workload_kind(),
                     &mut result,
                     &mut state,
                     liveness_kills,

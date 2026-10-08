@@ -167,9 +167,11 @@ pub(crate) async fn reconcile(
 }
 
 /// Count instances a liveness check removed as failures, exactly like
-/// instances that exited on their own.
+/// instances that exited on their own. For a job that is a failed run, bounded
+/// by its `backoff_limit`.
 pub(crate) fn record_liveness_kills(
     policy: &RestartPolicy,
+    kind: WorkloadKind,
     deployment: &mut Deployment,
     state: &mut RestartState,
     kills: usize,
@@ -184,7 +186,7 @@ pub(crate) fn record_liveness_kills(
     for _ in 0..kills {
         let decision = restart::decide(
             policy,
-            WorkloadKind::Worker,
+            kind,
             &mut counter,
             Event::Exited { exit_code: None },
             now,
@@ -194,6 +196,7 @@ pub(crate) fn record_liveness_kills(
     }
     deployment.restart_count = counter.restart_count;
     state.running_since = counter.running_since;
+    state.run_failures = counter.run_failures;
     // The check removed the last instance: the worker is waiting for its next
     // start like after a crash, not running.
     if kills > 0 && deployment.instances.is_empty() && deployment.status != DeploymentStatus::Failed
@@ -871,7 +874,15 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
 
         // The liveness check removed the only instance.
-        record_liveness_kills(&policy, &mut d, &mut state, 1, now(), &mut rng);
+        record_liveness_kills(
+            &policy,
+            WorkloadKind::Worker,
+            &mut d,
+            &mut state,
+            1,
+            now(),
+            &mut rng,
+        );
         assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
 
         // Its replacement starts in Creating, so it goes through the readiness
@@ -897,6 +908,27 @@ mod tests {
     }
 
     #[test]
+    fn a_job_killed_by_its_health_check_is_a_failed_run() {
+        let mut state = RestartState::default();
+        let mut d = job();
+        d.status = DeploymentStatus::Running;
+        let mut rng = StdRng::seed_from_u64(1);
+
+        record_liveness_kills(
+            &RestartPolicy::default(),
+            WorkloadKind::Job { backoff_limit: 0 },
+            &mut d,
+            &mut state,
+            1,
+            now(),
+            &mut rng,
+        );
+
+        assert_eq!(d.status, DeploymentStatus::Failed);
+        assert_eq!(state.run_failures, 1);
+    }
+
+    #[test]
     fn liveness_kills_count_as_failures() {
         let policy = RestartPolicy::default();
         let mut state = RestartState {
@@ -906,7 +938,15 @@ mod tests {
         let mut d = worker(1);
         let mut rng = StdRng::seed_from_u64(1);
 
-        record_liveness_kills(&policy, &mut d, &mut state, 2, now(), &mut rng);
+        record_liveness_kills(
+            &policy,
+            WorkloadKind::Worker,
+            &mut d,
+            &mut state,
+            2,
+            now(),
+            &mut rng,
+        );
 
         assert_eq!(d.restart_count, 2);
         assert_eq!(state.running_since, None);
