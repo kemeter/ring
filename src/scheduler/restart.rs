@@ -18,9 +18,6 @@
 //!
 //! See `documentation/design/restart-policy.md`.
 
-// Wired into the scheduler by the follow-up that persists the restart state.
-#![allow(dead_code)]
-
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use std::time::Duration;
@@ -29,12 +26,18 @@ pub(crate) const DEFAULT_BASE: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_CAP: Duration = Duration::from_secs(5 * 60);
 pub(crate) const DEFAULT_STABLE_AFTER: Duration = Duration::from_secs(10 * 60);
 pub(crate) const DEFAULT_MAX_ATTEMPTS: u32 = 5;
+// Jobs and manifest overrides are wired in once the manifest carries
+// `backoff_limit` and the `restart` block.
+#[allow(dead_code)]
 pub(crate) const DEFAULT_BACKOFF_LIMIT: u32 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkloadKind {
     Worker,
-    Job { backoff_limit: u32 },
+    #[allow(dead_code)]
+    Job {
+        backoff_limit: u32,
+    },
 }
 
 /// What a worker does once its failures would exceed `max_attempts`.
@@ -70,6 +73,7 @@ impl Default for RestartPolicy {
 /// The `restart` block of a manifest. Every key is optional and falls back to
 /// the server policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) struct RestartOverride {
     pub(crate) base: Option<Duration>,
     pub(crate) cap: Option<Duration>,
@@ -113,6 +117,7 @@ impl RestartPolicy {
     /// The policy for one deployment: this one, with the manifest's overrides
     /// applied key by key. The result is validated as a whole, so an override
     /// of `cap` alone is checked against the server's `base`.
+    #[allow(dead_code)]
     pub(crate) fn with_override(&self, o: &RestartOverride) -> Result<Self, PolicyError> {
         let policy = Self {
             base: o.base.unwrap_or(self.base),
@@ -164,6 +169,17 @@ pub(crate) enum Event {
     Exited { exit_code: Option<i64> },
     /// The instance could not be started.
     StartFailed(StartFailure),
+}
+
+impl Event {
+    /// An exit code that says the program can never run (126 not executable,
+    /// 127 not found) needs an operator just like a rejected spec does.
+    fn needs_operator(&self) -> bool {
+        match self {
+            Event::StartFailed(failure) => *failure == StartFailure::NeedsOperator,
+            Event::Exited { exit_code } => matches!(exit_code, Some(126) | Some(127)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,18 +251,38 @@ pub(crate) fn decide(
         return Decision::Fail;
     }
 
-    let ceiling = match event {
-        Event::StartFailed(StartFailure::NeedsOperator) => policy.cap,
-        _ => policy.delay_ceiling(state.restart_count),
+    match retry_at(
+        policy,
+        state.restart_count,
+        event.needs_operator(),
+        now,
+        rng,
+    ) {
+        Some(at) => Decision::WaitUntil(at),
+        None => Decision::StartNow,
+    }
+}
+
+/// When attempt `attempt` (1-based) may run, or `None` to run it now. Failures
+/// that need an operator draw from the whole `[0, cap]` range from the first
+/// attempt on.
+pub(crate) fn retry_at(
+    policy: &RestartPolicy,
+    attempt: u32,
+    needs_operator: bool,
+    now: DateTime<Utc>,
+    rng: &mut impl Rng,
+) -> Option<DateTime<Utc>> {
+    let ceiling = if needs_operator {
+        policy.cap
+    } else {
+        policy.delay_ceiling(attempt)
     };
     let delay = jitter(ceiling, rng);
     if delay.is_zero() {
-        return Decision::StartNow;
+        return None;
     }
-    match chrono::Duration::from_std(delay) {
-        Ok(delay) => Decision::WaitUntil(now + delay),
-        Err(_) => Decision::StartNow,
-    }
+    chrono::Duration::from_std(delay).ok().map(|d| now + d)
 }
 
 /// Full jitter: uniform in `[0, ceiling]`, at millisecond resolution.
@@ -520,6 +556,28 @@ mod tests {
         // First attempt of an ordinary failure is bounded by `base` (10s);
         // operator errors draw from the whole `[0, cap]` range instead.
         assert!(delays.iter().all(|d| *d <= p.cap));
+        assert!(delays.iter().any(|d| *d > p.base));
+    }
+
+    #[test]
+    fn unrunnable_program_exits_start_at_the_cap() {
+        let p = RestartPolicy::default();
+        let mut rng = rng();
+        let delays: Vec<Duration> = (0..50)
+            .map(|_| {
+                let mut state = RestartState::default();
+                delay_of(decide(
+                    &p,
+                    WorkloadKind::Worker,
+                    &mut state,
+                    Event::Exited {
+                        exit_code: Some(127),
+                    },
+                    now(),
+                    &mut rng,
+                ))
+            })
+            .collect();
         assert!(delays.iter().any(|d| *d > p.base));
     }
 

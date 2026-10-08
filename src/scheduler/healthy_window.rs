@@ -10,8 +10,11 @@
 //! anti-flap window (`min_healthy_time`, same window the rollout readiness gate
 //! uses), the count is reset to 0 — the crash budget refills.
 //!
-//! State is in-memory and non-persistent, like [`super::backoff::RetryBackoff`]:
-//! at process restart the clock starts over, which is safe (a still-crashing
+//! Only for runtimes still reconciling through `apply`: workers on an instance
+//! driver reset their count with the restart policy's persisted `stable_after`
+//! instead (see `super::reconcile`).
+//!
+//! State is in-memory and non-persistent: at process restart the clock starts over, which is safe (a still-crashing
 //! worker re-crashes and never accrues the window; a healthy one simply takes
 //! one window longer to have its old count forgiven).
 

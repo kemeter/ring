@@ -94,6 +94,101 @@ pub(crate) fn classify_create_error(err: &RuntimeError) -> Disposition {
     }
 }
 
+/// The status, event reason and operator-facing message a create-boundary
+/// [`RuntimeError`] maps to. Shared by the runtimes and the scheduler so the
+/// same failure reads the same everywhere.
+pub(crate) fn create_error_outcome(
+    err: &RuntimeError,
+    deployment: &crate::models::deployments::Deployment,
+) -> (DeploymentStatus, &'static str, String) {
+    match err {
+        RuntimeError::ImageNotFound(detail) => (
+            DeploymentStatus::ImagePullBackOff,
+            "image_pull_back_off",
+            // Preserve the inner detail — it carries operator-relevant
+            // context like `image_pull_policy=Never forbids pulling` that a
+            // generic "not found" would drop.
+            format!("Image '{}' not found: {}", deployment.image, detail),
+        ),
+        RuntimeError::ImagePullFailed(detail) => (
+            DeploymentStatus::ImagePullBackOff,
+            "image_pull_back_off",
+            format!("Failed to pull image '{}': {}", deployment.image, detail),
+        ),
+        RuntimeError::InstanceCreationFailed(msg) => (
+            DeploymentStatus::CreateContainerError,
+            "instance_creation_failed",
+            format!("Container creation failed: {}", msg),
+        ),
+        RuntimeError::NetworkCreationFailed(_) => (
+            DeploymentStatus::NetworkError,
+            "network_creation_failed",
+            format!(
+                "Failed to create network for namespace '{}'",
+                deployment.namespace
+            ),
+        ),
+        RuntimeError::ConfigNotFound(_) => (
+            DeploymentStatus::ConfigError,
+            "config_error",
+            format!("Config not found in namespace '{}'", deployment.namespace),
+        ),
+        RuntimeError::ConfigKeyNotFound(_) => (
+            DeploymentStatus::ConfigError,
+            "config_error",
+            format!(
+                "Config key not found in namespace '{}'",
+                deployment.namespace
+            ),
+        ),
+        RuntimeError::StatsFetchFailed(msg) => (
+            DeploymentStatus::Error,
+            "stats_fetch_failed",
+            format!("Stats fetch failed: {}", msg),
+        ),
+        RuntimeError::InsufficientResources(detail) => (
+            DeploymentStatus::InsufficientResources,
+            "insufficient_resources",
+            detail.clone(),
+        ),
+        RuntimeError::Other(msg) => (
+            DeploymentStatus::Error,
+            "runtime_error",
+            format!("Docker error: {}", msg),
+        ),
+        // CH-specific variants — Docker should never produce them, but the
+        // enum is shared so we map them to the closest Docker-side state.
+        RuntimeError::FirmwareNotFound(msg) => (
+            DeploymentStatus::Failed,
+            "firmware_not_found",
+            format!("Firmware not found: {}", msg),
+        ),
+        RuntimeError::VmStartFailed(msg) => (
+            DeploymentStatus::Error,
+            "vm_start_failed",
+            format!("VM start failed: {}", msg),
+        ),
+        // The CH runtime emits this; the Docker runtime doesn't (the daemon
+        // rejects port conflicts itself through InstanceCreationFailed). The
+        // arm exists to keep the match exhaustive over the shared enum.
+        RuntimeError::PortAlreadyInUse(port) => (
+            DeploymentStatus::Error,
+            "port_allocation_failed",
+            format!("Port {} is already allocated", port),
+        ),
+        RuntimeError::Io(e) => (
+            DeploymentStatus::FileSystemError,
+            "file_system_error",
+            format!("IO error: {}", e),
+        ),
+        RuntimeError::Json(e) => (
+            DeploymentStatus::Error,
+            "runtime_error",
+            format!("JSON error: {}", e),
+        ),
+    }
+}
+
 /// Classify a crash-boundary exit code into terminal-or-retry.
 ///
 /// A worker that exits is normally restarted (transient): the process may have
@@ -210,7 +305,13 @@ pub(crate) fn apply_vm_start_failure(
             // Concretely: a deployment refused by host-memory admission used to
             // report 5 restarts having never started a single process, sending
             // whoever read it looking for an instability that never existed.
-            if !scheduler_skips_by_status(&terminal) {
+            //
+            // A host short on memory is the exception: memory is freed all the
+            // time, so the refusal counts as one attempt and is retried on the
+            // backoff curve like a transient failure.
+            if terminal == DeploymentStatus::InsufficientResources {
+                deployment.restart_count += 1;
+            } else if !scheduler_skips_by_status(&terminal) {
                 deployment.restart_count = MAX_RESTART_COUNT;
             }
             deployment.status = terminal;
@@ -279,12 +380,11 @@ mod tests {
         );
     }
 
-    /// A deployment refused before anything ran must not claim restarts it
-    /// never made. `restart_count` is displayed by the CLI, the API and the
-    /// dashboard as a count of actual restarts; reporting 5 for a workload that
-    /// never started a process sends an operator hunting a phantom instability.
+    /// A deployment refused for lack of memory is retried, since memory is
+    /// freed all the time: the refusal counts as one attempt, not as the whole
+    /// budget, which would claim restarts that never happened.
     #[test]
-    fn admission_refusal_does_not_invent_restarts() {
+    fn admission_refusal_counts_one_attempt() {
         let mut d = vm_deployment();
         assert_eq!(d.restart_count, 0);
 
@@ -296,10 +396,7 @@ mod tests {
         );
 
         assert_eq!(d.status, DeploymentStatus::InsufficientResources);
-        assert_eq!(
-            d.restart_count, 0,
-            "no VM was ever spawned, so no restart may be reported"
-        );
+        assert_eq!(d.restart_count, 1);
     }
 
     /// The counterpart: statuses the scheduler DOES keep reconciling still need

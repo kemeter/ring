@@ -18,8 +18,8 @@
 //!   a slow scale-down is what stops a load that oscillates around the target
 //!   from driving the instance count up and down with it.
 //!
-//! State is in-memory and non-persistent, like [`super::healthy_window`] and
-//! [`super::backoff`]. At process restart the cooldowns start over: the first
+//! State is in-memory and non-persistent, like [`super::healthy_window`]. At
+//! process restart the cooldowns start over: the first
 //! post-restart tick may act immediately, which is safe — the decision is still
 //! bounded by the policy and by one step.
 
