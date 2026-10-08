@@ -23,8 +23,8 @@ All values serialize as `snake_case`, identically on the wire (JSON), in the CLI
 | Status | Cause | Terminal? |
 |---|---|---|
 | `failed` | A job exited non-zero / crashed; **or** a readiness check never turned green before the deadline on a non-rolling deployment; **or** (Cloud Hypervisor) firmware not found. | **Terminal** |
-| `crash_loop_back_off` | A worker's container/VM kept dying and `restart_count` reached `MAX_RESTART_COUNT` (5). The reconciler stops trying. | **Terminal** |
-| `insufficient_resources` | The host doesn't have enough memory for the deployment's request. A retry can't conjure RAM, so Ring stops. | **Terminal** |
+| `crash_loop_back_off` | A worker's instances keep dying. On Docker and Podman the worker is waiting for its next start (see [restart policy](#restart-policy)); on the other runtimes it reached 5 failed attempts. | Retried (Docker, Podman) |
+| `insufficient_resources` | The host doesn't have enough free memory for the deployment's request right now. Retried, since memory gets freed. | Retried |
 | `image_pull_back_off` | The image couldn't be pulled (tag not found, registry auth, `image_pull_policy: Never` forbidding a pull, transient network). | Retried |
 | `create_container_error` | The runtime rejected container creation (invalid mount, unsupported option, a port conflict the daemon surfaces at create time). | Retried |
 | `network_error` | Creating the namespace network/bridge failed. | Retried |
@@ -32,9 +32,9 @@ All values serialize as `snake_case`, identically on the wire (JSON), in the CLI
 | `file_system_error` | An IO error handling volumes or temp config files. | Retried |
 | `error` | Generic runtime fallback: a stats fetch, a JSON parse, a VM-start failure, or any error not classified above. | Retried |
 
-**Terminal vs retried.** A *terminal* status is never reconciled again, because the deployment is done. A *retried* failure status stays in the reconcile loop: each tick re-attempts the apply, bumping `restart_count`, until either it succeeds (back to `creating` → `running`) or the counter hits `MAX_RESTART_COUNT` and a worker flips to `crash_loop_back_off`. The reconciler explicitly polls `pending`, `creating`, `running`, `deleted`, and the five *retried* error states; `completed`, `failed`, `crash_loop_back_off`, and `insufficient_resources` are left out on purpose.
+**Terminal vs retried.** A *terminal* status is never reconciled again, because the deployment is done: only `completed` and `failed` are. Every other status stays in the reconcile loop, and a failed one is retried on the backoff curve described in [restart policy](#restart-policy) until it succeeds (back to `creating` → `running`).
 
-> **Recover from a terminal or stuck state** by re-applying a fixed manifest: `ring apply` resets `restart_count` and re-enters the lifecycle from the top. The restart counter is cumulative over the deployment's lifetime, not a sliding window.
+> **Recover from a terminal state** by re-applying a fixed manifest: `ring apply` resets `restart_count` and re-enters the lifecycle from the top.
 
 ## Worker lifecycle
 
@@ -45,13 +45,12 @@ pending → creating ──────────────→ running ─�
               │     (gate: ready)      │
               │                        ├──→ deleted              (you delete it)
               │←── readiness not green │
-              │    (held here)         └──→ crash_loop_back_off  (restart_count ≥ 5)
+              │    (held here)         └──→ crash_loop_back_off  (an instance died;
+              │                                                  waiting for the next start)
               │
               └──→ image_pull_back_off / create_container_error / network_error /
-                   config_error / file_system_error / error   (retried; → crash_loop_back_off
-                   after MAX_RESTART_COUNT, or → running once resolved)
-
-              insufficient_resources  (terminal — host out of memory)
+                   config_error / file_system_error / insufficient_resources / error
+                   (waiting for the next start; → creating once it succeeds)
 ```
 
 - **`creating → running`** happens as soon as the container/VM is up **unless** the deployment declares a `readiness: true` health check, in which case the [readiness gate](#the-readiness-gate) holds it in `creating` until ready.
@@ -66,7 +65,7 @@ A `kind: job` runs one instance to completion (`replicas` is ignored).
 pending → creating → running ──→ completed   (exit 0 / clean guest shutdown)
                           │
                           ├──→ failed         (non-zero exit, OOM, signal, host-side timeout)
-                          └──→ failed         (restart_count ≥ MAX_RESTART_COUNT)
+                          └──→ failed         (5 failed starts)
 ```
 
 - On Cloud Hypervisor the host can't read the guest's exit code, so any clean VM shutdown is `completed`. Use a worker if you need precise exit-code semantics on CH.
@@ -82,18 +81,15 @@ While in `creating`, only the readiness checks run (recorded for the gate to rea
 
 Without any readiness check, the legacy behaviour is preserved: `running` as soon as the container is up. See [Health checks (design) → the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate) for the full mechanics.
 
-## Restart counter and `crash_loop_back_off`
+## Restart policy
 
-Ring tracks a cumulative `restart_count` per deployment. It is bumped when:
+`restart_count` counts failed attempts since the last reset: an instance that died unexpectedly (not one Ring stopped itself on a delete or scale-down), a start that failed, or an instance removed by a liveness check.
 
-- A worker's container dies unexpectedly (Docker `die`/`oom`/`kill` events, or a CH VM going unresponsive), unless the shutdown was intentional (a delete/scale-down).
-- A *retried* error status re-attempts its apply and fails again.
+On **Docker and Podman**, a worker is never abandoned. Each failure pushes its next start out on a randomized exponential backoff, from up to 10 s after the first failure to at most 5 minutes, and the counter resets after 10 minutes of uninterrupted running. Failures that need an operator (a missing config, a rejected spec, an exit code `126`/`127`) wait up to 5 minutes from the first attempt on, and are still retried, so fixing the cause is picked up without a re-apply. The backoff is stored in the database and survives a `ring server` restart. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy) and [`[server.restart]`](/documentation/reference/config-toml#server-restart).
 
-Once `restart_count` reaches `MAX_RESTART_COUNT` (5), the next tick flips a **worker** to `crash_loop_back_off` (terminal) and a **job** to `failed` (terminal): the reconciler stops retrying, protecting the host from a tight crash loop. The counter is **cumulative for the deployment's lifetime**, not a sliding window; `ring apply` with a fixed manifest resets it.
+On **containerd, Cloud Hypervisor and Firecracker**, and for **jobs** on every runtime, the previous budget still applies: once `restart_count` reaches 5, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops retrying until the manifest is re-applied. Failures that cannot fix themselves (a missing image, config or firmware, a rejected spec) exhaust the budget at once.
 
-**Permanent failures skip the budget.** Some failures cannot fix themselves on a retry: the image genuinely doesn't exist, a referenced config or key is absent, the container/VM spec is rejected, the Firecracker kernel or Cloud Hypervisor firmware is missing at its configured path, or the host is out of memory. Rather than bumping the counter by one and burning five reconcile cycles to reach the same conclusion, Ring classifies these as terminal and lands on the matching status (`image_pull_back_off`, `config_error`, `create_container_error`, `failed`, `insufficient_resources`) on the next tick. Transient failures — a pull that died mid-flight, a busy port, a network setup race — still bump by one and retry within the budget. The classification is shared by every runtime, so Docker, Podman, containerd, Cloud Hypervisor and Firecracker converge identically.
-
-Counters live in memory only, so restarting `ring server` clears them, so each `(deployment, instance, check)` triple starts back at zero after a server restart.
+Health-check failure counters live in memory only, so each `(deployment, instance, check)` triple starts back at zero after a server restart.
 
 ## Observing the status
 

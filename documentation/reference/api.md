@@ -145,13 +145,13 @@ List deployments.
 | `completed` | Job exited `0` (jobs only) | Yes |
 | `failed` | Job failed, or readiness deadline exceeded, or firmware not found | Yes |
 | `deleted` | Marked for teardown; instances being removed, then purged | No |
-| `crash_loop_back_off` | Worker hit `MAX_RESTART_COUNT` (5) restarts | Yes |
+| `crash_loop_back_off` | Worker instances keep dying; waiting for the next start (Docker, Podman) or gave up after 5 attempts (other runtimes) | No on Docker/Podman |
 | `image_pull_back_off` | Image couldn't be pulled (tag, auth, policy, network) | No (retried) |
 | `create_container_error` | Runtime rejected container creation | No (retried) |
 | `network_error` | Namespace network/bridge creation failed | No (retried) |
 | `config_error` | A mounted config or key doesn't exist | No (retried) |
 | `file_system_error` | IO error on volumes or temp config files | No (retried) |
-| `insufficient_resources` | Host out of memory for the deployment's request | Yes |
+| `insufficient_resources` | Host out of memory for the deployment's request | No (retried) |
 | `error` | Generic runtime fallback (stats, JSON, VM start, unclassified) | No (retried) |
 
 **Examples:**

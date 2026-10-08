@@ -78,9 +78,17 @@ In both cases, the missing instance is recreated automatically on the next tick.
 
 ## Restart policy
 
-Ring tracks restart attempts per deployment. Past `MAX_RESTART_COUNT` (currently 5) failed boots, the deployment lands in `crash_loop_back_off` and the reconciler stops trying. The counter is **cumulative for the lifetime of the deployment**, not a sliding window; fix the underlying issue and re-apply the manifest to reset.
+On Docker and Podman, a worker is **never abandoned**. It is a service: whatever ended it (a crash, a clean exit, a failed start, a liveness check), Ring starts it again, and slows down instead of giving up.
 
-This protects the host from a tight crash loop pegging Docker / Cloud Hypervisor.
+- Each failure counts one attempt in `restart_count`, and the next start waits a random delay between zero and `min(cap, base × 2^(attempt − 1))`: up to 10 s after the first failure, 20 s after the second, and so on up to 5 minutes. The randomness ("full jitter") spreads retries out, so workloads that failed together, after a host reboot for instance, do not all come back in the same second.
+- While a worker waits, it shows `crash_loop_back_off` (or the status of the start error, such as `image_pull_back_off`), and the reconciler keeps watching it: it is started again as soon as the delay elapses, without a re-apply. Creating a missing config, or pushing the missing image, is enough.
+- Failures that need an operator (a missing config, a spec the runtime rejects, an exit code `126`/`127` meaning the program cannot run) wait up to `cap` from the first attempt on.
+- Once the worker has run for `stable_after` (10 minutes) without a failure, `restart_count` resets to 0.
+- The delay, the running time and the last exit (code, time and the last 80 lines or 2 KiB of output) are stored in the database, so a `ring server` restart does not reset anyone's backoff.
+
+All of this is tunable in [`[server.restart]`](/documentation/reference/config-toml#server-restart), including `on_exhaustion = "fail"` for an operator who prefers a worker to stop after `max_attempts` failures.
+
+Jobs, and workers on containerd, Cloud Hypervisor and Firecracker, still use the previous budget: past 5 failed attempts, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops trying until the manifest is re-applied. Their retries are spaced on the same backoff curve.
 
 ## What survives a `ring server` restart
 
@@ -93,6 +101,7 @@ Every input to the loop lives in SQLite:
 
 Two things **don't** survive:
 
+- **Restart state survives**: the next start time, the running time and the last exit are stored with the deployment.
 - **Health-check failure counters**: they live in memory. After a restart, each `(deployment, instance, check)` triple starts back at zero. A flapping service won't trigger `on_failure` immediately after a server restart.
 - **In-flight runtime operations**: if `ring server` crashes mid-`apply`, the partial state is detected on the next tick and the reconciler converges.
 
