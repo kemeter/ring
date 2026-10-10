@@ -17,9 +17,17 @@ pub(crate) struct Termination {
     /// `None` when the runtime could not tell.
     pub(crate) exit_code: Option<i64>,
     pub(crate) finished_at: DateTime<Utc>,
+    /// Whether the instance's program ever started. One that never did (the
+    /// runtime refused to start it) failed to start; it did not run and exit.
+    #[serde(default = "started_by_default")]
+    pub(crate) started: bool,
     /// Last lines of the instance's output, at most [`LOGS_TAIL_BYTES`].
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) logs_tail: Option<String>,
+}
+
+fn started_by_default() -> bool {
+    true
 }
 
 /// Lines of output kept from a terminated instance.
@@ -51,6 +59,8 @@ pub(crate) struct RestartState {
     pub(crate) next_attempt_at: Option<DateTime<Utc>>,
     pub(crate) running_since: Option<DateTime<Utc>>,
     pub(crate) last_termination: Option<Termination>,
+    /// Runs of a job that exited non-zero.
+    pub(crate) run_failures: u32,
 }
 
 impl RestartState {
@@ -66,6 +76,7 @@ struct Row {
     next_attempt_at: Option<String>,
     running_since: Option<String>,
     last_termination: Option<String>,
+    run_failures: i64,
 }
 
 fn parse_time(raw: Option<String>) -> Option<DateTime<Utc>> {
@@ -79,8 +90,9 @@ pub(crate) async fn find_all(
     pool: &SqlitePool,
 ) -> Result<HashMap<String, RestartState>, sqlx::Error> {
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, next_attempt_at, running_since, last_termination FROM deployment \
-         WHERE next_attempt_at IS NOT NULL OR running_since IS NOT NULL OR last_termination IS NOT NULL",
+        "SELECT id, next_attempt_at, running_since, last_termination, run_failures FROM deployment \
+         WHERE next_attempt_at IS NOT NULL OR running_since IS NOT NULL \
+            OR last_termination IS NOT NULL OR run_failures > 0",
     )
     .fetch_all(pool)
     .await?;
@@ -94,6 +106,7 @@ pub(crate) async fn find_all(
                 last_termination: row
                     .last_termination
                     .and_then(|json| serde_json::from_str(&json).ok()),
+                run_failures: u32::try_from(row.run_failures).unwrap_or(0),
             };
             (row.id, state)
         })
@@ -111,11 +124,13 @@ pub(crate) async fn save(
         None => None,
     };
     sqlx::query(
-        "UPDATE deployment SET next_attempt_at = ?, running_since = ?, last_termination = ? WHERE id = ?",
+        "UPDATE deployment SET next_attempt_at = ?, running_since = ?, last_termination = ?, \
+         run_failures = ? WHERE id = ?",
     )
     .bind(state.next_attempt_at.map(|t| t.to_rfc3339()))
     .bind(state.running_since.map(|t| t.to_rfc3339()))
     .bind(last_termination)
+    .bind(i64::from(state.run_failures))
     .bind(deployment_id)
     .execute(pool)
     .await?;
@@ -159,8 +174,10 @@ mod tests {
                 instance_id: "c1".to_string(),
                 exit_code: Some(1),
                 finished_at: at("2026-01-01T00:00:00Z"),
+                started: true,
                 logs_tail: Some("boom".to_string()),
             }),
+            run_failures: 2,
         };
         save(&pool, "d1", &state).await.unwrap();
 

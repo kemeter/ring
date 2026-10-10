@@ -1,22 +1,9 @@
 #!/usr/bin/env bash
-# T24: a `kind: job` whose container is rejected by Docker `start` (OCI
-# runtime cannot exec the binary, e.g. command pointing at a missing
-# file) must converge to a terminal state — `failed` — rather than sit
-# in `create_container_error` indefinitely.
-#
-# Before the fix, `handle_job_deployment` only triggered creation when
-# status was `creating` / `pending` and called `handle_create_error`
-# with `increment_restart: false`. The first failed boot pushed status
-# to `create_container_error` and the deployment was never retried —
-# the operator had no signal that the job had actually failed.
-#
-# After the fix:
-#   1. The scheduler keeps reconciling `create_container_error` deployments
-#      (PR #84 already extends the status filter).
-#   2. `handle_job_deployment` retries from error states like `worker` does.
-#   3. `restart_count` is incremented on each failure (`increment_restart:
-#      true`), and once it reaches `MAX_RESTART_COUNT`, the runtime flips
-#      the deployment to `Failed` — terminal for a one-shot job.
+# T24: a `kind: job` whose container is rejected by Docker `start` (OCI runtime
+# cannot exec the binary, e.g. command pointing at a missing file) never ran, so
+# it is not `failed`: it lands on `create_container_error` and keeps being
+# retried on the backoff curve, as Kubernetes keeps a pod that cannot start.
+# Fixing the image or command is picked up on the next attempt.
 
 set -euo pipefail
 
@@ -24,7 +11,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T24: kind: job CreateContainerError must converge to Failed =="
+log "== T24: a job that cannot start is retried, not failed =="
+
+export RING_EXTRA_CONFIG='[server.restart]
+base = "1s"
+cap = "2s"'
 
 start_ring
 ring_login
@@ -46,9 +37,8 @@ EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
 
-# 60s is well past MAX_RESTART_COUNT (5) at a 1s scheduler interval.
-log "waiting 60s for scheduler to converge..."
-sleep 60
+log "waiting 20s for repeated start failures..."
+sleep 20
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "job-oci-error")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"
@@ -62,17 +52,22 @@ STATUS=$("$RING_BIN" deployment list --output json \
 
 log "observed: status=$STATUS restart_count=$RESTART_COUNT"
 
-# 1) Terminal: must end up in `failed` (one-shot semantics, not the
-#    long-running `crash_loop_back_off` we use for workers).
-if [ "$STATUS" != "failed" ]; then
-  fail "expected status failed, got '$STATUS' — job is stuck in a non-terminal state"
+# 1) Not failed: nothing ran, so nothing can have failed.
+if [ "$STATUS" != "create_container_error" ]; then
+  fail "expected status create_container_error, got '$STATUS'"
 fi
 
-# 2) restart_count must have reached MAX_RESTART_COUNT (5). If it stayed
-#    at 0 or 1, the runtime swallowed the failures silently — that's
-#    the exact bug this test guards.
-if [ "${RESTART_COUNT:-0}" -lt 5 ]; then
-  fail "expected restart_count >= 5, got $RESTART_COUNT — job didn't actually retry"
+# 2) Still retried, well past the old budget of 5 attempts.
+if [ "${RESTART_COUNT:-0}" -le 5 ]; then
+  fail "expected restart_count > 5, got $RESTART_COUNT — the job stopped retrying"
+fi
+
+# 3) Each failed start cleans up after itself. A retry comes every couple of
+#    seconds, so one container may belong to the attempt in flight; a leak
+#    would have left one per attempt.
+ORPHANS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
+if [ "$ORPHANS" -gt 1 ]; then
+  fail "$ORPHANS container(s) left behind by failed starts"
 fi
 
 log "== T24: PASS =="

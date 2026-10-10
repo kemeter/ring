@@ -301,11 +301,11 @@ async fn log_apply_timeout(pool: &SqlitePool, deployment_id: &str, apply_timeout
     }
 }
 
-/// Reconcile a worker on a runtime that reports its instances, applying the
-/// restart policy here rather than in the runtime. Bounded like
+/// Reconcile a deployment on a runtime that reports its instances, applying
+/// the restart policy here rather than in the runtime. Bounded like
 /// [`apply_runtime`].
 #[tracing::instrument(
-    name = "scheduler.reconcile_worker",
+    name = "scheduler.reconcile",
     skip_all,
     fields(
         otel.kind = "internal",
@@ -328,9 +328,11 @@ async fn reconcile_driven(
     rng: &mut rand::rngs::StdRng,
 ) -> Option<Deployment> {
     let id = resolved.id.clone();
-    let pass = reconcile::reconcile_worker(
+    let kind = resolved.workload_kind();
+    let pass = reconcile::reconcile(
         driver,
         policy,
+        kind,
         resolved,
         &resolved_mounts,
         state,
@@ -419,10 +421,14 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
     deployment.pending_events.clear();
 }
 
+/// `promote` moves a Creating deployment that has instances to Running. The
+/// reconcile pass of a runtime with an instance driver promotes by itself, once
+/// a new instance has been seen running, so it passes `false`.
 async fn handle_status_transitions(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     deleted: &mut Vec<String>,
+    promote: bool,
 ) {
     if deployment.status == DeploymentStatus::Deleted && deployment.instances.is_empty() {
         info!("Marking deployment {} for cleanup", deployment.id);
@@ -444,7 +450,10 @@ async fn handle_status_transitions(
         deleted.push(deployment.id.clone());
     }
 
-    if deployment.status == DeploymentStatus::Creating && !deployment.instances.is_empty() {
+    if promote
+        && deployment.status == DeploymentStatus::Creating
+        && !deployment.instances.is_empty()
+    {
         info!(
             "Deployment {} transition: creating -> running",
             deployment.id
@@ -513,14 +522,15 @@ async fn publish_status_change(
     }
 }
 
-/// Returns how many instances a failed liveness check removed.
+/// Returns the instances a failed liveness check removed, with the end of
+/// their output read before the removal took it away.
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     old_status: &DeploymentStatus,
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
-) -> usize {
+) -> Vec<restart_state::Termination> {
     // Health checks run in `Running` (full set, drives `on_failure`) and, for
     // readiness gating, in `Creating` (readiness-only, record-only — see
     // `HealthChecker::execute_checks`). `execute_checks` enforces the
@@ -533,7 +543,7 @@ async fn run_health_checks(
         _ => false,
     };
     if !runnable || deployment.health_checks.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     debug!("Executing health checks for deployment {}", deployment.id);
@@ -575,11 +585,26 @@ async fn run_health_checks(
         deployment.status = new_status;
     }
 
+    let mut removed = Vec::new();
     for instance_id in &outcome.instances_to_remove {
+        let tail = restart_state::LOGS_TAIL_LINES.to_string();
+        let lines: Vec<String> = runtime
+            .get_logs(&deployment.id, Some(&tail), None, Some(instance_id))
+            .await
+            .into_iter()
+            .map(|log| log.message)
+            .collect();
         runtime.remove_instance(instance_id.clone()).await;
         deployment.instances.retain(|id| id != instance_id);
+        removed.push(restart_state::Termination {
+            instance_id: instance_id.clone(),
+            exit_code: None,
+            finished_at: chrono::Utc::now(),
+            started: true,
+            logs_tail: restart_state::logs_tail(&lines),
+        });
     }
-    outcome.instances_to_remove.len()
+    removed
 }
 
 /// Pick the instance `restart_interval` should replace this cycle: the oldest,
@@ -1835,26 +1860,32 @@ pub(crate) async fn schedule(
 
                 let old_status = deployment.status.clone();
                 persist_pending_events(&pool, &mut result).await;
-                handle_status_transitions(&pool, &mut result, &mut deleted).await;
+                handle_status_transitions(&pool, &mut result, &mut deleted, true).await;
 
                 write_back(&pool, &old_status, &result).await;
                 continue;
             }
 
-            // Workers on an instance driver are reconciled by the scheduler,
-            // which applies the restart policy itself. Everything else still
-            // goes through the runtime's `apply`.
-            let driver = runtime
-                .instance_driver()
-                .filter(|_| deployment.kind == "worker");
+            // Deployments on an instance driver are reconciled by the
+            // scheduler, which applies the restart policy itself. The other
+            // runtimes still go through their `apply`.
+            let driver = runtime.instance_driver();
+            let deployment_policy = deployment.restart_policy(&policy);
             let mut state = restart_states.remove(&deployment.id).unwrap_or_default();
             let state_before = state.clone();
             let now = chrono::Utc::now();
 
-            // Honour the retry backoff. A driven worker is still reconciled
+            // Honour the retry backoff. A driven deployment is still reconciled
             // while backing off (an extra instance is stopped, a crash is
             // counted); only starting a new instance waits. (Deletes are
             // handled above and never reach this point.)
+            // A runtime still on `apply` gives up for good on
+            // crash_loop_back_off: its worker path has no guard of its own, and
+            // would otherwise restart the deployment on every tick.
+            if driver.is_none() && deployment.status == DeploymentStatus::CrashLoopBackOff {
+                continue;
+            }
+
             if driver.is_none() && state.backing_off(now) {
                 // Emit this at info as a structured event, not a bare debug line:
                 // a deployment being skipped by backoff is the single most useful
@@ -1978,7 +2009,7 @@ pub(crate) async fn schedule(
                     reconcile_driven(
                         &pool,
                         driver,
-                        &policy,
+                        &deployment_policy,
                         resolved,
                         resolved_mounts,
                         &mut state,
@@ -2013,12 +2044,21 @@ pub(crate) async fn schedule(
             // Nor is there any wait once the budget is spent: the next apply
             // only lands the deployment on its terminal status.
             if driver.is_none() {
+                // A memory refusal is retried past the budget, so it keeps
+                // its backoff instead of being retried on every tick.
                 state.next_attempt_at = if result.restart_count > restart_count_before
-                    && result.restart_count < deployments::MAX_RESTART_COUNT
+                    && (result.restart_count < deployments::MAX_RESTART_COUNT
+                        || result.status == DeploymentStatus::InsufficientResources)
                     && result.status != DeploymentStatus::CrashLoopBackOff
                     && result.status != DeploymentStatus::Failed
                 {
-                    restart::retry_at(&policy, result.restart_count, false, now, &mut rng)
+                    restart::retry_at(
+                        &deployment_policy,
+                        result.restart_count,
+                        false,
+                        now,
+                        &mut rng,
+                    )
                 } else {
                     None
                 };
@@ -2044,8 +2084,8 @@ pub(crate) async fn schedule(
             // an already-established `Running` (which it must not touch), and
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
-            handle_status_transitions(&pool, &mut result, &mut deleted).await;
-            let liveness_kills = run_health_checks(
+            handle_status_transitions(&pool, &mut result, &mut deleted, driver.is_none()).await;
+            let killed = run_health_checks(
                 &pool,
                 &mut result,
                 &old_status,
@@ -2053,13 +2093,17 @@ pub(crate) async fn schedule(
                 runtime.as_ref(),
             )
             .await;
-            // An instance a liveness check removed failed, like one that exited.
-            if driver.is_some() && liveness_kills > 0 {
+            // An instance a liveness check removed failed, like one that exited,
+            // and keeps the end of its output like one.
+            if driver.is_some() && !killed.is_empty() {
+                let kills = killed.len();
+                state.last_termination = killed.into_iter().last();
                 reconcile::record_liveness_kills(
-                    &policy,
+                    &deployment_policy,
+                    result.workload_kind(),
                     &mut result,
                     &mut state,
-                    liveness_kills,
+                    kills,
                     now,
                     &mut rng,
                 );
@@ -2207,6 +2251,7 @@ mod tests {
             pending_events: vec![],
             parent_id: Some("parent-id".to_string()),
             network: None,
+            restart: None,
         }
     }
 

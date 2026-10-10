@@ -146,6 +146,50 @@ fn validate_autoscale(input: &DeploymentInput, errors: &mut ViolationList) {
     }
 }
 
+/// Reject a `restart` block that does not parse, that contradicts the server
+/// policy it is merged over (a `cap` below the server's `base`), or that sets a
+/// key meaningless for the deployment's kind.
+fn validate_restart(
+    input: &DeploymentInput,
+    server: &crate::scheduler::restart::RestartPolicy,
+    errors: &mut ViolationList,
+) {
+    let Some(spec) = &input.restart else {
+        return;
+    };
+
+    if let Err(message) = spec.resolve(server) {
+        errors.push(Violation::new(
+            "restart".to_string(),
+            message,
+            "deployment.restart.invalid".to_string(),
+        ));
+    }
+
+    match input.kind {
+        DeploymentKind::Worker if spec.backoff_limit.is_some() => {
+            errors.push(Violation::new(
+                "restart.backoff_limit".to_string(),
+                "backoff_limit applies to jobs only; a worker is restarted on any exit".to_string(),
+                "deployment.restart.job_only".to_string(),
+            ));
+        }
+        DeploymentKind::Job
+            if spec.on_exhaustion.is_some()
+                || spec.max_attempts.is_some()
+                || spec.stable_after.is_some() =>
+        {
+            errors.push(Violation::new(
+                "restart".to_string(),
+                "on_exhaustion, max_attempts and stable_after apply to workers only; a job uses backoff_limit"
+                    .to_string(),
+                "deployment.restart.worker_only".to_string(),
+            ));
+        }
+        _ => {}
+    }
+}
+
 /// Whether the host uses the unified cgroup v2 hierarchy, which is where
 /// containerd reports a task's CPU time. Ring runs on the same host as the
 /// runtimes it drives.
@@ -828,6 +872,8 @@ pub(crate) struct DeploymentInput {
     ports: Vec<DeploymentPort>,
     #[serde(default)]
     network: Option<NetworkConfig>,
+    #[serde(default)]
+    restart: Option<crate::models::deployments::RestartSpec>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -844,6 +890,7 @@ pub(crate) struct CreateQueryParams {
 pub(crate) async fn create(
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
+    State(configuration): State<crate::config::config::Config>,
     auth: Auth,
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,
@@ -865,6 +912,11 @@ pub(crate) async fn create(
     validate_environment(&input, &mut violations);
     validate_resources(&input, &mut violations);
     validate_autoscale(&input, &mut violations);
+    validate_restart(
+        &input,
+        &configuration.server.restart.policy().unwrap_or_default(),
+        &mut violations,
+    );
     validate_config(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
     if !violations.is_empty() {
@@ -976,6 +1028,7 @@ pub(crate) async fn create(
         pending_events: vec![],
         parent_id: None,
         network: input.network.clone(),
+        restart: input.restart.clone(),
     };
 
     match deploy(&pool, deployment, params.force).await {
@@ -1076,8 +1129,13 @@ pub(crate) async fn deploy(
                 // downtime, but deterministic and loop-free.
                 let publishes_host_port = deployment.ports.iter().any(|p| p.published > 0);
 
+                // A job runs once and has no instance left to hand traffic
+                // over to: it always replaces its predecessor.
+                let is_job = deployment.kind == "job";
+
                 // Rolling update: keep old deployment running if conditions are met
                 if !force
+                    && !is_job
                     && has_health_checks
                     && deployments_list.len() == 1
                     && !publishes_host_port
@@ -1102,6 +1160,8 @@ pub(crate) async fn deploy(
                     // and `host_port_published` is the rolling-incompatible case.
                     replace_reason = Some(if force {
                         "force"
+                    } else if is_job {
+                        "job"
                     } else if !has_health_checks {
                         "no_health_checks"
                     } else if deployments_list.len() > 1 {
@@ -1188,6 +1248,10 @@ pub(crate) async fn deploy(
         let message = match reason {
             "force" => format!(
                 "Replaced {} immediately because force=true was set on the request — rolling update skipped",
+                replaced
+            ),
+            "job" => format!(
+                "Replaced {} immediately because a job runs once — rolling update applies to workers only",
                 replaced
             ),
             "no_health_checks" => format!(
@@ -2882,6 +2946,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_job_replaces_its_predecessor_instead_of_rolling() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let job = |image: &str| {
+            json!({
+                "runtime": "docker",
+                "kind": "job",
+                "name": "migrate",
+                "namespace": "jobs-ns",
+                "image": image,
+                "health_checks": [{
+                    "type": "command",
+                    "command": "/bin/true",
+                    "interval": "10s",
+                    "timeout": "2s",
+                    "on_failure": "restart"
+                }]
+            })
+        };
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&job("migrate:1"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first: serde_json::Value = response.json();
+        let first_id = first["id"].as_str().unwrap().to_string();
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&job("migrate:2"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let second: serde_json::Value = response.json();
+
+        assert!(second["parent_id"].is_null(), "a job never rolls: {second}");
+        let (status,): (String,) = sqlx::query_as("SELECT status FROM deployment WHERE id = ?")
+            .bind(&first_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "deleted");
+    }
+
+    #[tokio::test]
     async fn no_health_checks_bypasses_rolling_update() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
@@ -4250,6 +4367,94 @@ mod tests {
                 StatusCode::CREATED,
                 "{runtime}: {}",
                 response.text()
+            );
+        }
+    }
+
+    async fn post_restart(
+        kind: &str,
+        restart: serde_json::Value,
+    ) -> (StatusCode, Vec<String>, serde_json::Value) {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app).unwrap();
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "kind": kind,
+                "name": "app",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "restart": restart
+            }))
+            .await;
+        let status = response.status_code();
+        let body: serde_json::Value = serde_json::from_str(&response.text()).unwrap_or_default();
+        let codes = body["violations"]
+            .as_array()
+            .map(|vs| {
+                vs.iter()
+                    .filter_map(|v| v["code"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        (status, codes, body)
+    }
+
+    #[tokio::test]
+    async fn create_stores_and_returns_the_restart_block() {
+        let (status, codes, body) =
+            post_restart("worker", json!({ "cap": "30s", "on_exhaustion": "fail" })).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+        assert_eq!(
+            body["restart"],
+            json!({ "cap": "30s", "on_exhaustion": "fail" })
+        );
+
+        let (status, codes, body) = post_restart("job", json!({ "backoff_limit": 3 })).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+        assert_eq!(body["restart"]["backoff_limit"], json!(3));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_an_invalid_restart_block() {
+        for restart in [
+            json!({ "base": "soon" }),
+            json!({ "on_exhaustion": "never" }),
+            // Below the server's `base` (10s).
+            json!({ "cap": "5s" }),
+            json!({ "max_attempts": 0 }),
+        ] {
+            let (status, codes, _) = post_restart("worker", restart.clone()).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{restart}");
+            assert!(
+                codes.contains(&"deployment.restart.invalid".to_string()),
+                "{restart}: {codes:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn create_rejects_restart_keys_of_the_other_kind() {
+        let (status, codes, _) = post_restart("worker", json!({ "backoff_limit": 2 })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            codes.contains(&"deployment.restart.job_only".to_string()),
+            "{codes:?}"
+        );
+
+        for restart in [
+            json!({ "on_exhaustion": "fail" }),
+            json!({ "max_attempts": 2 }),
+            json!({ "stable_after": "1h" }),
+        ] {
+            let (status, codes, _) = post_restart("job", restart.clone()).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{restart}");
+            assert!(
+                codes.contains(&"deployment.restart.worker_only".to_string()),
+                "{restart}: {codes:?}"
             );
         }
     }
