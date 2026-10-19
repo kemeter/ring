@@ -25,6 +25,7 @@
 
 use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::{Deployment, EnvValue};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -124,6 +125,11 @@ pub(crate) async fn build_cidata_iso(
     tokio::fs::create_dir_all(&staging)
         .await
         .map_err(RuntimeError::Io)?;
+    // The user-data carries the environment in clear, secrets included: only
+    // the user Ring runs as may read it, on its way into the image as in it.
+    tokio::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+        .await
+        .map_err(RuntimeError::Io)?;
 
     let user_data = render_user_data(&envs, mounts, net);
     let meta_data = render_meta_data(instance_id);
@@ -148,12 +154,27 @@ pub(crate) async fn build_cidata_iso(
     let img_str = img_path
         .to_str()
         .ok_or_else(|| RuntimeError::Other(format!("non-UTF-8 cidata path: {:?}", img_path)))?;
+    // Created private before mke2fs fills it, which keeps the existing mode.
+    create_private(&img_path).map_err(RuntimeError::Io)?;
 
     let result = build_ext4_cidata(img_str, &staging).await;
     let _ = tokio::fs::remove_dir_all(&staging).await;
     result?;
 
     Ok(img_path)
+}
+
+/// Create an empty file only its owner can read and write (0600), whatever
+/// the umask.
+pub(crate) fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
 }
 
 /// Create an ext4 image labelled `CIDATA` containing the staged user-data and
@@ -461,6 +482,15 @@ mod tests {
         let yaml = render_user_data(&[], &[], None);
         assert!(!yaml.contains("ip addr add"));
         assert!(!yaml.contains("ip route add default"));
+    }
+
+    #[test]
+    fn create_private_is_owner_only() {
+        let path = std::env::temp_dir().join(format!("ring-private-{}", uuid::Uuid::new_v4()));
+        create_private(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(mode, 0o600);
     }
 
     #[test]

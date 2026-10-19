@@ -113,6 +113,10 @@ impl FirecrackerRuntimeConfig {
     }
 }
 
+/// Drive id of the guest config disk. The Firecracker API accepts only
+/// letters, digits and underscores in resource ids.
+const GUEST_CONFIG_DRIVE_ID: &str = "ring_config";
+
 /// The disks a microVM boots from.
 enum RootDisks<'a> {
     /// A private copy of an ext4 image, the root device itself.
@@ -301,6 +305,14 @@ impl FirecrackerLifecycle {
                         .map(|p| p.to_string_lossy().to_string())
                         .filter(|s| !s.is_empty())
                         .unwrap_or_else(|| "/".to_string());
+                    // The file arrives as a disk mounted on its directory, and
+                    // no disk can be mounted over the root of the guest.
+                    if mount_dir == "/" {
+                        return Err(format!(
+                            "a config or secret volume needs a destination inside a directory on firecracker, got {}",
+                            destination
+                        ));
+                    }
 
                     let stage = PathBuf::from(self.config.socket_dir.clone())
                         .join(format!("{}.vol{}.stage", instance_id, idx));
@@ -622,6 +634,7 @@ impl FirecrackerLifecycle {
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&rootfs_rw);
             let _ = std::fs::remove_file(self.cidata_path(&instance_id));
+            let _ = std::fs::remove_file(self.guest_config_path(&instance_id));
             self.cleanup_ephemeral_volumes(&instance_id);
             return Err(RuntimeError::VmStartFailed(format!(
                 "configure/boot failed for {}: {}",
@@ -652,6 +665,7 @@ impl FirecrackerLifecycle {
                         let _ = std::fs::remove_file(&socket_path);
                         let _ = std::fs::remove_file(&rootfs_rw);
                         let _ = std::fs::remove_file(self.cidata_path(&instance_id));
+                        let _ = std::fs::remove_file(self.guest_config_path(&instance_id));
                         return Err(e);
                     }
                 }
@@ -682,6 +696,11 @@ impl FirecrackerLifecycle {
 
     fn cidata_path(&self, instance_id: &str) -> String {
         format!("{}/{}.cidata.iso", self.config.socket_dir, instance_id)
+    }
+
+    /// The guest config disk of a squashfs boot, in place of cidata.
+    fn guest_config_path(&self, instance_id: &str) -> String {
+        format!("{}/{}.ring-config", self.config.socket_dir, instance_id)
     }
 
     /// Host-side base path of the multiplexing Unix socket for the guest's
@@ -718,10 +737,26 @@ impl FirecrackerLifecycle {
             ),
             None => self.config.boot_args.clone(),
         };
+        // A squashfs boot has ring-init apply the environment and volume
+        // mounts, which cloud-init does for an ext4 image (and the squashfs
+        // images of the Firecracker CI do not ship). They travel on a disk
+        // attached after the volumes, so its letter is known up front.
+        let guest_config_device = match rootfs {
+            RootDisks::Overlay { .. }
+                if !deployment.environment.is_empty() || !resolved_mounts.is_empty() =>
+            {
+                let letter = b'a' + (rootfs.drives().len() + resolved_mounts.len()) as u8;
+                Some(format!("/dev/vd{}", letter as char))
+            }
+            _ => None,
+        };
         if let RootDisks::Overlay { .. } = rootfs {
             // Spelled out rather than left to ring-init's defaults, so the
             // drive order below and the guest agree by construction.
             boot_args.push_str(" ring.lower=/dev/vda ring.upper=/dev/vdb");
+        }
+        if let Some(device) = &guest_config_device {
+            boot_args.push_str(&format!(" ring.config={}", device));
         }
 
         client
@@ -764,7 +799,27 @@ impl FirecrackerLifecycle {
             prefix_len: n.prefix_len,
             mac: n.mac.clone(),
         });
-        if !deployment.environment.is_empty() || guest_net.is_some() || !guest_mounts.is_empty() {
+        if guest_config_device.is_some() {
+            let content = super::guest_config::disk_content(deployment, &guest_mounts)?;
+            let path = self.guest_config_path(instance_id);
+            // It holds the environment in clear, secrets included.
+            crate::hypervisor::cloud_init::create_private(Path::new(&path))
+                .and_then(|mut file| std::io::Write::write_all(&mut file, &content))
+                .map_err(|e| format!("cannot write the guest config '{}': {}", path, e))?;
+            client
+                .put_drive(&Drive {
+                    drive_id: GUEST_CONFIG_DRIVE_ID.to_string(),
+                    path_on_host: path,
+                    is_root_device: false,
+                    is_read_only: true,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+        } else if matches!(rootfs, RootDisks::Copy { .. })
+            && (!deployment.environment.is_empty()
+                || guest_net.is_some()
+                || !guest_mounts.is_empty())
+        {
             let socket_dir = PathBuf::from(&self.config.socket_dir);
             let iso_path = crate::hypervisor::cloud_init::build_cidata_iso(
                 instance_id,
@@ -879,6 +934,7 @@ impl FirecrackerLifecycle {
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
         let _ = std::fs::remove_file(self.cidata_path(instance_id));
+        let _ = std::fs::remove_file(self.guest_config_path(instance_id));
         let console_log = self.console_log_path(instance_id);
         let _ = std::fs::remove_file(&console_log);
         // Sweep any rotated backups (`<id>.console.log.1`, `.2`, ...) the
@@ -2271,6 +2327,25 @@ mod tests {
         assert!(cfg.kernel_path.ends_with("/firecracker/vmlinux"));
         assert!(cfg.socket_dir.ends_with("/firecracker/sockets"));
         assert!(cfg.boot_args.contains("console=ttyS0"));
+    }
+
+    #[test]
+    fn drive_ids_are_valid_firecracker_resource_ids() {
+        let valid =
+            |id: &str| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let initrd = PathBuf::from("/run/fc/ring-init.cpio");
+        let overlay = RootDisks::Overlay {
+            lower: "/images/a.squashfs",
+            upper: "/run/fc/vm.ext4",
+            initrd: &initrd,
+        };
+        let copy = RootDisks::Copy {
+            rootfs: "/run/fc/vm.ext4",
+        };
+        for drive in overlay.drives().iter().chain(copy.drives().iter()) {
+            assert!(valid(&drive.drive_id), "{}", drive.drive_id);
+        }
+        assert!(valid(GUEST_CONFIG_DRIVE_ID));
     }
 
     #[test]
