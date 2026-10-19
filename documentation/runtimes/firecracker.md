@@ -95,6 +95,7 @@ What the image and kernel need:
 
 - The kernel must support squashfs (with the image's compression), overlayfs, ext4 and devtmpfs. The CI kernel above does; erofs, for instance, is not in it.
 - The image needs nothing from Ring: no cloud-init and no init script. Ring passes the devices on the kernel command line (`ring.lower=/dev/vda ring.upper=/dev/vdb`), so the squashfs is `/dev/vda`, the layer `/dev/vdb`, and volumes start at `/dev/vdc`.
+- ring-init also applies the deployment's `environment` and `volumes`, which cloud-init does for an ext4 image. They reach it on a small read-only disk named by `ring.config=` (not on the kernel command line, which any user of the guest can read). The environment is written where cloud-init writes it — `/etc/ring/env`, applied to every systemd service through a drop-in, and `/etc/profile.d/ring-env.sh` for shells — and the volumes are mounted before the image's init starts.
 - What a guest writes lives in its layer only, and is gone when the instance is replaced, as with an ext4 copy. Use a named volume for data that must survive.
 
 `ring doctor` warns when ring-init is missing or not executable, and when the configured kernel lacks squashfs, overlayfs or devtmpfs. These are warnings rather than failures, since a host running ext4 images needs none of it.
@@ -199,7 +200,7 @@ Completed jobs are sticky (never rebooted) and their per-instance artifacts (soc
 
 ## Volumes
 
-Firecracker has no virtio-fs (the Cloud Hypervisor mechanism, which its maintainers declined on attack-surface grounds), so a volume is realised as a separate **ext4 image attached as a virtio-block device**. Ring builds the image on the host, attaches it after the root device (`/dev/vdb`, `/dev/vdc`, … in declaration order), and cloud-init in the guest mounts it at the destination.
+Firecracker has no virtio-fs (the Cloud Hypervisor mechanism, which its maintainers declined on attack-surface grounds), so a volume is realised as a separate **ext4 image attached as a virtio-block device**. Ring builds the image on the host, attaches it after the root device (`/dev/vdb`, `/dev/vdc`, … in declaration order), and cloud-init in the guest mounts it at the destination (ring-init for a squashfs image).
 
 ```yaml
 volumes:
@@ -214,7 +215,7 @@ volumes:
 
 Bind and config/secret images are ephemeral and reaped when the instance stops; only named volumes persist.
 
-> Volume mounting requires **cloud-init** (and `mount`/`mkdir`) in the guest rootfs, the same requirement as the static network config. A rootfs without cloud-init attaches the block device but won't mount it.
+> With an ext4 image, volume mounting requires **cloud-init** (and `mount`/`mkdir`) in the guest rootfs. A rootfs without cloud-init attaches the block device but won't mount it. A squashfs image needs none of it: ring-init mounts the volumes (see [Squashfs images](#squashfs-images)).
 
 ## Known gaps (experimental)
 

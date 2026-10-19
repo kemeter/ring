@@ -18,10 +18,14 @@
 //! - `ring.lower=` the squashfs device (default `/dev/vda`)
 //! - `ring.upper=` the writable disk (default `/dev/vdb`)
 //! - `ring.init=` the init to run in the new root (default `/sbin/init`)
+//! - `ring.config=` a disk holding the guest's environment and volume mounts,
+//!   applied to the new root before the handover (see [`guest_config`])
 //!
 //! On any failure it prints the reason on the console and exits: PID 1 exiting
 //! panics the kernel, which with `panic=1 reboot=k` stops the microVM, so Ring
 //! sees the instance fail and can read why in its console log.
+
+mod guest_config;
 
 use std::ffi::CString;
 use std::path::Path;
@@ -38,6 +42,7 @@ struct BootConfig {
     lower: String,
     upper: String,
     init: String,
+    config: Option<String>,
 }
 
 /// Read Ring's settings from the kernel command line, falling back to the
@@ -47,6 +52,7 @@ fn parse_cmdline(cmdline: &str) -> BootConfig {
         lower: "/dev/vda".to_string(),
         upper: "/dev/vdb".to_string(),
         init: "/sbin/init".to_string(),
+        config: None,
     };
     for arg in cmdline.split_whitespace() {
         if let Some(value) = arg.strip_prefix("ring.lower=") {
@@ -55,6 +61,8 @@ fn parse_cmdline(cmdline: &str) -> BootConfig {
             config.upper = value.to_string();
         } else if let Some(value) = arg.strip_prefix("ring.init=") {
             config.init = value.to_string();
+        } else if let Some(value) = arg.strip_prefix("ring.config=") {
+            config.config = Some(value.to_string());
         }
     }
     config
@@ -121,6 +129,24 @@ fn run() -> Result<(), String> {
     chroot(".").map_err(|e| format!("cannot chroot into the new root: {}", e))?;
     chdir("/").map_err(|e| format!("cannot enter the new root: {}", e))?;
 
+    // Applied from inside the new root, so a symbolic link in the image
+    // resolves there, as it would for cloud-init, rather than in the
+    // initramfs.
+    if let Some(device) = &config.config {
+        wait_for(device)?;
+        let disk = std::fs::read(device).map_err(|e| format!("cannot read {}: {}", device, e))?;
+        let guest = guest_config::parse(&disk)?;
+        let root = Path::new("/");
+        guest_config::write_env(root, &guest.env)?;
+        guest_config::mount_volumes(root, &guest.mounts, wait_for)?;
+        // Not prefixed with "ring-init:", which marks a failure.
+        eprintln!(
+            "[ring-init] {} environment variable(s), {} volume(s) mounted",
+            guest.env.len(),
+            guest.mounts.len()
+        );
+    }
+
     let init = CString::new(config.init.clone())
         .map_err(|_| format!("invalid init path {:?}", config.init))?;
     execv(&init, &[&init]).map_err(|e| format!("cannot run {}: {}", config.init, e))?;
@@ -165,6 +191,7 @@ mod tests {
                 lower: "/dev/vda".to_string(),
                 upper: "/dev/vdb".to_string(),
                 init: "/sbin/init".to_string(),
+                config: None,
             }
         );
     }
@@ -177,5 +204,8 @@ mod tests {
         assert_eq!(config.lower, "/dev/vdc");
         assert_eq!(config.upper, "/dev/vdd");
         assert_eq!(config.init, "/lib/systemd/systemd");
+
+        let config = parse_cmdline("console=ttyS0 ring.config=/dev/vdd");
+        assert_eq!(config.config.as_deref(), Some("/dev/vdd"));
     }
 }

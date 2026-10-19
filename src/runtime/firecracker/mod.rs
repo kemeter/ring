@@ -8,6 +8,7 @@
 //! of CH's monolithic `vm.create`).
 
 mod client;
+mod guest_config;
 mod initramfs;
 mod lifecycle;
 
