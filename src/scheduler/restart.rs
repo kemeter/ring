@@ -8,8 +8,10 @@
 //! - Workers restart on any exit and any start error, and by default never
 //!   give up: they keep retrying at `cap`. `OnExhaustion::Fail` opts into
 //!   failing after `max_attempts`.
-//! - Jobs complete on exit 0 and fail once their failures exceed
-//!   `backoff_limit`, as Kubernetes jobs do.
+//! - Jobs complete on exit 0 and fail once the runs that exited non-zero
+//!   exceed `backoff_limit` (0 by default: a job that ran and failed is not run
+//!   again unless its manifest asks for it). A job that could not even start
+//!   ran nothing, so it is retried without limit, as Kubernetes does.
 //! - The delay before attempt `n` is drawn with full jitter from
 //!   `[0, min(cap, base * 2^(n - 1))]`, so workloads failing together (a host
 //!   reboot) do not retry together.
@@ -26,18 +28,15 @@ pub(crate) const DEFAULT_BASE: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_CAP: Duration = Duration::from_secs(5 * 60);
 pub(crate) const DEFAULT_STABLE_AFTER: Duration = Duration::from_secs(10 * 60);
 pub(crate) const DEFAULT_MAX_ATTEMPTS: u32 = 5;
-// Jobs and manifest overrides are wired in once the manifest carries
-// `backoff_limit` and the `restart` block.
-#[allow(dead_code)]
-pub(crate) const DEFAULT_BACKOFF_LIMIT: u32 = 6;
+/// Runs a failed job gets after its first, unless its manifest says otherwise.
+/// Zero, because a job that half-ran (a migration, a dump) is not safe to run
+/// again without being told so.
+pub(crate) const DEFAULT_BACKOFF_LIMIT: u32 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WorkloadKind {
     Worker,
-    #[allow(dead_code)]
-    Job {
-        backoff_limit: u32,
-    },
+    Job { backoff_limit: u32 },
 }
 
 /// What a worker does once its failures would exceed `max_attempts`.
@@ -47,6 +46,18 @@ pub(crate) enum OnExhaustion {
     Backoff,
     /// Stop and mark the deployment failed.
     Fail,
+}
+
+impl std::str::FromStr for OnExhaustion {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "backoff" => Ok(OnExhaustion::Backoff),
+            "fail" => Ok(OnExhaustion::Fail),
+            other => Err(format!("'{other}' is not one of \"backoff\", \"fail\"")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +84,6 @@ impl Default for RestartPolicy {
 /// The `restart` block of a manifest. Every key is optional and falls back to
 /// the server policy.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct RestartOverride {
     pub(crate) base: Option<Duration>,
     pub(crate) cap: Option<Duration>,
@@ -117,7 +127,6 @@ impl RestartPolicy {
     /// The policy for one deployment: this one, with the manifest's overrides
     /// applied key by key. The result is validated as a whole, so an override
     /// of `cap` alone is checked against the server's `base`.
-    #[allow(dead_code)]
     pub(crate) fn with_override(&self, o: &RestartOverride) -> Result<Self, PolicyError> {
         let policy = Self {
             base: o.base.unwrap_or(self.base),
@@ -149,6 +158,9 @@ pub(crate) struct RestartState {
     pub(crate) restart_count: u32,
     /// Start of the current uninterrupted run, if an instance is running.
     pub(crate) running_since: Option<DateTime<Utc>>,
+    /// Job runs that exited non-zero. Unlike `restart_count`, start failures
+    /// do not count, and it never resets: it is what `backoff_limit` bounds.
+    pub(crate) run_failures: u32,
 }
 
 /// Why an instance could not be started.
@@ -240,14 +252,18 @@ pub(crate) fn decide(
 
     state.restart_count = state.restart_count.saturating_add(1);
 
-    let limit = match kind {
-        WorkloadKind::Job { backoff_limit } => Some(backoff_limit),
-        WorkloadKind::Worker => match policy.on_exhaustion {
-            OnExhaustion::Fail => Some(policy.max_attempts),
-            OnExhaustion::Backoff => None,
-        },
+    let exhausted = match (kind, event) {
+        (WorkloadKind::Job { backoff_limit }, Event::Exited { .. }) => {
+            state.run_failures = state.run_failures.saturating_add(1);
+            state.run_failures > backoff_limit
+        }
+        // Nothing ran: retrying a job that could not start is always safe.
+        (WorkloadKind::Job { .. }, Event::StartFailed(_)) => false,
+        (WorkloadKind::Worker, _) => {
+            policy.on_exhaustion == OnExhaustion::Fail && state.restart_count > policy.max_attempts
+        }
     };
-    if limit.is_some_and(|limit| state.restart_count > limit) {
+    if exhausted {
         return Decision::Fail;
     }
 
@@ -489,6 +505,73 @@ mod tests {
             decide(&p, kind, &mut state, crash(), now(), &mut rng),
             Decision::Fail
         );
+    }
+
+    #[test]
+    fn a_job_that_cannot_start_is_retried_without_limit() {
+        let p = RestartPolicy::default();
+        let kind = WorkloadKind::Job { backoff_limit: 0 };
+        let mut state = RestartState::default();
+        let mut rng = rng();
+        for _ in 0..20 {
+            let d = decide(
+                &p,
+                kind,
+                &mut state,
+                Event::StartFailed(StartFailure::Transient),
+                now(),
+                &mut rng,
+            );
+            assert_ne!(d, Decision::Fail);
+        }
+        assert_eq!(state.run_failures, 0);
+        assert_eq!(
+            state.restart_count, 20,
+            "start failures still space the retries"
+        );
+    }
+
+    #[test]
+    fn start_failures_do_not_count_against_backoff_limit() {
+        let p = RestartPolicy::default();
+        let kind = WorkloadKind::Job { backoff_limit: 1 };
+        let mut state = RestartState::default();
+        let mut rng = rng();
+        for _ in 0..3 {
+            decide(
+                &p,
+                kind,
+                &mut state,
+                Event::StartFailed(StartFailure::Transient),
+                now(),
+                &mut rng,
+            );
+        }
+        assert_ne!(
+            decide(&p, kind, &mut state, crash(), now(), &mut rng),
+            Decision::Fail
+        );
+        assert_eq!(
+            decide(&p, kind, &mut state, crash(), now(), &mut rng),
+            Decision::Fail
+        );
+    }
+
+    #[test]
+    fn a_failed_job_is_not_run_again_by_default() {
+        let p = RestartPolicy::default();
+        let mut state = RestartState::default();
+        let d = decide(
+            &p,
+            WorkloadKind::Job {
+                backoff_limit: DEFAULT_BACKOFF_LIMIT,
+            },
+            &mut state,
+            crash(),
+            now(),
+            &mut rng(),
+        );
+        assert_eq!(d, Decision::Fail);
     }
 
     #[test]

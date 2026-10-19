@@ -86,9 +86,11 @@ On Docker and Podman, a worker is **never abandoned**. It is a service: whatever
 - Once the worker has run for `stable_after` (10 minutes) without a failure, `restart_count` resets to 0.
 - The delay, the running time and the last exit (code, time and the last 80 lines or 2 KiB of output) are stored in the database, so a `ring server` restart does not reset anyone's backoff.
 
-All of this is tunable in [`[server.restart]`](/documentation/reference/config-toml#server-restart), including `on_exhaustion = "fail"` for an operator who prefers a worker to stop after `max_attempts` failures.
+All of this is tunable in [`[server.restart]`](/documentation/reference/config-toml#server-restart), including `on_exhaustion = "fail"` for an operator who prefers a worker to stop after `max_attempts` failures, and per deployment with the manifest's [`restart`](/documentation/reference/manifest#restart) block.
 
-Jobs, and workers on containerd, Cloud Hypervisor and Firecracker, still use the previous budget: past 5 failed attempts, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops trying until the manifest is re-applied. Their retries are spaced on the same backoff curve.
+A job runs once: a run that exits non-zero fails it, unless the manifest sets `restart.backoff_limit`. A job that cannot start is retried without limit, since nothing ran.
+
+Workers and jobs on containerd, Cloud Hypervisor and Firecracker still use the previous budget: past 5 failed attempts, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops trying until the manifest is re-applied. Their retries are spaced on the same backoff curve.
 
 ## What survives a `ring server` restart
 

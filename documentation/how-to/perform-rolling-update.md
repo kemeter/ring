@@ -11,6 +11,7 @@ For the underlying mechanism (parent/child deployments, readiness gate, drain lo
 | Manifest has ≥1 `health_checks:` entry, exactly one active deployment shares `name`+`namespace`, no `--force` | **Rolling update** |
 | `--force` is set | Immediate replacement |
 | No health checks declared | Immediate replacement |
+| `kind: job` | Immediate replacement (a job runs once, there is nothing to hand over) |
 | Multiple active deployments share `name`+`namespace` | Immediate replacement (clean up duplicates first) |
 | Manifest publishes a host port (`ports[].published`) | Immediate replacement (**recreate**), see below |
 

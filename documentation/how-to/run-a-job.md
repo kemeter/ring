@@ -34,6 +34,24 @@ Status transitions:
 
 `completed` and `failed` jobs stay in the database: they're history, not active deployments. Prune them with `ring namespace prune <namespace>`.
 
+A job that could not even start (an image that cannot be pulled, a missing config, not enough memory) is not `failed`: nothing ran, so Ring keeps retrying it on the backoff curve, up to 5 minutes apart, and runs it as soon as the cause is fixed.
+
+### Retry a failed run
+
+By default a job that ran and exited non-zero is **not** run again: it may have half-done its work, and only you know whether running it twice is safe. For a job that is, ask for retries:
+
+```yaml
+deployments:
+  sync:
+    name: sync
+    kind: job
+    image: registry.example.com/sync:1.4
+    restart:
+      backoff_limit: 3   # up to 3 more runs after the first failure
+```
+
+The runs are spaced by the same backoff as workers (up to 10 s after the first failure, then doubling). See [`restart`](/documentation/reference/manifest#restart).
+
 ## Inject configuration and secrets
 
 Jobs accept the same `environment:` block as workers:
@@ -188,7 +206,7 @@ A unique date in the name keeps multiple backfills coexisting in the database fo
 
 - **No cron.** Ring does not schedule jobs on a recurring time. Trigger from cron, GitHub Actions, or any external scheduler. For periodic work inside Ring, run a long-lived worker that wakes itself up.
 - **No parallelism.** `replicas: 4` on a job runs **one** instance, not four. For fan-out, deploy multiple jobs with distinct names or use a worker consuming from a queue.
-- **No automatic retry.** A `failed` job stays failed until you act.
+- **No retry unless asked.** A job that ran and failed stays `failed` unless its manifest sets `restart.backoff_limit`. On Docker and Podman only; on the other runtimes a failed job is never run again.
 - **No timeout / deadline.** A job that hangs runs until `ring deployment delete`. Plan timeouts inside your job's command.
 - **Logs live with the container.** Once you prune the deployment, the underlying Docker container goes away and the logs go with it. Ship logs out (Loki, Fluent Bit, journald → a collector) before pruning if you need long retention.
 - **Cloud Hypervisor:** clean guest shutdown = `completed`, regardless of the workload's actual exit code. Ring can't see the guest's main-process exit from the host. If exit-code precision matters, prefer Docker. See [Runtimes](/documentation/concepts/runtimes#quick-comparison).

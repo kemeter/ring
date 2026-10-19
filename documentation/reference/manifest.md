@@ -139,6 +139,7 @@ A map of deployment declarations. A manifest may carry `configs:` alone, to upda
 | `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
 | `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. |
 | `autoscale` | object | unset | Adjust the instance count from observed CPU. Opt-in: without it the count never changes on its own. See [autoscale](#autoscale). |
+| `restart` | object | unset | How this deployment is restarted after a failure, over the server's `[server.restart]`. See [restart](#restart). |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only**, rejected at the API on the CH runtime. |
 | `environment` | map | `{}` | Environment variables, either plain values or `secretRef` references. See [environment](#environment). |
 | `volumes` | object list | `[]` | Volume mounts. See [volumes](#volumes). |
@@ -426,6 +427,31 @@ Rejected combinations, reported at `ring apply` time:
 - **`kind: job`** — a job runs once and exits, it has no steady-state CPU to aim at.
 - **`network.mode: host` with `max` above 1** — every instance would compete for the same host ports.
 - **the `containerd` runtime on a cgroup v1 host** — containerd reports CPU from cgroup v2 only, so a CPU target would be measured against a constant zero and walk the deployment down to `min`.
+
+## `restart`
+
+Tune how Ring restarts this deployment after a failure. Every key is optional and falls back to the server's [`[server.restart]`](/documentation/reference/config-toml#server-restart):
+
+```yaml
+restart:
+  cap: 30s            # a critical worker that should come back quickly
+  stable_after: 30m   # a slow starter, reset its counter later
+```
+
+| Field | Applies to | Description |
+|---|---|---|
+| `base` | all | Upper bound of the delay before the first retry, e.g. `10s` |
+| `cap` | all | Upper bound of the delay between two retries. Must not be lower than `base`, whether `base` comes from this block or from the server |
+| `stable_after` | workers | Uninterrupted running time after which the attempt counter resets |
+| `on_exhaustion` | workers | `backoff` (default) keeps retrying at `cap` forever; `fail` marks the worker `failed` once its failures exceed `max_attempts` |
+| `max_attempts` | workers | Read when `on_exhaustion` is `fail` |
+| `backoff_limit` | jobs | How many times a run that exited non-zero is run again. Default `0`: a failed job is not run again |
+
+Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`). Ring rejects at `ring apply` time a block that does not parse, a `cap` below the effective `base`, an unknown key, `backoff_limit` on a worker and `on_exhaustion`, `max_attempts` or `stable_after` on a job.
+
+A job that cannot even start (an image that cannot be pulled, a missing config, not enough memory) is retried without limit on the backoff curve: nothing ran, so nothing can be run twice. `backoff_limit` only counts runs that exited non-zero.
+
+Applies on Docker and Podman. On the other runtimes, workers and jobs still give up after 5 failed attempts.
 
 ## `health_checks`
 

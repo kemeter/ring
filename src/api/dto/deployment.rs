@@ -53,6 +53,9 @@ pub(crate) struct DeploymentOutput {
     /// number would show a target the runtimes are not aiming at.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) desired_replicas: Option<u32>,
+    /// The manifest's `restart` block, absent when it has none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) restart: Option<crate::models::deployments::RestartSpec>,
     pub(crate) ports: Vec<DeploymentPort>,
     pub(crate) labels: HashMap<String, String>,
     /// Running instances of this deployment. Each carries its id and — when it
@@ -117,6 +120,7 @@ impl DeploymentOutput {
             replicas: deployment.replicas,
             desired_replicas: effective_target,
             autoscale: deployment.autoscale,
+            restart: deployment.restart,
             ports: deployment.ports,
             labels,
             environment,

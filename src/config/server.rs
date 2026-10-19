@@ -92,15 +92,10 @@ impl RestartConfig {
         let duration = |key: &str, value: &str| {
             parse_interval(value).map_err(|e| format!("[server.restart] {key}: {e}"))
         };
-        let on_exhaustion = match self.on_exhaustion.as_str() {
-            "backoff" => OnExhaustion::Backoff,
-            "fail" => OnExhaustion::Fail,
-            other => {
-                return Err(format!(
-                    "[server.restart] on_exhaustion: '{other}' is not one of \"backoff\", \"fail\""
-                ));
-            }
-        };
+        let on_exhaustion: OnExhaustion = self
+            .on_exhaustion
+            .parse()
+            .map_err(|e| format!("[server.restart] on_exhaustion: {e}"))?;
         let policy = RestartPolicy {
             base: duration("base", &self.base)?,
             cap: duration("cap", &self.cap)?,
