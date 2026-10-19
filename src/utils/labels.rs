@@ -11,7 +11,7 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::Error;
-    use serde_yaml::Value;
+    use serde_norway::Value;
 
     let value = Value::deserialize(deserializer)?;
     let mut labels = HashMap::new();
@@ -63,7 +63,7 @@ mod tests {
     #[test]
     fn test_empty_array_labels() {
         let yaml = "labels: []";
-        let test: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let test: TestStruct = serde_norway::from_str(yaml).unwrap();
         assert_eq!(test.labels.len(), 0);
     }
 
@@ -74,7 +74,7 @@ labels:
   app: "my-app"
   version: "1.0"
 "#;
-        let test: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let test: TestStruct = serde_norway::from_str(yaml).unwrap();
         assert_eq!(test.labels.len(), 2);
         assert_eq!(test.labels.get("app"), Some(&"my-app".to_string()));
         assert_eq!(test.labels.get("version"), Some(&"1.0".to_string()));
@@ -87,7 +87,7 @@ labels:
   - app: "my-app"
   - version: "1.0"
 "#;
-        let test: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let test: TestStruct = serde_norway::from_str(yaml).unwrap();
         assert_eq!(test.labels.len(), 2);
         assert_eq!(test.labels.get("app"), Some(&"my-app".to_string()));
         assert_eq!(test.labels.get("version"), Some(&"1.0".to_string()));
@@ -96,7 +96,7 @@ labels:
     #[test]
     fn test_missing_labels() {
         let yaml = "other: value";
-        let test: TestStruct = serde_yaml::from_str(yaml).unwrap();
+        let test: TestStruct = serde_norway::from_str(yaml).unwrap();
         assert_eq!(test.labels.len(), 0);
     }
 }

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Health check results record the instance they probed, returned as `instance_id` by `GET /deployments/{id}/health-checks`. `restart_interval` uses it: a failure from an instance that is already gone no longer holds the next replacement back, and the readiness that lets it proceed has to come from the replacement itself
 
 ### Fixed
+- Bump `rustls` to 0.23.46 for RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349
+- Replace dependencies that are no longer maintained: `serde_yaml`, deprecated and archived along with its `unsafe-libyaml` parser, by `serde_norway`, a maintained fork with the same API that reads `ring apply` manifests; `inquire` 0.9 drops `fxhash`; newer `validator_derive` and `getset` drop `proc-macro-error2`
 - A user label named `ring_deployment` replaced the label Ring uses to find a deployment's containers (Docker, Podman and containerd), so Ring lost track of them. Ring's own labels now take precedence over the user's
 - `ring doctor` checked the network capabilities of the Firecracker runtime on the `firecracker` binary, reporting a failure and suggesting a `setcap` on the wrong file: Ring creates the microVMs' taps itself, so it is `cap_net_admin` on the Ring binary that is checked now
 - On containerd 2.x, Ring did not see a deployment's running instances and created a new one on every scheduler cycle: `ListTasks` no longer fills a task's container id, which the instances were matched on. They are now matched on the task's own id when the container id is empty
