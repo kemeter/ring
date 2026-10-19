@@ -62,11 +62,20 @@ fn resolve_username(flag: Option<String>) -> String {
         }
         CredentialAction::Prompt => inquire::Text::new("Username:")
             .prompt()
+            .map(without_pasted_line_breaks)
             .unwrap_or_else(|_| {
                 eprintln!("Aborted.");
                 exit_code::ExitCode::General.exit();
             }),
     }
+}
+
+/// Drop the line breaks a paste carries at the end of a typed credential.
+/// The prompt keeps a pasted newline as part of the input, and Enter then
+/// submits it with the value: hidden behind the password mask, it would fail
+/// the login for no visible reason.
+fn without_pasted_line_breaks(value: String) -> String {
+    value.trim_end_matches(['\r', '\n']).to_string()
 }
 
 /// Returns the password from the flag, or prompts for it (masked) on an
@@ -82,6 +91,7 @@ fn resolve_password(flag: Option<String>) -> String {
             .with_display_mode(inquire::PasswordDisplayMode::Masked)
             .without_confirmation()
             .prompt()
+            .map(without_pasted_line_breaks)
             .unwrap_or_else(|_| {
                 eprintln!("Aborted.");
                 exit_code::ExitCode::General.exit();
@@ -163,7 +173,7 @@ pub(crate) async fn execute(
 
 #[cfg(test)]
 mod tests {
-    use super::{CredentialAction, decide_credential};
+    use super::{CredentialAction, decide_credential, without_pasted_line_breaks};
 
     #[test]
     fn flag_value_is_used_regardless_of_tty() {
@@ -185,5 +195,19 @@ mod tests {
     #[test]
     fn missing_flag_fails_without_a_terminal() {
         assert_eq!(decide_credential(None, false), CredentialAction::Fail);
+    }
+
+    #[test]
+    fn a_pasted_trailing_newline_is_dropped() {
+        assert_eq!(without_pasted_line_breaks("s3cret\n".to_string()), "s3cret");
+        assert_eq!(
+            without_pasted_line_breaks("s3cret\r\n".to_string()),
+            "s3cret"
+        );
+        // Only line breaks: a password may end or start with spaces.
+        assert_eq!(
+            without_pasted_line_breaks(" s3cret ".to_string()),
+            " s3cret "
+        );
     }
 }

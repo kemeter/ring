@@ -17,7 +17,7 @@ use std::path::Path;
 #[derive(Debug)]
 enum ApplyError {
     FileRead(std::io::Error),
-    YamlParse(serde_yaml::Error),
+    YamlParse(serde_norway::Error),
     Validation(String),
     Http(reqwest::Error),
     // The failure has already been printed to stderr (typically by
@@ -450,7 +450,8 @@ fn load_config_file(
 ) -> Result<ConfigFile, ApplyError> {
     let contents = fs::read_to_string(file_path).map_err(ApplyError::FileRead)?;
 
-    let mut config: ConfigFile = serde_yaml::from_str(&contents).map_err(ApplyError::YamlParse)?;
+    let mut config: ConfigFile =
+        serde_norway::from_str(&contents).map_err(ApplyError::YamlParse)?;
 
     // `files` references are relative to the manifest's directory, so resolve
     // them while we still know where the manifest lives.
@@ -1104,7 +1105,7 @@ deployments:
     config:
       stop_timeout: 120
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let deployment = config.deployments.get("db").unwrap();
 
         assert_eq!(
@@ -1150,7 +1151,7 @@ deployments:
       - sozune.host: "nginx.localhost"
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
 
         assert_eq!(config.deployments.len(), 2);
 
@@ -1178,7 +1179,7 @@ deployments:
     image: nginx
     labels: []
 "#;
-        let config1: ConfigFile = serde_yaml::from_str(yaml1).unwrap();
+        let config1: ConfigFile = serde_norway::from_str(yaml1).unwrap();
         assert_eq!(config1.deployments["test1"].labels.len(), 0);
 
         let yaml2 = r#"
@@ -1190,7 +1191,7 @@ deployments:
       - app: "my-app"
       - version: "1.0"
 "#;
-        let config2: ConfigFile = serde_yaml::from_str(yaml2).unwrap();
+        let config2: ConfigFile = serde_norway::from_str(yaml2).unwrap();
         let labels2 = &config2.deployments["test2"].labels;
         assert_eq!(labels2.len(), 2);
         assert_eq!(labels2.get("app"), Some(&"my-app".to_string()));
@@ -1205,7 +1206,7 @@ deployments:
       app: "my-app"
       version: "1.0"
 "#;
-        let config3: ConfigFile = serde_yaml::from_str(yaml3).unwrap();
+        let config3: ConfigFile = serde_norway::from_str(yaml3).unwrap();
         let labels3 = &config3.deployments["test3"].labels;
         assert_eq!(labels3.len(), 2);
         assert_eq!(labels3.get("app"), Some(&"my-app".to_string()));
@@ -1230,7 +1231,7 @@ deployments:
     replicas: 3
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
 
         assert_eq!(config.namespaces.len(), 2);
         assert_eq!(config.namespaces["production"].name, "production");
@@ -1256,7 +1257,7 @@ deployments:
     replicas: 3
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
 
         let policy = config.deployments["api"]
             .autoscale
@@ -1285,7 +1286,7 @@ deployments:
     name: api
     image: myapp:latest
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let payload = serde_json::to_string(&config.deployments["api"]).unwrap();
 
         assert!(
@@ -1327,7 +1328,7 @@ deployments:
         on_failure: alert
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let api = &config.deployments["api"];
 
         assert_eq!(api.command.len(), 3);
@@ -1408,7 +1409,7 @@ deployments:
         destination: /data
         permission: rw
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let mut nginx = config.deployments["nginx"].clone();
         nginx.resolve_env_vars(&HashMap::new());
 
@@ -1457,7 +1458,7 @@ deployments:
         key: app.yaml
         destination: /etc/app.yaml
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let names =
             deployments_mounting(&config.deployments, &HashMap::new(), &config.configs["app"]);
         // Not `worker` (another config), not the staging `api` (another
@@ -1475,7 +1476,7 @@ deployments:
     config:
       restart_interval: 24h
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let payload = serde_json::to_value(&config.deployments["vector"]).unwrap();
         assert_eq!(payload["config"]["restart_interval"], "24h");
     }
@@ -1489,7 +1490,7 @@ configs:
     name: app
     data: '{"app.yaml":"level: debug"}'
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         assert_eq!(config.configs.len(), 1);
         assert!(config.deployments.is_empty());
     }
@@ -1512,7 +1513,7 @@ deployments:
         source: /tmp/data
         destination: /data
 "#;
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         let volumes = serde_json::to_value(&config.deployments["nginx"].volumes).unwrap();
 
         assert_eq!(volumes[0]["on_change"], "live");
@@ -1543,7 +1544,7 @@ deployments:
         destination: /var/config/test.conf
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
 
         assert_eq!(config.configs.len(), 1);
         let entry = &config.configs["entrypoints"];
@@ -1802,7 +1803,7 @@ deployments:
     runtime: docker
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         assert_eq!(config.configs.len(), 0);
     }
 
@@ -1816,7 +1817,7 @@ deployments:
     runtime: docker
 "#;
 
-        let config: ConfigFile = serde_yaml::from_str(yaml_content).unwrap();
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
         assert_eq!(config.namespaces.len(), 0);
         assert_eq!(config.deployments.len(), 1);
     }
