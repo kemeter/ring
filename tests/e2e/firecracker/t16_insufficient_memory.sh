@@ -5,7 +5,7 @@
 # with an opaque allocation error and then crash-loops — burning a rootfs copy
 # and a TAP on every attempt for RAM that is never going to appear. Ring checks
 # the request against the host's available memory before any of that work and
-# fails fast with a TERMINAL `insufficient_resources` status.
+# fails fast with `insufficient_resources`, retried on the backoff curve.
 #
 # Cloud Hypervisor has this coverage (t23); Firecracker did not, even though
 # `check_host_memory` is shared between them and is the only resource admission
@@ -77,22 +77,36 @@ ROOTFS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null |
 [ "$ROOTFS" -eq 0 ] || fail "$ROOTFS rootfs image(s) copied before the admission check refused the boot"
 log "no VM was spawned and no rootfs was copied"
 
-# Terminal, not transient: the RAM is not coming back, so retrying would only
-# spam events.
-#
-# `restart_count` stays 0: the admission check refused the boot before any
-# process existed, so there is nothing to report. It used to read 5 — the
-# terminal path assigned MAX_RESTART_COUNT as a "stop reconciling" marker,
-# which was redundant (the scheduler already skips this status) and made the
-# field claim restarts that never happened.
-#
-# What matters here is that the count is FROZEN: nothing is retrying underneath.
-COUNT_ONE=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')
+# Retried, since memory gets freed, but on the backoff curve: each refusal
+# counts as one attempt and pushes the next one out, so the scheduler does not
+# retry on every tick. The delay before attempt n is drawn from
+# [0, 10s * 2^(n-1)], so over 12 one-second ticks there are, short of a ~1e-7
+# run of tiny draws, no more than five attempts.
+restart_count() {
+  "$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0'
+}
+COUNT_ONE=$(restart_count)
 sleep 12
-COUNT_TWO=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null | jq -r '.restart_count // 0')
-[ "$COUNT_TWO" -eq "$COUNT_ONE" ] \
-  || fail "restart_count moved from $COUNT_ONE to $COUNT_TWO: insufficient_resources is being retried instead of being terminal"
-log "restart_count frozen at $COUNT_TWO — nothing is retrying"
+COUNT_TWO=$(restart_count)
+[ $((COUNT_TWO - COUNT_ONE)) -le 5 ] \
+  || fail "restart_count moved from $COUNT_ONE to $COUNT_TWO in 12s: insufficient_resources is retried without backoff"
+# And it is retried at all: the next attempt lands within the current ceiling
+# (40s for the third attempt, by which point it has normally moved already).
+for _ in $(seq 1 45); do
+  [ "$COUNT_TWO" -gt "$COUNT_ONE" ] && break
+  sleep 1
+  COUNT_TWO=$(restart_count)
+done
+[ "$COUNT_TWO" -gt "$COUNT_ONE" ] \
+  || fail "restart_count stayed at $COUNT_ONE for a minute: insufficient_resources is not being retried"
+log "restart_count moved from $COUNT_ONE to $COUNT_TWO — retried on the backoff curve"
+
+# A retry is refused by the same check, before any VM or rootfs exists.
+SOCKETS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2>/dev/null | wc -l | tr -d ' ')
+ROOTFS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null | wc -l | tr -d ' ')
+[ "$SOCKETS" -eq 0 ] && [ "$ROOTFS" -eq 0 ] \
+  || fail "a retry spawned a VM ($SOCKETS socket(s)) or copied a rootfs ($ROOTFS image(s))"
+log "no retry spawned a VM or copied a rootfs"
 
 # The status must not drift onwards to crash_loop_back_off: an operator
 # filtering on insufficient_resources would otherwise lose sight of it.
@@ -121,4 +135,4 @@ log "one error event carries the reason and the needed/available figures"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 
-log "== T16-FC: PASS — over-ask refused before boot, terminal, and explained =="
+log "== T16-FC: PASS — over-ask refused before boot, backed off, and explained =="
