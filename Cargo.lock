@@ -2581,6 +2581,8 @@ name = "ring-init"
 version = "0.1.0"
 dependencies = [
  "nix",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
