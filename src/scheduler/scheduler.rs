@@ -1738,16 +1738,12 @@ pub(crate) async fn schedule(
 
         // The scheduler picks up every status that can still progress on the
         // next tick. Pending/Creating need their first apply, Running needs
-        // reconciliation, Deleted needs cleanup, and the transient error
-        // states need to keep retrying until `restart_count` reaches
-        // `MAX_RESTART_COUNT` — at which point the runtime flips the
-        // deployment to `CrashLoopBackOff` and stops being included here.
+        // reconciliation, Deleted needs cleanup, and the error states
+        // (CrashLoopBackOff and InsufficientResources included) are retried
+        // on the restart policy's backoff curve.
         //
-        // Statuses left out on purpose: Completed (terminal job), Failed,
-        // CrashLoopBackOff (terminal failure), InsufficientResources (the host
-        // is short on memory — a retry won't conjure more, so we stop instead
-        // of crash-looping). Anything in those states is done — no point
-        // reconciling further.
+        // Statuses left out on purpose: Completed (finished job) and Failed.
+        // Anything in those states is done — no point reconciling further.
         //
         // We go through `DeploymentStatus::to_string()` rather than writing
         // the literal strings here: the compiler then guarantees the filter
