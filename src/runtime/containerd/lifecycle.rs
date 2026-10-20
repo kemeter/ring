@@ -393,8 +393,7 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         );
-        // No task at all is an answer; failing to ask is not, and must not be
-        // read as an instance that never ran.
+        // Failing to ask must not be read as an instance that never ran.
         let process = match tasks.get(req).await {
             Ok(resp) => resp.into_inner().process,
             Err(status) if status.code() == tonic::Code::NotFound => None,
@@ -405,8 +404,12 @@ impl ContainerdLifecycle {
                 )));
             }
         };
-        // A task that is not stopped never ran its program: it was created and
-        // its start refused, or it was never created at all.
+        // A task still `Created` never ran its program: its start was refused.
+        // A task that is gone may have run before it was removed, so it ended
+        // with an unknown code; reading it as never started would run a job
+        // twice.
+        let status = process.as_ref().map(|p| TaskStatus::try_from(p.status));
+        let started = status != Some(Ok(TaskStatus::Created));
         let stopped = process
             .as_ref()
             .filter(|p| TaskStatus::try_from(p.status) == Ok(TaskStatus::Stopped));
@@ -421,7 +424,7 @@ impl ContainerdLifecycle {
         Ok(Termination {
             exit_code: stopped.map(|p| i64::from(p.exit_status)),
             finished_at,
-            started: stopped.is_some(),
+            started,
             logs_tail: logs_tail(&lines),
             instance_id,
         })
