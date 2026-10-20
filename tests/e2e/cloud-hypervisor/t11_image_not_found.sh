@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # T11-CH: deploying with a non-existent disk image must land the
-# deployment in `ImagePullBackOff` (a permanent state, not a transient
-# crash loop). Cloud Hypervisor classifies a missing rootfs as
-# `RuntimeError::ImageNotFound`, which the lifecycle pins to
-# `DeploymentStatus::ImagePullBackOff`. We assert that status and that
-# the scheduler does NOT keep retrying forever (no restart_count growth).
+# deployment in `ImagePullBackOff`. Cloud Hypervisor classifies a missing
+# rootfs as `RuntimeError::ImageNotFound`. The image may appear later, so
+# the start is retried, but on the restart policy's backoff curve: never on
+# every scheduler tick.
 
 set -euo pipefail
 
@@ -41,16 +40,19 @@ DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "missing-image")
 [ -z "$DEPLOYMENT_ID" ] && fail "no deployment id"
 log "deployment landed in ImagePullBackOff: $DEPLOYMENT_ID"
 
-# === restart_count must stay at 0 — ImagePullBackOff is permanent ===
-# A few scheduler ticks pass; if the runtime kept retrying, restart_count
-# would grow. The classification as a permanent error is what guarantees
-# this: the scheduler skips retries.
+# === Each attempt is counted, and retries are spaced out ===
+# Five scheduler ticks pass (1s each in e2e). Retrying on every tick would
+# count about five attempts; the backoff (up to 10s, then up to 20s) allows
+# at most three.
 sleep 5
 RC=$(get_restart_count "ring-e2e" "missing-image")
-if [ "$RC" != "0" ]; then
-  fail "restart_count=$RC after a permanent ImageNotFound (expected 0 — scheduler must not retry)"
+if [ "${RC:-0}" -lt 1 ] || [ "$RC" -gt 3 ]; then
+  fail "restart_count=$RC after 5s of a missing image (expected 1 to 3: counted, but backed off)"
 fi
-log "restart_count stayed at 0 (permanent error not retried)"
+log "restart_count=$RC (counted and backed off)"
+STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
+  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | .status')
+[ "$STATUS" = "image_pull_back_off" ] || fail "expected image_pull_back_off, got '$STATUS'"
 
 # === No CH socket / VM was created — there is nothing to clean up but
 # we check anyway, so a future regression that *does* create a half-baked

@@ -6,15 +6,14 @@
 # Without the pre-check, socat would silently die after `Bind: Address
 # already in use`, the VM would still boot, and the host port would be a
 # black hole. The pre-check in `port_forwarder::host_port_available`
-# rejects the boot up front and surfaces a `PortAllocationFailed` event;
-# the scheduler then retries (a port may free up) and falls into
-# `CrashLoopBackOff` after MAX_RESTART_COUNT (5).
+# rejects the boot up front and surfaces a `port_allocation_failed` event;
+# the scheduler then retries on the backoff curve, since the port may free
+# up.
 #
 # What we assert:
-#   1. A `PortAllocationFailed` event is emitted within a few scheduler
+#   1. A `port_allocation_failed` event is emitted within a few scheduler
 #      ticks.
-#   2. The deployment ends up in a terminal state (`crashloopbackoff` or
-#      `error`) once the retries are exhausted.
+#   2. The deployment reports `error` and keeps retrying.
 #   3. The blocker process never gets dispossessed of its port — i.e. the
 #      pre-check is non-destructive.
 
@@ -86,53 +85,35 @@ done
 [ -z "$DEP_ID" ] && fail "deployment row never appeared"
 log "deployment id: $DEP_ID"
 
-# === 1) PortAllocationFailed event surfaces ===
+# === 1) port_allocation_failed event surfaces ===
 TOKEN=$(jq -r '.default.token' "$RING_CONFIG_DIR/auth.json")
-log "waiting for PortAllocationFailed event..."
+log "waiting for port_allocation_failed event..."
 EVENTS_RAW=""
 for _ in $(seq 1 60); do
   EVENTS_RAW=$(curl -s -H "Authorization: Bearer $TOKEN" \
     "${RING_URL}/deployments/${DEP_ID}/events" || true)
-  COUNT=$(echo "$EVENTS_RAW" | jq 'if type == "array" then [.[] | select(.reason=="PortAllocationFailed")] | length else 0 end' 2>/dev/null || echo 0)
+  COUNT=$(echo "$EVENTS_RAW" | jq 'if type == "array" then [.[] | select(.reason=="port_allocation_failed")] | length else 0 end' 2>/dev/null || echo 0)
   [ "${COUNT:-0}" -ge 1 ] && break
   sleep 1
 done
 if [ "${COUNT:-0}" -lt 1 ]; then
   echo "[e2e] last events response:" >&2
   echo "$EVENTS_RAW" | jq . >&2 2>/dev/null || echo "$EVENTS_RAW" >&2
-  fail "no PortAllocationFailed event after 60s — pre-check did not fire or event was misnamed"
+  fail "no port_allocation_failed event after 60s — pre-check did not fire or event was misnamed"
 fi
-log "$COUNT PortAllocationFailed event(s) recorded"
+log "$COUNT port_allocation_failed event(s) recorded"
 
-# === 2) Deployment lands in a terminal state ===
-# MAX_RESTART_COUNT is 5 and the scheduler tick is 1s in e2e, so 60s is a
-# comfortable upper bound for the deployment to exhaust retries and flip
-# to CrashLoopBackOff. The exact name of the status depends on the
-# rust-side enum; accept any of the known terminal variants.
-log "waiting for deployment to reach a terminal state..."
-TERMINAL=""
-for _ in $(seq 1 120); do
-  TERMINAL=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r --arg id "$DEP_ID" '.[] | select(.id==$id) | .status' \
-    | head -n1)
-  # Lowercase for matching — the API can emit PascalCase
-  # (`CrashLoopBackOff`) or the rust-side debug form depending on the
-  # serializer; comparing case-insensitively keeps the assertion stable.
-  case "$(echo "$TERMINAL" | tr '[:upper:]' '[:lower:]')" in
-    crashloopbackoff|error|failed)
-      log "deployment reached terminal status '$TERMINAL'"
-      break
-      ;;
-  esac
-  sleep 1
-done
-case "$(echo "$TERMINAL" | tr '[:upper:]' '[:lower:]')" in
-  crashloopbackoff|error|failed)
-    ;;
-  *)
-    fail "deployment never reached a terminal state (last status: '$TERMINAL') — retries did not exhaust"
-    ;;
-esac
+# === 2) The deployment reports the failure and keeps retrying ===
+# A busy port may free up, so the start is retried on the backoff curve
+# rather than given up on.
+wait_deployment_status "ring-e2e" "port-conflict" "error" 60
+RC_BEFORE=$(get_restart_count "ring-e2e" "port-conflict")
+sleep 30
+RC_AFTER=$(get_restart_count "ring-e2e" "port-conflict")
+if [ "${RC_AFTER:-0}" -le "${RC_BEFORE:-0}" ]; then
+  fail "restart_count stayed at $RC_BEFORE over 30s — the start is not retried"
+fi
+log "start retried: restart_count $RC_BEFORE -> $RC_AFTER"
 
 # === 3) The blocker still owns the port ===
 # If the pre-check used SO_REUSEPORT or otherwise stole the port from the
