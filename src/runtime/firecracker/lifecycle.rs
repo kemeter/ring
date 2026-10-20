@@ -1547,10 +1547,16 @@ impl InstanceDriver for FirecrackerLifecycle {
                     observation.running.push(instance_id);
                     continue;
                 }
-                // Inherited: alive while a firecracker process holds its socket.
+                // Inherited from an earlier server, so how it ended was not
+                // seen: alive while a firecracker process holds its socket.
                 None if self.instance_alive(&instance_id) => {
                     observation.running.push(instance_id);
                     continue;
+                }
+                // Firecracker removes its socket when the guest reboots, which
+                // is how a VM ends cleanly; a crash leaves the socket behind.
+                None if !Path::new(&self.socket_path(&instance_id)).exists() => {
+                    (Some(0), Utc::now())
                 }
                 None => (None, Utc::now()),
             };
@@ -2399,14 +2405,17 @@ mod tests {
     }
 
     /// A VM whose process exited is reported as terminated with the exit code
-    /// it recorded; one still watched runs; one inherited from an earlier
-    /// server with no live process ended with an unknown code.
+    /// it recorded; one still watched runs. One inherited from an earlier
+    /// server ended cleanly when its socket is gone (the guest rebooted), and
+    /// crashed when a stale socket stayed behind.
     #[tokio::test]
     async fn observe_reports_how_each_vm_ended() {
         let (lc, dir) = lifecycle_with_scratch_dir("observe");
         touch(&dir, "job1234-5678-done.ext4");
         touch(&dir, "job1234-5678-live.ext4");
         touch(&dir, "job1234-5678-lost.ext4");
+        touch(&dir, "job1234-5678-lost.sock");
+        touch(&dir, "job1234-5678-gone.ext4");
         lc.exits.watch("job1234-5678-done");
         lc.exits.record(
             "job1234-5678-done",
@@ -2425,7 +2434,11 @@ mod tests {
         ended.sort();
         assert_eq!(
             ended,
-            vec![("job1234-5678-done", Some(1)), ("job1234-5678-lost", None)]
+            vec![
+                ("job1234-5678-done", Some(1)),
+                ("job1234-5678-gone", Some(0)),
+                ("job1234-5678-lost", None)
+            ]
         );
         std::fs::remove_dir_all(&dir).ok();
     }

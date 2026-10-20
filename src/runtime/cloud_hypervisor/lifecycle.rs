@@ -992,9 +992,11 @@ impl CloudHypervisorLifecycle {
             // A process this server spawned and saw no exit of still runs: its
             // API is only slow to answer.
             None if watched.is_some() => VmState::Alive,
-            // Inherited from an earlier server and no longer answering.
+            // Inherited from an earlier server, so how it ended was not seen.
+            // cloud-hypervisor removes its socket when it exits cleanly; a
+            // crash leaves the socket behind.
             None => VmState::Ended {
-                exit_code: None,
+                exit_code: (!socket.exists()).then_some(0),
                 finished_at: Utc::now(),
             },
         }
@@ -1715,14 +1717,17 @@ mod tests {
     }
 
     /// A VM whose process exited is reported as terminated with the exit code
-    /// it recorded; one still watched runs; one inherited from an earlier
-    /// server that no longer answers ended with an unknown code.
+    /// it recorded; one still watched runs. One inherited from an earlier
+    /// server ended cleanly when its socket is gone, and crashed when its
+    /// socket stayed behind, unanswered.
     #[tokio::test]
     async fn observe_reports_how_each_vm_ended() {
         let (lc, dir) = lifecycle_with_socket_dir();
         touch(&dir, "ch-job1234--done.raw");
         touch(&dir, "ch-job1234--live.raw");
         touch(&dir, "ch-job1234--lost.raw");
+        touch(&dir, "ch-job1234--lost.sock");
+        touch(&dir, "ch-job1234--gone.raw");
         lc.exits.watch("ch-job1234--done");
         lc.exits.record(
             "ch-job1234--done",
@@ -1741,7 +1746,11 @@ mod tests {
         ended.sort();
         assert_eq!(
             ended,
-            vec![("ch-job1234--done", Some(0)), ("ch-job1234--lost", None)]
+            vec![
+                ("ch-job1234--done", Some(0)),
+                ("ch-job1234--gone", Some(0)),
+                ("ch-job1234--lost", None)
+            ]
         );
         std::fs::remove_dir_all(&dir).ok();
     }
