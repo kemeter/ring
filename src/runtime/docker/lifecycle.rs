@@ -1,21 +1,31 @@
 use super::container::remove_container;
-use super::instances::list_instances;
+use super::instances::try_list_instances;
+use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::Deployment;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use bollard::Docker;
 
 /// Tear down a deleted Docker/Podman deployment: every container, live or
-/// ended, and its temporary config files.
+/// ended, and its temporary config files. `deployment.instances` is left with
+/// the containers still there afterwards, so the deployment is only forgotten
+/// once none is.
 pub(crate) async fn teardown(
     deployment: &mut Deployment,
     docker: &Docker,
     intentional_shutdowns: &IntentionalShutdowns,
-) {
+) -> Result<(), RuntimeError> {
     debug!("{} marked as deleted. Remove all instances", deployment.id);
-    deployment.instances = list_instances(docker, deployment.id.to_string(), "all").await;
+    deployment.instances = list_all(docker, &deployment.id).await?;
     let kind = deployment.kind.clone();
     remove_all_instances(deployment, docker, &kind, intentional_shutdowns).await;
-    deployment.instances.clear();
+    deployment.instances = list_all(docker, &deployment.id).await?;
+    Ok(())
+}
+
+async fn list_all(docker: &Docker, deployment_id: &str) -> Result<Vec<String>, RuntimeError> {
+    try_list_instances(docker, deployment_id, "all")
+        .await
+        .map_err(|e| RuntimeError::Other(format!("listing containers failed: {}", e)))
 }
 
 async fn remove_all_instances(

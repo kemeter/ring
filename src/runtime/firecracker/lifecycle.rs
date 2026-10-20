@@ -1529,7 +1529,7 @@ fn parse_resources(deployment: &Deployment) -> (u32, u32) {
 
 #[async_trait]
 impl InstanceDriver for FirecrackerLifecycle {
-    async fn observe(&self, deployment: &Deployment) -> Observation {
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError> {
         // Re-adopt any instance inherited from a previous ring-server, so its
         // network is restored without recreating the VM.
         self.readopt_networking(deployment).await;
@@ -1572,7 +1572,7 @@ impl InstanceDriver for FirecrackerLifecycle {
             });
         }
         observation.terminated.sort_by_key(|t| t.finished_at);
-        observation
+        Ok(observation)
     }
 
     async fn start_instance(
@@ -1616,7 +1616,8 @@ impl InstanceDriver for FirecrackerLifecycle {
                 );
             }
         }
-        deployment.instances.clear();
+        // What survived a failed stop keeps the deployment for a later pass.
+        deployment.instances = self.instance_ids(&deployment.id);
         Ok(())
     }
 }
@@ -2423,7 +2424,10 @@ mod tests {
         );
         lc.exits.watch("job1234-5678-live");
 
-        let observation = lc.observe(&job_deployment(DeploymentStatus::Running)).await;
+        let observation = lc
+            .observe(&job_deployment(DeploymentStatus::Running))
+            .await
+            .unwrap();
 
         assert_eq!(observation.running, vec!["job1234-5678-live"]);
         let mut ended: Vec<_> = observation

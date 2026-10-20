@@ -45,26 +45,36 @@ fn matches_status(state: Option<&ContainerSummaryStateEnum>, status: &str) -> bo
 }
 
 pub(crate) async fn list_instances(docker: &Docker, id: String, status: &str) -> Vec<String> {
-    let options = build_list_options(status);
-    let mut instances = Vec::new();
+    try_list_instances(docker, &id, status)
+        .await
+        .unwrap_or_else(|e| {
+            debug!("Docker list instances error: {}", e);
+            Vec::new()
+        })
+}
 
-    match docker.list_containers(Some(options)).await {
-        Ok(containers) => {
-            for container in containers {
-                if matches_status(container.state.as_ref(), status)
-                    && let Some(labels) = container.labels
-                    && let Some(deployment_id) = labels.get(super::RING_DEPLOYMENT_LABEL)
-                    && deployment_id == &id
-                    && let Some(container_id) = container.id
-                {
-                    instances.push(container_id);
-                }
-            }
-        }
-        Err(e) => debug!("Docker list instances error: {}", e),
-    }
-
-    instances
+/// Like [`list_instances`], but a failed list call is an error rather than an
+/// empty list, for callers that must not mistake one for the other.
+pub(crate) async fn try_list_instances(
+    docker: &Docker,
+    id: &str,
+    status: &str,
+) -> Result<Vec<String>, bollard::errors::Error> {
+    let containers = docker
+        .list_containers(Some(build_list_options(status)))
+        .await?;
+    Ok(containers
+        .into_iter()
+        .filter(|container| matches_status(container.state.as_ref(), status))
+        .filter(|container| {
+            container
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(super::RING_DEPLOYMENT_LABEL))
+                .is_some_and(|deployment_id| deployment_id == id)
+        })
+        .filter_map(|container| container.id)
+        .collect())
 }
 
 /// Group running instance ids by deployment in a single host-wide list call,
@@ -122,32 +132,30 @@ fn liveness(state: Option<&ContainerSummaryStateEnum>) -> Option<bool> {
 
 /// The containers of a deployment split into live and ended ones, in a single
 /// list call.
-pub(crate) async fn list_live_and_ended(docker: &Docker, id: &str) -> (Vec<String>, Vec<String>) {
+pub(crate) async fn list_live_and_ended(
+    docker: &Docker,
+    id: &str,
+) -> Result<(Vec<String>, Vec<String>), bollard::errors::Error> {
     let mut live = Vec::new();
     let mut ended = Vec::new();
 
-    match docker
+    let containers = docker
         .list_containers(Some(build_list_options("all")))
-        .await
-    {
-        Ok(containers) => {
-            for container in containers {
-                if let Some(labels) = &container.labels
-                    && labels.get(super::RING_DEPLOYMENT_LABEL).map(String::as_str) == Some(id)
-                    && let Some(container_id) = container.id
-                {
-                    match liveness(container.state.as_ref()) {
-                        Some(true) => live.push(container_id),
-                        Some(false) => ended.push(container_id),
-                        None => {}
-                    }
-                }
+        .await?;
+    for container in containers {
+        if let Some(labels) = &container.labels
+            && labels.get(super::RING_DEPLOYMENT_LABEL).map(String::as_str) == Some(id)
+            && let Some(container_id) = container.id
+        {
+            match liveness(container.state.as_ref()) {
+                Some(true) => live.push(container_id),
+                Some(false) => ended.push(container_id),
+                None => {}
             }
         }
-        Err(e) => debug!("Docker list instances error: {}", e),
     }
 
-    (live, ended)
+    Ok((live, ended))
 }
 
 pub(crate) async fn list_instances_with_names(

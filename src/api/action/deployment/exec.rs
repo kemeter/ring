@@ -676,8 +676,11 @@ mod tests {
         async fn observe(
             &self,
             _deployment: &crate::models::deployments::Deployment,
-        ) -> crate::hypervisor::instance_driver::Observation {
-            crate::hypervisor::instance_driver::Observation::default()
+        ) -> Result<
+            crate::hypervisor::instance_driver::Observation,
+            crate::hypervisor::error::RuntimeError,
+        > {
+            Ok(crate::hypervisor::instance_driver::Observation::default())
         }
 
         async fn start_instance(

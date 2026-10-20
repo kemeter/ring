@@ -80,8 +80,8 @@ impl MockRuntime {
 
 #[async_trait]
 impl InstanceDriver for MockRuntime {
-    async fn observe(&self, _deployment: &Deployment) -> Observation {
-        Observation::default()
+    async fn observe(&self, _deployment: &Deployment) -> Result<Observation, RuntimeError> {
+        Ok(Observation::default())
     }
 
     async fn start_instance(

@@ -112,12 +112,10 @@ fn config_dir(deployment_id: &str) -> String {
 
 #[async_trait]
 impl InstanceDriver for ContainerdLifecycle {
-    async fn observe(&self, deployment: &Deployment) -> Observation {
-        let Ok(client) = self.connect().await else {
-            return Observation::default();
-        };
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError> {
+        let client = self.connect().await?;
         let (running, ended) =
-            instances::list_live_and_ended(&client, &self.config.namespace, &deployment.id).await;
+            instances::list_live_and_ended(&client, &self.config.namespace, &deployment.id).await?;
 
         let mut terminated = Vec::with_capacity(ended.len());
         for instance_id in ended {
@@ -125,10 +123,10 @@ impl InstanceDriver for ContainerdLifecycle {
         }
         terminated.sort_by_key(|t| t.finished_at);
 
-        Observation {
+        Ok(Observation {
             running,
             terminated,
-        }
+        })
     }
 
     async fn start_instance(
@@ -158,11 +156,14 @@ impl InstanceDriver for ContainerdLifecycle {
 
     async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
         let client = self.connect().await?;
+        let namespace = &self.config.namespace;
         deployment.instances =
-            instances::list_instances(&client, &self.config.namespace, &deployment.id, "all").await;
+            instances::try_list_instances(&client, namespace, &deployment.id).await?;
         let kind = deployment.kind.clone();
         self.remove_all(deployment, &client, &kind).await;
-        deployment.instances.clear();
+        // What survived a failed removal keeps the deployment for a later pass.
+        deployment.instances =
+            instances::try_list_instances(&client, namespace, &deployment.id).await?;
         Ok(())
     }
 }

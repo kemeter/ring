@@ -24,7 +24,10 @@ pub(crate) struct Observation {
 
 #[async_trait]
 pub(crate) trait InstanceDriver: Send + Sync {
-    async fn observe(&self, deployment: &Deployment) -> Observation;
+    /// An error means the runtime could not tell: the pass is skipped rather
+    /// than taking it for a deployment with no instance, which would start a
+    /// second one next to those it could not see.
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError>;
 
     /// Create and start one instance, appending its id to
     /// `deployment.instances`. Never touches the status or the counters.
@@ -48,7 +51,9 @@ pub(crate) trait InstanceDriver: Send + Sync {
     async fn retire_instance(&self, _instance_id: &str) {}
 
     /// Remove every instance of a deleted deployment, live or ended, and
-    /// whatever the runtime kept for them. Clears `deployment.instances`.
+    /// whatever the runtime kept for them. Leaves in `deployment.instances`
+    /// those still there afterwards: the deployment is only forgotten once
+    /// none is.
     ///
     /// An error means the runtime could not even be asked: the deployment is
     /// kept, and torn down again on a later pass, rather than forgotten with

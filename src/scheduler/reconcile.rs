@@ -47,7 +47,17 @@ pub(crate) async fn reconcile(
         run_failures: state.run_failures,
     };
 
-    let observation = driver.observe(&deployment).await;
+    let observation = match driver.observe(&deployment).await {
+        Ok(observation) => observation,
+        Err(e) => {
+            // Starting anything now could double an instance it did not see.
+            warn!(
+                "Deployment {}: could not observe its instances, skipping this pass: {}",
+                deployment.id, e
+            );
+            return deployment;
+        }
+    };
     deployment.instances = observation.running;
     // An instance started on an earlier pass and still running now has proven
     // it stays up: that, not the start itself, is what promotes a Creating
@@ -385,6 +395,8 @@ mod tests {
         started: Mutex<u32>,
         discarded: Mutex<Vec<String>>,
         retired: Mutex<Vec<String>>,
+        /// `observe` fails, as with a daemon that cannot be reached.
+        blind: Mutex<bool>,
         stopped: Mutex<Vec<String>>,
     }
 
@@ -418,11 +430,14 @@ mod tests {
 
     #[async_trait]
     impl InstanceDriver for FakeDriver {
-        async fn observe(&self, _deployment: &Deployment) -> Observation {
-            Observation {
+        async fn observe(&self, _deployment: &Deployment) -> Result<Observation, RuntimeError> {
+            if *self.blind.lock().unwrap() {
+                return Err(RuntimeError::Other("daemon unreachable".to_string()));
+            }
+            Ok(Observation {
                 running: self.running.lock().unwrap().clone(),
                 terminated: self.terminated.lock().unwrap().clone(),
-            }
+            })
         }
 
         async fn start_instance(
@@ -533,6 +548,26 @@ mod tests {
 
     fn secs(s: i64) -> chrono::Duration {
         chrono::Duration::seconds(s)
+    }
+
+    #[tokio::test]
+    async fn nothing_is_started_when_the_instances_cannot_be_observed() {
+        let driver = FakeDriver::running(&["a"]);
+        *driver.blind.lock().unwrap() = true;
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(2),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(d.status, DeploymentStatus::Running);
+        assert_eq!(d.restart_count, 0);
     }
 
     #[tokio::test]

@@ -89,10 +89,10 @@ pub(crate) async fn list_live_and_ended(
     client: &containerd_client::Client,
     namespace: &str,
     deployment_id: &str,
-) -> (Vec<String>, Vec<String>) {
-    let all = list_instances(client, namespace, deployment_id, "all").await;
+) -> Result<(Vec<String>, Vec<String>), RuntimeError> {
+    let all = try_list_instances(client, namespace, deployment_id).await?;
     if all.is_empty() {
-        return (Vec::new(), Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut tasks = TasksClient::new(client.channel());
     let task_req = with_namespace!(
@@ -101,16 +101,28 @@ pub(crate) async fn list_live_and_ended(
         },
         namespace
     );
-    let task_status = match tasks.list(task_req).await {
-        Ok(resp) => task_status_by_container(resp.into_inner().tasks),
-        Err(e) => {
-            // Without the task list nothing can be told apart: report nothing
-            // ended rather than every instance.
-            debug!("containerd ListTasks failed: {}", e);
-            return (all, Vec::new());
-        }
-    };
-    split_live_and_ended(all, &task_status)
+    let tasks = tasks
+        .list(task_req)
+        .await
+        .map_err(|e| RuntimeError::Other(format!("ListTasks failed: {}", e)))?;
+    let task_status = task_status_by_container(tasks.into_inner().tasks);
+    Ok(split_live_and_ended(all, &task_status))
+}
+
+/// Every container of a deployment. A failed list call is an error rather
+/// than an empty list, for callers that must not mistake one for the other.
+pub(crate) async fn try_list_instances(
+    client: &containerd_client::Client,
+    namespace: &str,
+    deployment_id: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    Ok(
+        list_instances_inner(client, namespace, deployment_id, "all")
+            .await?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect(),
+    )
 }
 
 fn split_live_and_ended(

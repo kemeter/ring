@@ -1013,7 +1013,7 @@ enum VmState {
 
 #[async_trait]
 impl InstanceDriver for CloudHypervisorLifecycle {
-    async fn observe(&self, deployment: &Deployment) -> Observation {
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError> {
         let ids = self.instance_ids(&deployment.id).await;
         self.exits
             .retain_known(&Self::deployment_prefix(&deployment.id), &ids);
@@ -1041,7 +1041,7 @@ impl InstanceDriver for CloudHypervisorLifecycle {
             }
         }
         observation.terminated.sort_by_key(|t| t.finished_at);
-        observation
+        Ok(observation)
     }
 
     async fn start_instance(
@@ -1094,7 +1094,8 @@ impl InstanceDriver for CloudHypervisorLifecycle {
             }
         }
         self.cleanup_orphaned_artifacts(&deployment.id).await;
-        deployment.instances.clear();
+        // What survived a failed stop keeps the deployment for a later pass.
+        deployment.instances = self.instance_ids(&deployment.id).await;
         Ok(())
     }
 }
@@ -1735,7 +1736,10 @@ mod tests {
         );
         lc.exits.watch("ch-job1234--live");
 
-        let observation = lc.observe(&job_deployment(DeploymentStatus::Running)).await;
+        let observation = lc
+            .observe(&job_deployment(DeploymentStatus::Running))
+            .await
+            .unwrap();
 
         assert_eq!(observation.running, vec!["ch-job1234--live"]);
         let mut ended: Vec<_> = observation
