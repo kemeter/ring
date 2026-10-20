@@ -563,12 +563,10 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         );
-        let resp = snapshots.prepare(req).await.map_err(|e| {
-            RuntimeError::InstanceCreationFailed(format!(
-                "PrepareSnapshot failed for {}: {}",
-                instance_id, e
-            ))
-        })?;
+        let resp = snapshots
+            .prepare(req)
+            .await
+            .map_err(|e| creation_error("PrepareSnapshot", instance_id, e))?;
         Ok(resp.into_inner().mounts)
     }
 
@@ -616,12 +614,10 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         );
-        containers.create(req).await.map_err(|e| {
-            RuntimeError::InstanceCreationFailed(format!(
-                "CreateContainer failed for {}: {}",
-                instance_id, e
-            ))
-        })?;
+        containers
+            .create(req)
+            .await
+            .map_err(|e| creation_error("CreateContainer", instance_id, e))?;
         Ok(())
     }
 
@@ -664,12 +660,7 @@ impl ContainerdLifecycle {
         let create_resp = tasks
             .create(with_namespace!(create, self.config.namespace))
             .await
-            .map_err(|e| {
-                RuntimeError::InstanceCreationFailed(format!(
-                    "CreateTask failed for {}: {}",
-                    instance_id, e
-                ))
-            })?;
+            .map_err(|e| creation_error("CreateTask", instance_id, e))?;
         let pid = create_resp.into_inner().pid;
 
         // Wire up CNI on the task's netns *before* starting, while the process
@@ -701,10 +692,7 @@ impl ContainerdLifecycle {
                     self.config.namespace
                 ))
                 .await;
-            return Err(RuntimeError::InstanceCreationFailed(format!(
-                "StartTask failed for {}: {}",
-                instance_id, e
-            )));
+            return Err(creation_error("StartTask", instance_id, e));
         }
         Ok(())
     }
@@ -832,6 +820,21 @@ impl ContainerdLifecycle {
     }
 }
 
+/// The error of a failed gRPC call on the create path. containerd answers a
+/// spec it cannot run with an error a retry would only repeat, but a shim or
+/// snapshotter that is briefly unavailable with one of the codes below: those
+/// are transient, and retried on the normal backoff curve.
+fn creation_error(call: &str, instance_id: &str, status: tonic::Status) -> RuntimeError {
+    let message = format!("{} failed for {}: {}", call, instance_id, status);
+    match status.code() {
+        tonic::Code::Unavailable
+        | tonic::Code::DeadlineExceeded
+        | tonic::Code::ResourceExhausted
+        | tonic::Code::Aborted => RuntimeError::Other(message),
+        _ => RuntimeError::InstanceCreationFailed(message),
+    }
+}
+
 /// Materialize `Content` mounts (config/secret) to host files and return
 /// `(host_path, destination)` pairs for the OCI spec.
 async fn write_config_files(
@@ -915,6 +918,21 @@ mod tests {
             network: None,
             restart: None,
         }
+    }
+
+    #[test]
+    fn an_unavailable_containerd_is_a_transient_creation_error() {
+        for code in [tonic::Code::Unavailable, tonic::Code::DeadlineExceeded] {
+            let err = creation_error("CreateTask", "i1", tonic::Status::new(code, "shim"));
+            assert!(matches!(err, RuntimeError::Other(_)), "{code:?}");
+        }
+    }
+
+    #[test]
+    fn a_rejected_spec_is_an_instance_creation_failure() {
+        let status = tonic::Status::unknown("exec: \"nope\": executable file not found");
+        let err = creation_error("StartTask", "i1", status);
+        assert!(matches!(err, RuntimeError::InstanceCreationFailed(_)));
     }
 
     #[test]
