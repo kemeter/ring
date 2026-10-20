@@ -70,9 +70,10 @@ impl DockerLifecycle {
 
 #[async_trait]
 impl InstanceDriver for DockerLifecycle {
-    async fn observe(&self, deployment: &Deployment) -> Observation {
-        let (running, ended) =
-            super::instances::list_live_and_ended(&self.docker, &deployment.id).await;
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError> {
+        let (running, ended) = super::instances::list_live_and_ended(&self.docker, &deployment.id)
+            .await
+            .map_err(|e| RuntimeError::Other(format!("listing containers failed: {}", e)))?;
 
         let mut terminated = Vec::new();
         for instance_id in ended {
@@ -86,10 +87,10 @@ impl InstanceDriver for DockerLifecycle {
         }
         terminated.sort_by_key(|t| t.finished_at);
 
-        Observation {
+        Ok(Observation {
             running,
             terminated,
-        }
+        })
     }
 
     async fn start_instance(
@@ -115,6 +116,10 @@ impl InstanceDriver for DockerLifecycle {
 
     async fn discard_instance(&self, instance_id: &str) {
         super::container::remove_container(self.docker.clone(), instance_id.to_string()).await;
+    }
+
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
+        super::lifecycle::teardown(deployment, &self.docker, &self.intentional_shutdowns).await
     }
 }
 
@@ -159,23 +164,6 @@ impl DockerLifecycle {
 
 #[async_trait]
 impl RuntimeLifecycle for DockerLifecycle {
-    fn instance_driver(&self) -> Option<&dyn InstanceDriver> {
-        Some(self)
-    }
-
-    async fn apply(
-        &self,
-        deployment: Deployment,
-        _resolved_mounts: Vec<ResolvedMount>,
-    ) -> Deployment {
-        super::lifecycle::apply(
-            deployment,
-            self.docker.clone(),
-            self.intentional_shutdowns.clone(),
-        )
-        .await
-    }
-
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }
@@ -438,7 +426,7 @@ mod tests {
         driver.start_instance(&mut crasher, &[]).await.unwrap();
         let mut observed = Observation::default();
         for _ in 0..50 {
-            observed = driver.observe(&crasher).await;
+            observed = driver.observe(&crasher).await.unwrap();
             if !observed.terminated.is_empty() {
                 break;
             }
@@ -448,14 +436,14 @@ mod tests {
         if let Some(t) = &ended {
             driver.discard_instance(&t.instance_id).await;
         }
-        let after_discard = driver.observe(&crasher).await;
+        let after_discard = driver.observe(&crasher).await.unwrap();
 
         // An instance Ring stops itself.
         let mut sleeper = driver_test_worker("ring-driver-sleeper", &["sleep", "60"]);
         driver.start_instance(&mut sleeper, &[]).await.unwrap();
-        let running = driver.observe(&sleeper).await;
+        let running = driver.observe(&sleeper).await.unwrap();
         let stopped = driver.stop_instance(&sleeper.instances[0]).await;
-        let after_stop = driver.observe(&sleeper).await;
+        let after_stop = driver.observe(&sleeper).await.unwrap();
 
         let ended = ended.expect("the crashed instance is reported");
         assert_eq!(ended.exit_code, Some(3));

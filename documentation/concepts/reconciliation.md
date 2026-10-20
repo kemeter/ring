@@ -78,7 +78,7 @@ In both cases, the missing instance is recreated automatically on the next tick.
 
 ## Restart policy
 
-On Docker and Podman, a worker is **never abandoned**. It is a service: whatever ended it (a crash, a clean exit, a failed start, a liveness check), Ring starts it again, and slows down instead of giving up.
+A worker is **never abandoned**, on every runtime. It is a service: whatever ended it (a crash, a clean exit, a failed start, a liveness check), Ring starts it again, and slows down instead of giving up.
 
 - Each failure counts one attempt in `restart_count`, and the next start waits a random delay between zero and `min(cap, base × 2^(attempt − 1))`: up to 10 s after the first failure, 20 s after the second, and so on up to 5 minutes. The randomness ("full jitter") spreads retries out, so workloads that failed together, after a host reboot for instance, do not all come back in the same second.
 - While a worker waits, it shows `crash_loop_back_off` (or the status of the start error, such as `image_pull_back_off`), and the reconciler keeps watching it: it is started again as soon as the delay elapses, without a re-apply. Creating a missing config, or pushing the missing image, is enough.
@@ -89,8 +89,6 @@ On Docker and Podman, a worker is **never abandoned**. It is a service: whatever
 All of this is tunable in [`[server.restart]`](/documentation/reference/config-toml#server-restart), including `on_exhaustion = "fail"` for an operator who prefers a worker to stop after `max_attempts` failures, and per deployment with the manifest's [`restart`](/documentation/reference/manifest#restart) block.
 
 A job runs once: a run that exits non-zero fails it, unless the manifest sets `restart.backoff_limit`. A job that cannot start is retried without limit, since nothing ran.
-
-Workers and jobs on containerd, Cloud Hypervisor and Firecracker still use the previous budget: past 5 failed attempts, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops trying until the manifest is re-applied. Their retries are spaced on the same backoff curve.
 
 ## What survives a `ring server` restart
 

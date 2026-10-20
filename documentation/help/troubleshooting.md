@@ -155,14 +155,14 @@ See [how-to: deploy with secrets → private registry credentials](/documentatio
 
 ### `crash_loop_back_off`
 
-The worker's instances keep dying. On Docker and Podman, Ring keeps restarting it, waiting longer between attempts (up to 5 minutes); on the other runtimes it gave up after 5 attempts. Look at:
+The worker's instances keep dying. Ring keeps restarting it, waiting longer between attempts (up to 5 minutes). Look at:
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> --level error     # one container_crashed per exit, with its code
 ring deployment logs <DEPLOYMENT_ID> --tail 200          # what the app said
 ```
 
-On Docker and Podman, fixing the cause (a config, a dependency) is enough: the next attempt picks it up. Re-apply the manifest to start again right away with a fresh counter, or scale the worker to 0 to stop the retries.
+Fixing the cause (a config, a dependency) is enough: the next attempt picks it up. Re-apply the manifest to start again right away with a fresh counter, or scale the worker to 0 to stop the retries.
 
 ### `insufficient_resources`
 

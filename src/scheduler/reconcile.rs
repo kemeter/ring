@@ -14,7 +14,8 @@
 //! - A worker never gives up unless the policy says `on_exhaustion = "fail"`.
 //! - A job runs one instance. It completes on exit 0 and fails once its runs
 //!   that exited non-zero exceed `backoff_limit`; the instance of a finished job
-//!   is kept, with its logs. A job that cannot start is retried without limit.
+//!   is [retired](InstanceDriver::retire_instance). A job that cannot start is
+//!   retried without limit.
 
 use crate::hypervisor::classifier::{
     Disposition, classify_create_error, classify_exit_code, create_error_outcome,
@@ -46,7 +47,17 @@ pub(crate) async fn reconcile(
         run_failures: state.run_failures,
     };
 
-    let observation = driver.observe(&deployment).await;
+    let observation = match driver.observe(&deployment).await {
+        Ok(observation) => observation,
+        Err(e) => {
+            // Starting anything now could double an instance it did not see.
+            warn!(
+                "Deployment {}: could not observe its instances, skipping this pass: {}",
+                deployment.id, e
+            );
+            return deployment;
+        }
+    };
     deployment.instances = observation.running;
     // An instance started on an earlier pass and still running now has proven
     // it stays up: that, not the start itself, is what promotes a Creating
@@ -99,6 +110,7 @@ pub(crate) async fn reconcile(
                 "scheduler",
                 Some("job_completed"),
             );
+            driver.retire_instance(&termination.instance_id).await;
             state.last_termination = Some(termination);
             state.next_attempt_at = None;
             break;
@@ -129,9 +141,10 @@ pub(crate) async fn reconcile(
             );
             deployment.status = status;
         }
-        // A finished job keeps its instance, and the logs with it.
         let job_done = matches!(kind, WorkloadKind::Job { .. }) && decision == Decision::Fail;
-        if !job_done {
+        if job_done {
+            driver.retire_instance(&termination.instance_id).await;
+        } else {
             driver.discard_instance(&termination.instance_id).await;
         }
         state.last_termination = Some(termination);
@@ -381,6 +394,9 @@ mod tests {
         start_error: Mutex<Option<RuntimeError>>,
         started: Mutex<u32>,
         discarded: Mutex<Vec<String>>,
+        retired: Mutex<Vec<String>>,
+        /// `observe` fails, as with a daemon that cannot be reached.
+        blind: Mutex<bool>,
         stopped: Mutex<Vec<String>>,
     }
 
@@ -414,11 +430,14 @@ mod tests {
 
     #[async_trait]
     impl InstanceDriver for FakeDriver {
-        async fn observe(&self, _deployment: &Deployment) -> Observation {
-            Observation {
+        async fn observe(&self, _deployment: &Deployment) -> Result<Observation, RuntimeError> {
+            if *self.blind.lock().unwrap() {
+                return Err(RuntimeError::Other("daemon unreachable".to_string()));
+            }
+            Ok(Observation {
                 running: self.running.lock().unwrap().clone(),
                 terminated: self.terminated.lock().unwrap().clone(),
-            }
+            })
         }
 
         async fn start_instance(
@@ -449,6 +468,15 @@ mod tests {
                 .unwrap()
                 .retain(|t| t.instance_id != instance_id);
             self.discarded.lock().unwrap().push(instance_id.to_string());
+        }
+
+        async fn retire_instance(&self, instance_id: &str) {
+            self.retired.lock().unwrap().push(instance_id.to_string());
+        }
+
+        async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
+            deployment.instances.clear();
+            Ok(())
         }
     }
 
@@ -520,6 +548,26 @@ mod tests {
 
     fn secs(s: i64) -> chrono::Duration {
         chrono::Duration::seconds(s)
+    }
+
+    #[tokio::test]
+    async fn nothing_is_started_when_the_instances_cannot_be_observed() {
+        let driver = FakeDriver::running(&["a"]);
+        *driver.blind.lock().unwrap() = true;
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(2),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(d.status, DeploymentStatus::Running);
+        assert_eq!(d.restart_count, 0);
     }
 
     #[tokio::test]
@@ -843,7 +891,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_job_that_exits_zero_completes_and_keeps_its_instance() {
+    async fn a_job_that_exits_zero_completes_and_retires_its_instance() {
         let driver = FakeDriver::running(&["j"]);
         driver.crash("j", Some(0));
         let mut state = RestartState::default();
@@ -852,6 +900,7 @@ mod tests {
 
         assert_eq!(d.status, DeploymentStatus::Completed);
         assert!(driver.discarded.lock().unwrap().is_empty());
+        assert_eq!(*driver.retired.lock().unwrap(), ["j"]);
         assert!(reasons(&d).contains(&"job_completed".to_string()));
         assert_eq!(d.restart_count, 0);
     }
@@ -865,7 +914,8 @@ mod tests {
         let d = job_pass(&driver, 0, job(), &mut state, now()).await;
 
         assert_eq!(d.status, DeploymentStatus::Failed);
-        assert!(driver.discarded.lock().unwrap().is_empty(), "logs are kept");
+        assert!(driver.discarded.lock().unwrap().is_empty());
+        assert_eq!(*driver.retired.lock().unwrap(), ["j"]);
         assert_eq!(driver.starts(), 0);
         assert_eq!(state.run_failures, 1);
     }

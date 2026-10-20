@@ -137,7 +137,7 @@ What Ring does:
 1. Creates a sparse copy of the base image for each instance
 2. Spawns a `cloud-hypervisor` process with the configured firmware
 3. Boots the VM via Cloud Hypervisor's HTTP API
-4. Reconciles by scanning sockets (no event stream from CH, so crash detection is bounded by the scheduler tick)
+4. Reconciles from the instance disks in `socket_dir` (no event stream from CH, so crash detection is bounded by the scheduler tick). A VM whose `cloud-hypervisor` process exits, or whose guest powers off, has ended: it is restarted on the [restart policy](/documentation/concepts/reconciliation#restart-policy)'s backoff curve, like a crashed container
 
 ## Environment variables (cloud-init)
 
@@ -194,7 +194,7 @@ ports:
 
 Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>` → `<guest_ip>:<target>`. The guest IP is a deterministic /30 under `10.42.0.0/16` derived from the instance ID.
 
-If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `PortAllocationFailed` event. After `MAX_RESTART_COUNT` failed attempts, the deployment lands in `crash_loop_back_off`.
+If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `port_allocation_failed` event. The start is retried on the [restart policy](/documentation/concepts/reconciliation#restart-policy)'s backoff curve until the port is free.
 
 Both `tcp` (default) and `udp` are supported via the port's `protocol` field; `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
@@ -264,7 +264,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | `resources.requests.*` | Not used to **size** the VM (that comes from `limits`); a **warning event** is recorded at create so it isn't silent. `requests.memory` is still read for host-memory admission control, where it takes precedence over `limits.memory` |
 | `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull); a **warning event** is recorded at create |
 | `config.user` (privileged / id / group) | Ignored; a **warning event** is recorded at create |
-| `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`. CH does not expose the workload's exit code, so Ring sees VM state only. |
+| `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`; a `cloud-hypervisor` process that exits non-zero → a failed run. CH does not expose the workload's exit code, so Ring sees VM state only. The finished VM's artifacts are reaped. |
 | Inter-VM networking | Each VM is isolated, with no shared bridge and no DNS between siblings. Cross-VM traffic goes through host-published ports |
 | Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |

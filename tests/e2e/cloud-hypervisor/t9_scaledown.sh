@@ -104,12 +104,14 @@ fi
 log "restart_count stayed at 0 (no false-positive crash)"
 
 # === Status is still `running` (not crashloopbackoff or any other terminal) ===
-STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$NEW_DEPLOYMENT_ID" '.[] | select(.id==$id) | .status')
-if [ "$STATUS" != "running" ]; then
-  fail "deployment $NEW_DEPLOYMENT_ID landed in '$STATUS' after scale-down (expected running)"
-fi
-log "deployment is still running"
+# A replacement instance is `creating` until the next scheduler pass sees it
+# still up, so give it a few ticks rather than reading the status at once.
+wait_deployment_status "ring-e2e" "scale-vm" "running" 30
+log "deployment is running"
+# The deployment that took over after the rollout, its predecessor now gone.
+NEW_DEPLOYMENT_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \
+  | jq -r '.[] | select(.namespace=="ring-e2e" and .name=="scale-vm" and .status=="running") | .id' \
+  | head -n1)
 
 # Cleanup
 "$RING_BIN" deployment delete "$NEW_DEPLOYMENT_ID"

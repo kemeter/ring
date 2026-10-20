@@ -1,8 +1,7 @@
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::hypervisor::error::RuntimeError;
-use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
-use crate::models::volume::{ReloadSignal, ResolvedMount};
+use crate::models::volume::ReloadSignal;
 use async_trait::async_trait;
 use axum::response::sse::Event;
 use chrono::{DateTime, Utc};
@@ -232,19 +231,9 @@ pub(crate) fn extract_date(log: &str) -> Option<String> {
 }
 
 #[async_trait]
-pub(crate) trait RuntimeLifecycle: Send + Sync {
-    async fn apply(
-        &self,
-        deployment: Deployment,
-        resolved_mounts: Vec<ResolvedMount>,
-    ) -> Deployment;
-
-    /// Instance-level operations, for runtimes whose workers the scheduler
-    /// reconciles itself. `None` keeps the runtime on [`Self::apply`].
-    fn instance_driver(&self) -> Option<&dyn crate::hypervisor::instance_driver::InstanceDriver> {
-        None
-    }
-
+pub(crate) trait RuntimeLifecycle:
+    crate::hypervisor::instance_driver::InstanceDriver
+{
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String>;
 
     /// Resolve the running instance ids for many deployments at once, keyed by

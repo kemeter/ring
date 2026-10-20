@@ -12,7 +12,6 @@ use crate::models::volume::ResolvedMount;
 use crate::scheduler::autoscaler::{Autoscaler, Decision};
 use crate::scheduler::docker_events::DockerEvent;
 use crate::scheduler::health_checker::HealthChecker;
-use crate::scheduler::healthy_window::HealthyWindow;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use crate::scheduler::reconcile;
 use crate::scheduler::restart;
@@ -248,33 +247,33 @@ async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Optio
     Some(resolved)
 }
 
-// Span the runtime apply (image pull + container create/start, or teardown).
-// This is the step whose wall-clock dominates a rollout, so measuring it
-// directly answers "is the delay the pull or the boot?" from the trace instead
-// of guesswork. Only the deployment identity and status are recorded; the large
-// value args are skipped.
+/// Remove every instance of a deleted deployment. Bounded like a reconcile
+/// pass.
 #[tracing::instrument(
-    name = "scheduler.apply_runtime",
+    name = "scheduler.teardown",
     skip_all,
     fields(
         otel.kind = "internal",
         deployment.id = %deployment.id,
         deployment.namespace = %deployment.namespace,
         deployment.name = %deployment.name,
-        deployment.status = %deployment.status,
     )
 )]
-async fn apply_runtime(
+async fn teardown_runtime(
     pool: &SqlitePool,
     deployment: &Deployment,
-    resolved: Deployment,
-    resolved_mounts: Vec<ResolvedMount>,
     apply_timeout: Duration,
     apply_timeout_secs: u64,
     runtime: &dyn RuntimeLifecycle,
 ) -> Option<Deployment> {
-    match tokio::time::timeout(apply_timeout, runtime.apply(resolved, resolved_mounts)).await {
-        Ok(result) => Some(result),
+    let mut result = deployment.clone();
+    match tokio::time::timeout(apply_timeout, runtime.teardown(&mut result)).await {
+        Ok(Ok(())) => Some(result),
+        Ok(Err(e)) => {
+            // Kept as deleted, and torn down again next cycle.
+            error!("Failed to tear down deployment {}: {}", deployment.id, e);
+            None
+        }
         Err(_) => {
             log_apply_timeout(pool, &deployment.id, apply_timeout_secs).await;
             None
@@ -301,9 +300,13 @@ async fn log_apply_timeout(pool: &SqlitePool, deployment_id: &str, apply_timeout
     }
 }
 
-/// Reconcile a deployment on a runtime that reports its instances, applying
-/// the restart policy here rather than in the runtime. Bounded like
-/// [`apply_runtime`].
+/// Reconcile a deployment: observe its instances, apply the restart policy and
+/// start or stop instances. Bounded by `apply_timeout`, so a runtime that hangs
+/// cannot stall the whole scheduler.
+//
+// The pass covers the image pull and the instance start, the steps whose
+// wall-clock dominates a rollout: its span answers "is the delay the pull or
+// the boot?" from the trace.
 #[tracing::instrument(
     name = "scheduler.reconcile",
     skip_all,
@@ -421,14 +424,10 @@ async fn persist_pending_events(pool: &SqlitePool, deployment: &mut Deployment) 
     deployment.pending_events.clear();
 }
 
-/// `promote` moves a Creating deployment that has instances to Running. The
-/// reconcile pass of a runtime with an instance driver promotes by itself, once
-/// a new instance has been seen running, so it passes `false`.
-async fn handle_status_transitions(
+async fn schedule_cleanup(
     pool: &SqlitePool,
     deployment: &mut Deployment,
     deleted: &mut Vec<String>,
-    promote: bool,
 ) {
     if deployment.status == DeploymentStatus::Deleted && deployment.instances.is_empty() {
         info!("Marking deployment {} for cleanup", deployment.id);
@@ -448,23 +447,6 @@ async fn handle_status_transitions(
             );
         }
         deleted.push(deployment.id.clone());
-    }
-
-    if promote
-        && deployment.status == DeploymentStatus::Creating
-        && !deployment.instances.is_empty()
-    {
-        info!(
-            "Deployment {} transition: creating -> running",
-            deployment.id
-        );
-        // NB: the `state_transition` event is NOT logged here. The readiness
-        // gate (`gate_running_on_readiness`) may revert this `Running` back to
-        // `Creating` later in the same cycle, so emitting the event now would
-        // persist a "creating -> running" event for a status that never gets
-        // persisted. The event is emitted once, after the gate, by
-        // `log_running_transition` — keyed on the status actually written.
-        deployment.status = DeploymentStatus::Running;
     }
 }
 
@@ -834,23 +816,6 @@ async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
 /// across readiness checks so the most-cautious wins.
 const DEFAULT_MIN_HEALTHY_TIME: Duration = Duration::from_secs(10);
 
-/// Whether a deployment currently has a live container for the purpose of the
-/// anti-flap window that refills `restart_count`.
-///
-/// A worker that reached `Running` obviously qualifies. So does one still in
-/// `Creating` that already has an instance: a host-network worker can never pass
-/// Ring's readiness checks (its container has no resolvable address), so it stays
-/// `Creating` for life even though its container runs fine. Requiring `Running`
-/// here left such a worker's `restart_count` monotonic, so its retry backoff
-/// climbed to the 60s cap and never came back down — every redeploy got slower.
-fn has_live_container(status: &DeploymentStatus, instances_empty: bool) -> bool {
-    match status {
-        DeploymentStatus::Running => true,
-        DeploymentStatus::Creating => !instances_empty,
-        _ => false,
-    }
-}
-
 /// Resolve the anti-flap window for a deployment: take the max of the
 /// per-HC `min_healthy_time` (parsed via `HealthCheck::parse_duration`)
 /// across readiness checks. Falls back to `DEFAULT_MIN_HEALTHY_TIME` when
@@ -1093,10 +1058,9 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
 
 /// Gate the `creating → running` transition on readiness.
 ///
-/// The runtimes flip a deployment to `Running` as soon as the container exists
-/// (Docker/CH `apply`), and the secondary transition in
-/// `handle_status_transitions` does the same. That only means "the process
-/// started" — not "the app is ready". When a deployment declares any
+/// The reconcile pass flips a deployment to `Running` once its new instance is
+/// seen still running on the next pass. That only means "the process stayed
+/// up" — not "the app is ready". When a deployment declares any
 /// `readiness: true` check, we hold it in `Creating` until those checks are
 /// green (readiness probes run during `Creating`, record-only — see
 /// `HealthChecker::execute_checks`), so `Running` means *really ready* and the
@@ -1170,7 +1134,7 @@ async fn gate_running_on_readiness(
 
 /// Handle rolling update coordination for deployments that have a `parent_id`.
 ///
-/// Called after `apply_runtime` + `run_health_checks` for each child deployment.
+/// Called after the reconcile pass + `run_health_checks` for each child deployment.
 /// - If the child is `Running` (healthy): remove one instance from the parent.
 ///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
 /// - If the child is `Failed`: stop the rollout — parent containers keep running.
@@ -1320,7 +1284,7 @@ async fn handle_rolling_update(
     }
 
     // Finalize in the same cycle the last instance was drained: otherwise
-    // the parent's `apply_runtime` on the next cycle would see replicas=1
+    // the parent's reconcile pass on the next cycle would see replicas=1
     // vs instances=0 and respawn a fresh container, sending us into a
     // spawn/kill loop that never lets the rollout converge.
     if parent.instances.is_empty() {
@@ -1704,11 +1668,6 @@ pub(crate) async fn schedule(
     let policy = config.server.restart.policy().unwrap_or_default();
     let mut rng = rand::rngs::StdRng::from_os_rng();
 
-    // Runtimes still reconciling through `apply` refill a worker's crash budget
-    // after it runs for the anti-flap window. Workers on an instance driver use
-    // the restart policy's `stable_after` instead.
-    let mut healthy_window = HealthyWindow::new();
-
     // Per-deployment autoscaling cooldowns. Only ever consulted for deployments
     // that carry an `autoscale` policy — see `run_autoscaling`.
     let mut autoscaler = Autoscaler::new();
@@ -1833,17 +1792,14 @@ pub(crate) async fn schedule(
             // secrets / volumes is both pointless and actively harmful here —
             // those resources are often deleted alongside the deployment, and a
             // missing one makes the resolution step `continue` before we ever
-            // reach `handle_status_transitions`, leaving the deployment stuck in
-            // `deleted` forever. The runtime's delete path removes containers
-            // without reading env or mounts, so reconcile with the unresolved
+            // reach `schedule_cleanup`, leaving the deployment stuck in
+            // `deleted` forever. The runtime's teardown removes instances
+            // without reading env or mounts, so tear down the unresolved
             // deployment and go straight to cleanup.
             if deployment.status == DeploymentStatus::Deleted {
-                healthy_window.clear(&deployment.id);
-                let mut result = match apply_runtime(
+                let mut result = match teardown_runtime(
                     &pool,
                     &deployment,
-                    deployment.clone(),
-                    Vec::new(),
                     apply_timeout,
                     apply_timeout_secs,
                     runtime.as_ref(),
@@ -1856,49 +1812,16 @@ pub(crate) async fn schedule(
 
                 let old_status = deployment.status.clone();
                 persist_pending_events(&pool, &mut result).await;
-                handle_status_transitions(&pool, &mut result, &mut deleted, true).await;
+                schedule_cleanup(&pool, &mut result, &mut deleted).await;
 
                 write_back(&pool, &old_status, &result).await;
                 continue;
             }
 
-            // Deployments on an instance driver are reconciled by the
-            // scheduler, which applies the restart policy itself. The other
-            // runtimes still go through their `apply`.
-            let driver = runtime.instance_driver();
             let deployment_policy = deployment.restart_policy(&policy);
             let mut state = restart_states.remove(&deployment.id).unwrap_or_default();
             let state_before = state.clone();
             let now = chrono::Utc::now();
-
-            // Honour the retry backoff. A driven deployment is still reconciled
-            // while backing off (an extra instance is stopped, a crash is
-            // counted); only starting a new instance waits. (Deletes are
-            // handled above and never reach this point.)
-            // A runtime still on `apply` gives up for good on
-            // crash_loop_back_off: its worker path has no guard of its own, and
-            // would otherwise restart the deployment on every tick.
-            if driver.is_none() && deployment.status == DeploymentStatus::CrashLoopBackOff {
-                continue;
-            }
-
-            if driver.is_none() && state.backing_off(now) {
-                // Emit this at info as a structured event, not a bare debug line:
-                // a deployment being skipped by backoff is the single most useful
-                // signal when diagnosing "why is my rollout slow to converge?",
-                // and it's otherwise invisible in production. As an event inside
-                // the `scheduler.cycle` span it surfaces directly in the trace,
-                // tagged with the deployment and its retry count.
-                info!(
-                    deployment.id = %deployment.id,
-                    deployment.namespace = %deployment.namespace,
-                    deployment.name = %deployment.name,
-                    deployment.status = %deployment.status,
-                    deployment.restart_count = deployment.restart_count,
-                    "deployment skipped this cycle: in retry backoff"
-                );
-                continue;
-            }
 
             let configs = match load_configs(&pool, &deployment).await {
                 Some(c) => c,
@@ -2000,65 +1923,25 @@ pub(crate) async fn schedule(
             }
 
             let restart_count_before = deployment.restart_count;
-            let applied = match driver {
-                Some(driver) => {
-                    reconcile_driven(
-                        &pool,
-                        driver,
-                        &deployment_policy,
-                        resolved,
-                        resolved_mounts,
-                        &mut state,
-                        apply_timeout,
-                        apply_timeout_secs,
-                        &mut rng,
-                    )
-                    .await
-                }
-                None => {
-                    apply_runtime(
-                        &pool,
-                        &deployment,
-                        resolved,
-                        resolved_mounts,
-                        apply_timeout,
-                        apply_timeout_secs,
-                        runtime.as_ref(),
-                    )
-                    .await
-                }
-            };
-            let mut result = match applied {
+            // A deployment backing off is still reconciled (an extra instance
+            // is stopped, a crash is counted); only starting a new instance
+            // waits.
+            let mut result = match reconcile_driven(
+                &pool,
+                runtime.as_ref(),
+                &deployment_policy,
+                resolved,
+                resolved_mounts,
+                &mut state,
+                apply_timeout,
+                apply_timeout_secs,
+                &mut rng,
+            )
+            .await
+            {
                 Some(d) => d,
                 None => continue,
             };
-
-            // A runtime that bumped restart_count hit a failure it will retry:
-            // schedule the retry on the policy's backoff curve. Otherwise
-            // (success, or a status the runtime gave up on) drop any pending
-            // backoff.
-            // Nor is there any wait once the budget is spent: the next apply
-            // only lands the deployment on its terminal status.
-            if driver.is_none() {
-                // A memory refusal is retried past the budget, so it keeps
-                // its backoff instead of being retried on every tick.
-                state.next_attempt_at = if result.restart_count > restart_count_before
-                    && (result.restart_count < deployments::MAX_RESTART_COUNT
-                        || result.status == DeploymentStatus::InsufficientResources)
-                    && result.status != DeploymentStatus::CrashLoopBackOff
-                    && result.status != DeploymentStatus::Failed
-                {
-                    restart::retry_at(
-                        &deployment_policy,
-                        result.restart_count,
-                        false,
-                        now,
-                        &mut rng,
-                    )
-                } else {
-                    None
-                };
-            }
 
             persist_pending_events(&pool, &mut result).await;
 
@@ -2074,13 +1957,12 @@ pub(crate) async fn schedule(
                 continue;
             }
 
-            // Status as it stood entering this cycle, before the runtime
+            // Status as it stood entering this cycle, before the reconcile pass
             // flipped `result` to `Running`. The readiness gate uses it to tell
             // a fresh `creating → running` transition (which it may hold) from
             // an already-established `Running` (which it must not touch), and
             // `publish_status_change` uses it to detect a real status change.
             let old_status = deployment.status.clone();
-            handle_status_transitions(&pool, &mut result, &mut deleted, driver.is_none()).await;
             let killed = run_health_checks(
                 &pool,
                 &mut result,
@@ -2091,7 +1973,7 @@ pub(crate) async fn schedule(
             .await;
             // An instance a liveness check removed failed, like one that exited,
             // and keeps the end of its output like one.
-            if driver.is_some() && !killed.is_empty() {
+            if !killed.is_empty() {
                 let kills = killed.len();
                 state.last_termination = killed.into_iter().last();
                 reconcile::record_liveness_kills(
@@ -2124,37 +2006,6 @@ pub(crate) async fn schedule(
             // Log the creating -> running transition only now that the status
             // for this cycle is settled (the gate above may have reverted it).
             log_running_transition(&pool, &old_status, &result).await;
-
-            // Refill the crash budget: once a worker has run continuously
-            // healthy for the anti-flap window, forgive its accrued
-            // restart_count. Without this the count is monotonic for life, so a
-            // worker that crashed a few times months ago trips CrashLoopBackOff
-            // on its next single crash. Crashes *within* the window still bump
-            // the count and converge (the window restarts on every fresh crash),
-            // so this never masks a real crash loop. Scoped to workers — jobs
-            // converge to Failed, not a windowed budget.
-            if driver.is_none()
-                && result.kind == "worker"
-                && healthy_window.observe(
-                    &result.id,
-                    has_live_container(&result.status, result.instances.is_empty()),
-                    result.restart_count,
-                    min_healthy_time_for(&result),
-                )
-            {
-                info!(
-                    "Deployment {} healthy for the anti-flap window; resetting restart_count from {} to 0",
-                    result.id, result.restart_count
-                );
-                // Persisted below with the cycle's other count changes.
-                result.restart_count = 0;
-                result.emit_event(
-                    "info",
-                    "restart_count reset to 0 after staying healthy".to_string(),
-                    "scheduler",
-                    Some("restart_count_reset"),
-                );
-            }
 
             persist_pending_events(&pool, &mut result).await;
             result.restart_count = persist_restart_count(
@@ -2761,39 +2612,6 @@ mod tests {
         let d = simple_running("trans-3", vec![]);
         log_running_transition(&pool, &DeploymentStatus::Running, &d).await;
         assert_eq!(count_state_transition_events(&pool, "trans-3").await, 0);
-    }
-
-    #[test]
-    fn live_container_running_is_healthy() {
-        // A worker that reached Running always counts as healthy-running.
-        assert!(has_live_container(&DeploymentStatus::Running, false));
-        assert!(has_live_container(&DeploymentStatus::Running, true));
-    }
-
-    #[test]
-    fn live_container_creating_with_instance_is_healthy() {
-        // The host-network case: stuck in Creating (readiness can't pass) but the
-        // container is actually up. This must count as healthy so restart_count
-        // can be forgiven and the retry backoff stops climbing.
-        assert!(has_live_container(&DeploymentStatus::Creating, false));
-    }
-
-    #[test]
-    fn live_container_creating_without_instance_is_not_healthy() {
-        // Creating with no instance yet: genuinely not running, no reset.
-        assert!(!has_live_container(&DeploymentStatus::Creating, true));
-    }
-
-    #[test]
-    fn live_container_other_states_are_not_healthy() {
-        for status in [
-            DeploymentStatus::Pending,
-            DeploymentStatus::Failed,
-            DeploymentStatus::Deleted,
-        ] {
-            assert!(!has_live_container(&status, false));
-            assert!(!has_live_container(&status, true));
-        }
     }
 
     async fn queued_events(pool: &SqlitePool) -> i64 {

@@ -206,7 +206,7 @@ A unique date in the name keeps multiple backfills coexisting in the database fo
 
 - **No cron.** Ring does not schedule jobs on a recurring time. Trigger from cron, GitHub Actions, or any external scheduler. For periodic work inside Ring, run a long-lived worker that wakes itself up.
 - **No parallelism.** `replicas: 4` on a job runs **one** instance, not four. For fan-out, deploy multiple jobs with distinct names or use a worker consuming from a queue.
-- **No retry unless asked.** A job that ran and failed stays `failed` unless its manifest sets `restart.backoff_limit`. On Docker and Podman only; on the other runtimes a failed job is never run again.
+- **No retry unless asked.** A job that ran and failed stays `failed` unless its manifest sets `restart.backoff_limit`.
 - **No timeout / deadline.** A job that hangs runs until `ring deployment delete`. Plan timeouts inside your job's command.
 - **Logs live with the container.** Once you prune the deployment, the underlying Docker container goes away and the logs go with it. Ship logs out (Loki, Fluent Bit, journald → a collector) before pruning if you need long retention.
 - **Cloud Hypervisor:** clean guest shutdown = `completed`, regardless of the workload's actual exit code. Ring can't see the guest's main-process exit from the host. If exit-code precision matters, prefer Docker. See [Runtimes](/documentation/concepts/runtimes#quick-comparison).

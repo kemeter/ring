@@ -83,6 +83,57 @@ pub(crate) async fn list_instances_with_names(
     }
 }
 
+/// The instances of a deployment split into live ones and ended ones: a
+/// container whose task is stopped, was never started, or is missing.
+pub(crate) async fn list_live_and_ended(
+    client: &containerd_client::Client,
+    namespace: &str,
+    deployment_id: &str,
+) -> Result<(Vec<String>, Vec<String>), RuntimeError> {
+    let all = try_list_instances(client, namespace, deployment_id).await?;
+    if all.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let mut tasks = TasksClient::new(client.channel());
+    let task_req = with_namespace!(
+        ListTasksRequest {
+            filter: String::new(),
+        },
+        namespace
+    );
+    let tasks = tasks
+        .list(task_req)
+        .await
+        .map_err(|e| RuntimeError::Other(format!("ListTasks failed: {}", e)))?;
+    let task_status = task_status_by_container(tasks.into_inner().tasks);
+    Ok(split_live_and_ended(all, &task_status))
+}
+
+/// Every container of a deployment. A failed list call is an error rather
+/// than an empty list, for callers that must not mistake one for the other.
+pub(crate) async fn try_list_instances(
+    client: &containerd_client::Client,
+    namespace: &str,
+    deployment_id: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    Ok(
+        list_instances_inner(client, namespace, deployment_id, "all")
+            .await?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect(),
+    )
+}
+
+fn split_live_and_ended(
+    containers: Vec<String>,
+    task_status: &HashMap<String, i32>,
+) -> (Vec<String>, Vec<String>) {
+    containers
+        .into_iter()
+        .partition(|id| task_status.get(id).copied().is_some_and(is_active))
+}
+
 async fn list_instances_inner(
     client: &containerd_client::Client,
     namespace: &str,
@@ -150,6 +201,19 @@ mod tests {
             status: status as i32,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn instances_without_an_active_task_have_ended() {
+        let statuses = task_status_by_container(vec![
+            task("c1", "c1", TaskStatus::Running),
+            task("c2", "c2", TaskStatus::Stopped),
+            task("c3", "c3", TaskStatus::Created),
+        ]);
+        let containers = ["c1", "c2", "c3", "c4"].map(String::from).to_vec();
+        let (live, ended) = split_live_and_ended(containers, &statuses);
+        assert_eq!(live, vec!["c1"]);
+        assert_eq!(ended, vec!["c2", "c3", "c4"]);
     }
 
     #[test]

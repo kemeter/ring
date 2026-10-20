@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# T6-CH: a CH deployment that cannot boot must hit CrashLoopBackOff after
-# MAX_RESTART_COUNT (5) instead of being respawned forever.
+# T6-CH: a CH deployment that cannot boot is never abandoned, and its retries
+# are spaced out: each failed boot is counted and the next one waits on the
+# restart policy's backoff, well past the 5 attempts after which Ring used to
+# give up.
 #
 # Strategy: point Ring at a *bogus firmware* (empty file). cloud-hypervisor
 # accepts a bogus disk silently (it just doesn't boot), but rejects an invalid
 # firmware at the create_vm API call. This produces a transient VmStartFailed
-# on every cycle, which is exactly what the backoff + crash-loop logic should
-# bound.
+# on every attempt.
 #
 # This validates three things together:
 #   1. Failed boots actually increment restart_count (not silently dropped).
-#   2. The exponential backoff in the scheduler spaces retries (otherwise we'd
-#      see > 6 disk files since each attempt creates one).
-#   3. The deployment lands in CrashLoopBackOff once restart_count >= MAX_RESTART_COUNT.
+#   2. They keep being retried: the deployment is not abandoned.
+#   3. Each failed boot is cleaned up: per-instance disks do not pile up.
+#
+# A short restart policy keeps the test fast: retries come at most 2s apart.
 #
 # Requires: cloud-hypervisor binary, /dev/kvm, CAP_NET_ADMIN on the binary.
 
@@ -24,7 +26,7 @@ source "$SCRIPT_DIR/../lib.sh"
 # shellcheck source=./setup.sh
 source "$SCRIPT_DIR/setup.sh"
 
-log "== T6-CH: crash loop must converge to CrashLoopBackOff =="
+log "== T6-CH: a VM that cannot boot backs off and never gives up =="
 
 # Override the firmware with a bogus empty file BEFORE setup_ch so the value
 # we export ends up in Ring's config.toml. The real firmware path stays
@@ -36,6 +38,11 @@ export RING_E2E_CH_FIRMWARE
 log "bogus firmware created at $BOGUS_FW"
 
 setup_ch
+RING_EXTRA_CONFIG="$RING_EXTRA_CONFIG
+[server.restart]
+base = \"1s\"
+cap = \"2s\""
+export RING_EXTRA_CONFIG
 
 start_ring
 ring_login
@@ -67,42 +74,40 @@ if [ -z "$DEPLOYMENT_ID" ]; then
 fi
 log "deployment id: $DEPLOYMENT_ID"
 
-# Backoff is exponential (1+2+4+8+16 = 31s) — wait long enough to land in
-# CrashLoopBackOff. Allow extra headroom because each failed attempt itself
-# takes a few seconds (CH spawn + firmware error + cleanup).
-log "waiting up to 180s for the scheduler to converge to CrashLoopBackOff..."
-STATUS=""
-for _ in $(seq 1 180); do
-  STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r --arg ns "ring-e2e" --arg n "crashloop-vm" \
-        '.[] | select(.namespace==$ns and .name==$n) | .status' \
-    | head -n1)
-  if [ "$STATUS" = "crash_loop_back_off" ]; then
-    log "deployment reached crash_loop_back_off"
-    break
-  fi
-  sleep 1
-done
+log "waiting 45s for repeated failed boots..."
+sleep 45
 
 RESTART_COUNT=$(get_restart_count "ring-e2e" "crashloop-vm")
+STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
+  | jq -r --arg ns "ring-e2e" --arg n "crashloop-vm" \
+      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+  | head -n1)
 log "observed: status=$STATUS restart_count=$RESTART_COUNT"
 
-if [ "$STATUS" != "crash_loop_back_off" ]; then
-  fail "expected status crash_loop_back_off, got '$STATUS' (restart_count=$RESTART_COUNT)"
+# Still retrying past the old budget of 5: the deployment was not abandoned.
+if [ "${RESTART_COUNT:-0}" -le 5 ]; then
+  fail "expected restart_count > 5, got $RESTART_COUNT (the deployment was abandoned or failures are not counted)"
 fi
 
-# restart_count must have actually been incremented by the runtime. If it's
-# stuck at 0, the runtime is silently swallowing failures.
-if [ "${RESTART_COUNT:-0}" -lt 5 ]; then
-  fail "expected restart_count >= 5, got $RESTART_COUNT (failures are not being counted)"
-fi
+# A failed boot reports its error; caught right after an attempt, the
+# deployment may be creating.
+case "$STATUS" in
+  error|creating) ;;
+  *) fail "expected error (or a fresh attempt), got '$STATUS'" ;;
+esac
 
-# Sanity: leftover socket / disk count must stay bounded. A runaway loop would
-# leave per-instance .raw files piling up because they are created before the
-# boot attempt.
+# Each failed boot removes the per-instance .raw it created before booting:
+# at most the one of an attempt in flight may be there.
 DISK_COUNT=$(find "$RING_E2E_CH_SOCKET_DIR" -maxdepth 1 -type f -name "ch-*.raw" 2>/dev/null | wc -l | tr -d ' ')
-if [ "$DISK_COUNT" -gt 6 ]; then
-  fail "too many per-instance disks ($DISK_COUNT) — restart loop is not bounded"
+if [ "$DISK_COUNT" -gt 1 ]; then
+  fail "$DISK_COUNT per-instance disks left — failed boots are not cleaned up"
+fi
+
+# Nor do the VMM processes: a boot refused at create_vm leaves its
+# cloud-hypervisor process up unless Ring stops it.
+VMM_COUNT=$(pgrep -fc "cloud-hypervisor --api-socket $RING_E2E_CH_SOCKET_DIR/" || true)
+if [ "${VMM_COUNT:-0}" -gt 1 ]; then
+  fail "$VMM_COUNT cloud-hypervisor processes left — failed boots leak their VMM"
 fi
 
 # Cleanup so cleanup_ch does not complain.

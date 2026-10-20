@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # T43: windowed restart_count reset for a worker stuck in Creating with a live
-# container (the host-network regression fixed by has_live_container).
+# container.
 #
 # A host-network worker never passes Ring's readiness checks — its container has
 # no resolvable address — so it stays in `Creating` for life even though the
-# container runs fine. The old anti-flap gate required status == Running, so such
-# a worker's restart_count stayed monotonic: its retry backoff climbed to the 60s
-# cap and never came back down. The fix counts a Creating worker that already has
-# a live instance as healthy, so the accrued count is forgiven.
+# container runs fine. A reset gated on status == Running would leave such a
+# worker's restart_count monotonic: its retry backoff would climb to the cap and
+# never come back down. The reset is gated on a live instance instead, so the
+# accrued count is forgiven after `stable_after`.
 #
 # This reproduces that exact state end-to-end. Docker re-runs the SAME command on
 # every (re)spawn, so the "crash a few times then stay up" behaviour is driven by
@@ -98,8 +98,8 @@ done
 log "Invariant 2: PASS (worker held 'creating' with a live container past the window)"
 
 # Invariant 3: the crash budget must have refilled even though the worker never
-# reached `running`. This is the regression: with status == Running gate, the
-# count stayed at 3 forever; with has_live_container it is forgiven to 0.
+# reached `running`. Gated on status == Running, the count would stay at 3
+# forever; gated on a live instance, it is forgiven to 0.
 RESTART_AFTER_WINDOW=$(get_restart_count "$NS" "$NAME")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "$NS" --arg n "$NAME" \
@@ -113,7 +113,7 @@ if [ "$STATUS" != "creating" ]; then
 fi
 
 if [ "${RESTART_AFTER_WINDOW:-99}" -ne 0 ]; then
-  fail "expected restart_count reset to 0 after the healthy window, got $RESTART_AFTER_WINDOW (has_live_container did not forgive the Creating worker)"
+  fail "expected restart_count reset to 0 after the healthy window, got $RESTART_AFTER_WINDOW (the Creating worker with a live instance was not forgiven)"
 fi
 
 log "== T43: PASS =="

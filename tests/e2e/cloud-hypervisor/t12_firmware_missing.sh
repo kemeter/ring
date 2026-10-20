@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # T12-CH: when the configured firmware path does not exist, Cloud
-# Hypervisor maps the failure to `RuntimeError::FirmwareNotFound`,
-# which the lifecycle pins to `DeploymentStatus::Failed` (permanent —
-# the operator must fix `firmware_path`).
+# Hypervisor maps the failure to `RuntimeError::FirmwareNotFound`, which
+# lands the deployment on `failed` after its one attempt (permanent — the
+# operator must fix `firmware_path`), and it is not retried.
 #
 # We override `firmware_path` for this test only, leaving the rest of
 # the suite unaffected.
@@ -64,13 +64,13 @@ wait_deployment_status "ring-e2e" "no-fw" "failed" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "no-fw")
 log "deployment landed in 'failed' as expected: $DEPLOYMENT_ID"
 
-# === Permanent failure: restart_count must stay at 0 ===
+# === Permanent failure: the one attempt is counted, and never retried ===
 sleep 5
 RC=$(get_restart_count "ring-e2e" "no-fw")
-if [ "$RC" != "0" ]; then
-  fail "restart_count=$RC for FirmwareNotFound (expected 0 — permanent error)"
+if [ "$RC" != "1" ]; then
+  fail "restart_count=$RC for FirmwareNotFound (expected 1 — one attempt, no retry)"
 fi
-log "restart_count stayed at 0"
+log "restart_count stayed at 1"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 

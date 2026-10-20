@@ -72,8 +72,8 @@ DID=$(get_deployment_id "ring-e2e" "crasher")
 [ -n "$DID" ] || fail "could not find deployment id after apply"
 log "deployment id: $DID"
 
-# Must reach crash_loop_back_off within MAX_RESTART_COUNT cycles, AND the live
-# container count must never blow up (the bug created one per tick, unbounded).
+# Must reach crash_loop_back_off after its first crash, AND the live container
+# count must never blow up (the bug created one per tick, unbounded).
 reached=0
 max_seen=0
 for _ in $(seq 1 40); do

@@ -672,15 +672,41 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::hypervisor::lifecycle_trait::RuntimeLifecycle for InstanceListRuntime {
-        async fn apply(
+    impl crate::hypervisor::instance_driver::InstanceDriver for InstanceListRuntime {
+        async fn observe(
             &self,
-            deployment: crate::models::deployments::Deployment,
-            _resolved_mounts: Vec<crate::models::volume::ResolvedMount>,
-        ) -> crate::models::deployments::Deployment {
-            deployment
+            _deployment: &crate::models::deployments::Deployment,
+        ) -> Result<
+            crate::hypervisor::instance_driver::Observation,
+            crate::hypervisor::error::RuntimeError,
+        > {
+            Ok(crate::hypervisor::instance_driver::Observation::default())
         }
 
+        async fn start_instance(
+            &self,
+            _deployment: &mut crate::models::deployments::Deployment,
+            _resolved_mounts: &[crate::models::volume::ResolvedMount],
+        ) -> Result<(), crate::hypervisor::error::RuntimeError> {
+            Ok(())
+        }
+
+        async fn stop_instance(&self, _instance_id: &str) -> bool {
+            true
+        }
+
+        async fn discard_instance(&self, _instance_id: &str) {}
+
+        async fn teardown(
+            &self,
+            _deployment: &mut crate::models::deployments::Deployment,
+        ) -> Result<(), crate::hypervisor::error::RuntimeError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::hypervisor::lifecycle_trait::RuntimeLifecycle for InstanceListRuntime {
         async fn list_instances(&self, _deployment_id: String, _status: &str) -> Vec<String> {
             self.instances.iter().map(|(id, _)| id.clone()).collect()
         }

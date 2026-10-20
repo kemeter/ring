@@ -1,5 +1,6 @@
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::hypervisor::error::RuntimeError;
+use crate::hypervisor::instance_driver::{InstanceDriver, Observation};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
@@ -78,15 +79,33 @@ impl MockRuntime {
 }
 
 #[async_trait]
-impl RuntimeLifecycle for MockRuntime {
-    async fn apply(
-        &self,
-        deployment: Deployment,
-        _resolved_mounts: Vec<ResolvedMount>,
-    ) -> Deployment {
-        deployment
+impl InstanceDriver for MockRuntime {
+    async fn observe(&self, _deployment: &Deployment) -> Result<Observation, RuntimeError> {
+        Ok(Observation::default())
     }
 
+    async fn start_instance(
+        &self,
+        _deployment: &mut Deployment,
+        _resolved_mounts: &[ResolvedMount],
+    ) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    async fn stop_instance(&self, instance_id: &str) -> bool {
+        self.remove_instance(instance_id.to_string()).await
+    }
+
+    async fn discard_instance(&self, _instance_id: &str) {}
+
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
+        deployment.instances.clear();
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl RuntimeLifecycle for MockRuntime {
     async fn list_instances(&self, _deployment_id: String, _status: &str) -> Vec<String> {
         Vec::new()
     }

@@ -1,12 +1,9 @@
 //! Instance-level runtime operations: report facts, start and stop instances,
 //! make no decisions.
 //!
-//! A runtime that implements [`InstanceDriver`] leaves the restart policy, the
-//! backoff and the scaling decisions to the scheduler (`scheduler::reconcile`),
-//! which runs the same code for every such runtime. Runtimes that do not yet
-//! implement it keep reconciling through [`RuntimeLifecycle::apply`].
-//!
-//! [`RuntimeLifecycle::apply`]: crate::hypervisor::lifecycle_trait::RuntimeLifecycle::apply
+//! Every runtime implements [`InstanceDriver`] and leaves the restart policy,
+//! the backoff and the scaling decisions to the scheduler
+//! (`scheduler::reconcile`), which runs the same code for all of them.
 
 use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::Deployment;
@@ -27,7 +24,10 @@ pub(crate) struct Observation {
 
 #[async_trait]
 pub(crate) trait InstanceDriver: Send + Sync {
-    async fn observe(&self, deployment: &Deployment) -> Observation;
+    /// An error means the runtime could not tell: the pass is skipped rather
+    /// than taking it for a deployment with no instance, which would start a
+    /// second one next to those it could not see.
+    async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError>;
 
     /// Create and start one instance, appending its id to
     /// `deployment.instances`. Never touches the status or the counters.
@@ -43,4 +43,20 @@ pub(crate) trait InstanceDriver: Send + Sync {
 
     /// Remove a terminated instance once its termination has been handled.
     async fn discard_instance(&self, instance_id: &str);
+
+    /// The terminated instance of a finished job. By default it is kept, and
+    /// its logs with it, until the deployment is deleted. A runtime for which
+    /// an ended instance still holds real resources (a microVM's disk copy)
+    /// removes it instead.
+    async fn retire_instance(&self, _instance_id: &str) {}
+
+    /// Remove every instance of a deleted deployment, live or ended, and
+    /// whatever the runtime kept for them. Leaves in `deployment.instances`
+    /// those still there afterwards: the deployment is only forgotten once
+    /// none is.
+    ///
+    /// An error means the runtime could not even be asked: the deployment is
+    /// kept, and torn down again on a later pass, rather than forgotten with
+    /// its instances still running.
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError>;
 }
