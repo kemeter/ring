@@ -117,8 +117,9 @@ impl InstanceDriver for DockerLifecycle {
         super::container::remove_container(self.docker.clone(), instance_id.to_string()).await;
     }
 
-    async fn teardown(&self, deployment: &mut Deployment) {
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
         super::lifecycle::teardown(deployment, &self.docker, &self.intentional_shutdowns).await;
+        Ok(())
     }
 }
 

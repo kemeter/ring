@@ -156,19 +156,14 @@ impl InstanceDriver for ContainerdLifecycle {
         }
     }
 
-    async fn teardown(&self, deployment: &mut Deployment) {
-        let client = match self.connect().await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("[{}] containerd connect failed: {}", deployment.id, e);
-                return;
-            }
-        };
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
+        let client = self.connect().await?;
         deployment.instances =
             instances::list_instances(&client, &self.config.namespace, &deployment.id, "all").await;
         let kind = deployment.kind.clone();
         self.remove_all(deployment, &client, &kind).await;
         deployment.instances.clear();
+        Ok(())
     }
 }
 

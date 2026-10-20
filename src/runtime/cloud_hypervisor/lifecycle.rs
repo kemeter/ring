@@ -1085,7 +1085,7 @@ impl InstanceDriver for CloudHypervisorLifecycle {
         self.stop_vm(instance_id).await;
     }
 
-    async fn teardown(&self, deployment: &mut Deployment) {
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
         for instance_id in self.instance_ids(&deployment.id).await {
             if !self.stop_vm(&instance_id).await {
                 warn!("Failed to stop VM {} during deletion", instance_id);
@@ -1093,6 +1093,7 @@ impl InstanceDriver for CloudHypervisorLifecycle {
         }
         self.cleanup_orphaned_artifacts(&deployment.id).await;
         deployment.instances.clear();
+        Ok(())
     }
 }
 

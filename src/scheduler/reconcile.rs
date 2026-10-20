@@ -459,8 +459,9 @@ mod tests {
             self.retired.lock().unwrap().push(instance_id.to_string());
         }
 
-        async fn teardown(&self, deployment: &mut Deployment) {
+        async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
             deployment.instances.clear();
+            Ok(())
         }
     }
 

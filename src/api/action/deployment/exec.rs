@@ -694,7 +694,12 @@ mod tests {
 
         async fn discard_instance(&self, _instance_id: &str) {}
 
-        async fn teardown(&self, _deployment: &mut crate::models::deployments::Deployment) {}
+        async fn teardown(
+            &self,
+            _deployment: &mut crate::models::deployments::Deployment,
+        ) -> Result<(), crate::hypervisor::error::RuntimeError> {
+            Ok(())
+        }
     }
 
     #[async_trait::async_trait]

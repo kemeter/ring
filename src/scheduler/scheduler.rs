@@ -268,7 +268,12 @@ async fn teardown_runtime(
 ) -> Option<Deployment> {
     let mut result = deployment.clone();
     match tokio::time::timeout(apply_timeout, runtime.teardown(&mut result)).await {
-        Ok(()) => Some(result),
+        Ok(Ok(())) => Some(result),
+        Ok(Err(e)) => {
+            // Kept as deleted, and torn down again next cycle.
+            error!("Failed to tear down deployment {}: {}", deployment.id, e);
+            None
+        }
         Err(_) => {
             log_apply_timeout(pool, &deployment.id, apply_timeout_secs).await;
             None

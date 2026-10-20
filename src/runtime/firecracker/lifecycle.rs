@@ -1595,7 +1595,7 @@ impl InstanceDriver for FirecrackerLifecycle {
         self.stop_vm(instance_id).await;
     }
 
-    async fn teardown(&self, deployment: &mut Deployment) {
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
         // Re-adopt first so an instance inherited from a previous ring-server
         // (its forwarders orphaned, not in our maps) is brought back under
         // ownership — then stop_vm's Drop kills its socat. Without this,
@@ -1611,6 +1611,7 @@ impl InstanceDriver for FirecrackerLifecycle {
             }
         }
         deployment.instances.clear();
+        Ok(())
     }
 }
 

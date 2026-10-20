@@ -98,8 +98,9 @@ impl InstanceDriver for MockRuntime {
 
     async fn discard_instance(&self, _instance_id: &str) {}
 
-    async fn teardown(&self, deployment: &mut Deployment) {
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError> {
         deployment.instances.clear();
+        Ok(())
     }
 }
 

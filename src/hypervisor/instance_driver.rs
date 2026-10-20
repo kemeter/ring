@@ -49,5 +49,9 @@ pub(crate) trait InstanceDriver: Send + Sync {
 
     /// Remove every instance of a deleted deployment, live or ended, and
     /// whatever the runtime kept for them. Clears `deployment.instances`.
-    async fn teardown(&self, deployment: &mut Deployment);
+    ///
+    /// An error means the runtime could not even be asked: the deployment is
+    /// kept, and torn down again on a later pass, rather than forgotten with
+    /// its instances still running.
+    async fn teardown(&self, deployment: &mut Deployment) -> Result<(), RuntimeError>;
 }
