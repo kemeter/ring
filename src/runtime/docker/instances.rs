@@ -29,10 +29,9 @@ fn build_list_options(_status: &str) -> bollard::query_parameters::ListContainer
 /// container stuck in `created` (Docker accepted the spec but `start` failed —
 /// e.g. the OCI runtime can't exec the binary) is *not* a live instance.
 /// Counting it as active masked the failure — the scheduler saw
-/// `current_count == target_count`, skipped the retry path, and `restart_count`
-/// never climbed to `MAX_RESTART_COUNT`. With it excluded, the next tick sees
-/// 0 instances, retries, increments `restart_count`, and eventually flips the
-/// deployment to `CrashLoopBackOff` like any other crash loop.
+/// `current_count == target_count`, skipped the retry path, and the failure was
+/// never counted. With it excluded, the next pass sees 0 instances, counts the
+/// failure and retries on the backoff curve like any other crash loop.
 fn matches_status(state: Option<&ContainerSummaryStateEnum>, status: &str) -> bool {
     match status {
         "all" => true,

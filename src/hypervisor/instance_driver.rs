@@ -1,12 +1,9 @@
 //! Instance-level runtime operations: report facts, start and stop instances,
 //! make no decisions.
 //!
-//! A runtime that implements [`InstanceDriver`] leaves the restart policy, the
-//! backoff and the scaling decisions to the scheduler (`scheduler::reconcile`),
-//! which runs the same code for every such runtime. Runtimes that do not yet
-//! implement it keep reconciling through [`RuntimeLifecycle::apply`].
-//!
-//! [`RuntimeLifecycle::apply`]: crate::hypervisor::lifecycle_trait::RuntimeLifecycle::apply
+//! Every runtime implements [`InstanceDriver`] and leaves the restart policy,
+//! the backoff and the scaling decisions to the scheduler
+//! (`scheduler::reconcile`), which runs the same code for all of them.
 
 use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::Deployment;
@@ -43,4 +40,14 @@ pub(crate) trait InstanceDriver: Send + Sync {
 
     /// Remove a terminated instance once its termination has been handled.
     async fn discard_instance(&self, instance_id: &str);
+
+    /// The terminated instance of a finished job. By default it is kept, and
+    /// its logs with it, until the deployment is deleted. A runtime for which
+    /// an ended instance still holds real resources (a microVM's disk copy)
+    /// removes it instead.
+    async fn retire_instance(&self, _instance_id: &str) {}
+
+    /// Remove every instance of a deleted deployment, live or ended, and
+    /// whatever the runtime kept for them. Clears `deployment.instances`.
+    async fn teardown(&self, deployment: &mut Deployment);
 }

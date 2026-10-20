@@ -116,6 +116,10 @@ impl InstanceDriver for DockerLifecycle {
     async fn discard_instance(&self, instance_id: &str) {
         super::container::remove_container(self.docker.clone(), instance_id.to_string()).await;
     }
+
+    async fn teardown(&self, deployment: &mut Deployment) {
+        super::lifecycle::teardown(deployment, &self.docker, &self.intentional_shutdowns).await;
+    }
 }
 
 impl DockerLifecycle {
@@ -159,23 +163,6 @@ impl DockerLifecycle {
 
 #[async_trait]
 impl RuntimeLifecycle for DockerLifecycle {
-    fn instance_driver(&self) -> Option<&dyn InstanceDriver> {
-        Some(self)
-    }
-
-    async fn apply(
-        &self,
-        deployment: Deployment,
-        _resolved_mounts: Vec<ResolvedMount>,
-    ) -> Deployment {
-        super::lifecycle::apply(
-            deployment,
-            self.docker.clone(),
-            self.intentional_shutdowns.clone(),
-        )
-        .await
-    }
-
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }

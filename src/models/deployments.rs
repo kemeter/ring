@@ -6,15 +6,8 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub(crate) const MAX_RESTART_COUNT: u32 = 5;
-
-/// Statuses the scheduler keeps reconciling on every tick.
-///
-/// Single source of truth: `scheduler::schedule` builds its DB filter from this
-/// list, and `classifier::scheduler_skips_by_status` is its complement. Keeping
-/// them derived from one array is what stops the two drifting apart — a status
-/// added here while still reported as "skipped" would be retried forever with
-/// no restart budget to stop it.
+/// Statuses the scheduler keeps reconciling on every tick: `scheduler::schedule`
+/// builds its DB filter from this list.
 ///
 /// `crash_loop_back_off` and `insufficient_resources` are reconciled too: a
 /// worker in either is backing off, not abandoned, and is started again once

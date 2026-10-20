@@ -2,7 +2,6 @@ pub(crate) mod autoscaler;
 pub(crate) mod docker_events;
 pub(crate) mod event_worker;
 pub(crate) mod health_checker;
-pub(crate) mod healthy_window;
 pub(crate) mod intentional_shutdowns;
 pub(crate) mod reconcile;
 pub(crate) mod restart;

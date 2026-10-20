@@ -73,10 +73,10 @@ impl HealthChecker {
         // `completed`/`failed` and never sit in a readiness-gated `Running`.
         //
         // The phase is keyed on `old_status` — the status *entering* the cycle —
-        // not `deployment.status`, which `handle_status_transitions` has already
-        // flipped `Creating → Running` optimistically (the moment an instance
-        // exists, before `gate_running_on_readiness` validates readiness later in
-        // the same cycle). Reading the current status here would treat a still-
+        // not `deployment.status`, which the reconcile pass has already flipped
+        // `Creating → Running` (once an instance stays up, before
+        // `gate_running_on_readiness` validates readiness later in the same
+        // cycle). Reading the current status here would treat a still-
         // booting deployment as `Running` and fire liveness `on_failure` against
         // an app that isn't ready yet — restarting it in a loop. `old_status`
         // stays `Creating` until a gate-validated `Running` is persisted, so

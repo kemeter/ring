@@ -1,8 +1,8 @@
 //! The `RuntimeLifecycle` implementation for containerd.
 //!
-//! `apply` reproduces the Docker runtime's reconciliation loop (job vs worker,
-//! scale up/down one instance per tick, terminal states) on top of containerd's
-//! lower-level primitives. Creating one instance is a five-step dance:
+//! The scheduler reconciles containerd deployments through the
+//! [`InstanceDriver`] implemented here, on top of containerd's lower-level
+//! primitives. Creating one instance is a five-step dance:
 //!
 //! 1. **image** — ensure the image is pulled + unpacked, resolve its rootfs
 //!    chain id ([`super::image`]).
@@ -22,9 +22,11 @@ use super::image::{ContainerdImage, ensure_image};
 use super::{ContainerdLifecycle, RING_DEPLOYMENT_LABEL, cni, instances, oci, tiny_id};
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::hypervisor::error::RuntimeError;
+use crate::hypervisor::instance_driver::{InstanceDriver, Observation};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
-use crate::models::deployments::{Deployment, DeploymentStatus, MAX_RESTART_COUNT};
+use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
+use crate::models::restart_state::{LOGS_TAIL_LINES, Termination, logs_tail};
 use crate::models::volume::{ReloadSignal, ResolvedMount};
 use crate::runtime::docker::ImagePullPolicy;
 use async_trait::async_trait;
@@ -43,7 +45,6 @@ use containerd_client::types::Mount;
 use containerd_client::types::v1::Status as TaskStatus;
 use containerd_client::with_namespace;
 use futures::stream::{self, Stream};
-use std::cmp::Ordering;
 use std::convert::Infallible;
 use std::pin::Pin;
 use tonic::Request;
@@ -110,48 +111,69 @@ fn config_dir(deployment_id: &str) -> String {
 }
 
 #[async_trait]
-impl RuntimeLifecycle for ContainerdLifecycle {
-    async fn apply(
+impl InstanceDriver for ContainerdLifecycle {
+    async fn observe(&self, deployment: &Deployment) -> Observation {
+        let Ok(client) = self.connect().await else {
+            return Observation::default();
+        };
+        let (running, ended) =
+            instances::list_live_and_ended(&client, &self.config.namespace, &deployment.id).await;
+
+        let mut terminated = Vec::with_capacity(ended.len());
+        for instance_id in ended {
+            terminated.push(self.termination(&client, instance_id).await);
+        }
+        terminated.sort_by_key(|t| t.finished_at);
+
+        Observation {
+            running,
+            terminated,
+        }
+    }
+
+    async fn start_instance(
         &self,
-        mut deployment: Deployment,
-        resolved_mounts: Vec<ResolvedMount>,
-    ) -> Deployment {
+        deployment: &mut Deployment,
+        resolved_mounts: &[ResolvedMount],
+    ) -> Result<(), RuntimeError> {
+        let client = self.connect().await?;
+        self.create_instance(deployment, &client, resolved_mounts)
+            .await
+    }
+
+    /// Teardown is synchronous here, so a stopped instance is gone before the
+    /// next observation and never reported as a termination.
+    async fn stop_instance(&self, instance_id: &str) -> bool {
+        let Ok(client) = self.connect().await else {
+            return false;
+        };
+        self.teardown_instance(&client, instance_id).await
+    }
+
+    async fn discard_instance(&self, instance_id: &str) {
+        if let Ok(client) = self.connect().await {
+            self.teardown_instance(&client, instance_id).await;
+        }
+    }
+
+    async fn teardown(&self, deployment: &mut Deployment) {
         let client = match self.connect().await {
             Ok(c) => c,
             Err(e) => {
                 error!("[{}] containerd connect failed: {}", deployment.id, e);
-                deployment.status = DeploymentStatus::Error;
-                deployment.emit_event(
-                    "error",
-                    format!("containerd unreachable: {}", e),
-                    "containerd",
-                    Some("runtime_error"),
-                );
-                return deployment;
+                return;
             }
         };
-
-        let status_filter = if deployment.status == DeploymentStatus::Deleted {
-            "all"
-        } else {
-            "active"
-        };
-        deployment.instances = instances::list_instances(
-            &client,
-            &self.config.namespace,
-            &deployment.id,
-            status_filter,
-        )
-        .await;
-
-        if deployment.kind == "job" {
-            self.handle_job(deployment, &client, &resolved_mounts).await
-        } else {
-            self.handle_worker(deployment, &client, &resolved_mounts)
-                .await
-        }
+        deployment.instances =
+            instances::list_instances(&client, &self.config.namespace, &deployment.id, "all").await;
+        let kind = deployment.kind.clone();
+        self.remove_all(deployment, &client, &kind).await;
+        deployment.instances.clear();
     }
+}
 
+#[async_trait]
+impl RuntimeLifecycle for ContainerdLifecycle {
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         let Ok(client) = self.connect().await else {
             return Vec::new();
@@ -360,130 +382,46 @@ impl RuntimeLifecycle for ContainerdLifecycle {
 }
 
 impl ContainerdLifecycle {
-    async fn handle_job(
+    /// How an ended instance finished: its exit code, when, and the end of its
+    /// output, read before the instance is torn down with them.
+    async fn termination(
         &self,
-        mut deployment: Deployment,
         client: &containerd_client::Client,
-        resolved_mounts: &[ResolvedMount],
-    ) -> Deployment {
-        if deployment.status == DeploymentStatus::Deleted {
-            self.remove_all(&mut deployment, client, "job").await;
-            return deployment;
-        }
-        if matches!(
-            deployment.status,
-            DeploymentStatus::Completed | DeploymentStatus::Failed
-        ) {
-            return deployment;
-        }
-        if deployment.restart_count >= MAX_RESTART_COUNT {
-            deployment.status = DeploymentStatus::Failed;
-            return deployment;
-        }
+        instance_id: String,
+    ) -> Termination {
+        let mut tasks = TasksClient::new(client.channel());
+        let req = with_namespace!(
+            GetRequest {
+                container_id: instance_id.clone(),
+                exec_id: String::new(),
+            },
+            self.config.namespace
+        );
+        let process = tasks
+            .get(req)
+            .await
+            .ok()
+            .and_then(|resp| resp.into_inner().process);
+        // A task that is not stopped never ran its program: it was created and
+        // its start refused, or it was never created at all.
+        let stopped = process
+            .as_ref()
+            .filter(|p| TaskStatus::try_from(p.status) == Ok(TaskStatus::Stopped));
+        let finished_at = stopped
+            .and_then(|p| p.exited_at.as_ref())
+            .and_then(|t| DateTime::from_timestamp(t.seconds, u32::try_from(t.nanos).ok()?))
+            .filter(|t| t.timestamp() > 0)
+            .unwrap_or_else(Utc::now);
+        let tail = LOGS_TAIL_LINES.to_string();
+        let lines = super::logs::read_logs(&instance_id, Some(&tail), None).await;
 
-        let all =
-            instances::list_instances(client, &self.config.namespace, &deployment.id, "all").await;
-        if let Some(instance_id) = all.first() {
-            match self.task_status(client, instance_id).await {
-                Some(TaskStatus::Running) | Some(TaskStatus::Paused) => {
-                    deployment.status = DeploymentStatus::Running;
-                }
-                Some(TaskStatus::Stopped) => {
-                    // A stopped task: inspect exit code to tell completed vs
-                    // failed. The Get response carries exit_status.
-                    deployment.status = match self.task_exit_status(client, instance_id).await {
-                        Some(0) => DeploymentStatus::Completed,
-                        _ => DeploymentStatus::Failed,
-                    };
-                }
-                _ => {
-                    deployment.status = DeploymentStatus::Failed;
-                }
-            }
-        } else {
-            match self
-                .create_instance(&mut deployment, client, resolved_mounts)
-                .await
-            {
-                Ok(_) => deployment.status = DeploymentStatus::Running,
-                Err(err) => handle_create_error(&mut deployment, err, true),
-            }
+        Termination {
+            exit_code: stopped.map(|p| i64::from(p.exit_status)),
+            finished_at,
+            started: stopped.is_some(),
+            logs_tail: logs_tail(&lines),
+            instance_id,
         }
-        deployment
-    }
-
-    async fn handle_worker(
-        &self,
-        mut deployment: Deployment,
-        client: &containerd_client::Client,
-        resolved_mounts: &[ResolvedMount],
-    ) -> Deployment {
-        if deployment.status == DeploymentStatus::Deleted {
-            self.remove_all(&mut deployment, client, "worker").await;
-            return deployment;
-        }
-        if deployment.restart_count >= MAX_RESTART_COUNT {
-            deployment.status = DeploymentStatus::CrashLoopBackOff;
-            return deployment;
-        }
-        if deployment.status == DeploymentStatus::CrashLoopBackOff {
-            return deployment;
-        }
-
-        let current = deployment.instances.len();
-        let target = match usize::try_from(deployment.target_replicas()) {
-            Ok(t) => t,
-            Err(_) => {
-                deployment.status = DeploymentStatus::Failed;
-                return deployment;
-            }
-        };
-
-        match current.cmp(&target) {
-            Ordering::Less => {
-                match self
-                    .create_instance(&mut deployment, client, resolved_mounts)
-                    .await
-                {
-                    Ok(_) => {
-                        deployment.emit_event(
-                            "info",
-                            format!("Scaled up from {} to {} replicas", current, current + 1),
-                            "containerd",
-                            Some("scale_up"),
-                        );
-                        if matches!(
-                            deployment.status,
-                            DeploymentStatus::Pending | DeploymentStatus::Creating
-                        ) {
-                            deployment.status = DeploymentStatus::Running;
-                        }
-                    }
-                    Err(err) => handle_create_error(&mut deployment, err, true),
-                }
-            }
-            Ordering::Greater => {
-                if let Some(instance_id) = deployment.instances.first().cloned() {
-                    self.teardown_instance(client, &instance_id).await;
-                    deployment.instances.remove(0);
-                    deployment.emit_event(
-                        "info",
-                        format!(
-                            "Scaled down from {} to {} replicas (removed {})",
-                            current,
-                            current - 1,
-                            instance_id
-                        ),
-                        "containerd",
-                        Some("scale_down"),
-                    );
-                }
-            }
-            Ordering::Equal => {
-                debug!("containerd replicas match target: {}", current);
-            }
-        }
-        deployment
     }
 
     async fn remove_all(
@@ -518,8 +456,8 @@ impl ContainerdLifecycle {
     }
 
     /// Create + start a single instance. On any failure mid-flight, the partial
-    /// objects (snapshot, container) are cleaned up so the next reconcile tick
-    /// starts clean and `restart_count` drives convergence to a terminal state.
+    /// objects (snapshot, container) are cleaned up so the next reconcile pass
+    /// starts clean.
     async fn create_instance(
         &self,
         deployment: &mut Deployment,
@@ -880,41 +818,6 @@ impl ContainerdLifecycle {
         }
     }
 
-    async fn task_status(
-        &self,
-        client: &containerd_client::Client,
-        instance_id: &str,
-    ) -> Option<TaskStatus> {
-        let mut tasks = TasksClient::new(client.channel());
-        let req = with_namespace!(
-            GetRequest {
-                container_id: instance_id.to_string(),
-                exec_id: String::new(),
-            },
-            self.config.namespace
-        );
-        let resp = tasks.get(req).await.ok()?;
-        let process = resp.into_inner().process?;
-        TaskStatus::try_from(process.status).ok()
-    }
-
-    async fn task_exit_status(
-        &self,
-        client: &containerd_client::Client,
-        instance_id: &str,
-    ) -> Option<u32> {
-        let mut tasks = TasksClient::new(client.channel());
-        let req = with_namespace!(
-            GetRequest {
-                container_id: instance_id.to_string(),
-                exec_id: String::new(),
-            },
-            self.config.namespace
-        );
-        let resp = tasks.get(req).await.ok()?;
-        resp.into_inner().process.map(|p| p.exit_status)
-    }
-
     async fn task_pid(&self, client: &containerd_client::Client, instance_id: &str) -> Option<u32> {
         let mut tasks = TasksClient::new(client.channel());
         let req = with_namespace!(
@@ -976,87 +879,10 @@ async fn write_config_files(
     Ok(out)
 }
 
-/// Translate a runtime error into the deployment's status + event, mirroring the
-/// Docker runtime's `handle_create_error`.
-fn handle_create_error(deployment: &mut Deployment, err: RuntimeError, increment_restart: bool) {
-    // Decide retry-vs-give-up before mapping the message, like Docker: a terminal
-    // error (image absent, config missing) can't fix itself on a retry, so jump
-    // straight to the restart bound instead of burning MAX_RESTART_COUNT
-    // reconcile cycles to reach the same outcome.
-    //
-    // `InstanceCreationFailed` is the one exception, and it is a containerd
-    // quirk rather than a classifier one. Docker only raises that variant when
-    // the daemon rejects a container spec — permanent by construction. Here it
-    // wraps every gRPC call in the create path (`PrepareSnapshot`,
-    // `CreateContainer`, `CreateTask`, `StartTask`), so it also covers a shim
-    // that is momentarily unavailable or a snapshotter under contention. Those
-    // do recover, so this runtime keeps them inside the retry budget.
-    let terminal = crate::hypervisor::classifier::classify_create_error(&err).is_terminal()
-        && !matches!(err, RuntimeError::InstanceCreationFailed(_));
-    // `InsufficientResources` is excluded from the scheduler's reconcile filter
-    // by status alone, so it needs no counter marker — and writing one would
-    // report restarts that never happened (no container was ever created). The
-    // other terminal statuses (`ImagePullBackOff`, `CreateContainerError`) ARE
-    // still reconciled, so for those the exhausted budget remains what stops
-    // the retries.
-    let status_alone_stops_reconciliation =
-        match crate::hypervisor::classifier::classify_create_error(&err) {
-            crate::hypervisor::classifier::Disposition::Terminal(ref s) => {
-                crate::hypervisor::classifier::scheduler_skips_by_status(s)
-            }
-            crate::hypervisor::classifier::Disposition::Retry => false,
-        };
-
-    if increment_restart && !status_alone_stops_reconciliation {
-        if terminal {
-            deployment.restart_count = MAX_RESTART_COUNT;
-        } else {
-            deployment.restart_count += 1;
-        }
-    }
-    let (status, reason, message) = match &err {
-        RuntimeError::ImageNotFound(detail) => (
-            DeploymentStatus::ImagePullBackOff,
-            "image_pull_back_off",
-            format!("Image '{}' not found: {}", deployment.image, detail),
-        ),
-        RuntimeError::ImagePullFailed(detail) => (
-            DeploymentStatus::ImagePullBackOff,
-            "image_pull_back_off",
-            format!("Failed to pull image '{}': {}", deployment.image, detail),
-        ),
-        RuntimeError::InstanceCreationFailed(msg) => (
-            DeploymentStatus::CreateContainerError,
-            "instance_creation_failed",
-            format!("Instance creation failed: {}", msg),
-        ),
-        RuntimeError::InsufficientResources(detail) => (
-            DeploymentStatus::InsufficientResources,
-            "insufficient_resources",
-            detail.clone(),
-        ),
-        // Terminal per the classifier: the referenced config (or key) is absent
-        // and only the operator can create it. Give it the dedicated status
-        // rather than the generic `Error` catch-all.
-        RuntimeError::ConfigNotFound(detail) | RuntimeError::ConfigKeyNotFound(detail) => (
-            DeploymentStatus::ConfigError,
-            "config_error",
-            detail.clone(),
-        ),
-        other => (
-            DeploymentStatus::Error,
-            "runtime_error",
-            format!("containerd error: {}", other),
-        ),
-    };
-    error!("[{}] {}: {}", deployment.id, reason, err);
-    deployment.status = status;
-    deployment.emit_event("error", message, "containerd", Some(reason));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::deployments::DeploymentStatus;
     use std::collections::HashMap;
 
     fn worker() -> Deployment {
@@ -1089,95 +915,6 @@ mod tests {
             network: None,
             restart: None,
         }
-    }
-
-    /// A permanent failure must not burn the whole restart budget: one create
-    /// attempt is enough to jump to the bound, so the deployment converges on
-    /// the next tick instead of five ticks from now.
-    #[test]
-    fn terminal_create_error_jumps_to_the_restart_bound() {
-        let mut deployment = worker();
-        handle_create_error(
-            &mut deployment,
-            RuntimeError::ImageNotFound("nope".into()),
-            true,
-        );
-
-        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
-        assert_eq!(deployment.status, DeploymentStatus::ImagePullBackOff);
-    }
-
-    /// A missing config is terminal too, and gets its own status rather than the
-    /// generic `Error` catch-all.
-    #[test]
-    fn missing_config_is_terminal_with_config_error_status() {
-        let mut deployment = worker();
-        handle_create_error(
-            &mut deployment,
-            RuntimeError::ConfigNotFound("app-config".into()),
-            true,
-        );
-
-        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
-        assert_eq!(deployment.status, DeploymentStatus::ConfigError);
-    }
-
-    /// Unlike Docker, containerd wraps every gRPC call in the create path in
-    /// `InstanceCreationFailed`, so it also covers a shim that is momentarily
-    /// unavailable. That must stay retryable — failing fast here would abandon a
-    /// deployment that a retry recovers.
-    ///
-    /// Asserting `restart_count == 1` alone would not prove much, so drive the
-    /// full budget: the deployment must take `MAX_RESTART_COUNT` failed ticks to
-    /// reach the bound, one increment at a time, and never jump early.
-    #[test]
-    fn instance_creation_failed_stays_retryable_on_containerd() {
-        let mut deployment = worker();
-
-        for tick in 1..=MAX_RESTART_COUNT {
-            handle_create_error(
-                &mut deployment,
-                RuntimeError::InstanceCreationFailed("CreateTask: transport error".into()),
-                true,
-            );
-            assert_eq!(
-                deployment.restart_count, tick,
-                "a transient shim error must consume exactly one restart per tick"
-            );
-            assert_eq!(deployment.status, DeploymentStatus::CreateContainerError);
-        }
-
-        // Only now is the budget exhausted; the guard in `handle_worker` turns
-        // this into CrashLoopBackOff on the next tick.
-        assert_eq!(deployment.restart_count, MAX_RESTART_COUNT);
-    }
-
-    /// A transient failure keeps its one-by-one budget.
-    #[test]
-    fn transient_create_error_increments_by_one() {
-        let mut deployment = worker();
-        handle_create_error(
-            &mut deployment,
-            RuntimeError::ImagePullFailed("registry timeout".into()),
-            true,
-        );
-
-        assert_eq!(deployment.restart_count, 1);
-    }
-
-    /// With `increment_restart == false` the counter is left alone entirely,
-    /// terminal verdict or not.
-    #[test]
-    fn no_increment_leaves_the_counter_untouched() {
-        let mut deployment = worker();
-        handle_create_error(
-            &mut deployment,
-            RuntimeError::ImageNotFound("nope".into()),
-            false,
-        );
-
-        assert_eq!(deployment.restart_count, 0);
-        assert_eq!(deployment.status, DeploymentStatus::ImagePullBackOff);
     }
 
     #[test]

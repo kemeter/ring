@@ -83,6 +83,45 @@ pub(crate) async fn list_instances_with_names(
     }
 }
 
+/// The instances of a deployment split into live ones and ended ones: a
+/// container whose task is stopped, was never started, or is missing.
+pub(crate) async fn list_live_and_ended(
+    client: &containerd_client::Client,
+    namespace: &str,
+    deployment_id: &str,
+) -> (Vec<String>, Vec<String>) {
+    let all = list_instances(client, namespace, deployment_id, "all").await;
+    if all.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let mut tasks = TasksClient::new(client.channel());
+    let task_req = with_namespace!(
+        ListTasksRequest {
+            filter: String::new(),
+        },
+        namespace
+    );
+    let task_status = match tasks.list(task_req).await {
+        Ok(resp) => task_status_by_container(resp.into_inner().tasks),
+        Err(e) => {
+            // Without the task list nothing can be told apart: report nothing
+            // ended rather than every instance.
+            debug!("containerd ListTasks failed: {}", e);
+            return (all, Vec::new());
+        }
+    };
+    split_live_and_ended(all, &task_status)
+}
+
+fn split_live_and_ended(
+    containers: Vec<String>,
+    task_status: &HashMap<String, i32>,
+) -> (Vec<String>, Vec<String>) {
+    containers
+        .into_iter()
+        .partition(|id| task_status.get(id).copied().is_some_and(is_active))
+}
+
 async fn list_instances_inner(
     client: &containerd_client::Client,
     namespace: &str,
@@ -150,6 +189,19 @@ mod tests {
             status: status as i32,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn instances_without_an_active_task_have_ended() {
+        let statuses = task_status_by_container(vec![
+            task("c1", "c1", TaskStatus::Running),
+            task("c2", "c2", TaskStatus::Stopped),
+            task("c3", "c3", TaskStatus::Created),
+        ]);
+        let containers = ["c1", "c2", "c3", "c4"].map(String::from).to_vec();
+        let (live, ended) = split_live_and_ended(containers, &statuses);
+        assert_eq!(live, vec!["c1"]);
+        assert_eq!(ended, vec!["c2", "c3", "c4"]);
     }
 
     #[test]
