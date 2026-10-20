@@ -196,7 +196,7 @@ A `kind: job` deployment boots a single microVM (replicas are ignored) and is ma
 
 > Your job's workload must end by issuing `reboot` (e.g. `reboot -f` once the work is done), **not** `poweroff`. A `poweroff` only halts the vCPU and leaves the Firecracker process running, so the job would never be observed as complete. Because the guest's exit code isn't surfaced, any clean reboot is treated as success.
 
-Completed jobs are sticky (never rebooted) and their per-instance artifacts (socket, rootfs copy, console log) are reaped; the deployment row stays for inspection.
+A finished job is never rebooted, and its per-instance artifacts (socket, rootfs copy, console log) are reaped; the deployment row stays for inspection. A `firecracker` process that exits non-zero, or a worker VM that stops, counts as a failure on the [restart policy](/documentation/concepts/reconciliation#restart-policy)'s backoff curve.
 
 ## Volumes
 

@@ -23,7 +23,7 @@ All values serialize as `snake_case`, identically on the wire (JSON), in the CLI
 | Status | Cause | Terminal? |
 |---|---|---|
 | `failed` | A job exited non-zero / crashed; **or** a readiness check never turned green before the deadline on a non-rolling deployment; **or** (Cloud Hypervisor) firmware not found. | **Terminal** |
-| `crash_loop_back_off` | A worker's instances keep dying. On Docker and Podman the worker is waiting for its next start (see [restart policy](#restart-policy)); on the other runtimes it reached 5 failed attempts. | Retried (Docker, Podman) |
+| `crash_loop_back_off` | A worker's instances keep dying, and the worker is waiting for its next start (see [restart policy](#restart-policy)). | Retried |
 | `insufficient_resources` | The host doesn't have enough free memory for the deployment's request right now. Retried, since memory gets freed. | Retried |
 | `image_pull_back_off` | The image couldn't be pulled (tag not found, registry auth, `image_pull_policy: Never` forbidding a pull, transient network). | Retried |
 | `create_container_error` | The runtime rejected container creation (invalid mount, unsupported option, a port conflict the daemon surfaces at create time). | Retried |
@@ -85,11 +85,9 @@ Without any readiness check, the legacy behaviour is preserved: `running` as soo
 
 `restart_count` counts failed attempts since the last reset: an instance that died unexpectedly (not one Ring stopped itself on a delete or scale-down), a start that failed, or an instance removed by a liveness check.
 
-On **Docker and Podman**, a worker is never abandoned. Each failure pushes its next start out on a randomized exponential backoff, from up to 10 s after the first failure to at most 5 minutes, and the counter resets after 10 minutes of uninterrupted running. Failures that need an operator (a missing config, a rejected spec, an exit code `126`/`127`) wait up to 5 minutes from the first attempt on, and are still retried, so fixing the cause is picked up without a re-apply. The backoff is stored in the database and survives a `ring server` restart. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy) and [`[server.restart]`](/documentation/reference/config-toml#server-restart).
+A worker is never abandoned. Each failure pushes its next start out on a randomized exponential backoff, from up to 10 s after the first failure to at most 5 minutes, and the counter resets after 10 minutes of uninterrupted running. Failures that need an operator (a missing config, a rejected spec, an exit code `126`/`127`) wait up to 5 minutes from the first attempt on, and are still retried, so fixing the cause is picked up without a re-apply. The backoff is stored in the database and survives a `ring server` restart. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy) and [`[server.restart]`](/documentation/reference/config-toml#server-restart).
 
-A **job** on Docker and Podman completes on exit 0. A run that exits non-zero fails it, unless its manifest sets `restart.backoff_limit`, in which case it is run again up to that many times on the same backoff. A job that cannot start (an image that cannot be pulled, a missing config, not enough memory) ran nothing, so it is retried without limit and does not count against `backoff_limit`. See [`restart`](/documentation/reference/manifest#restart).
-
-On **containerd, Cloud Hypervisor and Firecracker**, the previous budget still applies: once `restart_count` reaches 5, a worker lands in `crash_loop_back_off` and a job in `failed`, and the reconciler stops retrying until the manifest is re-applied. Failures that cannot fix themselves (a missing image, config or firmware, a rejected spec) exhaust the budget at once.
+A **job** completes on exit 0. A run that exits non-zero fails it, unless its manifest sets `restart.backoff_limit`, in which case it is run again up to that many times on the same backoff. A job that cannot start (an image that cannot be pulled, a missing config, not enough memory) ran nothing, so it is retried without limit and does not count against `backoff_limit`. See [`restart`](/documentation/reference/manifest#restart).
 
 Health-check failure counters live in memory only, so each `(deployment, instance, check)` triple starts back at zero after a server restart.
 

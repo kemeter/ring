@@ -451,8 +451,6 @@ Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`). Ring rejects at
 
 A job that cannot even start (an image that cannot be pulled, a missing config, not enough memory) is retried without limit on the backoff curve: nothing ran, so nothing can be run twice. `backoff_limit` only counts runs that exited non-zero.
 
-Applies on Docker and Podman. On the other runtimes, workers and jobs still give up after 5 failed attempts.
-
 ## `health_checks`
 
 A list of probe definitions. Each probe runs independently with its own counter and its own failure action. Three types: `tcp`, `http`, `command`.
