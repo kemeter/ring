@@ -49,7 +49,7 @@ EOF
 
 write_manifest "version-1"
 "$RING_BIN" apply --file "$RING_TEST_DIR/manifest.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "full-app" "running" 90
+wait_deployment_state "ring-e2e" "full-app" "running" 90
 V1_ID=$(get_deployment_id "ring-e2e" "full-app")
 log "v1 deployment $V1_ID"
 

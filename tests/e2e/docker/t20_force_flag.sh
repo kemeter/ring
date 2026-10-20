@@ -69,7 +69,7 @@ log "v2 has no parent_id — rolling update was bypassed"
 ok=0
 for _ in $(seq 1 30); do
   st=$(curl -fsS "$RING_URL/deployments/$V1_ID" \
-    -H "Authorization: Bearer $TOKEN" | jq -r '.status')
+    -H "Authorization: Bearer $TOKEN" | jq -r "$STATE_JQ")
   if [ "$st" = "deleted" ]; then
     ok=1
     break

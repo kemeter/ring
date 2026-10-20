@@ -11,6 +11,7 @@
     type NodeInfo
   } from '$lib/api';
   import { getToken } from '$lib/auth';
+  import { statusKind, statusLabel } from '$lib/status';
   import { timeAgo } from '$lib/utils';
 
   let deployments = $state<Deployment[]>([]);
@@ -24,38 +25,7 @@
   let lastRefresh = $state<Date | null>(null);
   let poll: ReturnType<typeof setInterval> | null = null;
 
-  /** Classify a deployment status into one of four buckets, matching the
-   *  deployments list page. */
-  function statusKind(s: string): 'success' | 'warn' | 'danger' | 'neutral' {
-    const k = s.toLowerCase();
-    if (k === 'running') {
-      return 'success';
-    }
-    if (
-      k === 'failed' ||
-      k === 'crashloopbackoff' ||
-      k === 'crash_loop_back_off' ||
-      k === 'error' ||
-      k === 'createcontainererror' ||
-      k === 'create_container_error' ||
-      k === 'imagepullbackoff' ||
-      k === 'image_pull_back_off'
-    ) {
-      return 'danger';
-    }
-    if (
-      k === 'pending' ||
-      k === 'booting' ||
-      k === 'created' ||
-      k === 'creating' ||
-      k === 'starting'
-    ) {
-      return 'warn';
-    }
-    return 'neutral';
-  }
-
-  let running = $derived(deployments.filter((d) => statusKind(d.status) === 'success').length);
+  let running = $derived(deployments.filter((d) => d.status === 'running').length);
   let failing = $derived(deployments.filter((d) => statusKind(d.status) === 'danger').length);
   let pending = $derived(deployments.filter((d) => statusKind(d.status) === 'warn').length);
   let failingDeployments = $derived(deployments.filter((d) => statusKind(d.status) === 'danger'));
@@ -277,7 +247,7 @@
                 <a href="/deployments/{d.id}">
                   <span class="fail-name">{d.name}</span>
                   <span class="fail-ns">{d.namespace}</span>
-                  <span class="fail-status">{d.status}</span>
+                  <span class="fail-status" title={d.failure?.message}>{statusLabel(d)}</span>
                 </a>
               </li>
             {/each}

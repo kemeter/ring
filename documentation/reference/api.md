@@ -133,26 +133,22 @@ List deployments.
 
 - `namespace` or `namespace[]`: filter by one or more namespaces
 - `status` or `status[]`: filter by one or more statuses (values below)
+- `reason` or `reason[]`: filter by one or more failure reasons (values below)
 - `kind` or `kind[]`: filter by `worker` or `job` (the CLI flag `--type` maps to this)
 
-**`status` values.** The `status` field on every deployment is one of these (all `snake_case`). See [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle) for transitions and meaning.
+**`status` values.** Every deployment carries a `status`, and a `failure` that is `null` unless it is backing off or failed, and then gives the `reason` (`snake_case`) and a human-readable `message`. See [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle) for transitions and meaning.
 
 | Status | Meaning | Terminal? |
 |---|---|---|
-| `pending` | Created, no instance started yet (short-lived) | No |
-| `creating` | Instances coming up, or held by the readiness gate until ready | No |
+| `pending` | Accepted, no instance started yet (short-lived) | No |
+| `progressing` | Instances coming up, or held by the readiness gate until ready | No |
 | `running` | Up, and ready when readiness checks are declared | No |
+| `backing_off` | The last attempt failed; waiting for the next one (see `failure`) | No |
 | `completed` | Job exited `0` (jobs only) | Yes |
-| `failed` | Job failed, or readiness deadline exceeded, or firmware not found | Yes |
+| `failed` | Job past its `backoff_limit`, or worker under `on_exhaustion = "fail"` | Yes |
 | `deleted` | Marked for teardown; instances being removed, then purged | No |
-| `crash_loop_back_off` | Worker instances keep dying; waiting for the next start (Docker, Podman) or gave up after 5 attempts (other runtimes) | No on Docker/Podman |
-| `image_pull_back_off` | Image couldn't be pulled (tag, auth, policy, network) | No (retried) |
-| `create_container_error` | Runtime rejected container creation | No (retried) |
-| `network_error` | Namespace network/bridge creation failed | No (retried) |
-| `config_error` | A mounted config or key doesn't exist | No (retried) |
-| `file_system_error` | IO error on volumes or temp config files | No (retried) |
-| `insufficient_resources` | Host out of memory for the deployment's request | No (retried) |
-| `error` | Generic runtime fallback (stats, JSON, VM start, unclassified) | No (retried) |
+
+**`reason` values:** `crash_loop`, `run_failed`, `image_pull`, `spec_rejected`, `config_missing`, `insufficient_resources`, `network`, `file_system`, `readiness_timeout`, `error`.
 
 **Examples:**
 
@@ -176,6 +172,7 @@ curl -H "Authorization: Bearer $TOKEN" \
     "created_at": "2026-04-15T10:30:00Z",
     "updated_at": "2026-04-15T10:30:05Z",
     "status": "running",
+    "failure": null,
     "restart_count": 0,
     "name": "nginx-demo",
     "runtime": "docker",
@@ -321,6 +318,7 @@ Retrieve a deployment by UUID.
   "created_at": "2026-04-15T10:30:00Z",
   "updated_at": "2026-04-15T10:30:05Z",
   "status": "running",
+  "failure": null,
   "restart_count": 0,
   "name": "nginx-demo",
   "runtime": "docker",
@@ -928,7 +926,7 @@ Management routes require the `webhooks:write` scope (`webhooks:read` for `GET`)
 
 | Kind                            | When                                                                 |
 |---------------------------------|----------------------------------------------------------------------|
-| `deployment.status_changed`     | A deployment transitions to a new status                             |
+| `deployment.status_changed`      | A deployment changes status, or reason within its status               |
 | `deployment.health_check_failed`| A health check fails enough to trigger its `on_failure` action       |
 | `deployment.rolling_update`     | A rolling update progresses (instance drained / complete / failed)   |
 | `deployment.scaled`             | The reconciler added or removed an instance to reach the target count |
@@ -940,18 +938,21 @@ Every payload shares a common envelope (`schema_version`, `deployment_id`, `name
 
 Each delivery is a POST with `content-type: application/json`, an `X-Ring-Event: <kind>` header, and (when the webhook has a secret) `X-Ring-Signature: sha256=<hmac>` (HMAC-SHA256 of the raw body).
 
-`deployment.status_changed`:
+`deployment.status_changed`, where `failure` is `null` unless the deployment is backing off or failed:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",
   "kind": "worker",
-  "old_status": "creating",
-  "new_status": "running",
-  "restart_count": 0
+  "old": { "status": "running", "failure": null },
+  "new": {
+    "status": "backing_off",
+    "failure": { "reason": "crash_loop", "message": "Instance 3f2a9c1d4b5e exited with code 1" }
+  },
+  "restart_count": 1
 }
 ```
 
@@ -959,7 +960,7 @@ For `deployment.health_check_failed`, `action` is the `on_failure` that fired (`
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",
@@ -970,17 +971,17 @@ For `deployment.health_check_failed`, `action` is the `on_failure` that fired (`
 }
 ```
 
-For `deployment.rolling_update`, `phase` is `step` / `complete` / `failed`, and `drained_instance_id` is set on `step`:
+For `deployment.rolling_update`, `status` is `step` / `complete` / `failed`, and `drained_instance_id` is set on `step`:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",
   "kind": "worker",
   "parent_id": "0b1c2d3e-...",
-  "phase": "step",
+  "status": "step",
   "drained_instance_id": "old456..."
 }
 ```
@@ -989,7 +990,7 @@ For `deployment.scaled`, `direction` is `up` / `down`, and `instance_count` is t
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",
@@ -1004,7 +1005,7 @@ For `deployment.error`, `reason` is the runtime discriminant and `category` its 
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",

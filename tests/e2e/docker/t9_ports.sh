@@ -36,7 +36,7 @@ EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "nginx-ports" "running" 60
+wait_deployment_state "ring-e2e" "nginx-ports" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-ports")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"
@@ -100,12 +100,12 @@ EOF
 
 # Poll for ~30s. The conflicting deployment must NOT reach `running`
 # because Docker keeps refusing to bind the busy port. Acceptable terminal
-# states are `creating`, `failed`, `crashloopbackoff`, etc. — anything but
+# states are `progressing`, `failed`, `backing_off`, etc. — anything but
 # `running`.
 saw_running=0
 for _ in $(seq 1 30); do
   status=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r '.[] | select(.namespace=="ring-e2e" and .name=="nginx-ports-conflict") | .status' \
+    | jq -r '.[] | select(.namespace=="ring-e2e" and .name=="nginx-ports-conflict") | '"$STATE_JQ" \
     | head -n1)
   if [ "$status" = "running" ]; then
     saw_running=1
@@ -120,7 +120,7 @@ log "conflicting deployment correctly stayed out of 'running' (last status: ${st
 
 # Original deployment is still running on the port.
 status_orig=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | .status')
+  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | '"$STATE_JQ")
 if [ "$status_orig" != "running" ]; then
   fail "original deployment $DEPLOYMENT_ID lost its 'running' state during conflict (got '$status_orig')"
 fi
@@ -187,7 +187,7 @@ deployments:
       - { published: $PORT_LO, target: 80, host_ip: 127.0.0.1 }
 EOF
 "$RING_BIN" apply --file "$LO_FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-ports-lo" "running" 60
+wait_deployment_state "ring-e2e" "nginx-ports-lo" "running" 60
 
 LO_ID=$(get_deployment_id "ring-e2e" "nginx-ports-lo")
 [ -z "$LO_ID" ] && fail "could not find loopback deployment id after apply"

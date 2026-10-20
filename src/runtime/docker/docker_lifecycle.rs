@@ -371,6 +371,8 @@ mod tests {
             created_at: Utc::now().to_string(),
             updated_at: None,
             status: DeploymentStatus::Pending,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "ring-driver-test".to_string(),
             name: id.to_string(),

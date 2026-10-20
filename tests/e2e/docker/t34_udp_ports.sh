@@ -42,7 +42,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "udp-svc" "running" 60
+wait_deployment_state "ring-e2e" "udp-svc" "running" 60
 DEP_ID=$(get_deployment_id "ring-e2e" "udp-svc")
 [ -z "$DEP_ID" ] && fail "could not resolve deployment id"
 

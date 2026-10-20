@@ -80,7 +80,7 @@ sleep 45
 RESTART_COUNT=$(get_restart_count "ring-e2e" "crashloop-vm")
 STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
   | jq -r --arg ns "ring-e2e" --arg n "crashloop-vm" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 log "observed: status=$STATUS restart_count=$RESTART_COUNT"
 
@@ -89,11 +89,11 @@ if [ "${RESTART_COUNT:-0}" -le 5 ]; then
   fail "expected restart_count > 5, got $RESTART_COUNT (the deployment was abandoned or failures are not counted)"
 fi
 
-# A failed boot reports its error; caught right after an attempt, the
-# deployment may be creating.
+# A failed boot backs off with its error; caught right after an attempt, the
+# deployment may be progressing.
 case "$STATUS" in
-  error|creating) ;;
-  *) fail "expected error (or a fresh attempt), got '$STATUS'" ;;
+  backing_off:error|progressing) ;;
+  *) fail "expected backing_off:error (or a fresh attempt), got '$STATUS'" ;;
 esac
 
 # Each failed boot removes the per-instance .raw it created before booting:

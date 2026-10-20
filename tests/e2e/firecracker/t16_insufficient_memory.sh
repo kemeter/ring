@@ -57,12 +57,12 @@ STATUS=""
 for _ in $(seq 1 90); do
   STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
     | jq -r --arg ns "ring-e2e" --arg n "fc-toobig" \
-        '.[] | select(.namespace==$ns and .name==$n) | .status' | head -n1)
-  [ "$STATUS" = "insufficient_resources" ] && break
+        '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" | head -n1)
+  [ "$STATUS" = "backing_off:insufficient_resources" ] && break
   sleep 1
 done
 
-if [ "$STATUS" != "insufficient_resources" ]; then
+if [ "$STATUS" != "backing_off:insufficient_resources" ]; then
   "$RING_BIN" deployment events "$DEPLOYMENT_ID" 2>/dev/null | head -15 >&2 || true
   fail "expected insufficient_resources, got '$STATUS' — the memory admission check did not fire"
 fi
@@ -108,11 +108,11 @@ ROOTFS=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -name "*.ext4" 2>/dev/null |
   || fail "a retry spawned a VM ($SOCKETS socket(s)) or copied a rootfs ($ROOTFS image(s))"
 log "no retry spawned a VM or copied a rootfs"
 
-# The status must not drift onwards to crash_loop_back_off: an operator
+# The status must not drift onwards to backing_off:crash_loop: an operator
 # filtering on insufficient_resources would otherwise lose sight of it.
 STATUS_LATER=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | .status')
-[ "$STATUS_LATER" = "insufficient_resources" ] \
+  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | '"$STATE_JQ")
+[ "$STATUS_LATER" = "backing_off:insufficient_resources" ] \
   || fail "status drifted from insufficient_resources to '$STATUS_LATER'"
 log "status stayed at insufficient_resources"
 

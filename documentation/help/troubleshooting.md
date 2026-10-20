@@ -107,9 +107,9 @@ Ring binds to its detected local IP by default (e.g. `192.168.1.x`), not `localh
 
 ## Deployment problems
 
-> For what each deployment status means and how a deployment moves between them, see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle).
+> For what each deployment status and reason means and how a deployment moves between them, see [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle). `ring deployment list` shows both; `ring deployment inspect <ID>` adds the message.
 
-### Stuck in `creating`
+### Stuck in `progressing`
 
 Look at the events first:
 
@@ -129,7 +129,7 @@ A deployment shown as `deleted` should disappear within a scheduler cycle or two
 
 Current builds reconcile a `deleted` deployment straight to teardown and purge, ignoring secret/config/volume resolution. If you hit this on an older server, upgrade; the stuck row clears on the next cycle after restart.
 
-### `image_pull_back_off`
+### `backing_off` with `image_pull`
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> --level error --limit 20
@@ -153,7 +153,7 @@ config:
 
 See [how-to: deploy with secrets → private registry credentials](/documentation/how-to/deploy-with-secrets#private-registry-credentials-are-different).
 
-### `crash_loop_back_off`
+### `backing_off` with `crash_loop`
 
 The worker's instances keep dying. Ring keeps restarting it, waiting longer between attempts (up to 5 minutes). Look at:
 
@@ -164,7 +164,7 @@ ring deployment logs <DEPLOYMENT_ID> --tail 200          # what the app said
 
 Fixing the cause (a config, a dependency) is enough: the next attempt picks it up. Re-apply the manifest to start again right away with a fresh counter, or scale the worker to 0 to stop the retries.
 
-### `insufficient_resources`
+### `backing_off` with `insufficient_resources`
 
 The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it, *before* creating any container or booting any VM. The event names the gap:
 
@@ -197,7 +197,7 @@ Common causes:
 ### Rolling update stuck on the new version
 
 ```bash
-ring deployment list --status failed
+ring deployment list --status backing_off
 ring deployment events <CHILD_ID> --level error
 ring deployment health-checks <CHILD_ID>
 ring deployment logs <CHILD_ID> --tail 200

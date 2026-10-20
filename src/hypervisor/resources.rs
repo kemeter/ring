@@ -89,6 +89,8 @@ mod tests {
             created_at: String::new(),
             updated_at: None,
             status: crate::models::deployments::DeploymentStatus::Pending,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "web".to_string(),

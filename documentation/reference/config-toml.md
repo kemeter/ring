@@ -81,7 +81,7 @@ How the scheduler restarts a failed worker. See [Reconciliation → restart poli
 |---|---|---|---|---|
 | `base` | duration | no | `"10s"` | Upper bound of the delay before the first retry |
 | `cap` | duration | no | `"5m"` | Upper bound of the delay between two retries, however many failed. Must not be lower than `base` |
-| `stable_after` | duration | no | `"10m"` | Uninterrupted running time after which the attempt counter resets |
+| `stable_after` | duration | no | `"10m"` | Uninterrupted running time after which the attempt counter resets, once the worker is `running` (past its readiness checks) |
 | `on_exhaustion` | string | no | `"backoff"` | `"backoff"` keeps retrying at `cap` forever; `"fail"` marks the worker `failed` once its failures exceed `max_attempts` |
 | `max_attempts` | int | no | `5` | Only read when `on_exhaustion = "fail"` |
 

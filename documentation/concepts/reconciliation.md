@@ -28,9 +28,9 @@ The reconciler treats `kind: worker` and `kind: job` differently.
 
 A long-running service. The reconciler keeps **exactly `replicas` instances alive**. If a container crashes or you delete it manually, the next tick recreates it. Updating the manifest triggers a rolling update (if health checks are declared) or an immediate replacement.
 
-A worker reaches `running` as soon as its container is up, **unless** it declares a `readiness: true` check, in which case it stays `creating` until that check is green (see [Health checks: the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate)). A readiness check that never turns green fails the deployment after `RING_ROLLOUT_DEADLINE` (default 600s).
+A worker reaches `running` once its container stays up, **unless** it declares a `readiness: true` check, in which case it stays `progressing` until that check is green (see [Health checks: the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate)). A readiness check that never turns green gets its instances recreated after `RING_ROLLOUT_DEADLINE` (default 600s), with the `readiness_timeout` reason.
 
-For the full set of statuses a deployment can hold, what moves it between them, and which are terminal, see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle).
+For the statuses and reasons a deployment can hold, what moves it between them, and which are terminal, see [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle).
 
 ### Job
 
@@ -39,9 +39,8 @@ A one-shot task. The reconciler boots **one** instance (`replicas` is ignored), 
 | Exit | Final status |
 |---|---|
 | Container exits with code 0 | `completed` |
-| Container exits with non-zero code | `failed` |
-| Container is killed by OOM / signal | `failed` |
-| Job times out (host-side) | `failed` |
+| Container exits with non-zero code | `failed` (`run_failed`) |
+| Container is killed by OOM / signal | `failed` (`run_failed`) |
 
 On Cloud Hypervisor, the host can't see the guest's exit code, so any clean VM shutdown is treated as `completed`. Use a worker for anything that needs precise exit-code semantics on CH.
 
@@ -81,9 +80,9 @@ In both cases, the missing instance is recreated automatically on the next tick.
 A worker is **never abandoned**, on every runtime. It is a service: whatever ended it (a crash, a clean exit, a failed start, a liveness check), Ring starts it again, and slows down instead of giving up.
 
 - Each failure counts one attempt in `restart_count`, and the next start waits a random delay between zero and `min(cap, base × 2^(attempt − 1))`: up to 10 s after the first failure, 20 s after the second, and so on up to 5 minutes. The randomness ("full jitter") spreads retries out, so workloads that failed together, after a host reboot for instance, do not all come back in the same second.
-- While a worker waits, it shows `crash_loop_back_off` (or the status of the start error, such as `image_pull_back_off`), and the reconciler keeps watching it: it is started again as soon as the delay elapses, without a re-apply. Creating a missing config, or pushing the missing image, is enough.
+- While a worker waits, it is `backing_off` with the reason of its last failure (`crash_loop`, or the start error, such as `image_pull`), and the reconciler keeps watching it: it is started again as soon as the delay elapses, without a re-apply. Creating a missing config, or pushing the missing image, is enough.
 - Failures that need an operator (a missing config, a spec the runtime rejects, an exit code `126`/`127` meaning the program cannot run) wait up to `cap` from the first attempt on.
-- Once the worker has run for `stable_after` (10 minutes) without a failure, `restart_count` resets to 0.
+- Once the worker has run for `stable_after` (10 minutes) without a failure, `restart_count` resets to 0. Only a `running` worker earns it back: one held `progressing` by the readiness gate is up but not serving.
 - The delay, the running time and the last exit (code, time and the last 80 lines or 2 KiB of output) are stored in the database, so a `ring server` restart does not reset anyone's backoff.
 
 All of this is tunable in [`[server.restart]`](/documentation/reference/config-toml#server-restart), including `on_exhaustion = "fail"` for an operator who prefers a worker to stop after `max_attempts` failures, and per deployment with the manifest's [`restart`](/documentation/reference/manifest#restart) block.

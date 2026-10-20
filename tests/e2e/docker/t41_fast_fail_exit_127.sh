@@ -2,7 +2,7 @@
 # T41: a non-retryable exit code. A container that RUNS but exec's a binary
 # that doesn't exist exits 127 (command not found). The program can never run
 # until someone fixes the image or the command, so the worker lands on
-# `create_container_error` at once and its next attempt waits up to the
+# `backing_off:spec_rejected` at once and its next attempt waits up to the
 # backoff cap (5 minutes by default) instead of climbing the curve from 10s.
 #
 # This is distinct from t23: there Docker `start` itself fails (a create/start
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T41: exit 127 lands on create_container_error and waits for an operator =="
+log "== T41: exit 127 lands on backing_off:spec_rejected and waits for an operator =="
 
 start_ring
 ring_login
@@ -35,14 +35,14 @@ TOTAL_CONTAINERS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID"
 RESTART_COUNT=$(get_restart_count "ring-e2e" "command-not-found")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "command-not-found" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 
 log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
 
 # 1) The exit code is recognised as needing an operator.
-if [ "$STATUS" != "create_container_error" ]; then
-  fail "expected create_container_error after an exit 127, got '$STATUS'"
+if [ "$STATUS" != "backing_off:spec_rejected" ]; then
+  fail "expected backing_off:spec_rejected after an exit 127, got '$STATUS'"
 fi
 
 # 2) Its retries start at the cap: in 30s, at most a couple of attempts.

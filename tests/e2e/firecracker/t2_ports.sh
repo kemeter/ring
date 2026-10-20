@@ -76,7 +76,7 @@ taps_now() { (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) |
 TAPS_BEFORE=$(taps_now)
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "ports-vm" "running" 60
+wait_deployment_state "ring-e2e" "ports-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "ports-vm")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"

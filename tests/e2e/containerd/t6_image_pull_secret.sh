@@ -53,7 +53,7 @@ deployments:
 EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "pull-secret-ctr" "image_pull_back_off" 60
+wait_deployment_state "ring-e2e" "pull-secret-ctr" "backing_off:image_pull" 60
 DEP_ID=$(get_deployment_id "ring-e2e" "pull-secret-ctr")
 TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS=$(curl -fsS "$RING_URL/deployments/$DEP_ID/events" \

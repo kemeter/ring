@@ -25,7 +25,7 @@ deployments:
     replicas: 2
 EOF
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-metrics" "running" 60
+wait_deployment_state "ring-e2e" "nginx-metrics" "running" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-metrics")
 
 # Wait until both replicas are up so the metrics aggregation is meaningful.

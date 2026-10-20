@@ -35,7 +35,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "scale-vm" "running" 180
+wait_deployment_state "ring-e2e" "scale-vm" "running" 180
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "scale-vm")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"
@@ -103,10 +103,10 @@ if [ "$RESTART_COUNT" != "0" ]; then
 fi
 log "restart_count stayed at 0 (no false-positive crash)"
 
-# === Status is still `running` (not crashloopbackoff or any other terminal) ===
-# A replacement instance is `creating` until the next scheduler pass sees it
+# === Status is still `running` (not backing off) ===
+# A replacement instance is `progressing` until the next scheduler pass sees it
 # still up, so give it a few ticks rather than reading the status at once.
-wait_deployment_status "ring-e2e" "scale-vm" "running" 30
+wait_deployment_state "ring-e2e" "scale-vm" "running" 30
 log "deployment is running"
 # The deployment that took over after the rollout, its predecessor now gone.
 NEW_DEPLOYMENT_ID=$("$RING_BIN" deployment list --output json 2>/dev/null \

@@ -2,7 +2,7 @@
 # T23: a deployment whose container is accepted by Docker `create` but rejected
 # by `start` (OCI runtime cannot exec the binary, e.g. command points at a
 # missing file). The spec is rejected, which needs an operator: the worker lands
-# on `create_container_error` and retries wait up to the backoff cap, instead of
+# on `backing_off:spec_rejected` and retries wait up to the backoff cap, instead of
 # a "Scaled up from 0 to 1 replicas" event and a failed start on every tick.
 
 set -euo pipefail
@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib.sh
 source "$SCRIPT_DIR/../lib.sh"
 
-log "== T23: a rejected start lands on create_container_error and backs off =="
+log "== T23: a rejected start lands on backing_off:spec_rejected and backs off =="
 
 start_ring
 ring_login
@@ -31,7 +31,7 @@ log "deployment id: $DEPLOYMENT_ID"
 RESTART_COUNT=$(get_restart_count "ring-e2e" "oci-create-error")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "oci-create-error" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 
 # Count "Scaled up" events: a failed start emits none, and the backoff keeps
@@ -45,8 +45,8 @@ SCALED_UP_COUNT=$(echo "$EVENTS_JSON" \
 log "observed: restart_count=$RESTART_COUNT status=$STATUS scaled_up_events=$SCALED_UP_COUNT"
 
 # 1) The rejected spec is reported as such.
-if [ "$STATUS" != "create_container_error" ]; then
-  fail "expected status create_container_error, got '$STATUS'"
+if [ "$STATUS" != "backing_off:spec_rejected" ]; then
+  fail "expected status backing_off:spec_rejected, got '$STATUS'"
 fi
 
 # 2) Each failed start is counted, but retries wait up to the 5-minute cap:

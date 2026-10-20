@@ -80,7 +80,7 @@ EOF
 
 # Booting 3 real VMs sequentially can take a while. Allow 240s for the
 # deployment to converge to running.
-wait_deployment_status "ring-e2e" "nginx-vm-scaled" "running" 240
+wait_deployment_state "ring-e2e" "nginx-vm-scaled" "running" 240
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-vm-scaled")
 if [ -z "$DEPLOYMENT_ID" ]; then
@@ -102,7 +102,7 @@ fi
 # multiple VMs (e.g. all replicas sharing one socket = silent collision).
 #
 # Status flips to 'running' as soon as the first VM boots, so we cannot use
-# wait_deployment_status here — we need to wait for *all* replicas to come up.
+# wait_deployment_state here — we need to wait for *all* replicas to come up.
 # Each VM boot is sequential at the scheduler tick rate, hence the generous
 # 180s ceiling for 3 VMs (~10-15s per boot in practice with headroom).
 wait_ch_socket_count 3 180

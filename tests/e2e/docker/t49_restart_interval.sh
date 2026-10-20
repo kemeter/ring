@@ -30,7 +30,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "rotating" "running" 60
+wait_deployment_state "ring-e2e" "rotating" "running" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "rotating")
 wait_docker_container_count "$DEPLOYMENT_ID" 2 60
 

@@ -39,8 +39,8 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "ctr-busy" "running" 90
-wait_deployment_status "ring-e2e" "ctr-idle" "running" 90
+wait_deployment_state "ring-e2e" "ctr-busy" "running" 90
+wait_deployment_state "ring-e2e" "ctr-idle" "running" 90
 BUSY_ID=$(get_deployment_id "ring-e2e" "ctr-busy")
 IDLE_ID=$(get_deployment_id "ring-e2e" "ctr-idle")
 wait_containerd_container_count "$BUSY_ID" 1 60

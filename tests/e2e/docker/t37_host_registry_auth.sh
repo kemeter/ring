@@ -10,7 +10,7 @@
 #      host_registry_config at a synthetic config.json holding an entry for the
 #      target registry. The deployment opts in with use_host_auth. The pull is
 #      attempted *with* those creds; since the registry (127.0.0.1:1) is
-#      unreachable, it lands in image_pull_back_off with a "cannot reach the
+#      unreachable, it lands in backing_off:image_pull with a "cannot reach the
 #      registry" event — which proves Ring got PAST auth resolution (it did not
 #      fail with "not authorized" or "no host credential").
 #
@@ -73,7 +73,7 @@ FIXTURE="$RING_TEST_DIR/host-auth.yaml"
 printf '%s\n' "$HOST_AUTH_FIXTURE_BODY" > "$FIXTURE"
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "host-auth" "image_pull_back_off" 30
+wait_deployment_state "ring-e2e" "host-auth" "backing_off:image_pull" 30
 DEP_ID=$(get_deployment_id "ring-e2e" "host-auth")
 TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS=$(curl -fsS "$RING_URL/deployments/$DEP_ID/events" \
@@ -108,7 +108,7 @@ FIXTURE2="$RING_TEST_DIR/host-auth.yaml"
 printf '%s\n' "$HOST_AUTH_FIXTURE_BODY" > "$FIXTURE2"
 "$RING_BIN" apply --file "$FIXTURE2"
 
-wait_deployment_status "ring-e2e" "host-auth" "image_pull_back_off" 30
+wait_deployment_state "ring-e2e" "host-auth" "backing_off:image_pull" 30
 DEP_ID2=$(get_deployment_id "ring-e2e" "host-auth")
 TOKEN2=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS2=$(curl -fsS "$RING_URL/deployments/$DEP_ID2/events" \

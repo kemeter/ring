@@ -28,6 +28,9 @@ pub(crate) struct DeploymentOutput {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) status: String,
+    /// Why the deployment is backing off or failed; null in any other status.
+    #[serde(default)]
+    pub(crate) failure: Option<FailureOutput>,
     pub(crate) restart_count: u32,
     pub(crate) name: String,
     pub(crate) runtime: String,
@@ -109,6 +112,10 @@ impl DeploymentOutput {
             created_at: deployment.created_at,
             updated_at: deployment.updated_at.unwrap_or("".to_string()),
             status: deployment.status.to_string(),
+            failure: deployment.reason.map(|reason| FailureOutput {
+                reason: reason.to_string(),
+                message: deployment.message.unwrap_or_default(),
+            }),
             restart_count: deployment.restart_count,
             name: deployment.name,
             namespace: deployment.namespace,
@@ -133,6 +140,14 @@ impl DeploymentOutput {
             network: deployment.network,
         }
     }
+}
+
+/// Why a deployment is backing off or failed: a stable `reason` to branch on
+/// and a human-readable `message`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct FailureOutput {
+    pub(crate) reason: String,
+    pub(crate) message: String,
 }
 
 /// One running instance of a deployment. `address` is the routable guest IP

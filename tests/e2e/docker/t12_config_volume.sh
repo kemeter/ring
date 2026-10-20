@@ -12,7 +12,7 @@
 #
 # Before `ring apply` honored the top-level `configs:` block, this required
 # a separate API call to seed the config; carrying it in the manifest left
-# the deployment stuck in `creating` ("Config '...' not found"). This test
+# the deployment stuck in `progressing` ("Config '...' not found"). This test
 # locks in that the manifest alone is self-sufficient.
 
 set -euo pipefail
@@ -63,7 +63,7 @@ echo "$APPLY_OUT" | grep -qF "Config 'app-conf' created" \
   || fail "config 'app-conf' not listable after apply"
 log "config 'app-conf' created and listable via the manifest's configs: block"
 
-wait_deployment_status "ring-e2e" "cfg-vm" "running" 60
+wait_deployment_state "ring-e2e" "cfg-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "cfg-vm")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"

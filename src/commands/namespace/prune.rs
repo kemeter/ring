@@ -9,20 +9,10 @@ use clap::ArgAction;
 use clap::ArgMatches;
 use clap::Command;
 
+/// Deployments that are not serving: finished, given up, deleted, or waiting
+/// for their next attempt after a failure.
 fn is_prunable(status: &str) -> bool {
-    matches!(
-        status,
-        "completed"
-            | "failed"
-            | "deleted"
-            | "crash_loop_back_off"
-            | "image_pull_back_off"
-            | "create_container_error"
-            | "network_error"
-            | "config_error"
-            | "file_system_error"
-            | "error"
-    )
+    matches!(status, "completed" | "failed" | "deleted" | "backing_off")
 }
 
 pub(crate) fn command_config() -> Command {

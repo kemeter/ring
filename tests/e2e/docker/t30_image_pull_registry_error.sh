@@ -40,9 +40,9 @@ EOF
 "$RING_BIN" apply --file "$UNREACHABLE_FIXTURE"
 
 # The pull fails → ImagePullFailed → ImagePullBackOff.
-wait_deployment_status "ring-e2e" "unreachable-registry" "image_pull_back_off" 30
+wait_deployment_state "ring-e2e" "unreachable-registry" "backing_off:image_pull" 30
 DEP_ID=$(get_deployment_id "ring-e2e" "unreachable-registry")
-log "unreachable-registry reached image_pull_back_off as expected"
+log "unreachable-registry reached backing_off:image_pull as expected"
 
 # The whole point of this work: the event must read as an actionable line,
 # naming the registry, not a bare bollard dump. If we regress to the generic

@@ -6,153 +6,198 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-/// Statuses the scheduler keeps reconciling on every tick: `scheduler::schedule`
-/// builds its DB filter from this list.
+/// Where a deployment is in its lifecycle.
 ///
-/// `crash_loop_back_off` and `insufficient_resources` are reconciled too: a
-/// worker in either is backing off, not abandoned, and is started again once
-/// its backoff elapses. Only `completed` and `failed` are left alone.
-pub(crate) const RECONCILED_STATUSES: &[DeploymentStatus] = &[
-    DeploymentStatus::Pending,
-    DeploymentStatus::Creating,
-    DeploymentStatus::Running,
-    DeploymentStatus::Deleted,
-    DeploymentStatus::CrashLoopBackOff,
-    DeploymentStatus::CreateContainerError,
-    DeploymentStatus::ImagePullBackOff,
-    DeploymentStatus::NetworkError,
-    DeploymentStatus::ConfigError,
-    DeploymentStatus::FileSystemError,
-    DeploymentStatus::InsufficientResources,
-    DeploymentStatus::Error,
-];
-
-/// All variants serialize to snake_case, both on the wire (serde JSON) and
-/// in the SQLite `deployment.status` column (Display). Before this change,
-/// lifecycle states were lowercase (`running`, …) while error states were
-/// PascalCase (`CrashLoopBackOff`, …). The mismatch silently dropped rows
-/// from string-matching filters — see migration `20220101000015` for the DB
-/// rewrite and the PR description for the full trace.
-///
-/// **Breaking change** for any external consumer that parsed the JSON API
-/// or `ring deployment list` output expecting the PascalCase form. Mapping:
-/// `CrashLoopBackOff` → `crash_loop_back_off`, `ImagePullBackOff` →
-/// `image_pull_back_off`, etc.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Serialized as snake_case, on the wire and in the `deployment.status` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DeploymentStatus {
+    /// Accepted, nothing started yet.
     Pending,
-    Creating,
+    /// Instances are starting, or held by the readiness gate.
+    Progressing,
+    /// The desired instances are up, and ready if readiness checks are declared.
     Running,
+    /// The last attempt failed: waiting for the next one, on the backoff curve.
+    BackingOff,
+    /// A job that finished successfully. Terminal.
     Completed,
+    /// A job past its `backoff_limit`, or a worker under
+    /// `on_exhaustion = "fail"` past its `max_attempts`. Terminal.
     Failed,
+    /// Marked for teardown.
     Deleted,
-    CrashLoopBackOff,
-    ImagePullBackOff,
-    CreateContainerError,
-    NetworkError,
-    ConfigError,
-    FileSystemError,
-    InsufficientResources,
-    Error,
-}
-
-impl fmt::Display for DeploymentStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Pending => write!(f, "pending"),
-            Self::Creating => write!(f, "creating"),
-            Self::Running => write!(f, "running"),
-            Self::Completed => write!(f, "completed"),
-            Self::Failed => write!(f, "failed"),
-            Self::Deleted => write!(f, "deleted"),
-            Self::CrashLoopBackOff => write!(f, "crash_loop_back_off"),
-            Self::ImagePullBackOff => write!(f, "image_pull_back_off"),
-            Self::CreateContainerError => write!(f, "create_container_error"),
-            Self::NetworkError => write!(f, "network_error"),
-            Self::ConfigError => write!(f, "config_error"),
-            Self::FileSystemError => write!(f, "file_system_error"),
-            Self::InsufficientResources => write!(f, "insufficient_resources"),
-            Self::Error => write!(f, "error"),
-        }
-    }
-}
-
-impl std::str::FromStr for DeploymentStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        match s {
-            "pending" => Ok(Self::Pending),
-            "creating" => Ok(Self::Creating),
-            "running" => Ok(Self::Running),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            "deleted" => Ok(Self::Deleted),
-            "crash_loop_back_off" => Ok(Self::CrashLoopBackOff),
-            "image_pull_back_off" => Ok(Self::ImagePullBackOff),
-            "create_container_error" => Ok(Self::CreateContainerError),
-            "network_error" => Ok(Self::NetworkError),
-            "config_error" => Ok(Self::ConfigError),
-            "file_system_error" => Ok(Self::FileSystemError),
-            "insufficient_resources" => Ok(Self::InsufficientResources),
-            "error" => Ok(Self::Error),
-            other => Err(format!("Unknown deployment status: {}", other)),
-        }
-    }
 }
 
 impl DeploymentStatus {
     /// Every variant, in declaration order. Used to emit a metric series per
-    /// status even when its count is zero — a Prometheus series that vanishes
-    /// between scrapes breaks alerts written against it, so all statuses are
-    /// always present.
-    pub(crate) const fn all() -> [DeploymentStatus; 14] {
+    /// status even when its count is zero: a Prometheus series that vanishes
+    /// between scrapes breaks the alerts written against it.
+    pub(crate) const fn all() -> [DeploymentStatus; 7] {
         [
             Self::Pending,
-            Self::Creating,
+            Self::Progressing,
             Self::Running,
+            Self::BackingOff,
             Self::Completed,
             Self::Failed,
             Self::Deleted,
-            Self::CrashLoopBackOff,
-            Self::ImagePullBackOff,
-            Self::CreateContainerError,
-            Self::NetworkError,
-            Self::ConfigError,
-            Self::FileSystemError,
+        ]
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Progressing => "progressing",
+            Self::Running => "running",
+            Self::BackingOff => "backing_off",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Deleted => "deleted",
+        }
+    }
+
+    /// Whether the scheduler still reconciles a deployment in this status. Only
+    /// a finished job and a deployment that gave up are left alone.
+    pub(crate) const fn is_reconciled(self) -> bool {
+        !matches!(self, Self::Completed | Self::Failed)
+    }
+}
+
+impl fmt::Display for DeploymentStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for DeploymentStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::all()
+            .into_iter()
+            .find(|status| status.as_str() == s)
+            .ok_or_else(|| format!("Unknown deployment status: {}", s))
+    }
+}
+
+/// Why a deployment is backing off or failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Reason {
+    /// Its instances keep ending.
+    CrashLoop,
+    /// A run of a job exited non-zero, or was killed by its health check.
+    RunFailed,
+    /// Its image cannot be pulled.
+    ImagePull,
+    /// The runtime rejects its spec, or its program cannot run.
+    SpecRejected,
+    /// A config it mounts is missing.
+    ConfigMissing,
+    /// The host does not have the memory it asks for.
+    InsufficientResources,
+    /// Its network could not be set up.
+    Network,
+    /// A file it needs could not be written.
+    FileSystem,
+    /// Its readiness checks never turned green before the deadline.
+    ReadinessTimeout,
+    /// Any other failure; `message` says which.
+    Error,
+}
+
+impl Reason {
+    /// Every variant, in declaration order.
+    pub(crate) const fn all() -> [Reason; 10] {
+        [
+            Self::CrashLoop,
+            Self::RunFailed,
+            Self::ImagePull,
+            Self::SpecRejected,
+            Self::ConfigMissing,
             Self::InsufficientResources,
+            Self::Network,
+            Self::FileSystem,
+            Self::ReadinessTimeout,
             Self::Error,
         ]
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::CrashLoop => "crash_loop",
+            Self::RunFailed => "run_failed",
+            Self::ImagePull => "image_pull",
+            Self::SpecRejected => "spec_rejected",
+            Self::ConfigMissing => "config_missing",
+            Self::InsufficientResources => "insufficient_resources",
+            Self::Network => "network",
+            Self::FileSystem => "file_system",
+            Self::ReadinessTimeout => "readiness_timeout",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for Reason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Reason {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::all()
+            .into_iter()
+            .find(|reason| reason.as_str() == s)
+            .ok_or_else(|| format!("Unknown deployment reason: {}", s))
     }
 }
 
 #[cfg(test)]
-mod status_roundtrip_tests {
-    use super::DeploymentStatus;
+mod status_reason_tests {
+    use super::{DeploymentStatus, Reason};
     use std::str::FromStr;
 
-    /// Every variant must round-trip Display ↔ FromStr ↔ serde with the
-    /// exact same string. Catches any future divergence between the three
-    /// representations (the lifecycle/error casing mismatch we just fixed
-    /// went undetected for months because there was no such test).
+    /// Display, FromStr and serde must agree on every variant: the column, the
+    /// filters and the JSON API all go through one of them.
     #[test]
-    fn every_variant_round_trips() {
-        for s in DeploymentStatus::all() {
-            let txt = s.to_string();
-            // snake_case: lowercase + underscores only.
-            assert!(
-                txt.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "{:?} must Display as snake_case, got {:?}",
-                s,
-                txt
+    fn every_status_round_trips() {
+        for status in DeploymentStatus::all() {
+            let txt = status.to_string();
+            assert_eq!(DeploymentStatus::from_str(&txt), Ok(status));
+            assert_eq!(
+                serde_json::to_string(&status).unwrap(),
+                format!("\"{txt}\"")
             );
-            let parsed = DeploymentStatus::from_str(&txt).expect("must parse");
-            assert_eq!(parsed, s, "{:?} round-trip via Display/FromStr", s);
-            // serde JSON wraps strings in quotes.
-            let json = serde_json::to_string(&s).expect("must serialize");
-            assert_eq!(json, format!("\"{}\"", txt), "serde matches Display");
         }
+    }
+
+    #[test]
+    fn every_reason_round_trips() {
+        for reason in Reason::all() {
+            let txt = reason.to_string();
+            assert_eq!(Reason::from_str(&txt), Ok(reason));
+            assert_eq!(
+                serde_json::to_string(&reason).unwrap(),
+                format!("\"{txt}\"")
+            );
+        }
+    }
+
+    #[test]
+    fn finished_deployments_are_not_reconciled() {
+        let left_alone: Vec<DeploymentStatus> = DeploymentStatus::all()
+            .into_iter()
+            .filter(|p| !p.is_reconciled())
+            .collect();
+        assert_eq!(
+            left_alone,
+            [DeploymentStatus::Completed, DeploymentStatus::Failed]
+        );
     }
 }
 
@@ -489,6 +534,10 @@ pub(crate) struct Deployment {
     pub(crate) created_at: String,
     pub(crate) updated_at: Option<String>,
     pub(crate) status: DeploymentStatus,
+    /// Why the deployment is in its status: set when backing off or failed.
+    pub(crate) reason: Option<Reason>,
+    /// Human-readable detail for `reason`.
+    pub(crate) message: Option<String>,
     pub(crate) restart_count: u32,
     pub(crate) namespace: String,
     pub(crate) name: String,
@@ -528,6 +577,53 @@ pub(crate) struct Deployment {
     /// The manifest's `restart` block, `None` when it has none.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) restart: Option<RestartSpec>,
+}
+
+/// The status of a deployment with its reason: what a change is announced on.
+/// The message is left out, since its wording varies without the state
+/// changing.
+pub(crate) type Condition = (DeploymentStatus, Option<Reason>);
+
+/// Where a deployment stood before a change: its condition and the message
+/// that went with it, to describe the failure it is leaving.
+#[derive(Clone, Debug)]
+pub(crate) struct Snapshot {
+    pub(crate) condition: Condition,
+    pub(crate) message: Option<String>,
+}
+
+impl Deployment {
+    /// Move to `status`, which carries no reason.
+    pub(crate) fn set_status(&mut self, status: DeploymentStatus) {
+        self.status = status;
+        self.reason = None;
+        self.message = None;
+    }
+
+    /// The last attempt failed for `reason`: wait for the next one.
+    pub(crate) fn back_off(&mut self, reason: Reason, message: impl Into<String>) {
+        self.status = DeploymentStatus::BackingOff;
+        self.reason = Some(reason);
+        self.message = Some(message.into());
+    }
+
+    /// Give up for good, for `reason`.
+    pub(crate) fn fail(&mut self, reason: Reason, message: impl Into<String>) {
+        self.status = DeploymentStatus::Failed;
+        self.reason = Some(reason);
+        self.message = Some(message.into());
+    }
+
+    pub(crate) fn condition(&self) -> Condition {
+        (self.status, self.reason)
+    }
+
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            condition: self.condition(),
+            message: self.message.clone(),
+        }
+    }
 }
 
 impl Deployment {
@@ -609,6 +705,8 @@ struct DeploymentRow {
     created_at: String,
     updated_at: Option<String>,
     status: String,
+    reason: Option<String>,
+    message: Option<String>,
     restart_count: i32,
     namespace: String,
     name: String,
@@ -661,7 +759,11 @@ impl From<DeploymentRow> for Deployment {
             id: id.clone(),
             created_at: row.created_at,
             updated_at: row.updated_at,
-            status: row.status.parse().unwrap_or(DeploymentStatus::Error),
+            // An unknown status is reconciled: losing a deployment from the
+            // loop would be worse than one extra pass.
+            status: row.status.parse().unwrap_or(DeploymentStatus::Progressing),
+            reason: row.reason.and_then(|r| r.parse().ok()),
+            message: row.message,
             restart_count: row.restart_count as u32,
             namespace: row.namespace,
             name: row.name,
@@ -747,12 +849,12 @@ impl From<DeploymentRow> for Deployment {
 }
 
 const SELECT_COLUMNS: &str = "
-    id, created_at, updated_at, status, restart_count,
+    id, created_at, updated_at, status, reason, message, restart_count,
     namespace, name, image, command, config, runtime, kind,
     replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart
 ";
 
-const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "kind"];
+const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "reason", "kind"];
 
 pub(crate) async fn find_all(
     pool: &SqlitePool,
@@ -846,13 +948,15 @@ pub(crate) async fn create(
 
     sqlx::query(
         "INSERT INTO deployment (
-            id, created_at, status, restart_count, namespace, name, image,
+            id, created_at, status, reason, message, restart_count, namespace, name, image,
             command, config, runtime, kind, replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&deployment.id)
     .bind(&deployment.created_at)
-    .bind(deployment.status.to_string())
+    .bind(deployment.status.as_str())
+    .bind(deployment.reason.map(Reason::as_str))
+    .bind(&deployment.message)
     .bind(deployment.restart_count as i32)
     .bind(&deployment.namespace)
     .bind(&deployment.name)
@@ -880,8 +984,8 @@ pub(crate) async fn create(
     Ok(deployment.clone())
 }
 
-/// Write back the scheduler's view of a deployment: its status, image digest
-/// and rolling parent. Returns whether the write applied.
+/// Write back the scheduler's view of a deployment: its status, reason,
+/// message, image digest and rolling parent. Returns whether the write applied.
 ///
 /// `deleted` is terminal, and the guard on it is what makes it so. The
 /// scheduler writes back a deployment it loaded at the start of its cycle; a
@@ -893,16 +997,19 @@ pub(crate) async fn update(
     pool: &SqlitePool,
     deployment: &Deployment,
 ) -> Result<bool, sqlx::Error> {
-    let status = deployment.status.to_string();
+    let status = deployment.status.as_str();
     let result = sqlx::query(
-        "UPDATE deployment SET status = ?, updated_at = datetime('now'), image_digest = ?, parent_id = ? \
-         WHERE id = ? AND (status <> 'deleted' OR ? = 'deleted')"
+        "UPDATE deployment SET status = ?, reason = ?, message = ?, updated_at = datetime('now'), \
+         image_digest = ?, parent_id = ? \
+         WHERE id = ? AND (status <> 'deleted' OR ? = 'deleted')",
     )
-    .bind(&status)
+    .bind(status)
+    .bind(deployment.reason.map(Reason::as_str))
+    .bind(&deployment.message)
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
     .bind(&deployment.id)
-    .bind(&status)
+    .bind(status)
     .execute(pool)
     .await?;
 
@@ -916,7 +1023,8 @@ pub(crate) async fn update(
 /// with whatever that copy held, undoing a change the scheduler made since.
 pub(crate) async fn mark_deleted(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE deployment SET status = 'deleted', updated_at = datetime('now') WHERE id = ?",
+        "UPDATE deployment SET status = 'deleted', reason = NULL, message = NULL, \
+         updated_at = datetime('now') WHERE id = ?",
     )
     .bind(id)
     .execute(pool)
@@ -1014,25 +1122,23 @@ pub(crate) async fn find_referencing_secret(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
-/// Count deployments grouped by `(namespace, status)`, restricted to the given
-/// statuses. One row per non-empty bucket, ordered by `(namespace, status)`.
-/// Returns raw `(namespace, status, count)` tuples; callers decide how to
-/// present them. `statuses` must be non-empty.
-pub(crate) async fn count_by_namespace_and_status(
+/// Count deployments grouped by `(namespace, status, reason)`, restricted to
+/// the given statuses. One row per non-empty bucket, ordered by namespace, status
+/// and reason; a deployment without a reason has an empty one. `statuses` must be
+/// non-empty.
+pub(crate) async fn count_by_namespace_status_reason(
     pool: &SqlitePool,
-    statuses: &[&str],
-) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
-    // Bind each status as a parameter (they are caller-provided literals today,
-    // but parameterising keeps the query injection-free regardless).
+    statuses: &[DeploymentStatus],
+) -> Result<Vec<(String, String, String, i64)>, sqlx::Error> {
     let placeholders = vec!["?"; statuses.len()].join(", ");
     let sql = format!(
-        "SELECT namespace, status, COUNT(*) FROM deployment \
+        "SELECT namespace, status, COALESCE(reason, ''), COUNT(*) FROM deployment \
          WHERE status IN ({placeholders}) \
-         GROUP BY namespace, status ORDER BY namespace, status"
+         GROUP BY namespace, status, reason ORDER BY namespace, status, reason"
     );
-    let mut query = sqlx::query_as::<_, (String, String, i64)>(&sql);
+    let mut query = sqlx::query_as::<_, (String, String, String, i64)>(&sql);
     for status in statuses {
-        query = query.bind(*status);
+        query = query.bind(status.as_str());
     }
     query.fetch_all(pool).await
 }
@@ -1343,6 +1449,8 @@ mod tests {
             created_at: chrono::Utc::now().to_string(),
             updated_at: None,
             status: DeploymentStatus::Running,
+            reason: None,
+            message: None,
             restart_count,
             namespace: "test".to_string(),
             name: format!("w-{id}"),
@@ -1378,13 +1486,36 @@ mod tests {
         row.0 as u32
     }
 
+    /// A database with the migrations before `version` applied, and none
+    /// after: what a server upgraded to `version` starts from.
+    async fn pool_before(version: i64) -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for migration in sqlx::migrate!("./migrations")
+            .iter()
+            .filter(|m| m.version < version)
+        {
+            sqlx::raw_sql(&migration.sql).execute(&pool).await.unwrap();
+        }
+        pool
+    }
+
+    async fn run_migration(pool: &SqlitePool, version: i64) {
+        let migrator = sqlx::migrate!("./migrations");
+        let migration = migrator.iter().find(|m| m.version == version).unwrap();
+        sqlx::raw_sql(&migration.sql).execute(pool).await.unwrap();
+    }
+
     /// Earlier versions left workers that exited 0 in `completed`, out of
     /// reconciliation for good. The migration must put them back under
     /// reconciliation with a fresh restart budget, and leave completed jobs
     /// alone — a job is the only kind that can legitimately be completed.
     #[tokio::test]
     async fn migration_resumes_completed_workers_but_not_jobs() {
-        let pool = test_pool().await;
+        let pool = pool_before(20220101000026).await;
         for (id, kind) in [("w1", "worker"), ("j1", "job")] {
             sqlx::query(
                 "INSERT INTO deployment (id, created_at, status, namespace, runtime, kind, name, restart_count) \
@@ -1398,12 +1529,7 @@ mod tests {
             .unwrap();
         }
 
-        sqlx::raw_sql(include_str!(
-            "../../migrations/20220101000026_resume_completed_workers.sql"
-        ))
-        .execute(&pool)
-        .await
-        .unwrap();
+        run_migration(&pool, 20220101000026).await;
 
         let status = |id: &'static str| {
             let pool = pool.clone();
@@ -1422,9 +1548,89 @@ mod tests {
         assert_eq!(count_in_db(&pool, "j1").await, 3);
     }
 
-    /// A replaced deployment is `deleted`, its successor `creating`. An index
-    /// on `status` makes the planner walk rows in status order, which puts the
-    /// successor first; the explicit order must win over it.
+    /// Every former status lands on its status and reason; every deployment
+    /// landing in `backing_off` starts over, so the workers abandoned before the
+    /// upgrade are retried on the first tick.
+    #[tokio::test]
+    async fn migration_splits_status_into_status_and_reason() {
+        let pool = pool_before(20220101000029).await;
+        let rows = [
+            ("a", "worker", "running"),
+            ("b", "worker", "creating"),
+            ("c", "worker", "crash_loop_back_off"),
+            ("d", "worker", "config_error"),
+            ("e", "worker", "failed"),
+            ("f", "job", "failed"),
+            ("g", "job", "completed"),
+            ("h", "worker", "insufficient_resources"),
+        ];
+        for (id, kind, status) in rows {
+            sqlx::query(
+                "INSERT INTO deployment (id, created_at, status, namespace, runtime, kind, name, \
+                 restart_count, next_attempt_at) \
+                 VALUES (?, '2024-01-01', ?, 'prod', 'docker', ?, ?, 5, '2099-01-01T00:00:00Z')",
+            )
+            .bind(id)
+            .bind(status)
+            .bind(kind)
+            .bind(format!("d-{id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO webhook (id, created_at, url, events) \
+             VALUES ('w', '2024-01-01', 'https://x', '[\"deployment.status_changed\"]')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migration(&pool, 20220101000029).await;
+
+        type Row = (String, String, Option<String>, i64, Option<String>);
+        let got: Vec<Row> = sqlx::query_as(
+            "SELECT id, status, reason, restart_count, next_attempt_at FROM deployment ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let backing_off = |reason: &str| ("backing_off".to_string(), Some(reason.to_string()));
+        let expected = [
+            ("running".to_string(), None),
+            ("progressing".to_string(), None),
+            backing_off("crash_loop"),
+            backing_off("config_missing"),
+            backing_off("readiness_timeout"),
+            ("failed".to_string(), Some("run_failed".to_string())),
+            ("completed".to_string(), None),
+            backing_off("insufficient_resources"),
+        ];
+        for ((id, status, reason, restart_count, next_attempt_at), (want_status, want_reason)) in
+            got.into_iter().zip(expected)
+        {
+            assert_eq!((&status, &reason), (&want_status, &want_reason), "{id}");
+            if status == "backing_off" {
+                assert_eq!(restart_count, 0, "{id} starts over");
+                assert_eq!(next_attempt_at, None, "{id} is retried at once");
+            } else {
+                assert_eq!(restart_count, 5, "{id} keeps its counter");
+            }
+        }
+
+        let events: (String,) = sqlx::query_as("SELECT events FROM webhook WHERE id = 'w'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            events.0, "[\"deployment.status_changed\"]",
+            "the event keeps its name, so subscriptions are left as they are"
+        );
+    }
+
+    /// A replaced deployment is `deleted`, its successor `progressing`. An
+    /// index on `status` makes the planner walk rows in status order, which puts
+    /// the successor first; the explicit order must win over it.
     #[tokio::test]
     async fn find_all_returns_a_replaced_deployment_before_its_successor() {
         let pool = test_pool().await;
@@ -1435,18 +1641,22 @@ mod tests {
 
         let mut replaced = worker("old", 0);
         replaced.name = "db".to_string();
-        replaced.status = DeploymentStatus::Deleted;
+        replaced.set_status(DeploymentStatus::Deleted);
         create(&pool, &replaced).await.unwrap();
 
         let mut successor = worker("new", 0);
         successor.name = "db".to_string();
-        successor.status = DeploymentStatus::Creating;
+        successor.set_status(DeploymentStatus::Progressing);
         create(&pool, &successor).await.unwrap();
 
         let mut filters = HashMap::new();
         filters.insert(
             "status".to_string(),
-            RECONCILED_STATUSES.iter().map(|s| s.to_string()).collect(),
+            DeploymentStatus::all()
+                .into_iter()
+                .filter(|p| p.is_reconciled())
+                .map(|p| p.to_string())
+                .collect(),
         );
         let ids: Vec<String> = find_all(&pool, filters)
             .await
@@ -1486,7 +1696,7 @@ mod tests {
         // The API deletes the deployment while the scheduler holds a copy it
         // loaded as running...
         let mut deleted = loaded.clone();
-        deleted.status = DeploymentStatus::Deleted;
+        deleted.set_status(DeploymentStatus::Deleted);
         update(&pool, &deleted).await.unwrap();
 
         // ...and then writes that copy back, which is refused.
@@ -1519,7 +1729,7 @@ mod tests {
     async fn a_deleted_deployment_can_still_be_written_as_deleted() {
         let pool = test_pool().await;
         let mut deployment = worker("d1", 0);
-        deployment.status = DeploymentStatus::Deleted;
+        deployment.set_status(DeploymentStatus::Deleted);
         create(&pool, &deployment).await.unwrap();
 
         deployment.parent_id = Some("parent".to_string());

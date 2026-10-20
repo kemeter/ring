@@ -47,7 +47,7 @@ EOF
 
 # API must accept the manifest now that vsock-based command probes work.
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "cmd-hc-vm" "running" 120
+wait_deployment_state "ring-e2e" "cmd-hc-vm" "running" 120
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "cmd-hc-vm")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"

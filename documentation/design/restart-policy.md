@@ -180,8 +180,8 @@ New columns on `deployment`:
 
 | Column | Type | Meaning |
 |---|---|---|
-| `phase` | text | See the status model below |
-| `reason` | text, nullable | Why the deployment is in its phase |
+| `status` | text | Kept, with new values: see the status model below |
+| `reason` | text, nullable | Why the deployment is in its status |
 | `message` | text, nullable | Human-readable detail for `reason` |
 | `restart_count` | integer | Kept: attempts since the last reset |
 | `next_attempt_at` | datetime, nullable | When the scheduler may try again |
@@ -190,13 +190,13 @@ New columns on `deployment`:
 
 `RetryBackoff` and `HealthyWindow` disappear. A `ring server` restart no longer resets anyone's backoff, so it no longer triggers a burst of retries.
 
-### 4. Status model: phase and reason
+### 4. Status model: status and reason
 
 The single `status` field mixes two things: where the deployment is in its lifecycle, and why. It is split.
 
-**Phase**
+**Status**
 
-| Phase | Meaning |
+| Status | Meaning |
 |---|---|
 | `pending` | Accepted, nothing started yet |
 | `progressing` | Instances are starting, or held by the readiness gate |
@@ -220,11 +220,11 @@ The single `status` field mixes two things: where the deployment is in its lifec
 | `readiness_timeout` | `failed` after `RING_ROLLOUT_DEADLINE` on a non-rolling worker |
 | `error` | `error` |
 
-The reconciler processes every deployment whose phase is not `completed`, `failed` or `deleted`-and-purged. The `RECONCILED_STATUSES` list and its complement `scheduler_skips_by_status` go away: there is no longer a status that silently drops a worker from the loop.
+The reconciler processes every deployment whose status is not `completed`, `failed` or `deleted`-and-purged. The `RECONCILED_STATUSES` list and its complement `scheduler_skips_by_status` go away: there is no longer a status that silently drops a worker from the loop.
 
 A readiness deadline on a worker no longer fails it. The deployment moves to `backing_off` with `readiness_timeout`, and its instance is recreated on the backoff curve. Kubernetes behaves the same way: `progressDeadlineSeconds` reports a condition, it does not stop the Deployment.
 
-API, CLI and webhooks expose `phase` and `reason` instead of `status`. `deployment.status_changed` becomes `deployment.phase_changed`, carrying old and new phase and the reason.
+API, CLI and webhooks keep `status`, with the new values, and add a `failure` object (`reason`, `message`), `null` unless the deployment is backing off or failed. `deployment.status_changed` carries the `old` and `new` states, each a `status` and a `failure` (`schema_version` 2).
 
 ### 5. Recreations reuse the resolved image
 
@@ -238,17 +238,17 @@ This makes recreation reproducible (a mutable tag moving under a running deploym
 
 ### 7. Observability
 
-- `ring deployment inspect` shows the phase, the reason, the next attempt and the last termination, including the logs tail.
+- `ring deployment inspect` shows the status, the reason, the next attempt and the last termination, including the logs tail.
 - Each failed attempt emits an event carrying the reason, the attempt number and `next_attempt_at`.
-- New metrics: `ring_deployment_restarts_total`, `ring_deployment_backoff_seconds`, and `ring_deployments{phase,reason}` in place of `ring_unhealthy_deployments`.
-- Alerting is meant to key on **how long** a deployment has been `backing_off`, not on the phase alone: a brief back-off during a rollout is normal.
+- New metrics: `ring_deployment_restarts_total`, `ring_deployment_backoff_seconds`, and `ring_deployments{status,reason}` in place of `ring_unhealthy_deployments`.
+- Alerting is meant to key on **how long** a deployment has been `backing_off`, not on the status alone: a brief back-off during a rollout is normal.
 
 ## Migration
 
 One SQL migration:
 
 - adds the columns above;
-- maps existing `status` values to `phase` + `reason` (`crash_loop_back_off` → `backing_off` / `crash_loop`, `image_pull_back_off` → `backing_off` / `image_pull`, `running` → `running`, `completed` → `completed`, a worker's `failed` → `backing_off` / `readiness_timeout`, …);
+- maps existing `status` values to `status` + `reason` (`crash_loop_back_off` → `backing_off` / `crash_loop`, `image_pull_back_off` → `backing_off` / `image_pull`, `running` → `running`, `completed` → `completed`, a worker's `failed` → `backing_off` / `readiness_timeout`, …);
 - sets `next_attempt_at` to now and `restart_count` to 0 for every worker that lands in `backing_off`, so previously abandoned workers are retried on the first tick after the upgrade;
 - drops `status`.
 
@@ -264,7 +264,7 @@ Each step is a separate pull request that builds, passes the suite, and can ship
 2. **Docker and Podman workers.** Persisted restart state (`next_attempt_at`, `running_since`, `last_termination`), the `[restart]` server section, and the instance interface (`observe` / `start_instance` / `stop_instance` / `discard_instance`) implemented for Docker and Podman. The scheduler reconciles their workers with the policy module and counts liveness kills as restarts. `RetryBackoff` is removed; the other runtimes keep their `apply` path but get their retries spaced on the persisted backoff. Persisting the state alone would not have shipped on its own: the runtimes still decided when to give up, and a longer reset window without that change would have abandoned workers that are restarted indefinitely today.
 3. **Jobs and manifest overrides.** `backoff_limit` and the `restart` block in the manifest, then Docker and Podman jobs on the policy module.
 4. **Remaining runtimes.** containerd, then Firecracker and Cloud Hypervisor, each deleting its own `handle_*` and restart-count code. `HealthyWindow` goes with the last one.
-5. **Phase and reason.** Migration of the status column, API, CLI, dashboard and webhook changes, documentation (`deployment-status-lifecycle.md`, `reconciliation.md`, troubleshooting).
+5. **Status and reason.** Migration of the status column, API, CLI, dashboard and webhook changes, documentation (`deployment-status-lifecycle.md`, `reconciliation.md`, troubleshooting).
 6. **Image digest reuse and start rate limiting.**
 7. **Metrics and events.**
 

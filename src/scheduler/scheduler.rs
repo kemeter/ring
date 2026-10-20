@@ -3,7 +3,7 @@ use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
 use crate::models::config;
 use crate::models::config::Config;
 use crate::models::deployment_event;
-use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue};
+use crate::models::deployments::{self, Deployment, DeploymentStatus, EnvValue, Snapshot};
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::health_check_logs;
 use crate::models::restart_state;
@@ -450,18 +450,19 @@ async fn schedule_cleanup(
     }
 }
 
-/// Emit the `creating -> running` `state_transition` event, but only once the
-/// status that survives the whole cycle (after the readiness gate) is really
-/// `Running`. Called at the end of the cycle, after `gate_running_on_readiness`
+/// Emit the `progressing -> running` `state_transition` event, but only once
+/// the status that survives the whole cycle (after the readiness gate) is really
+/// `running`. Called at the end of the cycle, after `gate_running_on_readiness`
 /// — never before — so the event never lies: a deployment the gate holds back
-/// in `Creating` produces no event, matching the lifecycle contract that a
+/// in `progressing` produces no event, matching the lifecycle contract that a
 /// `status_changed` event fires only when a tick lands on a *different* status.
 async fn log_running_transition(
     pool: &SqlitePool,
-    old_status: &DeploymentStatus,
+    old_status: DeploymentStatus,
     deployment: &Deployment,
 ) {
-    if *old_status != DeploymentStatus::Creating || deployment.status != DeploymentStatus::Running {
+    if old_status != DeploymentStatus::Progressing || deployment.status != DeploymentStatus::Running
+    {
         return;
     }
 
@@ -470,7 +471,7 @@ async fn log_running_transition(
         deployment.id.clone(),
         "info",
         format!(
-            "Status changed from creating to running ({} containers)",
+            "DeploymentStatus changed from progressing to running ({} instances)",
             deployment.instances.len()
         ),
         "scheduler",
@@ -486,21 +487,13 @@ async fn log_running_transition(
 }
 
 /// Publish a `deployment.status_changed` event when a reconciliation cycle
-/// moved the deployment to a different status. Called after the row is
-/// persisted (and after the readiness gate has had its say on the final
+/// moved the deployment to a different status, or reason. Called after the row
+/// is persisted (and after the readiness gate has had its say on the final
 /// status) so a subscriber that immediately queries Ring sees the same state.
 /// Best-effort: enqueue failures are swallowed inside `events::publish`.
-async fn publish_status_change(
-    pool: &SqlitePool,
-    old_status: &DeploymentStatus,
-    deployment: &Deployment,
-) {
-    if &deployment.status != old_status {
-        events::publish(
-            pool,
-            Event::deployment_status_changed(deployment, old_status),
-        )
-        .await;
+async fn publish_status_change(pool: &SqlitePool, old: &Snapshot, deployment: &Deployment) {
+    if deployment.condition() != old.condition {
+        events::publish(pool, Event::deployment_status_changed(deployment, old)).await;
     }
 }
 
@@ -509,19 +502,19 @@ async fn publish_status_change(
 async fn run_health_checks(
     pool: &SqlitePool,
     deployment: &mut Deployment,
-    old_status: &DeploymentStatus,
+    old_status: DeploymentStatus,
     health_checker: &HealthChecker,
     runtime: &dyn RuntimeLifecycle,
 ) -> Vec<restart_state::Termination> {
-    // Health checks run in `Running` (full set, drives `on_failure`) and, for
-    // readiness gating, in `Creating` (readiness-only, record-only — see
+    // Health checks run in `running` (full set, drives `on_failure`) and, for
+    // readiness gating, in `progressing` (readiness-only, record-only — see
     // `HealthChecker::execute_checks`). `execute_checks` enforces the
-    // readiness-only / no-action rules for the creating phase; here we just
-    // let the call through for both statuses. Jobs never gate, so skip them in
-    // `Creating`.
+    // readiness-only / no-action rules while progressing; here we just let the
+    // call through for both statuses. Jobs never gate, so skip them while
+    // progressing.
     let runnable = match deployment.status {
         DeploymentStatus::Running => true,
-        DeploymentStatus::Creating => deployment.kind != "job",
+        DeploymentStatus::Progressing => deployment.kind != "job",
         _ => false,
     };
     if !runnable || deployment.health_checks.is_empty() {
@@ -564,7 +557,7 @@ async fn run_health_checks(
     }
 
     if let Some(new_status) = outcome.proposed_status {
-        deployment.status = new_status;
+        deployment.set_status(new_status);
     }
 
     let mut removed = Vec::new();
@@ -778,9 +771,9 @@ fn format_age(age: Duration) -> String {
 /// Store the outcome of this cycle for `deployment` and announce its status
 /// change. A deployment deleted through the API during the cycle refuses the
 /// write; nothing is announced then, since it never took that status.
-async fn write_back(pool: &SqlitePool, old_status: &DeploymentStatus, deployment: &Deployment) {
+async fn write_back(pool: &SqlitePool, old: &Snapshot, deployment: &Deployment) {
     match deployments::update(pool, deployment).await {
-        Ok(true) => publish_status_change(pool, old_status, deployment).await,
+        Ok(true) => publish_status_change(pool, old, deployment).await,
         Ok(false) => info!(
             "Deployment {} was deleted during the scheduler cycle, its {} status was not stored",
             deployment.id, deployment.status
@@ -895,11 +888,7 @@ fn start_period_for(child: &Deployment) -> Duration {
 /// healthy app the instant its build outlasts the deadline. The effective
 /// budget is therefore `start_period + RING_ROLLOUT_DEADLINE`.
 fn rollout_deadline_exceeded(child: &Deployment) -> bool {
-    let deadline_secs: i64 = std::env::var("RING_ROLLOUT_DEADLINE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(600);
+    let deadline_secs = rollout_deadline_secs() as i64;
 
     // Ring stores timestamps as `Utc::now().to_string()`, e.g.
     // "2026-05-30 20:07:20.341309196 UTC" — a space (not `T`) and a trailing
@@ -1056,80 +1045,103 @@ async fn is_ready_to_drain(pool: &SqlitePool, child: &Deployment) -> bool {
     }
 }
 
-/// Gate the `creating → running` transition on readiness.
+/// Gate the `progressing → running` transition on readiness.
 ///
-/// The reconcile pass flips a deployment to `Running` once its new instance is
+/// The reconcile pass flips a deployment to `running` once its new instance is
 /// seen still running on the next pass. That only means "the process stayed
 /// up" — not "the app is ready". When a deployment declares any
-/// `readiness: true` check, we hold it in `Creating` until those checks are
-/// green (readiness probes run during `Creating`, record-only — see
-/// `HealthChecker::execute_checks`), so `Running` means *really ready* and the
+/// `readiness: true` check, we hold it in `progressing` until those checks are
+/// green (readiness probes run while progressing, record-only — see
+/// `HealthChecker::execute_checks`), so `running` means *really ready* and the
 /// `deployment.status_changed → running` event is trustworthy.
 ///
 /// Called right after `run_health_checks`, before `handle_rolling_update`, so
-/// the revert is what gets persisted this cycle — the runtime re-proposes
-/// `Running` next tick and we re-decide, converging without ever persisting a
-/// premature `running`.
+/// the revert is what gets persisted this cycle — the reconcile pass
+/// re-proposes `running` next tick and we re-decide, converging without ever
+/// persisting a premature `running`.
 ///
-/// Scope: only acts when the deployment *just* moved `Creating → Running` this
-/// cycle (`old_status == Creating`), never on an already-established `Running`
-/// (that's the liveness checks' job, not the gate's — avoids flapping). Jobs
-/// are exempt: they go straight to `completed`/`failed`.
+/// Scope: only acts when the deployment *just* moved `progressing → running`
+/// this cycle (`old_status == Progressing`), never on an already-established
+/// `running` (that's the liveness checks' job, not the gate's — avoids
+/// flapping). Jobs are exempt: they go straight to `completed`/`failed`.
 ///
-/// Deadline guard (reuses `RING_ROLLOUT_DEADLINE`, default 600s, the same knob
-/// as the rolling-update drain — mirrors Kubernetes `progressDeadlineSeconds`):
-/// a *simple* deployment (no `parent_id`) whose readiness never turns green
-/// would otherwise sit in `Creating` forever, so past the deadline we fail it.
-/// A rolling-update *child* is left alone here — its deadline is the forced
-/// drain in `handle_rolling_update`, which keeps the old version serving.
+/// Returns whether a *simple* deployment (no `parent_id`) blew past its
+/// readiness deadline ([`readiness_deadline_exceeded`]): the caller then
+/// removes its instances and counts the failure, so they are recreated on the
+/// backoff curve. A rolling-update *child* is left alone here — its deadline
+/// is the forced drain in `handle_rolling_update`, which keeps the old version
+/// serving.
 async fn gate_running_on_readiness(
     pool: &SqlitePool,
-    old_status: &DeploymentStatus,
+    old_status: DeploymentStatus,
     deployment: &mut Deployment,
-) {
+    running_since: Option<chrono::DateTime<chrono::Utc>>,
+) -> bool {
     use crate::models::health_check::ReadinessDecision;
 
-    // Only gate a fresh creating → running transition. Jobs never gate.
-    if *old_status != DeploymentStatus::Creating
+    // Only gate a fresh progressing → running transition. Jobs never gate.
+    if old_status != DeploymentStatus::Progressing
         || deployment.status != DeploymentStatus::Running
         || deployment.kind == "job"
     {
-        return;
+        return false;
     }
 
     match readiness_decision(pool, deployment).await {
-        // No readiness HC, or readiness is green for long enough — let Running
+        // No readiness HC, or readiness is green for long enough — let running
         // stand.
-        ReadinessDecision::NotConfigured | ReadinessDecision::Ready => {}
-        // Readiness not (yet) green: hold in Creating, unless a simple
-        // deployment has blown past the deadline — then fail it.
+        ReadinessDecision::NotConfigured | ReadinessDecision::Ready => false,
+        // Readiness not (yet) green: hold in progressing, unless a simple
+        // deployment has blown past the deadline.
         ReadinessDecision::PendingNoResult
         | ReadinessDecision::PendingMinHealthyTime { .. }
         | ReadinessDecision::Failing => {
-            if deployment.parent_id.is_none() && rollout_deadline_exceeded(deployment) {
+            deployment.set_status(DeploymentStatus::Progressing);
+            if deployment.parent_id.is_none()
+                && readiness_deadline_exceeded(deployment, running_since, chrono::Utc::now())
+            {
                 warn!(
-                    "Deployment {} never became ready before the deadline — marking failed (check its readiness probe)",
+                    "Deployment {} never became ready before the deadline — recreating its instances (check its readiness probe)",
                     deployment.id
                 );
-                deployment.status = DeploymentStatus::Failed;
-                let _ = deployment_event::log_event(
-                    pool,
-                    deployment.id.clone(),
-                    "error",
-                    "Readiness never turned green before the deadline; marking the deployment failed. Check the readiness health check.".to_string(),
-                    "scheduler",
-                    Some("readiness_deadline_exceeded"),
-                )
-                .await;
-            } else {
-                debug!(
-                    "Deployment {} held in creating: readiness not green yet",
-                    deployment.id
-                );
-                deployment.status = DeploymentStatus::Creating;
+                return true;
             }
+            debug!(
+                "Deployment {} held in progressing: readiness not green yet",
+                deployment.id
+            );
+            false
         }
     }
+}
+
+/// True when the instances of a deployment have been up longer than the
+/// readiness deadline without becoming ready: `start_period` plus
+/// `RING_ROLLOUT_DEADLINE` (seconds, default 600), the same knob as the
+/// rolling-update drain — mirrors Kubernetes `progressDeadlineSeconds`.
+///
+/// Counted from `running_since`, the start of the current run, not from the
+/// deployment's creation: instances recreated after a timeout get the whole
+/// deadline again, instead of being removed as soon as they come up.
+fn readiness_deadline_exceeded(
+    deployment: &Deployment,
+    running_since: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(since) = running_since else {
+        return false;
+    };
+    let deadline = start_period_for(deployment) + Duration::from_secs(rollout_deadline_secs());
+    (now - since).to_std().is_ok_and(|up| up >= deadline)
+}
+
+/// `RING_ROLLOUT_DEADLINE`, in seconds: 600 when unset or invalid.
+fn rollout_deadline_secs() -> u64 {
+    std::env::var("RING_ROLLOUT_DEADLINE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(600)
 }
 
 /// Handle rolling update coordination for deployments that have a `parent_id`.
@@ -1137,7 +1149,7 @@ async fn gate_running_on_readiness(
 /// Called after the reconcile pass + `run_health_checks` for each child deployment.
 /// - If the child is `Running` (healthy): remove one instance from the parent.
 ///   When the parent reaches 0 instances, mark it as `Deleted` and clear `parent_id`.
-/// - If the child is `Failed`: stop the rollout — parent containers keep running.
+/// - If the child is `failed`: stop the rollout — parent containers keep running.
 async fn handle_rolling_update(
     pool: &SqlitePool,
     child: &mut Deployment,
@@ -1150,7 +1162,10 @@ async fn handle_rolling_update(
     };
 
     // If child failed health checks, stop the rollout — leave parent alone.
-    if child.status == DeploymentStatus::Failed || child.status == DeploymentStatus::Deleted {
+    if matches!(
+        child.status,
+        DeploymentStatus::Failed | DeploymentStatus::Deleted
+    ) {
         warn!(
             "Rolling update failed for deployment {} (parent: {}): child health checks failed",
             child.id, parent_id
@@ -1292,7 +1307,7 @@ async fn handle_rolling_update(
             "Rolling update complete: parent {} has 0 instances, marking as deleted",
             parent.id
         );
-        parent.status = DeploymentStatus::Deleted;
+        parent.set_status(DeploymentStatus::Deleted);
         if let Err(e) = deployments::mark_deleted(pool, &parent.id).await {
             error!("Failed to mark parent {} as deleted: {}", parent.id, e);
         }
@@ -1391,8 +1406,8 @@ async fn apply_docker_event(
             // The reconcile loop owns `restart_count` for worker exits: it reads
             // the deployment at the start of a tick and writes the full row back
             // at the end, so a bump issued here would be lost to that write (the
-            // race that let crash loops recreate forever and never reach
-            // CrashLoopBackOff). The reconcile pass counts the same exited
+            // race that let crash loops recreate forever and never back off).
+            // The reconcile pass counts the same exited
             // container when it observes it, for Docker and Podman. This branch is
             // therefore log-only — it records the crash cause for traceability
             // without mutating the counter.
@@ -1685,8 +1700,8 @@ pub(crate) async fn schedule(
     loop {
         // Apply any crash events received from Docker since the last cycle.
         // Doing this before `find_all` ensures that the deployments we load
-        // already reflect the latest restart_count, so the worker scaler can
-        // hit CrashLoopBackOff in the same cycle as the crash that caused it.
+        // already reflect the latest restart_count, so the worker backs off in
+        // the same cycle as the crash that caused it.
         drain_docker_events(
             &pool,
             &mut event_rx,
@@ -1696,24 +1711,16 @@ pub(crate) async fn schedule(
         .await;
 
         // The scheduler picks up every status that can still progress on the
-        // next tick. Pending/Creating need their first apply, Running needs
-        // reconciliation, Deleted needs cleanup, and the error states
-        // (CrashLoopBackOff and InsufficientResources included) are retried
-        // on the restart policy's backoff curve.
-        //
-        // Statuses left out on purpose: Completed (finished job) and Failed.
-        // Anything in those states is done — no point reconciling further.
-        //
-        // We go through `DeploymentStatus::to_string()` rather than writing
-        // the literal strings here: the compiler then guarantees the filter
-        // stays in sync with the enum's Display impl. A bare string literal
-        // would silently drift if the enum casing ever changes again.
+        // next tick: everything but a finished job and a deployment that gave
+        // up (see `DeploymentStatus::is_reconciled`). A deployment backing off is
+        // reconciled too: only its next start waits.
         let mut filters = HashMap::new();
         filters.insert(
             String::from("status"),
-            crate::models::deployments::RECONCILED_STATUSES
-                .iter()
-                .map(|s| s.to_string())
+            DeploymentStatus::all()
+                .into_iter()
+                .filter(|status| status.is_reconciled())
+                .map(|status| status.to_string())
                 .collect(),
         );
         let mut list_deployments = match deployments::find_all(&pool, filters).await {
@@ -1810,11 +1817,11 @@ pub(crate) async fn schedule(
                     None => continue,
                 };
 
-                let old_status = deployment.status.clone();
+                let old = deployment.snapshot();
                 persist_pending_events(&pool, &mut result).await;
                 schedule_cleanup(&pool, &mut result, &mut deleted).await;
 
-                write_back(&pool, &old_status, &result).await;
+                write_back(&pool, &old, &result).await;
                 continue;
             }
 
@@ -1945,7 +1952,8 @@ pub(crate) async fn schedule(
 
             persist_pending_events(&pool, &mut result).await;
 
-            // Re-read current status from DB to detect concurrent changes (e.g. API delete)
+            // Re-read the current status from the DB to detect concurrent changes
+            // (e.g. an API delete).
             if let Ok(Some(current)) = deployments::find(&pool, &result.id).await
                 && current.status == DeploymentStatus::Deleted
                 && result.status != DeploymentStatus::Deleted
@@ -1958,15 +1966,16 @@ pub(crate) async fn schedule(
             }
 
             // Status as it stood entering this cycle, before the reconcile pass
-            // flipped `result` to `Running`. The readiness gate uses it to tell
-            // a fresh `creating → running` transition (which it may hold) from
-            // an already-established `Running` (which it must not touch), and
-            // `publish_status_change` uses it to detect a real status change.
-            let old_status = deployment.status.clone();
+            // flipped `result` to `running`. The readiness gate uses it to tell
+            // a fresh `progressing → running` transition (which it may hold)
+            // from an already-established `running` (which it must not touch),
+            // and `publish_status_change` uses it to detect a real change.
+            let old = deployment.snapshot();
+            let old_status = deployment.status;
             let killed = run_health_checks(
                 &pool,
                 &mut result,
-                &old_status,
+                old_status,
                 &health_checker,
                 runtime.as_ref(),
             )
@@ -1976,17 +1985,59 @@ pub(crate) async fn schedule(
             if !killed.is_empty() {
                 let kills = killed.len();
                 state.last_termination = killed.into_iter().last();
-                reconcile::record_liveness_kills(
+                let kind = result.workload_kind();
+                reconcile::record_removals(
                     &deployment_policy,
-                    result.workload_kind(),
+                    kind,
                     &mut result,
                     &mut state,
                     kills,
+                    reconcile::ended_reason(kind),
+                    "Removed by its liveness health check",
                     now,
                     &mut rng,
                 );
             }
-            gate_running_on_readiness(&pool, &old_status, &mut result).await;
+            // Never ready before the deadline: its instances go, and come back
+            // on the backoff curve, like instances that failed.
+            if gate_running_on_readiness(&pool, old_status, &mut result, state.running_since).await {
+                let message = "Readiness never turned green before the deadline; recreating the instances. Check the readiness health check.";
+                let mut removed = Vec::new();
+                for instance_id in std::mem::take(&mut result.instances) {
+                    if runtime.remove_instance(instance_id.clone()).await {
+                        removed.push(instance_id);
+                    } else {
+                        result.instances.push(instance_id);
+                    }
+                }
+                if let Err(e) =
+                    health_check_logs::delete_by_instances(&pool, &result.id, &removed).await
+                {
+                    warn!(
+                        "Failed to forget the health checks of the instances removed from {}: {}",
+                        result.id, e
+                    );
+                }
+                // Counted once every instance is gone. One the runtime would
+                // not remove keeps the deployment progressing, past its
+                // deadline, so the next cycle tries again.
+                if result.instances.is_empty() {
+                    result.emit_event(
+                        "error",
+                        message.to_string(),
+                        "scheduler",
+                        Some("readiness_deadline_exceeded"),
+                    );
+                    reconcile::record_readiness_timeout(
+                        &deployment_policy,
+                        &mut result,
+                        &mut state,
+                        message,
+                        now,
+                        &mut rng,
+                    );
+                }
+            }
             // Taken before the rolling step, which clears `parent_id` on the
             // cycle a rollout completes: the deployment it just finished
             // draining must not lose an instance in that same cycle.
@@ -2003,9 +2054,10 @@ pub(crate) async fn schedule(
             .await;
             persist_pending_events(&pool, &mut result).await;
 
-            // Log the creating -> running transition only now that the status
-            // for this cycle is settled (the gate above may have reverted it).
-            log_running_transition(&pool, &old_status, &result).await;
+            // Log the progressing -> running transition only now that the
+            // status for this cycle is settled (the gate above may have reverted
+            // it).
+            log_running_transition(&pool, old_status, &result).await;
 
             persist_pending_events(&pool, &mut result).await;
             result.restart_count = persist_restart_count(
@@ -2024,7 +2076,7 @@ pub(crate) async fn schedule(
                 );
             }
 
-            write_back(&pool, &old_status, &result).await;
+            write_back(&pool, &old, &result).await;
         }
 
         cleanup_deleted(&pool, deleted).await;
@@ -2076,6 +2128,8 @@ mod tests {
             created_at: chrono::Utc::now().to_string(),
             updated_at: None,
             status: DeploymentStatus::Running,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "test".to_string(),
             name: "child".to_string(),
@@ -2466,14 +2520,14 @@ mod tests {
 
     // ---- gate_running_on_readiness ----
 
-    /// A simple (non-child) worker that just transitioned to `Running` this
+    /// A simple (non-child) worker that just transitioned to `running` this
     /// cycle — the exact case the gate inspects. `parent_id = None` so the
-    /// deadline path marks it `Failed` rather than deferring to rolling-update.
+    /// deadline path applies rather than deferring to rolling-update.
     fn simple_running(id: &str, hcs: Vec<HealthCheck>) -> Deployment {
         let mut d = child_with_health_checks(id, hcs);
         d.kind = "worker".to_string();
         d.parent_id = None;
-        d.status = DeploymentStatus::Running;
+        d.set_status(DeploymentStatus::Running);
         d
     }
 
@@ -2482,27 +2536,27 @@ mod tests {
         // Liveness-only → legacy "running on container up", gate is a no-op.
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-1", vec![liveness_command()]);
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Running);
     }
 
     #[tokio::test]
-    async fn gate_reverts_to_creating_when_readiness_no_result_yet() {
+    async fn gate_holds_progressing_when_readiness_no_result_yet() {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-2", vec![readiness_command("ready")]);
         // No recorded result yet — not ready, hold in creating.
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
-    async fn gate_reverts_to_creating_when_readiness_too_recent() {
+    async fn gate_holds_progressing_when_readiness_too_recent() {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-3", vec![readiness_command("ready")]);
         // Green only 5s ago, anti-flap default is 10s → still holding.
         insert_hc_result(&pool, "gate-3", "command", "success", 5).await;
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
@@ -2510,7 +2564,7 @@ mod tests {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-4", vec![readiness_command("ready")]);
         insert_hc_result(&pool, "gate-4", "command", "success", 30).await;
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Running);
     }
 
@@ -2520,8 +2574,8 @@ mod tests {
         let mut d = simple_running("gate-5", vec![readiness_command("ready")]);
         insert_hc_result(&pool, "gate-5", "command", "success", 60).await;
         insert_hc_result(&pool, "gate-5", "command", "failed", 5).await;
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
@@ -2532,7 +2586,7 @@ mod tests {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-6", vec![readiness_command("ready")]);
         // No result → would be "not ready", but old_status is Running.
-        gate_running_on_readiness(&pool, &DeploymentStatus::Running, &mut d).await;
+        gate_running_on_readiness(&pool, DeploymentStatus::Running, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Running);
     }
 
@@ -2542,31 +2596,57 @@ mod tests {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-7", vec![readiness_command("ready")]);
         d.kind = "job".to_string();
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
+        gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Running);
     }
 
     #[tokio::test]
-    async fn gate_fails_simple_deployment_after_deadline() {
+    async fn gate_times_out_a_simple_deployment_after_the_deadline() {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-8", vec![readiness_command("ready")]);
-        // Created 20 minutes ago, readiness never green → past the deadline.
+        // Up for 20 minutes, readiness never green → past the deadline.
+        let since = chrono::Utc::now() - chrono::Duration::seconds(1200);
+        assert!(
+            gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, Some(since))
+                .await
+        );
+        assert_eq!(
+            d.status,
+            DeploymentStatus::Progressing,
+            "held, never running"
+        );
+    }
+
+    /// The deadline runs from the start of the current instances, not from the
+    /// deployment's creation: instances recreated after a timeout get the whole
+    /// deadline again.
+    #[tokio::test]
+    async fn gate_gives_recreated_instances_the_whole_deadline() {
+        let pool = new_test_pool().await;
+        let mut d = simple_running("gate-10", vec![readiness_command("ready")]);
         d.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_string();
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
-        assert_eq!(d.status, DeploymentStatus::Failed);
+        let since = chrono::Utc::now() - chrono::Duration::seconds(5);
+        assert!(
+            !gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, Some(since))
+                .await
+        );
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
-    async fn gate_does_not_fail_child_after_deadline() {
-        // A rolling-update child past the deadline is left in creating here —
+    async fn gate_does_not_time_out_a_child_after_deadline() {
+        // A rolling-update child past the deadline is left progressing here —
         // its deadline is the forced drain in handle_rolling_update, which
-        // keeps the old version serving. Never fail a child from the gate.
+        // keeps the old version serving.
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-9", vec![readiness_command("ready")]);
         d.parent_id = Some("parent-id".to_string());
-        d.created_at = (chrono::Utc::now() - chrono::Duration::seconds(1200)).to_string();
-        gate_running_on_readiness(&pool, &DeploymentStatus::Creating, &mut d).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        let since = chrono::Utc::now() - chrono::Duration::seconds(1200);
+        assert!(
+            !gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, Some(since))
+                .await
+        );
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     // ---- log_running_transition ----
@@ -2585,22 +2665,24 @@ mod tests {
 
     #[tokio::test]
     async fn running_transition_logged_when_status_lands_on_running() {
-        // The honest case: entered the cycle in Creating, the runtime flipped to
-        // Running, and the gate left it Running → exactly one event.
+        // The honest case: entered the cycle progressing, the reconcile pass
+        // flipped it to running, and the gate left it running → exactly one
+        // event.
         let pool = new_test_pool().await;
         let d = simple_running("trans-1", vec![]);
-        log_running_transition(&pool, &DeploymentStatus::Creating, &d).await;
+        log_running_transition(&pool, DeploymentStatus::Progressing, &d).await;
         assert_eq!(count_state_transition_events(&pool, "trans-1").await, 1);
     }
 
     #[tokio::test]
-    async fn running_transition_not_logged_when_gate_reverts_to_creating() {
-        // The bug this fixes: the runtime proposed Running, the gate reverted to
-        // Creating. No event must be persisted — `running` never happened.
+    async fn running_transition_not_logged_when_gate_holds_progressing() {
+        // The bug this fixes: the reconcile pass proposed running, the gate held
+        // it progressing. No event must be persisted — `running` never
+        // happened.
         let pool = new_test_pool().await;
         let mut d = simple_running("trans-2", vec![readiness_command("ready")]);
-        d.status = DeploymentStatus::Creating; // gate reverted it this cycle
-        log_running_transition(&pool, &DeploymentStatus::Creating, &d).await;
+        d.set_status(DeploymentStatus::Progressing); // gate reverted it this cycle
+        log_running_transition(&pool, DeploymentStatus::Progressing, &d).await;
         assert_eq!(count_state_transition_events(&pool, "trans-2").await, 0);
     }
 
@@ -2610,7 +2692,7 @@ mod tests {
         // (otherwise every tick of a healthy deployment would re-log it).
         let pool = new_test_pool().await;
         let d = simple_running("trans-3", vec![]);
-        log_running_transition(&pool, &DeploymentStatus::Running, &d).await;
+        log_running_transition(&pool, DeploymentStatus::Running, &d).await;
         assert_eq!(count_state_transition_events(&pool, "trans-3").await, 0);
     }
 
@@ -2621,15 +2703,51 @@ mod tests {
             .unwrap()
     }
 
+    fn progressing() -> Snapshot {
+        Snapshot {
+            condition: (DeploymentStatus::Progressing, None),
+            message: None,
+        }
+    }
+
+    /// The old and new states each carry their status, and a failure only
+    /// when backing off or failed.
+    #[test]
+    fn status_changed_payload_nests_the_old_and_new_states() {
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.back_off(
+            deployments::Reason::CrashLoop,
+            "Instance a exited with code 1",
+        );
+        let old = Snapshot {
+            condition: (DeploymentStatus::Running, None),
+            message: None,
+        };
+
+        let payload = Event::deployment_status_changed(&deployment, &old).payload;
+
+        assert_eq!(
+            payload["old"],
+            serde_json::json!({ "status": "running", "failure": null })
+        );
+        assert_eq!(
+            payload["new"],
+            serde_json::json!({
+                "status": "backing_off",
+                "failure": { "reason": "crash_loop", "message": "Instance a exited with code 1" },
+            })
+        );
+    }
+
     #[tokio::test]
     async fn write_back_announces_the_status_it_stored() {
         let pool = new_test_pool().await;
         let mut deployment = child_with_health_checks("d1", vec![]);
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
         deployments::create(&pool, &deployment).await.unwrap();
 
-        deployment.status = DeploymentStatus::Running;
-        write_back(&pool, &DeploymentStatus::Creating, &deployment).await;
+        deployment.set_status(DeploymentStatus::Running);
+        write_back(&pool, &progressing(), &deployment).await;
 
         assert_eq!(queued_events(&pool).await, 1);
     }
@@ -2638,14 +2756,14 @@ mod tests {
     async fn write_back_announces_nothing_for_a_deployment_deleted_meanwhile() {
         let pool = new_test_pool().await;
         let mut deployment = child_with_health_checks("d1", vec![]);
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
         deployments::create(&pool, &deployment).await.unwrap();
 
         // Deleted through the API while this cycle held the deployment.
         deployments::mark_deleted(&pool, "d1").await.unwrap();
 
-        deployment.status = DeploymentStatus::Running;
-        write_back(&pool, &DeploymentStatus::Creating, &deployment).await;
+        deployment.set_status(DeploymentStatus::Running);
+        write_back(&pool, &progressing(), &deployment).await;
 
         assert_eq!(
             queued_events(&pool).await,

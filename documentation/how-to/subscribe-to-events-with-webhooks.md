@@ -38,20 +38,22 @@ def verify(secret: str, body: bytes, header: str) -> bool:
     return hmac.compare_digest(expected, header)
 ```
 
-The body for `deployment.status_changed`:
+The body for `deployment.status_changed`, sent whenever a deployment changes status, or reason within its status:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "deployment_id": "f3a8b2c4-...",
   "namespace": "production",
   "name": "web",
   "kind": "worker",
-  "old_status": "creating",
-  "new_status": "running",
+  "old": { "status": "progressing", "failure": null },
+  "new": { "status": "running", "failure": null },
   "restart_count": 0
 }
 ```
+
+`old` and `new` each carry a `status` and a `failure`, which is `null` unless the deployment is `backing_off` or `failed`, and then gives the `reason` and a human-readable `message`. See [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle).
 
 Respond with any `2xx` to acknowledge. A non-2xx (or a timeout) makes Ring retry with exponential backoff; after repeated failures the event is dead-lettered and stops being retried.
 
@@ -68,7 +70,7 @@ See [API reference → Webhooks](/documentation/reference/api#webhooks) for each
 
 ## Idempotency
 
-Delivery is **at-least-once**: on a retry, an event your endpoint already processed may arrive again. Key your handling on `deployment_id` + `new_status` (or carry your own dedup) so reprocessing is a no-op.
+Delivery is **at-least-once**: on a retry, an event your endpoint already processed may arrive again. Key your handling on `deployment_id` + `new.status` + `new.failure.reason` (or carry your own dedup) so reprocessing is a no-op.
 
 ## List and remove
 

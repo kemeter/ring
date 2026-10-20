@@ -31,7 +31,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-limits" "running" 60
+wait_deployment_state "ring-e2e" "nginx-limits" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-limits")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"
@@ -77,7 +77,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE2"
-wait_deployment_status "ring-e2e" "nginx-no-limits" "running" 60
+wait_deployment_state "ring-e2e" "nginx-no-limits" "running" 60
 DEPLOYMENT_ID2=$(get_deployment_id "ring-e2e" "nginx-no-limits")
 CID2=$(docker ps --filter "label=ring_deployment=$DEPLOYMENT_ID2" --format '{{.ID}}' | head -n1)
 [ -z "$CID2" ] && fail "no container for nginx-no-limits"

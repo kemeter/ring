@@ -369,7 +369,7 @@ resources:
 
 Both `limits` and `requests` are optional. Within each, `cpu` and `memory` are also optional.
 
-> **Memory admission control.** Before creating a container or booting a VM, Ring checks the deployment's requested memory against the host's currently-available memory. The figure it admits against is `requests.memory` if set, otherwise `limits.memory` (and, on Cloud Hypervisor, the 256 MiB default when neither is set). If the host can't hold it, the deployment goes to `insufficient_resources` with an event naming the gap (`needs X MiB but only Y MiB is available`), and is retried on the backoff curve since memory gets freed, instead of starting and getting OOM-killed (Docker) or failing the VM spawn opaquely (CH). The check is best-effort and point-in-time (it catches gross over-asks, not fine-grained contention), and it is *not* applied to CPU, since CPU overcommit is non-fatal. A deployment that declares no memory request or limit is not gated.
+> **Memory admission control.** Before creating a container or booting a VM, Ring checks the deployment's requested memory against the host's currently-available memory. The figure it admits against is `requests.memory` if set, otherwise `limits.memory` (and, on Cloud Hypervisor, the 256 MiB default when neither is set). If the host can't hold it, the deployment goes to `backing_off` with the reason `insufficient_resources` and an event naming the gap (`needs X MiB but only Y MiB is available`), and is retried on the backoff curve since memory gets freed, instead of starting and getting OOM-killed (Docker) or failing the VM spawn opaquely (CH). The check is best-effort and point-in-time (it catches gross over-asks, not fine-grained contention), and it is *not* applied to CPU, since CPU overcommit is non-fatal. A deployment that declares no memory request or limit is not gated.
 
 > **Cloud Hypervisor sizing.** When `resources` is not set on a CH deployment, the VM defaults to 1 vCPU and 256 MiB of RAM. Resizing is at-boot only; Ring does not use Cloud Hypervisor's `vm.resize` API to live-resize a running VM, so changing `resources` requires a redeploy.
 
@@ -420,7 +420,7 @@ autoscale:
 
 > **Ring is single-node.** Autoscaling multiplies instances on **one machine**: it divides that machine's CPU more finely, it does not add capacity. It is meant to absorb spikes on a host with headroom, and to release resources when load drops. It cannot rescue a saturated host — if the machine is already at its limit, adding instances only increases contention. Size `max` against what the host can actually carry.
 >
-> Memory is still admitted per instance (see [resources](#resources)), so an autoscaled deployment that outgrows the host is stopped with `insufficient_resources` rather than taking the machine down.
+> Memory is still admitted per instance (see [resources](#resources)), so an autoscaled deployment that outgrows the host backs off with the reason `insufficient_resources` rather than taking the machine down.
 
 Rejected combinations, reported at `ring apply` time:
 
@@ -442,7 +442,7 @@ restart:
 |---|---|---|
 | `base` | all | Upper bound of the delay before the first retry, e.g. `10s` |
 | `cap` | all | Upper bound of the delay between two retries. Must not be lower than `base`, whether `base` comes from this block or from the server |
-| `stable_after` | workers | Uninterrupted running time after which the attempt counter resets |
+| `stable_after` | workers | Uninterrupted running time after which the attempt counter resets, once the worker is `running` |
 | `on_exhaustion` | workers | `backoff` (default) keeps retrying at `cap` forever; `fail` marks the worker `failed` once its failures exceed `max_attempts` |
 | `max_attempts` | workers | Read when `on_exhaustion` is `fail` |
 | `backoff_limit` | jobs | How many times a run that exited non-zero is run again. Default `0`: a failed job is not run again |

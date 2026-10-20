@@ -24,7 +24,13 @@ pub(crate) fn command_config() -> Command {
                 .action(ArgAction::Append)
                 .short('s')
                 .long("status")
-                .help("Filter by status"),
+                .help("Filter by status (pending, progressing, running, backing_off, completed, failed, deleted)"),
+        )
+        .arg(
+            Arg::new("reason")
+                .action(ArgAction::Append)
+                .long("reason")
+                .help("Filter by reason, e.g. crash_loop or image_pull"),
         )
         .arg(
             Arg::new("type")
@@ -62,8 +68,10 @@ struct DeploymentTableItem {
     kind: String,
     #[table(title = "Replicas")]
     replicas: String,
-    #[table(title = "Status")]
+    #[table(title = "DeploymentStatus")]
     status: String,
+    #[table(title = "Reason")]
+    reason: String,
 }
 
 pub(crate) async fn execute(
@@ -91,10 +99,11 @@ pub(crate) async fn execute(
         ns_scope.join(",")
     };
 
-    if args.contains_id("status") {
-        let statuses = args.get_many::<String>("status").unwrap();
-        for status in statuses {
-            params.push(format!("status[]={}", status));
+    for filter in ["status", "reason"] {
+        if let Some(values) = args.get_many::<String>(filter) {
+            for value in values {
+                params.push(format!("{filter}[]={value}"));
+            }
         }
     }
 
@@ -181,6 +190,7 @@ pub(crate) async fn execute(
                         format!("{}/{}{}", deployment.instances.len(), target, marker)
                     },
                     status: style::status(&deployment.status),
+                    reason: deployment.failure.map(|f| f.reason).unwrap_or_default(),
                 })
             }
 

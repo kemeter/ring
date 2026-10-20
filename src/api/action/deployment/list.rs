@@ -21,6 +21,8 @@ pub(crate) struct QueryParameters {
     #[serde(default)]
     status: Vec<String>,
     #[serde(default)]
+    reason: Vec<String>,
+    #[serde(default)]
     kind: Vec<String>,
     /// `key=value` label selectors. A deployment matches only if it carries
     /// every selector. Stored as JSON in the `labels` column, so this is
@@ -48,6 +50,7 @@ where
         let parsed: Vec<(String, String)> = parse(query.as_bytes()).into_owned().collect();
 
         let mut status = Vec::new();
+        let mut reason = Vec::new();
         let mut namespaces = Vec::new();
         let mut kind = Vec::new();
         let mut labels = Vec::new();
@@ -59,6 +62,8 @@ where
                 "namespace" => namespaces.push(value),
                 "status[]" => status.push(value),
                 "status" => status.push(value),
+                "reason[]" => reason.push(value),
+                "reason" => reason.push(value),
                 "kind[]" => kind.push(value),
                 "kind" => kind.push(value),
                 "label[]" => labels.push(value),
@@ -71,6 +76,7 @@ where
         Ok(QueryParameters {
             namespaces,
             status,
+            reason,
             kind,
             labels,
             instances,
@@ -97,6 +103,10 @@ pub(crate) async fn list(
 
     if !query_parameters.status.is_empty() {
         filters.insert(String::from("status"), query_parameters.status);
+    }
+
+    if !query_parameters.reason.is_empty() {
+        filters.insert(String::from("reason"), query_parameters.reason);
     }
 
     if !query_parameters.kind.is_empty() {

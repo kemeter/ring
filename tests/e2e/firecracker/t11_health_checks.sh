@@ -56,7 +56,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "fc-hc-tcp" "running" 240
+wait_deployment_state "ring-e2e" "fc-hc-tcp" "running" 240
 
 TCP_ID=$(get_deployment_id "ring-e2e" "fc-hc-tcp")
 [ -n "$TCP_ID" ] || fail "could not find deployment id after apply"
@@ -124,7 +124,7 @@ log "$ROWS probe rows recorded — the loop is repeating"
 # filters with its own --level flag and matches the rendered text. Piping that
 # output through jq silently yields nothing — which is what made an earlier
 # version of this assertion appear to fail, and led me to wrongly blame the
-# creating-phase guard.
+# creating-status guard.
 log "waiting for the on_failure alert..."
 ALERTED=0
 for _ in $(seq 1 60); do

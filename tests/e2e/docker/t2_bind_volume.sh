@@ -19,7 +19,7 @@ ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-bind.yaml"
 
-wait_deployment_status "ring-e2e" "nginx-bind" "running" 60
+wait_deployment_state "ring-e2e" "nginx-bind" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-bind")
 if [ -z "$DEPLOYMENT_ID" ]; then

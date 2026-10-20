@@ -225,8 +225,8 @@ mod tests {
     #[test]
     fn active_excludes_created_and_exited() {
         // A `created` container (start failed) is NOT a live instance — this is
-        // the exclusion that lets the scheduler retry and eventually reach
-        // CrashLoopBackOff instead of treating it as healthy.
+        // the exclusion that lets the scheduler count the failure and retry
+        // instead of treating it as healthy.
         assert!(!matches_status(
             Some(&ContainerSummaryStateEnum::CREATED),
             "active"

@@ -10,7 +10,7 @@
 # restart_count, reaping each dead container so it isn't re-counted.
 #
 # This deploys a container that exits 1 immediately and asserts:
-#   1. it reaches crash_loop_back_off, and
+#   1. it reaches backing_off:crash_loop, and
 #   2. the live Podman container count stays bounded (no runaway recreation).
 #
 # Skips cleanly (exit 0) if Podman or its rootless socket isn't available.
@@ -72,24 +72,24 @@ DID=$(get_deployment_id "ring-e2e" "crasher")
 [ -n "$DID" ] || fail "could not find deployment id after apply"
 log "deployment id: $DID"
 
-# Must reach crash_loop_back_off after its first crash, AND the live container
+# Must reach backing_off:crash_loop after its first crash, AND the live container
 # count must never blow up (the bug created one per tick, unbounded).
 reached=0
 max_seen=0
 for _ in $(seq 1 40); do
   status=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r --arg id "$DID" '.[] | select(.id==$id) | .status' | head -n1)
+    | jq -r --arg id "$DID" '.[] | select(.id==$id) | '"$STATE_JQ" | head -n1)
   live=$(podman ps -aq --filter "label=ring_deployment=$DID" | wc -l | tr -d ' ')
   [ "$live" -gt "$max_seen" ] && max_seen=$live
-  if [ "$status" = "crash_loop_back_off" ]; then
+  if [ "$status" = "backing_off:crash_loop" ]; then
     reached=1
     break
   fi
   sleep 1
 done
 
-[ "$reached" -eq 1 ] || fail "crasher never reached crash_loop_back_off (bug: infinite recreate)"
-log "reached crash_loop_back_off"
+[ "$reached" -eq 1 ] || fail "crasher never reached backing_off:crash_loop (bug: infinite recreate)"
+log "reached backing_off:crash_loop"
 
 # Bounded recreation: a single replica crash loop must not accumulate many
 # containers. Allow generous slack for in-flight reaping but catch a runaway

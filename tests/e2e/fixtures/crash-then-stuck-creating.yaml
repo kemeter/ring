@@ -3,8 +3,8 @@ deployments:
     name: crash-then-stuck-creating
     namespace: ring-e2e
     runtime: docker
-    # Host-network windowed restart_count reset for a worker that never leaves
-    # `creating`. Docker re-runs the SAME command on every (re)spawn, so
+    # A worker held `progressing` by the readiness gate keeps its
+    # restart_count. Docker re-runs the SAME command on every (re)spawn, so
     # the "crash a few times then stay up" behaviour is driven by state on a host
     # bind mount: each start increments a counter in /state/count. While count
     # <= 3 the container exits 1 (a crash Ring counts toward restart_count); on
@@ -13,11 +13,9 @@ deployments:
     # Unlike crash-then-heal, this worker uses host networking and a readiness
     # probe that never turns green (the file it checks for is never created). A
     # host-network container has no resolvable address, so it can never pass
-    # readiness and stays in `Creating` for life even though its container is
-    # alive. A long start_period keeps the rollout deadline from failing it, so
-    # it sits in `Creating` with a live instance — the exact state where the old
-    # `status == Running` gate left restart_count monotonic. With the fix the
-    # scheduler recognises the live container and forgives the accrued count.
+    # readiness and stays `progressing` even though its container is alive. A
+    # long start_period keeps the readiness deadline from timing it out, so it
+    # sits `progressing` with a live instance, and its count is not forgiven.
     network:
       mode: host
     image: alpine:3.19

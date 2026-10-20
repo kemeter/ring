@@ -5,7 +5,7 @@
 # `deployments:`. serde dropped any unknown top-level key, so a `configs:`
 # block was silently parsed away: never POSTed to /configs, never landing in
 # the DB. A deployment referencing it via a `type: config` volume then got
-# stuck in `creating` forever with "Config '...' not found". The failure was
+# stuck in `progressing` forever with "Config '...' not found". The failure was
 # invisible at apply time — the worst kind of silent failure for a declarative
 # tool.
 #

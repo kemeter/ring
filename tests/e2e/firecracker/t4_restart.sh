@@ -74,7 +74,7 @@ taps_now() { (ip -o link show 2>/dev/null | grep -oE 'ring-[0-9a-f]+' || true) |
 TAPS_BEFORE=$(taps_now)
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "restart-vm" "running" 60
+wait_deployment_state "ring-e2e" "restart-vm" "running" 60
 
 # Record the instance id and the firecracker PID + tap that back it.
 INSTANCE_ID=""

@@ -48,9 +48,9 @@ EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "job-ok" "completed" 30
-wait_deployment_status "ring-e2e" "job-fails-once" "failed" 30
-wait_deployment_status "ring-e2e" "job-retried" "failed" 60
+wait_deployment_state "ring-e2e" "job-ok" "completed" 30
+wait_deployment_state "ring-e2e" "job-fails-once" "failed:run_failed" 30
+wait_deployment_state "ring-e2e" "job-retried" "failed:run_failed" 60
 
 ONCE=$(get_restart_count "ring-e2e" "job-fails-once")
 RETRIED=$(get_restart_count "ring-e2e" "job-retried")

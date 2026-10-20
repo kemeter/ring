@@ -34,7 +34,7 @@ deployments:
       - { type: tcp, port: 1, interval: "1s", timeout: "1s", threshold: 2, on_failure: stop }
 EOF
 "$RING_BIN" apply --file "$STOP_FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-hc-stop" "running" 60
+wait_deployment_state "ring-e2e" "nginx-hc-stop" "running" 60
 STOP_ID=$(get_deployment_id "ring-e2e" "nginx-hc-stop")
 
 # Wait for the container to disappear (the scheduler stops + removes it
@@ -66,7 +66,7 @@ deployments:
       - { type: tcp, port: 1, interval: "1s", timeout: "1s", threshold: 2, on_failure: alert }
 EOF
 "$RING_BIN" apply --file "$ALERT_FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-hc-alert" "running" 60
+wait_deployment_state "ring-e2e" "nginx-hc-alert" "running" 60
 ALERT_ID=$(get_deployment_id "ring-e2e" "nginx-hc-alert")
 INIT_RC=$(get_restart_count "ring-e2e" "nginx-hc-alert")
 

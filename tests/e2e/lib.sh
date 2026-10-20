@@ -151,8 +151,14 @@ ring_login() {
   log "logged in as $user"
 }
 
-# Usage: wait_deployment_status <namespace> <name> <expected_status> [timeout_seconds]
-wait_deployment_status() {
+# jq filter reading a deployment's state: its status, followed by `:reason`
+# when it has a failure (`running`, `backing_off:crash_loop`). Splice it into a
+# single-quoted jq program with '"$STATE_JQ"'.
+STATE_JQ='(.status + (if .failure then ":" + .failure.reason else "" end))'
+
+# Usage: wait_deployment_state <namespace> <name> <expected_state> [timeout_seconds]
+# The expected state is a status, or `status:reason`.
+wait_deployment_state() {
   local namespace="$1"
   local name="$2"
   local want="$3"
@@ -162,16 +168,16 @@ wait_deployment_status() {
   for _ in $(seq 1 "$timeout"); do
     got=$("$RING_BIN" deployment list --output json 2>/dev/null \
       | jq -r --arg ns "$namespace" --arg n "$name" \
-          '.[] | select(.namespace==$ns and .name==$n) | .status' \
+          '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
       | head -n1)
     if [ "$got" = "$want" ]; then
-      log "deployment $namespace/$name reached status '$want'"
+      log "deployment $namespace/$name reached state '$want'"
       return 0
     fi
     sleep 1
   done
 
-  fail "deployment $namespace/$name did not reach status '$want' in ${timeout}s (last: '${got:-<none>}')"
+  fail "deployment $namespace/$name did not reach state '$want' in ${timeout}s (last: '${got:-<none>}')"
 }
 
 # Usage: get_deployment_id <namespace> <name>
@@ -198,7 +204,7 @@ get_deployment_id_by_image() {
     | head -n1
 }
 
-# Usage: wait_deployment_by_image <namespace> <name> <image> <expected_status> [timeout]
+# Usage: wait_deployment_by_image <namespace> <name> <image> <expected_state> [timeout]
 wait_deployment_by_image() {
   local namespace="$1"
   local name="$2"
@@ -210,16 +216,16 @@ wait_deployment_by_image() {
   for _ in $(seq 1 "$timeout"); do
     got=$("$RING_BIN" deployment list --output json 2>/dev/null \
       | jq -r --arg ns "$namespace" --arg n "$name" --arg img "$image" \
-          '.[] | select(.namespace==$ns and .name==$n and .image==$img) | .status' \
+          '.[] | select(.namespace==$ns and .name==$n and .image==$img) | '"$STATE_JQ" \
       | head -n1)
     if [ "$got" = "$want" ]; then
-      log "deployment $namespace/$name ($image) reached status '$want'"
+      log "deployment $namespace/$name ($image) reached state '$want'"
       return 0
     fi
     sleep 1
   done
 
-  fail "deployment $namespace/$name ($image) did not reach status '$want' in ${timeout}s (last: '${got:-<none>}')"
+  fail "deployment $namespace/$name ($image) did not reach state '$want' in ${timeout}s (last: '${got:-<none>}')"
 }
 
 # Usage: assert_docker_container_exists <deployment_id>

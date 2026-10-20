@@ -26,7 +26,7 @@ ring_login
 # We pick port 22 because Cirros's getty is unlikely to expose it but the
 # health check is enough to *trigger* the rolling-update path; the test
 # does not care whether the probe ever succeeds (we time-bound it with
-# `wait_deployment_status` 'running').
+# `wait_deployment_state` 'running').
 FIXTURE_V1="$RING_TEST_DIR/rolling-vm-v1.yaml"
 cat > "$FIXTURE_V1" <<EOF
 deployments:
@@ -45,7 +45,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE_V1"
-wait_deployment_status "ring-e2e" "rolling-vm" "running" 120
+wait_deployment_state "ring-e2e" "rolling-vm" "running" 120
 
 V1_ID=$(get_deployment_id "ring-e2e" "rolling-vm")
 [ -z "$V1_ID" ] && fail "could not find v1 deployment id"
@@ -89,7 +89,7 @@ log "v2.parent_id == v1.id"
 # This is the whole point of the rolling-update brick: the old deployment
 # does not get torn down until the new one becomes healthy.
 V1_STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$V1_ID" '.[] | select(.id==$id) | .status')
+  | jq -r --arg id "$V1_ID" '.[] | select(.id==$id) | '"$STATE_JQ")
 if [ "$V1_STATUS" != "running" ]; then
   fail "v1 status after re-apply is '$V1_STATUS' (expected 'running' during rolling update)"
 fi
@@ -98,7 +98,7 @@ log "v1 still running while v2 boots"
 # Wait for v2 to reach running before we delete (avoid teardown races).
 for _ in $(seq 1 120); do
   s=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r --arg id "$V2_ID" '.[] | select(.id==$id) | .status')
+    | jq -r --arg id "$V2_ID" '.[] | select(.id==$id) | '"$STATE_JQ")
   [ "$s" = "running" ] && break
   sleep 1
 done

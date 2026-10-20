@@ -30,7 +30,7 @@ setup_fc() {
   }
 
   # Ring creates a TAP per microVM, which needs CAP_NET_ADMIN. Without it every
-  # boot fails on TUNSETIFF and the deployment lands in crash_loop_back_off —
+  # boot fails on TUNSETIFF and the deployment lands in backing_off:crash_loop —
   # which a test can only report as "did not reach running in 60s", pointing at
   # the runtime rather than at the missing capability. Fail fast and say so.
   RING_BIN_PATH="${RING_BIN:-$(cd "$SCRIPT_DIR/../../.." && pwd)/target/debug/ring}"

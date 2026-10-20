@@ -48,8 +48,8 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "lbl-prod" "running" 60
-wait_deployment_status "ring-e2e" "lbl-dev" "running" 60
+wait_deployment_state "ring-e2e" "lbl-prod" "running" 60
+wait_deployment_state "ring-e2e" "lbl-dev" "running" 60
 
 # Scope every query to the namespace so other deployments don't interfere.
 NS=(--namespace ring-e2e)

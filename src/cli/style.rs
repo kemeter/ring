@@ -102,16 +102,8 @@ pub(crate) fn status(s: &str) -> String {
 fn colour_status(enabled: bool, s: &str) -> String {
     match s {
         "running" | "completed" => paint(enabled, || s.green().to_string(), s),
-        "pending" | "starting" | "deleted" => paint(enabled, || s.yellow().to_string(), s),
-        "error"
-        | "failed"
-        | "crash_loop_back_off"
-        | "image_pull_back_off"
-        | "create_container_error"
-        | "network_error"
-        | "config_error"
-        | "file_system_error"
-        | "insufficient_resources" => paint(enabled, || s.red().to_string(), s),
+        "pending" | "progressing" | "deleted" => paint(enabled, || s.yellow().to_string(), s),
+        "backing_off" | "failed" => paint(enabled, || s.red().to_string(), s),
         _ => s.to_string(),
     }
 }

@@ -302,6 +302,8 @@ mod tests {
             created_at: "now".to_string(),
             updated_at: None,
             status: DeploymentStatus::Running,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "web".to_string(),

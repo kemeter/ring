@@ -46,7 +46,7 @@ impl HealthChecker {
     pub(crate) async fn execute_checks(
         &self,
         deployment: &Deployment,
-        old_status: &DeploymentStatus,
+        old_status: DeploymentStatus,
         runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
     ) -> HealthCheckOutcome {
         let mut outcome = HealthCheckOutcome {
@@ -57,41 +57,41 @@ impl HealthChecker {
             health_check_failures: Vec::new(),
         };
 
-        // Checks run in two phases of a deployment's life:
+        // Checks run in two statuses of a deployment's life:
         //
-        // - `Running`: the full set runs (readiness + liveness) and failures
+        // - `running`: the full set runs (readiness + liveness) and failures
         //   drive the `on_failure` actions (restart / stop / alert). This is
         //   the established behaviour.
-        // - `Creating`: only `readiness: true` checks run, and purely to
+        // - `progressing`: only `readiness: true` checks run, and purely to
         //   *record results* — they feed the readiness gate that decides when
-        //   the deployment may enter `Running` (see
+        //   the deployment may enter `running` (see
         //   `scheduler::gate_running_on_readiness`). A readiness probe that
         //   isn't green yet during boot is not a failure, so we never touch the
         //   failure counter or fire `on_failure` here.
         //
         // Jobs never run health checks: they go straight to
-        // `completed`/`failed` and never sit in a readiness-gated `Running`.
+        // `completed`/`failed` and never sit in a readiness-gated `running`.
         //
-        // The phase is keyed on `old_status` — the status *entering* the cycle —
+        // The mode is keyed on `old_status` — the status *entering* the cycle —
         // not `deployment.status`, which the reconcile pass has already flipped
-        // `Creating → Running` (once an instance stays up, before
+        // `progressing → running` (once an instance stays up, before
         // `gate_running_on_readiness` validates readiness later in the same
-        // cycle). Reading the current status here would treat a still-
-        // booting deployment as `Running` and fire liveness `on_failure` against
-        // an app that isn't ready yet — restarting it in a loop. `old_status`
-        // stays `Creating` until a gate-validated `Running` is persisted, so
+        // cycle). Reading the current status here would treat a still-booting
+        // deployment as `running` and fire liveness `on_failure` against an app
+        // that isn't ready yet — restarting it in a loop. `old_status` stays
+        // `progressing` until a gate-validated `running` is persisted, so
         // liveness checks only act once the deployment is genuinely established.
-        let creating_phase = match old_status {
+        let creating_status = match old_status {
             DeploymentStatus::Running => false,
-            DeploymentStatus::Creating if deployment.kind != "job" => true,
+            DeploymentStatus::Progressing if deployment.kind != "job" => true,
             _ => return outcome,
         };
 
         for instance_id in &deployment.instances {
             for (hc_index, health_check) in deployment.health_checks.iter().enumerate() {
-                // During `Creating` only the readiness checks are relevant; a
+                // While progressing only the readiness checks are relevant; a
                 // liveness probe has no meaning before the app is ready.
-                if creating_phase && !health_check.is_readiness() {
+                if creating_status && !health_check.is_readiness() {
                     continue;
                 }
 
@@ -104,9 +104,9 @@ impl HealthChecker {
                     )
                     .await;
 
-                // In the creating phase we only persist the result for the
+                // In the creating status we only persist the result for the
                 // gate to read; no failure counting, no `on_failure` action.
-                if !creating_phase {
+                if !creating_status {
                     let key = format!("{}:{}:{}", deployment.id, instance_id, hc_index);
                     if matches!(
                         result.status,
@@ -315,7 +315,7 @@ impl HealthChecker {
                 });
 
                 info!(
-                    "Deployment {} status changed to deleted by health checker due to instance {} failure",
+                    "Deployment {} marked deleted by health checker due to instance {} failure",
                     deployment.id, instance_id
                 );
             }
@@ -378,6 +378,8 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: None,
             status: DeploymentStatus::Running,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "test".to_string(),
             name: "test-deployment".to_string(),
@@ -426,7 +428,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -465,7 +467,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -510,7 +512,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -543,7 +545,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -577,21 +579,21 @@ mod tests {
 
         // Call 1: failure count = 1/3, no action
         let outcome1 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
         assert!(outcome1.instances_to_remove.is_empty());
         assert!(outcome1.events.is_empty());
 
         // Call 2: failure count = 2/3, no action
         let outcome2 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
         assert!(outcome2.instances_to_remove.is_empty());
         assert!(outcome2.events.is_empty());
 
         // Call 3: failure count = 3/3, triggers restart
         let outcome3 = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
         assert_eq!(outcome3.instances_to_remove, vec!["instance-1".to_string()]);
         assert!(
@@ -624,7 +626,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.proposed_status, Some(DeploymentStatus::Deleted));
@@ -659,7 +661,7 @@ mod tests {
         );
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert!(outcome.proposed_status.is_none());
@@ -707,7 +709,7 @@ mod tests {
         assert_eq!(row.4.as_deref(), Some("instance-1"));
     }
 
-    // ---- creating-phase readiness probing ----
+    // ---- creating-status readiness probing ----
 
     fn readiness_tcp() -> HealthCheck {
         HealthCheck::Tcp {
@@ -737,8 +739,8 @@ mod tests {
 
     #[tokio::test]
     async fn readiness_checks_run_during_creating() {
-        // In `Creating`, a readiness check still runs so the gate has data to
-        // read — even though the deployment isn't `Running` yet.
+        // While progressing, a readiness check still runs so the gate has data
+        // to read — even though the deployment isn't running yet.
         let pool = new_test_pool().await;
         let checker = HealthChecker::new(pool);
         let runtime = MockRuntime::healthy();
@@ -748,10 +750,10 @@ mod tests {
             vec!["instance-1".to_string()],
             vec![readiness_tcp()],
         );
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -763,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn liveness_checks_skipped_during_creating() {
-        // In `Creating`, only readiness checks run; the liveness check is
+        // While progressing, only readiness checks run; the liveness check is
         // skipped (it has no meaning before the app is ready). With a failing
         // runtime, the readiness result is recorded but no action fires.
         let pool = new_test_pool().await;
@@ -775,10 +777,10 @@ mod tests {
             vec!["instance-1".to_string()],
             vec![readiness_tcp(), liveness_tcp()],
         );
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         // Only the readiness check ran (one result), the liveness was skipped.
@@ -786,11 +788,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn liveness_skipped_when_old_status_creating_despite_running_flip() {
-        // Regression: the scheduler flips `Creating → Running` optimistically
+    async fn liveness_skipped_when_old_status_progressing_despite_running_flip() {
+        // Regression: the scheduler flips `progressing → running` optimistically
         // (the instant an instance exists) *before* health checks run and before
         // the readiness gate validates it. So `deployment.status` can read
-        // `Running` while the deployment is still booting. The phase must key on
+        // `running` while the deployment is still booting. The status must key on
         // `old_status` (the status entering the cycle), not the flipped current
         // one — otherwise a liveness check fires `on_failure: restart` against a
         // not-yet-ready app and restarts it in an endless loop.
@@ -803,16 +805,16 @@ mod tests {
             vec!["instance-1".to_string()],
             vec![readiness_tcp(), liveness_tcp()],
         );
-        // Current status is the optimistic `Running`; the status entering the
-        // cycle was still `Creating`.
-        deployment.status = DeploymentStatus::Running;
-        let old_status = DeploymentStatus::Creating;
+        // The current status is the optimistic `running`; the status entering the
+        // cycle was still `progressing`.
+        deployment.set_status(DeploymentStatus::Running);
+        let old_status = DeploymentStatus::Progressing;
 
         let outcome = checker
-            .execute_checks(&deployment, &old_status, &runtime)
+            .execute_checks(&deployment, old_status, &runtime)
             .await;
 
-        // Treated as the creating phase: only readiness ran, liveness skipped,
+        // Treated as the creating status: only readiness ran, liveness skipped,
         // and crucially no restart was queued despite the failing runtime.
         assert_eq!(outcome.results.len(), 1);
         assert!(outcome.instances_to_remove.is_empty());
@@ -832,10 +834,10 @@ mod tests {
             vec!["instance-1".to_string()],
             vec![readiness_tcp()],
         );
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert_eq!(outcome.results.len(), 1);
@@ -866,11 +868,11 @@ mod tests {
             vec!["instance-1".to_string()],
             vec![readiness_tcp()],
         );
-        deployment.status = DeploymentStatus::Creating;
+        deployment.set_status(DeploymentStatus::Progressing);
         deployment.kind = "job".to_string();
 
         let outcome = checker
-            .execute_checks(&deployment, &deployment.status, &runtime)
+            .execute_checks(&deployment, deployment.status, &runtime)
             .await;
 
         assert!(outcome.results.is_empty(), "jobs run no checks in creating");

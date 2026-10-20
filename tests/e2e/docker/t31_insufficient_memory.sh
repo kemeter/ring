@@ -39,7 +39,7 @@ EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
 # The admission check rejects it before any container is created.
-wait_deployment_status "ring-e2e" "oversized" "insufficient_resources" 30
+wait_deployment_state "ring-e2e" "oversized" "backing_off:insufficient_resources" 30
 DEP_ID=$(get_deployment_id "ring-e2e" "oversized")
 log "oversized reached insufficient_resources as expected"
 
@@ -67,8 +67,8 @@ log "no container was created — admission control ran before create"
 # than flapping to another one.
 sleep 3
 STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$DEP_ID" '.[] | select(.id == $id) | .status')
-[ "$STATUS" = "insufficient_resources" ] || \
+  | jq -r --arg id "$DEP_ID" '.[] | select(.id == $id) | '"$STATE_JQ")
+[ "$STATUS" = "backing_off:insufficient_resources" ] || \
   fail "status drifted from insufficient_resources to '$STATUS'"
 log "status stayed at insufficient_resources"
 

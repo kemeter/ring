@@ -30,7 +30,7 @@ EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "nginx-ctr-scaled" "running" 90
+wait_deployment_state "ring-e2e" "nginx-ctr-scaled" "running" 90
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-ctr-scaled")
 if [ -z "$DEPLOYMENT_ID" ]; then

@@ -47,7 +47,7 @@ echo "$OUT" | grep -q "Successful: 3" \
 log "apply summary: 3 successful deployments"
 
 for name in alpha beta gamma; do
-  wait_deployment_status "ring-e2e" "$name" "running" 90
+  wait_deployment_state "ring-e2e" "$name" "running" 90
   id=$(get_deployment_id "ring-e2e" "$name")
   [ -z "$id" ] && fail "no deployment id for $name"
   count=$(docker ps -q --filter "label=ring_deployment=$id" | wc -l | tr -d ' ')

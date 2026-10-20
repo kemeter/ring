@@ -21,7 +21,7 @@ use crate::hypervisor::classifier::{
     Disposition, classify_create_error, classify_exit_code, create_error_outcome,
 };
 use crate::hypervisor::instance_driver::InstanceDriver;
-use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::deployments::{Deployment, DeploymentStatus, Reason};
 use crate::models::restart_state::RestartState;
 use crate::models::volume::ResolvedMount;
 use crate::scheduler::restart::{self, Decision, Event, RestartPolicy, StartFailure, WorkloadKind};
@@ -59,14 +59,24 @@ pub(crate) async fn reconcile(
         }
     };
     deployment.instances = observation.running;
+    // Running when this pass started: the deployment already got past the
+    // readiness gate. Promoted below, it may still be held back by the gate.
+    let was_running = deployment.status == DeploymentStatus::Running;
     // An instance started on an earlier pass and still running now has proven
-    // it stays up: that, not the start itself, is what promotes a Creating
+    // it stays up: that, not the start itself, is what promotes a progressing
     // deployment. The readiness gate then has its say on this promotion.
-    if deployment.status == DeploymentStatus::Creating && !deployment.instances.is_empty() {
-        deployment.status = DeploymentStatus::Running;
+    if deployment.status == DeploymentStatus::Progressing && !deployment.instances.is_empty() {
+        deployment.set_status(DeploymentStatus::Running);
     }
 
-    let failed_this_pass = !observation.terminated.is_empty();
+    // A run that never got past the readiness gate is not the stable run that
+    // earns the budget back, however long it lasted: its end is counted
+    // without looking at its length. Kept otherwise, for the readiness deadline.
+    if !was_running && !observation.terminated.is_empty() {
+        counter.running_since = None;
+    }
+    // Why the last instance that ended this pass failed, and how.
+    let mut failure: Option<(Reason, String)> = None;
     for termination in observation.terminated {
         if !termination.started {
             // Its start was refused and the leftover could not be cleaned up
@@ -79,17 +89,27 @@ pub(crate) async fn reconcile(
                 now,
                 rng,
             );
+            let message = format!(
+                "Instance {} never started",
+                short_id(&termination.instance_id)
+            );
             deployment.emit_event(
                 "error",
-                format!(
-                    "Instance {} never started; removing it",
-                    short_id(&termination.instance_id)
-                ),
+                format!("{message}; removing it"),
                 &deployment.runtime.clone(),
                 Some("instance_never_started"),
             );
             driver.discard_instance(&termination.instance_id).await;
-            apply_decision(&mut deployment, state, decision, counter.restart_count);
+            let reason = Reason::CrashLoop;
+            apply_decision(
+                &mut deployment,
+                state,
+                decision,
+                counter.restart_count,
+                reason,
+                &message,
+            );
+            keep_worst(&mut failure, reason, message);
             continue;
         }
         let decision = restart::decide(
@@ -103,7 +123,7 @@ pub(crate) async fn reconcile(
             rng,
         );
         if decision == Decision::Complete {
-            deployment.status = DeploymentStatus::Completed;
+            deployment.set_status(DeploymentStatus::Completed);
             deployment.emit_event(
                 "info",
                 "Job completed".to_string(),
@@ -115,20 +135,21 @@ pub(crate) async fn reconcile(
             state.next_attempt_at = None;
             break;
         }
+        let message = format!(
+            "Instance {} exited with code {}",
+            short_id(&termination.instance_id),
+            termination
+                .exit_code
+                .map_or_else(|| "unknown".to_string(), |c| c.to_string()),
+        );
         deployment.emit_event(
             "error",
-            format!(
-                "Instance {} exited with code {} (restart {})",
-                short_id(&termination.instance_id),
-                termination
-                    .exit_code
-                    .map_or_else(|| "unknown".to_string(), |c| c.to_string()),
-                counter.restart_count
-            ),
+            format!("{message} (restart {})", counter.restart_count),
             &deployment.runtime.clone(),
             Some("container_crashed"),
         );
-        if let Disposition::Terminal(status) = classify_exit_code(termination.exit_code) {
+        let mut reason = ended_reason(kind);
+        if let Disposition::Terminal(terminal) = classify_exit_code(termination.exit_code) {
             deployment.emit_event(
                 "error",
                 format!(
@@ -139,7 +160,7 @@ pub(crate) async fn reconcile(
                 &deployment.runtime.clone(),
                 Some("non_retryable_exit"),
             );
-            deployment.status = status;
+            reason = terminal;
         }
         let job_done = matches!(kind, WorkloadKind::Job { .. }) && decision == Decision::Fail;
         if job_done {
@@ -148,7 +169,15 @@ pub(crate) async fn reconcile(
             driver.discard_instance(&termination.instance_id).await;
         }
         state.last_termination = Some(termination);
-        apply_decision(&mut deployment, state, decision, counter.restart_count);
+        apply_decision(
+            &mut deployment,
+            state,
+            decision,
+            counter.restart_count,
+            reason,
+            &message,
+        );
+        keep_worst(&mut failure, reason, message);
     }
 
     if matches!(
@@ -160,11 +189,13 @@ pub(crate) async fn reconcile(
         state.running_since = None;
         return deployment;
     }
-    if failed_this_pass
-        && deployment.instances.is_empty()
-        && deployment.status != DeploymentStatus::CreateContainerError
+    // With nothing left running, the deployment waits for its next start. A
+    // program that cannot run says so even while other instances still do.
+    let failed_this_pass = failure.is_some();
+    if let Some((reason, message)) = failure
+        && (deployment.instances.is_empty() || reason == Reason::SpecRejected)
     {
-        deployment.status = DeploymentStatus::CrashLoopBackOff;
+        deployment.back_off(reason, message);
     }
 
     scale(
@@ -180,11 +211,27 @@ pub(crate) async fn reconcile(
     )
     .await;
 
+    // Backing off with instances still serving (a program that cannot run in
+    // one of them) and nothing left to start, once the target came down to the
+    // instances left: no start will take it out of backing_off, so it goes
+    // back through progressing and the readiness gate like after a start.
+    if deployment.status == DeploymentStatus::BackingOff
+        && !failed_this_pass
+        && kind == WorkloadKind::Worker
+        && !deployment.instances.is_empty()
+        && deployment.instances.len() as u64 >= u64::from(deployment.target_replicas())
+    {
+        deployment.set_status(DeploymentStatus::Progressing);
+    }
+
     if deployment.instances.is_empty() {
         counter.running_since = None;
     } else if !failed_this_pass && kind == WorkloadKind::Worker {
         restart::on_running(&mut counter, now);
-        if restart::reset_if_stable(policy, &mut counter, now) {
+        // Only a deployment that is ready earns its budget back: one held by
+        // the readiness gate stays up without serving, and resetting it there
+        // would make each readiness timeout look like a first failure.
+        if was_running && restart::reset_if_stable(policy, &mut counter, now) {
             deployment.emit_event(
                 "info",
                 format!(
@@ -203,15 +250,19 @@ pub(crate) async fn reconcile(
     deployment
 }
 
-/// Count instances a liveness check removed as failures, exactly like
-/// instances that exited on their own. For a job that is a failed run, bounded
-/// by its `backoff_limit`.
-pub(crate) fn record_liveness_kills(
+/// Count instances the scheduler removed because they failed a check (a
+/// liveness check, the readiness deadline) as failures, exactly like instances
+/// that exited on their own. For a job that is a failed run, bounded by its
+/// `backoff_limit`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_removals(
     policy: &RestartPolicy,
     kind: WorkloadKind,
     deployment: &mut Deployment,
     state: &mut RestartState,
-    kills: usize,
+    removed: usize,
+    reason: Reason,
+    message: &str,
     now: DateTime<Utc>,
     rng: &mut impl Rng,
 ) {
@@ -220,7 +271,7 @@ pub(crate) fn record_liveness_kills(
         running_since: state.running_since,
         run_failures: state.run_failures,
     };
-    for _ in 0..kills {
+    for _ in 0..removed {
         let decision = restart::decide(
             policy,
             kind,
@@ -229,16 +280,68 @@ pub(crate) fn record_liveness_kills(
             now,
             rng,
         );
-        apply_decision(deployment, state, decision, counter.restart_count);
+        apply_decision(
+            deployment,
+            state,
+            decision,
+            counter.restart_count,
+            reason,
+            message,
+        );
     }
     deployment.restart_count = counter.restart_count;
     state.running_since = counter.running_since;
     state.run_failures = counter.run_failures;
-    // The check removed the last instance: the worker is waiting for its next
+    // The last instance was removed: the deployment is waiting for its next
     // start like after a crash, not running.
-    if kills > 0 && deployment.instances.is_empty() && deployment.status != DeploymentStatus::Failed
+    if removed > 0
+        && deployment.instances.is_empty()
+        && deployment.status != DeploymentStatus::Failed
     {
-        deployment.status = DeploymentStatus::CrashLoopBackOff;
+        deployment.back_off(reason, message);
+    }
+}
+
+/// Count a readiness timeout, once its instances are gone: one failed attempt.
+/// The run lasted the whole deadline without ever being ready, which is not
+/// the stable run that earns the budget back, so its length is not looked at.
+pub(crate) fn record_readiness_timeout(
+    policy: &RestartPolicy,
+    deployment: &mut Deployment,
+    state: &mut RestartState,
+    message: &str,
+    now: DateTime<Utc>,
+    rng: &mut impl Rng,
+) {
+    state.running_since = None;
+    let kind = deployment.workload_kind();
+    record_removals(
+        policy,
+        kind,
+        deployment,
+        state,
+        1,
+        Reason::ReadinessTimeout,
+        message,
+        now,
+        rng,
+    );
+}
+
+/// Record why an instance failed this pass, keeping a program that cannot run
+/// over a later ordinary crash: it is the one an operator has to fix.
+fn keep_worst(failure: &mut Option<(Reason, String)>, reason: Reason, message: String) {
+    if !matches!(failure, Some((Reason::SpecRejected, _))) {
+        *failure = Some((reason, message));
+    }
+}
+
+/// Why an instance that ended on its own failed: a worker must not end, and a
+/// job run that ends badly is a failed run.
+pub(crate) fn ended_reason(kind: WorkloadKind) -> Reason {
+    match kind {
+        WorkloadKind::Worker => Reason::CrashLoop,
+        WorkloadKind::Job { .. } => Reason::RunFailed,
     }
 }
 
@@ -304,42 +407,56 @@ async fn scale(
                 &deployment.runtime.clone(),
                 Some("scale_up"),
             );
-            // Creating until the next pass sees the instance still running.
-            // Promoted now, a container that dies on start would show Running
+            // Progressing until the next pass sees the instance still running.
+            // Promoted now, a container that dies on start would show running
             // for a pass, and a worker restarted with nothing live would reach
-            // Running without going through the readiness gate, which only
-            // holds a deployment that was Creating. A worker that still has
-            // other live instances stays Running.
+            // running without going through the readiness gate, which only
+            // holds a deployment that was progressing. A worker that still has
+            // other live instances stays running.
             if deployment.status != DeploymentStatus::Running || current == 0 {
-                deployment.status = DeploymentStatus::Creating;
+                deployment.set_status(DeploymentStatus::Progressing);
             }
         }
         Err(err) => {
-            let (status, reason, message) = create_error_outcome(&err, deployment);
-            error!("[{}] {}: {}", deployment.id, reason, err);
-            deployment.emit_event("error", message, &deployment.runtime.clone(), Some(reason));
-            deployment.status = status;
+            let (reason, event_reason, message) = create_error_outcome(&err, deployment);
+            error!("[{}] {}: {}", deployment.id, event_reason, err);
+            deployment.emit_event(
+                "error",
+                message.clone(),
+                &deployment.runtime.clone(),
+                Some(event_reason),
+            );
+            deployment.back_off(reason, message.clone());
 
             let failure = match classify_create_error(&err) {
                 Disposition::Terminal(
-                    DeploymentStatus::ConfigError
-                    | DeploymentStatus::CreateContainerError
-                    | DeploymentStatus::Failed,
+                    Reason::ConfigMissing | Reason::SpecRejected | Reason::Error,
                 ) => StartFailure::NeedsOperator,
                 _ => StartFailure::Transient,
             };
             let decision =
                 restart::decide(policy, kind, counter, Event::StartFailed(failure), now, rng);
-            apply_decision(deployment, state, decision, counter.restart_count);
+            apply_decision(
+                deployment,
+                state,
+                decision,
+                counter.restart_count,
+                reason,
+                &message,
+            );
         }
     }
 }
 
+/// Apply the policy's decision on a failure for `reason`, described by
+/// `message`.
 fn apply_decision(
     deployment: &mut Deployment,
     state: &mut RestartState,
     decision: Decision,
     attempts: u32,
+    reason: Reason,
+    message: &str,
 ) {
     match decision {
         Decision::StartNow | Decision::Complete => state.next_attempt_at = None,
@@ -347,7 +464,7 @@ fn apply_decision(
         Decision::Fail => {
             state.next_attempt_at = None;
             if deployment.status != DeploymentStatus::Failed {
-                deployment.status = DeploymentStatus::Failed;
+                deployment.fail(reason, message);
                 deployment.emit_event(
                     "error",
                     format!("Giving up after {} failed attempts", attempts),
@@ -492,6 +609,8 @@ mod tests {
             created_at: now().to_string(),
             updated_at: None,
             status: DeploymentStatus::Running,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "ns".to_string(),
             name: "web".to_string(),
@@ -599,13 +718,16 @@ mod tests {
             ..Default::default()
         };
         let mut d = worker(1);
-        d.status = DeploymentStatus::CrashLoopBackOff;
+        d.back_off(Reason::CrashLoop, "test");
         d.restart_count = 3;
 
         let d = pass(&driver, &RestartPolicy::default(), d, &mut state, now()).await;
 
         assert_eq!(driver.starts(), 0);
-        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::CrashLoop))
+        );
         assert_eq!(d.restart_count, 3);
     }
 
@@ -617,7 +739,7 @@ mod tests {
             ..Default::default()
         };
         let mut d = worker(1);
-        d.status = DeploymentStatus::CrashLoopBackOff;
+        d.back_off(Reason::CrashLoop, "test");
         d.restart_count = 3;
 
         let d = pass(
@@ -630,7 +752,7 @@ mod tests {
         .await;
 
         assert_eq!(driver.starts(), 1);
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        assert_eq!(d.status, DeploymentStatus::Progressing);
         assert_eq!(d.instances, ["new-1"], "the scale-up reports the new count");
         assert_eq!(state.next_attempt_at, None);
         assert_eq!(d.restart_count, 3, "a start is not a reset");
@@ -668,7 +790,10 @@ mod tests {
             assert_ne!(d.status, DeploymentStatus::Failed);
         }
         assert_eq!(d.restart_count, 50);
-        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::CrashLoop))
+        );
         let wait = state.next_attempt_at.map_or(0, |at| (at - t).num_seconds());
         assert!(wait <= 300, "never waits past the cap, waited {wait}s");
     }
@@ -699,7 +824,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unrunnable_program_lands_on_create_container_error() {
+    async fn an_unrunnable_program_backs_off_as_spec_rejected() {
         let driver = FakeDriver::running(&["a"]);
         driver.crash("a", Some(127));
         let mut state = RestartState::default();
@@ -713,7 +838,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(d.status, DeploymentStatus::CreateContainerError);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::SpecRejected))
+        );
         assert!(reasons(&d).contains(&"non_retryable_exit".to_string()));
     }
 
@@ -723,11 +851,14 @@ mod tests {
         driver.fail_starts_with(RuntimeError::ConfigNotFound("app".to_string()));
         let mut state = RestartState::default();
         let mut d = worker(1);
-        d.status = DeploymentStatus::Pending;
+        d.set_status(DeploymentStatus::Pending);
 
         let d = pass(&driver, &RestartPolicy::default(), d, &mut state, now()).await;
 
-        assert_eq!(d.status, DeploymentStatus::ConfigError);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::ConfigMissing))
+        );
         assert_eq!(d.restart_count, 1);
         assert!(reasons(&d).contains(&"config_error".to_string()));
     }
@@ -739,7 +870,7 @@ mod tests {
         let policy = RestartPolicy::default();
         let mut state = RestartState::default();
         let mut d = worker(1);
-        d.status = DeploymentStatus::Pending;
+        d.set_status(DeploymentStatus::Pending);
 
         d = pass(&driver, &policy, d, &mut state, now()).await;
         // The operator creates the config; the next attempt succeeds.
@@ -747,7 +878,7 @@ mod tests {
         let d = pass(&driver, &policy, d, &mut state, later).await;
 
         assert_eq!(driver.starts(), 1);
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
@@ -856,7 +987,7 @@ mod tests {
     fn job() -> Deployment {
         let mut d = worker(3);
         d.kind = "job".to_string();
-        d.status = DeploymentStatus::Pending;
+        d.set_status(DeploymentStatus::Pending);
         d
     }
 
@@ -969,22 +1100,27 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(1);
 
         // The liveness check removed the only instance.
-        record_liveness_kills(
+        record_removals(
             &policy,
             WorkloadKind::Worker,
             &mut d,
             &mut state,
             1,
+            Reason::CrashLoop,
+            "liveness",
             now(),
             &mut rng,
         );
-        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::CrashLoop))
+        );
 
-        // Its replacement starts in Creating, so it goes through the readiness
+        // Its replacement starts progressing, so it goes through the readiness
         // gate like any other start.
         let at = state.next_attempt_at.unwrap_or(now()) + secs(1);
         let d = pass(&driver, &policy, d, &mut state, at).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        assert_eq!(d.status, DeploymentStatus::Progressing);
     }
 
     #[tokio::test]
@@ -993,34 +1129,185 @@ mod tests {
         let policy = RestartPolicy::default();
         let mut state = RestartState::default();
         let mut d = worker(1);
-        d.status = DeploymentStatus::Pending;
+        d.set_status(DeploymentStatus::Pending);
 
         d = pass(&driver, &policy, d, &mut state, now()).await;
-        assert_eq!(d.status, DeploymentStatus::Creating);
+        assert_eq!(d.status, DeploymentStatus::Progressing);
         driver.crash("new-1", Some(1));
         let d = pass(&driver, &policy, d, &mut state, now() + secs(1)).await;
-        assert_eq!(d.status, DeploymentStatus::CrashLoopBackOff);
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::CrashLoop))
+        );
     }
 
     #[test]
     fn a_job_killed_by_its_health_check_is_a_failed_run() {
         let mut state = RestartState::default();
         let mut d = job();
-        d.status = DeploymentStatus::Running;
+        d.set_status(DeploymentStatus::Running);
         let mut rng = StdRng::seed_from_u64(1);
 
-        record_liveness_kills(
+        record_removals(
             &RestartPolicy::default(),
             WorkloadKind::Job { backoff_limit: 0 },
             &mut d,
             &mut state,
             1,
+            Reason::RunFailed,
+            "liveness",
             now(),
             &mut rng,
         );
 
         assert_eq!(d.status, DeploymentStatus::Failed);
         assert_eq!(state.run_failures, 1);
+    }
+
+    /// A readiness timeout backs off like a crash, with its own reason, and
+    /// waits on the backoff curve before the instances come back. However
+    /// long the instances were up, the budget is not given back: they were
+    /// never ready.
+    #[test]
+    fn a_readiness_timeout_backs_off_for_its_reason() {
+        let policy = RestartPolicy::default();
+        let mut state = RestartState {
+            running_since: Some(now()),
+            ..Default::default()
+        };
+        let mut d = worker(1);
+        d.instances.clear();
+        d.restart_count = 3;
+        let mut rng = StdRng::seed_from_u64(1);
+        let deadline = now() + policy.stable_after + secs(60);
+
+        record_readiness_timeout(
+            &policy,
+            &mut d,
+            &mut state,
+            "never ready",
+            deadline,
+            &mut rng,
+        );
+
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::ReadinessTimeout))
+        );
+        assert_eq!(d.message.as_deref(), Some("never ready"));
+        assert_eq!(d.restart_count, 4, "counted on top of the earlier failures");
+        assert!(state.next_attempt_at.is_some());
+    }
+
+    /// A failed job says why: its run failed, with the exit code.
+    #[tokio::test]
+    async fn a_failed_job_carries_its_reason_and_message() {
+        let driver = FakeDriver::running(&["j"]);
+        driver.crash("j", Some(3));
+        let mut state = RestartState::default();
+
+        let d = job_pass(&driver, 0, job(), &mut state, now()).await;
+
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::Failed, Some(Reason::RunFailed))
+        );
+        assert_eq!(d.message.as_deref(), Some("Instance j exited with code 3"));
+    }
+
+    /// A worker held back by the readiness gate does not earn its budget back
+    /// for staying up: it is not serving.
+    #[tokio::test]
+    async fn the_counter_resets_only_once_ready() {
+        let driver = FakeDriver::running(&["a"]);
+        let policy = RestartPolicy::default();
+        let mut state = RestartState {
+            running_since: Some(now()),
+            ..Default::default()
+        };
+        let mut held = worker(1);
+        held.restart_count = 3;
+        held.set_status(DeploymentStatus::Progressing);
+        let later = now() + policy.stable_after + secs(1);
+
+        let d = pass(&driver, &policy, held, &mut state, later).await;
+        assert_eq!(d.restart_count, 3, "still progressing: not forgiven");
+
+        let mut ready = worker(1);
+        ready.restart_count = 3;
+        let d = pass(&driver, &policy, ready, &mut state, later).await;
+        assert_eq!(d.restart_count, 0, "running: forgiven");
+    }
+
+    /// An instance that stays up without ever being ready, then exits, is one
+    /// more failure: the length of a run that never served is not forgiven.
+    #[tokio::test]
+    async fn a_crash_after_a_long_unready_run_is_not_forgiven() {
+        let driver = FakeDriver::running(&["a"]);
+        driver.crash("a", Some(1));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState {
+            running_since: Some(now()),
+            ..Default::default()
+        };
+        let mut held = worker(1);
+        held.restart_count = 3;
+        held.set_status(DeploymentStatus::Progressing);
+        let later = now() + policy.stable_after + secs(1);
+
+        let d = pass(&driver, &policy, held, &mut state, later).await;
+
+        assert_eq!(d.restart_count, 4);
+    }
+
+    /// Backing off for a program that cannot run while another instance
+    /// serves, then scaled down to that instance: nothing is left to start, so
+    /// the deployment goes back through progressing instead of staying stuck.
+    #[tokio::test]
+    async fn a_scale_down_to_the_serving_instances_ends_the_back_off() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("a", Some(127));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+
+        let d = pass(&driver, &policy, worker(2), &mut state, now()).await;
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::SpecRejected))
+        );
+
+        let mut scaled = d;
+        scaled.replicas = 1;
+        let d = pass(&driver, &policy, scaled, &mut state, now()).await;
+        assert_eq!(d.condition(), (DeploymentStatus::Progressing, None));
+        assert_eq!(driver.starts(), 0);
+
+        let d = pass(&driver, &policy, d, &mut state, now()).await;
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    /// Two replicas end in the same pass, one unable to run its program: the
+    /// reason says so, whatever the order they are reported in.
+    #[tokio::test]
+    async fn a_program_that_cannot_run_wins_over_a_crash_in_the_same_pass() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("a", Some(127));
+        driver.crash("b", Some(1));
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(2),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::SpecRejected))
+        );
     }
 
     #[test]
@@ -1033,12 +1320,14 @@ mod tests {
         let mut d = worker(1);
         let mut rng = StdRng::seed_from_u64(1);
 
-        record_liveness_kills(
+        record_removals(
             &policy,
             WorkloadKind::Worker,
             &mut d,
             &mut state,
             2,
+            Reason::CrashLoop,
+            "liveness",
             now(),
             &mut rng,
         );

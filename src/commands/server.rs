@@ -164,8 +164,8 @@ pub(crate) async fn execute(
                 runtimes_map.insert(
                     "podman".to_string(),
                     // Podman has no event listener (see below) — use the
-                    // reconcile-based crash detector so crash loops still
-                    // converge to CrashLoopBackOff.
+                    // reconcile-based crash detector so crash loops are
+                    // still counted and backed off.
                     Arc::new(DockerLifecycle::new_podman(
                         podman,
                         intentional_shutdowns.clone(),

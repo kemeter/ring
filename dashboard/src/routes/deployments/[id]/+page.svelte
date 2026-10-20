@@ -18,6 +18,7 @@
   } from '$lib/api';
   import CopyButton from '$lib/CopyButton.svelte';
   import DeploymentLogs from '$lib/DeploymentLogs.svelte';
+  import { statusKind, statusLabel } from '$lib/status';
   import DetailTableCard from '$lib/DetailTableCard.svelte';
   import { getToken } from '$lib/auth';
   import { formatBytes, formatDate, timeAgo } from '$lib/utils';
@@ -96,26 +97,6 @@
       clearInterval(poll);
     }
   });
-
-  function statusKind(s: string): 'success' | 'warn' | 'danger' | 'neutral' {
-    const k = s.toLowerCase();
-    if (k === 'running') {
-      return 'success';
-    }
-    if (
-      k === 'failed' ||
-      k === 'crashloopbackoff' ||
-      k === 'error' ||
-      k === 'createcontainererror' ||
-      k === 'imagepullbackoff'
-    ) {
-      return 'danger';
-    }
-    if (k === 'pending' || k === 'booting' || k === 'created') {
-      return 'warn';
-    }
-    return 'neutral';
-  }
 
   function envDisplay(value: EnvValue): { kind: 'literal' | 'secret'; text: string } {
     if (typeof value === 'string') {
@@ -216,9 +197,12 @@
             class:warn={kind === 'warn'}
             class:danger={kind === 'danger'}
           ></span>
-          {detail.status}
+          {statusLabel(detail)}
         </span>
       </div>
+      {#if detail.failure}
+        <p class="status-message">{detail.failure.message}</p>
+      {/if}
       <p class="subtitle">
         <span class="mono">{detail.id}</span>
         <CopyButton value={detail.id} label="Copy deployment ID" />
@@ -720,6 +704,11 @@
     border-bottom: none;
   }
 
+  .status-message {
+    margin: 4px 0 0;
+    color: var(--danger);
+    font-size: 0.9em;
+  }
   .status-pill {
     display: inline-flex;
     align-items: center;

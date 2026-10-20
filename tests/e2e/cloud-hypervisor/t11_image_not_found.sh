@@ -35,7 +35,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "missing-image" "image_pull_back_off" 60
+wait_deployment_state "ring-e2e" "missing-image" "backing_off:image_pull" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "missing-image")
 [ -z "$DEPLOYMENT_ID" ] && fail "no deployment id"
 log "deployment landed in ImagePullBackOff: $DEPLOYMENT_ID"
@@ -51,8 +51,8 @@ if [ "${RC:-0}" -lt 1 ] || [ "$RC" -gt 3 ]; then
 fi
 log "restart_count=$RC (counted and backed off)"
 STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | .status')
-[ "$STATUS" = "image_pull_back_off" ] || fail "expected image_pull_back_off, got '$STATUS'"
+  | jq -r --arg id "$DEPLOYMENT_ID" '.[] | select(.id==$id) | '"$STATE_JQ")
+[ "$STATUS" = "backing_off:image_pull" ] || fail "expected backing_off:image_pull, got '$STATUS'"
 
 # === No CH socket / VM was created — there is nothing to clean up but
 # we check anyway, so a future regression that *does* create a half-baked

@@ -48,7 +48,7 @@ EOF
 # First gate: dispatch worked, VM booted, Ring sees it as Running. Ubuntu
 # cloud-init + full systemd boot takes longer than a container — give it 3
 # minutes from apply to the first Running status.
-wait_deployment_status "ring-e2e" "job-vm" "running" 180
+wait_deployment_state "ring-e2e" "job-vm" "running" 180
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "job-vm")
 if [ -z "$DEPLOYMENT_ID" ]; then
@@ -74,7 +74,7 @@ log "CH socket exists while Running (count=$socket_count)"
 # multi-user.target. CH then terminates and Ring's next scheduler tick sees
 # the VM gone, finalizing the deployment as Completed. Boot + 5s sleep + a
 # couple of scheduler ticks fits well within 4 minutes for Ubuntu.
-wait_deployment_status "ring-e2e" "job-vm" "completed" 240
+wait_deployment_state "ring-e2e" "job-vm" "completed" 240
 log "deployment transitioned to completed"
 
 # Artifacts must be cleaned just like on a manual delete: no leftover socket,
@@ -95,7 +95,7 @@ log "per-instance disk cleaned up"
 
 # Terminal status is sticky: another scheduler tick must not reboot the VM.
 sleep 5
-status=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json | jq -r '.status')
+status=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json | jq -r "$STATE_JQ")
 if [ "$status" != "completed" ]; then
   fail "expected completed to stay sticky, got '$status'"
 fi

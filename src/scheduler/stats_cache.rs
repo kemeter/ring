@@ -18,7 +18,7 @@
 
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::api::server::RuntimeMap;
-use crate::models::deployments;
+use crate::models::deployments::{self, DeploymentStatus};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -118,7 +118,10 @@ pub(crate) async fn refresh(
     now_unix: u64,
 ) {
     let mut filters: HashMap<String, Vec<String>> = HashMap::new();
-    filters.insert("status".to_string(), vec!["running".to_string()]);
+    filters.insert(
+        "status".to_string(),
+        vec![DeploymentStatus::Running.to_string()],
+    );
 
     let active = match deployments::find_all(pool, filters).await {
         Ok(d) => d,

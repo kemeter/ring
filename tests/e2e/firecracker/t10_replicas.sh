@@ -75,7 +75,7 @@ EOF
 # Status flips to running as soon as the first VM boots, so reaching 'running'
 # is necessary but not sufficient — the socket count below is what proves the
 # fan-out actually happened.
-wait_deployment_status "ring-e2e" "fc-scaled" "running" 240
+wait_deployment_state "ring-e2e" "fc-scaled" "running" 240
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-scaled")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"
@@ -111,7 +111,7 @@ sed -i 's/replicas: 3/replicas: 1/' "$FIXTURE"
 # helper returns on the FIRST match — which could be a transient 1 while the old
 # deployment drains and before the replacement boots. So wait for the
 # replacement to be serving first, then require the count to hold at 1.
-wait_deployment_status "ring-e2e" "fc-scaled" "running" 180
+wait_deployment_state "ring-e2e" "fc-scaled" "running" 180
 
 wait_fc_socket_count 1 180
 # Hold the observation: if the count were transient, a second VM appears here.
