@@ -29,8 +29,8 @@ Status transitions:
 | Exit | Final status |
 |---|---|
 | Container exits 0 | `completed` |
-| Container exits non-zero | `failed` |
-| Container is OOM-killed or signalled | `failed` |
+| Container exits non-zero | `failed`, reason `run_failed` |
+| Container is OOM-killed or signalled | `failed`, reason `run_failed` |
 
 `completed` and `failed` jobs stay in the database: they're history, not active deployments. Prune them with `ring namespace prune <namespace>`.
 
@@ -80,8 +80,10 @@ For the secret half, see [how-to: deploy with secrets](/documentation/how-to/dep
 ```bash
 ring apply -f migrate.yaml
 
-while [ "$(ring deployment list --type job -o json \
-            | jq -r '.[] | select(.name=="migrate-v123") | .status')" = "running" ]; do
+status() {
+  ring deployment list --type job -o json | jq -r '.[] | select(.name=="migrate-v123") | .status'
+}
+until [ "$(status)" = "completed" ] || [ "$(status)" = "failed" ]; do
   sleep 2
 done
 

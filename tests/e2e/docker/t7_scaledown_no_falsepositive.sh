@@ -18,7 +18,7 @@ ring_login
 # Use the existing replicas fixture (nginx, replicas=3).
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-replicas.yaml"
 
-wait_deployment_status "ring-e2e" "nginx-scaled" "running" 60
+wait_deployment_state "ring-e2e" "nginx-scaled" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-scaled")
 log "deployment id: $DEPLOYMENT_ID"
@@ -49,7 +49,7 @@ wait_docker_container_count "$DEPLOYMENT_ID" 0 30
 RESTART_COUNT=$(get_restart_count "ring-e2e" "nginx-scaled")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "nginx-scaled" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 
 log "observed: restart_count=$RESTART_COUNT status=$STATUS"
@@ -58,8 +58,8 @@ if [ "${RESTART_COUNT:-0}" -ne 0 ]; then
   fail "scale-down bumped restart_count to $RESTART_COUNT — operator-initiated removals are being counted as crashes"
 fi
 
-if [ "$STATUS" = "crash_loop_back_off" ]; then
-  fail "deployment is in crash_loop_back_off after a clean scale-down"
+if [ "$STATUS" = "backing_off:crash_loop" ]; then
+  fail "deployment is in backing_off:crash_loop after a clean scale-down"
 fi
 
 log "== T7: PASS =="

@@ -29,7 +29,7 @@ deployments:
       - { type: http, url: "http://localhost/", interval: "2s", timeout: "1s", on_failure: restart }
 EOF
 "$RING_BIN" apply --file "$HTTP_FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-hc-http" "running" 60
+wait_deployment_state "ring-e2e" "nginx-hc-http" "running" 60
 HTTP_ID=$(get_deployment_id "ring-e2e" "nginx-hc-http")
 [ -z "$HTTP_ID" ] && fail "no http hc deployment id"
 
@@ -69,7 +69,7 @@ deployments:
       - { type: command, command: "true", interval: "2s", timeout: "1s", on_failure: restart }
 EOF
 "$RING_BIN" apply --file "$CMD_FIXTURE"
-wait_deployment_status "ring-e2e" "alpine-hc-cmd" "running" 60
+wait_deployment_state "ring-e2e" "alpine-hc-cmd" "running" 60
 CMD_ID=$(get_deployment_id "ring-e2e" "alpine-hc-cmd")
 [ -z "$CMD_ID" ] && fail "no command hc deployment id"
 

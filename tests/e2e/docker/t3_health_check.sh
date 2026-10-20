@@ -16,7 +16,7 @@ ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/nginx-healthcheck.yaml"
 
-wait_deployment_status "ring-e2e" "nginx-hc" "running" 60
+wait_deployment_state "ring-e2e" "nginx-hc" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-hc")
 if [ -z "$DEPLOYMENT_ID" ]; then
@@ -39,7 +39,7 @@ sleep 10
 # The deployment must still be running and must not have restarted.
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "nginx-hc" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 if [ "$STATUS" != "running" ]; then
   fail "deployment drifted to status '$STATUS' during health checks"

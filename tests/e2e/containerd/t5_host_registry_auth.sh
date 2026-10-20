@@ -9,7 +9,7 @@
 #
 #   1. Authorized + activated: server sets use_host_registry_auth +
 #      host_registry_config; deployment opts in. Pull is attempted with the
-#      host creds → image_pull_back_off, NOT a "not authorized" error.
+#      host creds → backing_off:image_pull, NOT a "not authorized" error.
 #   2. Activated but NOT authorized: server omits the flag → fail fast with a
 #      "not authorized" event.
 #   3. Validation: use_host_auth + inline credentials → 422 at apply.
@@ -70,7 +70,7 @@ FIXTURE="$RING_TEST_DIR/host-auth-ctr.yaml"
 printf '%s\n' "$FIXTURE_BODY" > "$FIXTURE"
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "host-auth-ctr" "image_pull_back_off" 60
+wait_deployment_state "ring-e2e" "host-auth-ctr" "backing_off:image_pull" 60
 DEP_ID=$(get_deployment_id "ring-e2e" "host-auth-ctr")
 TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS=$(curl -fsS "$RING_URL/deployments/$DEP_ID/events" \
@@ -105,7 +105,7 @@ FIXTURE2="$RING_TEST_DIR/host-auth-ctr.yaml"
 printf '%s\n' "$FIXTURE_BODY" > "$FIXTURE2"
 "$RING_BIN" apply --file "$FIXTURE2"
 
-wait_deployment_status "ring-e2e" "host-auth-ctr" "image_pull_back_off" 60
+wait_deployment_state "ring-e2e" "host-auth-ctr" "backing_off:image_pull" 60
 DEP_ID2=$(get_deployment_id "ring-e2e" "host-auth-ctr")
 TOKEN2=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS2=$(curl -fsS "$RING_URL/deployments/$DEP_ID2/events" \

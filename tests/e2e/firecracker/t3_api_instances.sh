@@ -83,7 +83,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE_PORTS"
-wait_deployment_status "ring-e2e" "api-ports-vm" "running" 60
+wait_deployment_state "ring-e2e" "api-ports-vm" "running" 60
 
 # The instance address is populated from the tap allocation, which can lag a
 # beat behind the "running" status; poll until it appears.
@@ -126,7 +126,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE_NOPORTS"
-wait_deployment_status "ring-e2e" "api-noports-vm" "running" 60
+wait_deployment_state "ring-e2e" "api-noports-vm" "running" 60
 
 INSTANCES_NP=$(instances_json "ring-e2e" "api-noports-vm")
 ID_NP=$(printf '%s' "$INSTANCES_NP" | jq -r '.[0].id // empty' 2>/dev/null || true)

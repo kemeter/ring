@@ -141,7 +141,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 **Concepts**: how Ring works internally
 - [Architecture](/documentation/concepts/architecture)
 - [Reconciliation](/documentation/concepts/reconciliation)
-- [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle)
+- [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle)
 - [Runtimes](/documentation/concepts/runtimes)
 - [Namespaces and networking](/documentation/concepts/namespaces-and-networking)
 - [Secrets and encryption](/documentation/concepts/secrets-encryption)

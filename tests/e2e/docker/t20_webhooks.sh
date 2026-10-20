@@ -101,17 +101,17 @@ deployments:
     replicas: 1
 EOF
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "nginx-wh" "running" 60
+wait_deployment_state "ring-e2e" "nginx-wh" "running" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-wh")
 
 # Give the worker a few poll cycles to drain and deliver the queued event(s).
 DELIVERED=0
 for _ in $(seq 1 30); do
-  if grep -q '"new_status":"running"' "$MOCK_LOG" 2>/dev/null; then DELIVERED=1; break; fi
+  if grep -q '"new":{[^}]*"status":"running"' "$MOCK_LOG" 2>/dev/null; then DELIVERED=1; break; fi
   sleep 1
 done
 [ "$DELIVERED" = "1" ] || { cat "$MOCK_LOG" >&2; fail "2: no running status_changed delivered to the subscriber"; }
-log "2: subscriber received a deployment.status_changed (new_status=running)"
+log "2: subscriber received a deployment.status_changed (new status running)"
 
 # --- Invariant 3: the delivery was HMAC-signed ---
 grep -q 'sha256=' "$MOCK_LOG" || { cat "$MOCK_LOG" >&2; fail "3: delivery not signed"; }
@@ -161,7 +161,7 @@ log "4b: subscriber received a deployment.scaled (direction=up)"
 # triggers when the new deployment declares health checks and exactly one
 # active deployment exists (see deployment::create). With no readiness HC, the
 # child drains the parent as soon as it is running (legacy behaviour), so the
-# rollout converges to a `complete` phase the worker delivers as a webhook.
+# rollout converges to a `complete` status the worker delivers as a webhook.
 cat > "$FIXTURE" <<EOF
 deployments:
   nginx-wh:
@@ -176,10 +176,10 @@ EOF
 "$RING_BIN" apply --file "$FIXTURE"
 # The event kind travels in the X-Ring-Event header (not the body), and the
 # body's `kind` field is the deployment kind. The rolling_update payload is the
-# only one carrying both `phase` and `parent_id`, so match on those.
+# only one carrying both `status` and `parent_id`, so match on those.
 ROLLED=0
 for _ in $(seq 1 60); do
-  if grep -q '"phase":"\(step\|complete\)"' "$MOCK_LOG" 2>/dev/null; then
+  if grep -q '"status":"\(step\|complete\)"' "$MOCK_LOG" 2>/dev/null; then
     ROLLED=1; break
   fi
   sleep 1

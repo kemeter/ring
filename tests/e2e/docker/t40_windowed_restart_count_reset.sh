@@ -7,10 +7,10 @@
 # Docker re-runs the SAME command on every (re)spawn, so the "crash then heal"
 # behaviour is driven by state on a host bind mount: each start increments a
 # counter; while count <= 3 the container exits 1 (counted as a crash); on the
-# 4th start it stays up and sleeps forever. We key the crash phase off
+# 4th start it stays up and sleeps forever. We key the crash status off
 # restart_count (NOT the status) on purpose: a container that exits immediately
 # can momentarily be reported `running` before the exit propagates, so status is
-# an unreliable signal during the crash phase. restart_count is the durable
+# an unreliable signal during the crash status. restart_count is the durable
 # truth — it climbs to 3, the worker then stays up, and after the healthy window
 # the scheduler resets restart_count back to 0.
 
@@ -38,9 +38,9 @@ ring_login
 
 "$RING_BIN" apply --file "$SCRIPT_DIR/../fixtures/crash-then-heal.yaml"
 
-# Phase 1: the container crashes 3 times. Wait for restart_count to reach 3,
-# which proves the crash phase registered. It stops at 3: the 4th start stays up.
-log "waiting for the crash phase to accrue restart_count=3..."
+# Status 1: the container crashes 3 times. Wait for restart_count to reach 3,
+# which proves the crash status registered. It stops at 3: the 4th start stays up.
+log "waiting for the crash status to accrue restart_count=3..."
 REACHED=0
 for _ in $(seq 1 60); do
   RC=$(get_restart_count "ring-e2e" "crash-then-heal")
@@ -51,15 +51,15 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 if [ "$REACHED" -ne 1 ]; then
-  fail "restart_count never reached 3 during the crash phase (last: ${RC:-0})"
+  fail "restart_count never reached 3 during the crash status (last: ${RC:-0})"
 fi
-log "crash phase registered: restart_count=$RC"
+log "crash status registered: restart_count=$RC"
 
 if [ "${RC:-0}" -gt 3 ]; then
   fail "restart_count reached $RC; the fixture crashes exactly 3 times"
 fi
 
-# Phase 2: the 4th container stays up (sleep 3600). Let `stable_after` (15s)
+# Status 2: the 4th container stays up (sleep 3600). Let `stable_after` (15s)
 # elapse so the scheduler forgives the accrued count. 40s is generous headroom.
 log "waiting 40s for the worker to stay healthy past the window and forgive restart_count..."
 sleep 40
@@ -67,7 +67,7 @@ sleep 40
 RESTART_AFTER_WINDOW=$(get_restart_count "ring-e2e" "crash-then-heal")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "crash-then-heal" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 
 log "observed: restart_count_after_window=$RESTART_AFTER_WINDOW status=$STATUS"
@@ -79,7 +79,7 @@ fi
 
 # The crash budget must have refilled: restart_count forgiven back to 0.
 if [ "${RESTART_AFTER_WINDOW:-99}" -ne 0 ]; then
-  fail "expected restart_count reset to 0 after the healthy window, got $RESTART_AFTER_WINDOW (Phase 1 reset did not fire)"
+  fail "expected restart_count reset to 0 after the healthy window, got $RESTART_AFTER_WINDOW (Status 1 reset did not fire)"
 fi
 
 log "== T40: PASS =="

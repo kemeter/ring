@@ -2350,6 +2350,8 @@ mod tests {
             created_at: String::new(),
             updated_at: None,
             status,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "job".to_string(),
@@ -2451,7 +2453,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_start_leaves_no_instance() {
         let (lc, dir) = lifecycle_with_scratch_dir("no-kernel");
-        let mut deployment = job_deployment(DeploymentStatus::Creating);
+        let mut deployment = job_deployment(DeploymentStatus::Progressing);
         assert!(lc.start_instance(&mut deployment, &[]).await.is_err());
         assert!(deployment.instances.is_empty());
         assert!(lc.instance_ids(&deployment.id).is_empty());

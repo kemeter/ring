@@ -39,7 +39,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "fc-logs-vm" "running" 60
+wait_deployment_state "ring-e2e" "fc-logs-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-logs-vm")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"

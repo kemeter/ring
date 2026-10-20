@@ -141,6 +141,28 @@ pub(crate) async fn delete_by_deployment_id(
     Ok(result.rows_affected())
 }
 
+/// Forget the results of instances that are gone for good. Readiness is read
+/// across the deployment, so a removed instance's old success would otherwise
+/// count toward the anti-flap window of the instance replacing it.
+pub(crate) async fn delete_by_instances(
+    pool: &SqlitePool,
+    deployment_id: &str,
+    instance_ids: &[String],
+) -> Result<u64, sqlx::Error> {
+    if instance_ids.is_empty() {
+        return Ok(0);
+    }
+    let placeholders = vec!["?"; instance_ids.len()].join(", ");
+    let sql = format!(
+        "DELETE FROM health_check WHERE deployment_id = ? AND instance_id IN ({placeholders})"
+    );
+    let mut query = sqlx::query(&sql).bind(deployment_id);
+    for id in instance_ids {
+        query = query.bind(id);
+    }
+    Ok(query.execute(pool).await?.rows_affected())
+}
+
 pub(crate) async fn cleanup_old_health_checks(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
     let deleted_by_age = sqlx::query(
         "DELETE FROM health_check WHERE datetime(started_at) < datetime('now', '-7 days')",

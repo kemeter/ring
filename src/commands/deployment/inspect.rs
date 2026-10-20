@@ -89,6 +89,10 @@ pub(crate) async fn execute(
             println!("Namespace     : {}", deployment.namespace);
             println!("Kind          : {}", deployment.kind);
             println!("Image         : {}", deployment.image);
+            println!("Status        : {}", deployment.status);
+            if let Some(failure) = &deployment.failure {
+                println!("Failure       : {} ({})", failure.reason, failure.message);
+            }
             // On an autoscaled deployment `replicas` is only the declared
             // starting point, so showing it alone would misreport how many
             // instances Ring is actually aiming for.

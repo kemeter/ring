@@ -64,12 +64,12 @@ Pick `restart` unless you have a specific reason not to. `stop` and `alert` are 
 
 `readiness: true` makes a check gate two things:
 
-1. **The deployment's own `Running` status**: a deployment with at least one readiness check stays `Creating` until every readiness check has been green for `min_healthy_time`. `Running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `Running` as soon as the container is up.
+1. **The deployment's own `running` status**: a deployment with at least one readiness check stays `progressing` until every readiness check has been green for `min_healthy_time`. `running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `running` as soon as the container stays up.
 2. **The rolling-update drain**: during an update, Ring drains the old (parent) deployment only once the new (child) deployment's readiness gate has opened.
 
-Readiness probes are evaluated even while a deployment is `Creating` (readiness-only, record-only: no `on_failure` action fires during boot, since a probe that isn't green yet isn't a failure). Liveness checks run only once `Running`.
+Readiness probes are evaluated even while a deployment is `progressing` (readiness-only, record-only: no `on_failure` action fires during boot, since a probe that isn't green yet isn't a failure). Liveness checks run only once `running`.
 
-**Deadline.** A simple deployment whose readiness never turns green would otherwise sit in `Creating` forever. Past `RING_ROLLOUT_DEADLINE` (default 600s, the same knob as the rolling-update drain, mirroring Kubernetes' `progressDeadlineSeconds`) Ring marks it `failed` with a `readiness_deadline_exceeded` event. A rolling-update child is exempt: its deadline is the forced parent drain below, which keeps the old version serving.
+**Deadline.** A simple deployment whose readiness never turns green would otherwise sit in `progressing` forever. Once its instances have been up for `start_period` plus `RING_ROLLOUT_DEADLINE` (default 600s, the same knob as the rolling-update drain, mirroring Kubernetes' `progressDeadlineSeconds`), Ring removes them with a `readiness_deadline_exceeded` event: the deployment is `backing_off` with the `readiness_timeout` reason, and its instances are recreated on the backoff curve. A rolling-update child is exempt: its deadline is the forced parent drain below, which keeps the old version serving.
 
 By default (no readiness check) Ring drains the parent deployment as soon as the new child container reaches `Running`. That's fast, but ignores application-level boot time (warmup, migrations, cache priming).
 
@@ -159,7 +159,7 @@ A few rules of thumb that hold up in practice:
 - **`interval` is advisory** (see above)
 - **Counters are in memory**: server restart resets them
 - **No per-instance disable**: can't pause probes on one container for debugging
-- **No per-probe startup delay**: slow-booting services must absorb cold-start failures within `threshold`. A readiness check does give a deployment-level grace period (it stays `Creating` until green, up to `RING_ROLLOUT_DEADLINE`), but there's no per-check `start_period` / `initialDelaySeconds` yet; it's on the roadmap.
+- **No per-probe startup delay**: slow-booting services must absorb cold-start failures within `threshold`. A readiness check does give a deployment-level grace period (it stays `progressing` until green, up to `RING_ROLLOUT_DEADLINE`), but there's no per-check `start_period` / `initialDelaySeconds` yet; it's on the roadmap.
 - **Cloud Hypervisor `command`** requires the in-guest `ring-agent` daemon
 - **Duration suffixes:** only `ms` and `s` parse. `1m` does not, so write `60s`.
 

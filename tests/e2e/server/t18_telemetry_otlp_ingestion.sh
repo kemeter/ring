@@ -128,7 +128,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "$NS" "$NAME" "running" 60
+wait_deployment_state "$NS" "$NAME" "running" 60
 
 # Give the stats cache a refresh cycle and the metrics reader a push interval,
 # plus the log batch a flush.

@@ -43,7 +43,7 @@ deployments:
       image_pull_policy: IfNotPresent
 EOF
 "$RING_BIN" apply --file "$IFNP_FIXTURE"
-wait_deployment_status "ring-e2e" "alpine-ifnp" "running" 60
+wait_deployment_state "ring-e2e" "alpine-ifnp" "running" 60
 IFNP_ID=$(get_deployment_id "ring-e2e" "alpine-ifnp")
 log "alpine-ifnp running with IfNotPresent on a cached image"
 
@@ -69,7 +69,7 @@ deployments:
       image_pull_policy: Always
 EOF
 "$RING_BIN" apply --file "$ALW_FIXTURE"
-wait_deployment_status "ring-e2e" "alpine-always" "running" 60
+wait_deployment_state "ring-e2e" "alpine-always" "running" 60
 ALW_ID=$(get_deployment_id "ring-e2e" "alpine-always")
 
 POLICY=$(curl -fsS "$RING_URL/deployments/$ALW_ID" \
@@ -100,9 +100,9 @@ deployments:
       image_pull_policy: Never
 EOF
 "$RING_BIN" apply --file "$NEVER_FIXTURE"
-wait_deployment_status "ring-e2e" "never-missing" "image_pull_back_off" 30
+wait_deployment_state "ring-e2e" "never-missing" "backing_off:image_pull" 30
 NEVER_ID=$(get_deployment_id "ring-e2e" "never-missing")
-log "never-missing reached image_pull_back_off as expected"
+log "never-missing reached backing_off:image_pull as expected"
 
 # Verify the event message actually mentions the policy — that's the whole
 # point of the explicit error; if it falls back to a generic bollard string
@@ -136,7 +136,7 @@ deployments:
       image_pull_policy: IfNotPresent
 EOF
 "$RING_BIN" apply --file "$DIGEST_FIXTURE"
-wait_deployment_status "ring-e2e" "alpine-digest" "running" 60
+wait_deployment_state "ring-e2e" "alpine-digest" "running" 60
 DIGEST_ID=$(get_deployment_id "ring-e2e" "alpine-digest")
 log "alpine-digest running with digest reference"
 

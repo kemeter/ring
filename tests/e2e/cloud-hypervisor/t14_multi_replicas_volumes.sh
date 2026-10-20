@@ -51,7 +51,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "multi-vol" "running" 180
+wait_deployment_state "ring-e2e" "multi-vol" "running" 180
 
 # === 2 instances, 2 virtiofsd pid files (one per replica) ===
 ok=0

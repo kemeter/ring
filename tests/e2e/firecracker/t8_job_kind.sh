@@ -47,7 +47,7 @@ EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
 # First gate: dispatch worked, VM booted, Ring sees it as Running.
-wait_deployment_status "ring-e2e" "fc-job-vm" "running" 120
+wait_deployment_state "ring-e2e" "fc-job-vm" "running" 120
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-job-vm")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"
@@ -66,7 +66,7 @@ log "firecracker socket exists while Running (count=$socket_count)"
 
 # Second gate: the in-guest unit fires `poweroff -f` ~5s after multi-user.target.
 # firecracker exits and Ring's next scheduler tick finalizes the job as Completed.
-wait_deployment_status "ring-e2e" "fc-job-vm" "completed" 180
+wait_deployment_state "ring-e2e" "fc-job-vm" "completed" 180
 log "deployment transitioned to completed"
 
 # Artifacts must be cleaned just like a manual delete: no leftover socket, no
@@ -84,7 +84,7 @@ log "per-instance rootfs cleaned up"
 
 # Terminal status is sticky: another scheduler tick must not reboot the VM.
 sleep 5
-status=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json | jq -r '.status')
+status=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json | jq -r "$STATE_JQ")
 [ "$status" = "completed" ] || fail "expected completed to stay sticky, got '$status'"
 log "completed status is sticky across scheduler ticks"
 

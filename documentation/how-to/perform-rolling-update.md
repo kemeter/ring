@@ -83,14 +83,14 @@ Terminal 1 should keep returning `200`s the whole time.
 
 If the child's instances never pass health checks within the threshold window, Ring stops and leaves the parent untouched:
 
-- Child marked `failed`
+- Child stays `progressing`, or `backing_off` when its instances keep crashing
 - `error` events accumulate (`HealthCheckAlert`, `HealthCheckInstanceRestart`)
 - Parent keeps serving traffic
 
 Inspect:
 
 ```bash
-ring deployment list --status failed
+ring deployment list --status backing_off
 ring deployment events <CHILD_ID> --level error
 ring deployment health-checks <CHILD_ID>
 ring deployment logs <CHILD_ID>

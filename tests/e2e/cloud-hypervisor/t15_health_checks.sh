@@ -94,7 +94,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$TCP_FIXTURE"
-wait_deployment_status "ring-e2e" "hc-tcp-fail" "running" 120
+wait_deployment_state "ring-e2e" "hc-tcp-fail" "running" 120
 
 TCP_ID=$(get_deployment_id "ring-e2e" "hc-tcp-fail")
 [ -z "$TCP_ID" ] && fail "could not find tcp deployment id after apply"
@@ -198,7 +198,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$HTTP_FIXTURE"
-wait_deployment_status "ring-e2e" "hc-http-fail" "running" 120
+wait_deployment_state "ring-e2e" "hc-http-fail" "running" 120
 
 HTTP_ID=$(get_deployment_id "ring-e2e" "hc-http-fail")
 [ -z "$HTTP_ID" ] && fail "could not find http deployment id after apply"

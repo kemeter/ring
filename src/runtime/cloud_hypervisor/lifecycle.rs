@@ -434,9 +434,8 @@ impl CloudHypervisorLifecycle {
         // (image copy, virtiofsd spawn, VM boot). Mirrors docker compose's
         // "port is already allocated" rejection: if the host can't bind the
         // port now, the VM is doomed to be unreachable on it. Failing here
-        // means the scheduler increments restart_count and eventually
-        // surfaces a CrashLoopBackOff with a clear PortAllocationFailed
-        // event in the deployment history.
+        // means the scheduler counts the failure and backs off, with a clear
+        // port_allocation_failed event in the deployment history.
         for p in &deployment.ports {
             let host_ip = p
                 .host_ip
@@ -1466,7 +1465,9 @@ mod tests {
             id: "test".to_string(),
             created_at: String::new(),
             updated_at: None,
-            status: DeploymentStatus::Creating,
+            status: DeploymentStatus::Progressing,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "test".to_string(),
@@ -1503,7 +1504,9 @@ mod tests {
             id: "test".to_string(),
             created_at: String::new(),
             updated_at: None,
-            status: DeploymentStatus::Creating,
+            status: DeploymentStatus::Progressing,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "test".to_string(),
@@ -1703,6 +1706,8 @@ mod tests {
             created_at: String::new(),
             updated_at: None,
             status,
+            reason: None,
+            message: None,
             restart_count: 0,
             namespace: "default".to_string(),
             name: "job".to_string(),
@@ -1796,7 +1801,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_start_leaves_no_instance() {
         let (lc, dir) = lifecycle_with_socket_dir();
-        let mut deployment = job_deployment(DeploymentStatus::Creating);
+        let mut deployment = job_deployment(DeploymentStatus::Progressing);
         let err = lc.start_instance(&mut deployment, &[]).await.unwrap_err();
         assert!(matches!(err, RuntimeError::FirmwareNotFound(_)));
         assert!(deployment.instances.is_empty());

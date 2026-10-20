@@ -43,7 +43,7 @@ EOF
 
 # The admission check rejects it before any VM is spawned, and the status is
 # terminal — no crash-loop retries.
-wait_deployment_status "ring-e2e" "oversized-vm" "insufficient_resources" 60
+wait_deployment_state "ring-e2e" "oversized-vm" "backing_off:insufficient_resources" 60
 DEP_ID=$(get_deployment_id "ring-e2e" "oversized-vm")
 log "oversized-vm reached insufficient_resources as expected"
 
@@ -61,11 +61,11 @@ fi
 log "event message is actionable: $EVENT_MSG"
 
 # Terminal: restart_count must stay 0 (no spawn attempt, no crash loop) and the
-# status must not drift to crash_loop_back_off.
+# status must not drift to backing_off:crash_loop.
 sleep 4
 STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
-  | jq -r --arg id "$DEP_ID" '.[] | select(.id == $id) | .status')
-[ "$STATUS" = "insufficient_resources" ] || \
+  | jq -r --arg id "$DEP_ID" '.[] | select(.id == $id) | '"$STATE_JQ")
+[ "$STATUS" = "backing_off:insufficient_resources" ] || \
   fail "status drifted from insufficient_resources to '$STATUS' (should be terminal)"
 log "status stayed terminal at insufficient_resources"
 

@@ -236,7 +236,9 @@ async fn roll_out(pool: &Db, current: &Deployment, config: &Config) {
     // and a replacement exactly as for a manifest applied again.
     let next = Deployment {
         id: Uuid::new_v4().to_string(),
-        status: DeploymentStatus::Creating,
+        status: DeploymentStatus::Pending,
+        reason: None,
+        message: None,
         created_at: Utc::now().to_string(),
         updated_at: None,
         instances: Vec::new(),

@@ -57,8 +57,8 @@ deployments:
 EOF
 "$RING_BIN" apply --file "$NS_A_FIXTURE"
 "$RING_BIN" apply --file "$NS_B_FIXTURE_HTTP"
-wait_deployment_status "ns-alpha" "pod-a" "running" 60
-wait_deployment_status "ns-beta" "pod-b" "running" 60
+wait_deployment_state "ns-alpha" "pod-a" "running" 60
+wait_deployment_state "ns-beta" "pod-b" "running" 60
 
 A_ID=$(get_deployment_id "ns-alpha" "pod-a")
 B_ID=$(get_deployment_id "ns-beta" "pod-b")
@@ -105,7 +105,7 @@ deployments:
     command: ["sh", "-c", "while true; do echo -e 'HTTP/1.0 200 OK\\r\\n\\r\\nOK' | nc -l -p 8080; done"]
 EOF
 "$RING_BIN" apply --file "$NS_A2_FIXTURE"
-wait_deployment_status "ns-alpha" "pod-a2" "running" 60
+wait_deployment_state "ns-alpha" "pod-a2" "running" 60
 A2_ID=$(get_deployment_id "ns-alpha" "pod-a2")
 A2_CID=$(docker ps -q --filter "label=ring_deployment=$A2_ID" | head -n1)
 A2_IP=$(docker inspect "$A2_CID" --format '{{ (index .NetworkSettings.Networks "ring_ns-alpha").IPAddress }}')

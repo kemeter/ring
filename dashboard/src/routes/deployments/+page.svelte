@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { listDeployments, type Deployment } from '$lib/api';
   import { getToken } from '$lib/auth';
+  import { statusKind, statusLabel } from '$lib/status';
   import { formatDate, timeAgo } from '$lib/utils';
 
   let items = $state<Deployment[]>([]);
@@ -115,27 +116,7 @@
     }
   });
 
-  function statusKind(s: string): 'success' | 'warn' | 'danger' | 'neutral' {
-    const k = s.toLowerCase();
-    if (k === 'running') {
-      return 'success';
-    }
-    if (
-      k === 'failed' ||
-      k === 'crashloopbackoff' ||
-      k === 'error' ||
-      k === 'createcontainererror' ||
-      k === 'imagepullbackoff'
-    ) {
-      return 'danger';
-    }
-    if (k === 'pending' || k === 'booting' || k === 'created') {
-      return 'warn';
-    }
-    return 'neutral';
-  }
-
-  let runningCount = $derived(visible.filter((d) => d.status.toLowerCase() === 'running').length);
+  let runningCount = $derived(visible.filter((d) => d.status === 'running').length);
   let totalReplicas = $derived(visible.reduce((acc, d) => acc + (d.replicas ?? 0), 0));
 </script>
 
@@ -210,8 +191,8 @@
   <div class="filter">
     <select bind:value={statusFilter} onchange={syncUrl}>
       <option value="">All statuses</option>
-      {#each allStatuses as st}
-        <option value={st}>{st}</option>
+      {#each allStatuses as status}
+        <option value={status}>{status}</option>
       {/each}
     </select>
   </div>
@@ -250,6 +231,7 @@
             <td>
               <span
                 class="status-pill"
+                title={d.failure?.message}
                 class:success={kind === 'success'}
                 class:warn={kind === 'warn'}
                 class:danger={kind === 'danger'}
@@ -260,7 +242,7 @@
                   class:warn={kind === 'warn'}
                   class:danger={kind === 'danger'}
                 ></span>
-                {d.status}
+                {statusLabel(d)}
               </span>
             </td>
             <td class="num mono">{d.replicas}</td>

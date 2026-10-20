@@ -35,7 +35,7 @@ TOTAL_CONTAINERS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID"
 RESTART_COUNT=$(get_restart_count "ring-e2e" "crashloop")
 STATUS=$("$RING_BIN" deployment list --output json \
   | jq -r --arg ns "ring-e2e" --arg n "crashloop" \
-      '.[] | select(.namespace==$ns and .name==$n) | .status' \
+      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
   | head -n1)
 
 log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
@@ -45,11 +45,11 @@ if [ "${RESTART_COUNT:-0}" -le 5 ]; then
   fail "expected restart_count > 5, got $RESTART_COUNT (the worker was abandoned or crashes are not counted)"
 fi
 
-# Between two attempts the worker waits in crash_loop_back_off; caught right
-# after a start, it is creating or running.
+# Between two attempts the worker waits in backing_off:crash_loop; caught
+# right after a start, it is progressing or running.
 case "$STATUS" in
-  crash_loop_back_off|creating|running) ;;
-  *) fail "expected crash_loop_back_off (or a fresh start), got '$STATUS'" ;;
+  backing_off:crash_loop|progressing|running) ;;
+  *) fail "expected backing_off:crash_loop (or a fresh start), got '$STATUS'" ;;
 esac
 
 # Every dead container is removed once its exit is recorded: they never pile up.

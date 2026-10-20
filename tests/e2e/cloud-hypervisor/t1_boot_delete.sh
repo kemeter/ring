@@ -43,7 +43,7 @@ EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
 # Booting a real VM takes longer than launching a container.
-wait_deployment_status "ring-e2e" "nginx-vm" "running" 120
+wait_deployment_state "ring-e2e" "nginx-vm" "running" 120
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "nginx-vm")
 if [ -z "$DEPLOYMENT_ID" ]; then

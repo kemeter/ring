@@ -196,14 +196,15 @@ ring deployment list [OPTIONS]
 **Options:**
 
 - `-n` / `--namespace <NAMESPACE>`: filter by namespace
-- `-s` / `--status <STATUS>`: filter by status (repeatable). Values: `pending`, `creating`, `running`, `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `insufficient_resources`, `error` (see [Deployment status lifecycle](/documentation/concepts/deployment-status-lifecycle))
+- `-s` / `--status <STATUS>`: filter by status (repeatable). Values: `pending`, `progressing`, `running`, `backing_off`, `completed`, `failed`, `deleted` (see [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle))
+- `--reason <REASON>`: filter by reason (repeatable). Values: `crash_loop`, `run_failed`, `image_pull`, `spec_rejected`, `config_missing`, `insufficient_resources`, `network`, `file_system`, `readiness_timeout`, `error`
 - `--type <TYPE>`: filter by deployment kind: `worker` or `job`
 - `-l` / `--label <SELECTOR>`: filter by label, `key=value` or just `key` (repeatable; a deployment must match **all** selectors). Works the same across runtimes (Docker and Cloud Hypervisor) since labels are matched on Ring's stored metadata.
 - `-o` / `--output <FORMAT>`: `table` (default) or `json`
 
 **Output (table):**
 
-The table has ten columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`.
+The table has eleven columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`, `Reason`.
 
 On an [autoscaled](/documentation/reference/manifest#autoscale) deployment the desired count is the one the autoscaler is currently targeting, not the number declared in the manifest, and it is suffixed with `*` (`3/8*`). `ring deployment inspect` spells both out.
 
@@ -218,7 +219,7 @@ raw timestamp untouched, so scripts that parse it are unaffected.
 ring deployment list
 ring deployment list --namespace production
 ring deployment list --status running
-ring deployment list --status running --status pending
+ring deployment list --status backing_off --reason crash_loop
 ring deployment list --type job
 ring deployment list --label env=prod
 ring deployment list -l env=prod -l tier=web   # both must match
@@ -467,7 +468,7 @@ Revokes the token and mints a new one with the same name, scopes, namespaces and
 
 Webhooks let an external endpoint receive Ring events by HTTP POST instead of polling the API. Each webhook subscribes to a set of event kinds (or all of them) and is delivered through a durable queue with retry and dead-lettering, so a transient outage on the receiver doesn't drop events.
 
-Today the only event kind is `deployment.status_changed`, emitted on every deployment status transition (creating→running, →failed, →completed, scaling, …). The payload carries `old_status`, `new_status`, the deployment id/name/namespace/kind and `restart_count`. When the webhook has a secret, deliveries are signed with `X-Ring-Signature: sha256=<hmac>`.
+The headline event kind is `deployment.status_changed`, emitted whenever a deployment changes status, or reason within its status (progressing→running, running→backing_off, →completed, …). The payload carries the `old` and `new` states (each a `status` and a `failure` with its `reason` and `message`), the deployment id/name/namespace/kind and `restart_count`. See [the API reference](/documentation/reference/api#event-kinds) for every kind. When the webhook has a secret, deliveries are signed with `X-Ring-Signature: sha256=<hmac>`.
 
 Managing webhooks requires the `webhooks:write` scope (or `webhooks:read` to list).
 
@@ -615,9 +616,9 @@ ring namespace prune <NAMESPACE> [--all]
 
 - `-a` / `--all`: delete every deployment in the namespace, including running ones. Destructive.
 
-**Prunable statuses (default):** `completed`, `failed`, `deleted`, `crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `network_error`, `config_error`, `file_system_error`, `error`.
+**Prunable statuses (default):** `completed`, `failed`, `deleted`, `backing_off`.
 
-**Preserved statuses (default):** `pending`, `creating`, `running`.
+**Preserved statuses (default):** `pending`, `progressing`, `running`.
 
 **Examples:**
 
@@ -1025,9 +1026,9 @@ Output is colourised only when **stdout is a real terminal** and the
 
 - Errors (`error: …`) are red, success lines green.
 - In `ring deployment list`, the `Status` column is colour-coded:
-  green = `running` / `completed`, yellow = `pending` / `starting` /
-  `deleted`, red = the failure states (`failed`, `crash_loop_back_off`,
-  `create_container_error`, …). Unknown values are left uncoloured.
+  green = `running` / `completed`, yellow = `pending` / `progressing` /
+  `deleted`, red = `backing_off` / `failed`. Unknown values are left
+  uncoloured.
 
 When the output is piped, redirected to a file, run under CI, or
 `NO_COLOR=1` is set, **no ANSI escape is emitted at all**, and the bytes are

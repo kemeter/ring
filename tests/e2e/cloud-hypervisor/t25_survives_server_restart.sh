@@ -49,7 +49,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "survivor" "running" 120
+wait_deployment_state "ring-e2e" "survivor" "running" 120
 DEP_ID=$(get_deployment_id "ring-e2e" "survivor")
 [ -z "$DEP_ID" ] && fail "could not resolve deployment id"
 log "deployment $DEP_ID is running"
@@ -90,7 +90,7 @@ log "ring-server back up (pid=$RING_PID)"
 # --- Invariant 3: the deployment is rediscovered as running ---
 # Re-login: tokens are per-process state? No — token lives in the DB, but the
 # CLI's auth.json persists, so reuse it. Just poll status.
-if ! wait_deployment_status "ring-e2e" "survivor" "running" 60; then
+if ! wait_deployment_state "ring-e2e" "survivor" "running" 60; then
   fail "3: deployment not seen as running after restart (rediscovery failed)"
 fi
 log "3 (rediscovered running): ok"

@@ -32,7 +32,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "log-emitter-ctr" "running" 90
+wait_deployment_state "ring-e2e" "log-emitter-ctr" "running" 90
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "log-emitter-ctr")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"

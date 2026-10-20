@@ -49,7 +49,7 @@
 
   function runningCount(name: string): number {
     return deployments.filter(
-      (d) => d.namespace === name && d.status.toLowerCase() === 'running'
+      (d) => d.namespace === name && d.status === 'running'
     ).length;
   }
 

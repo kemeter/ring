@@ -60,7 +60,7 @@ APPLY_OUT=$("$RING_BIN" apply --file "$FIXTURE" 2>&1) \
   || { echo "$APPLY_OUT" >&2; fail "ring apply failed"; }
 echo "$APPLY_OUT"
 
-wait_deployment_status "ring-e2e" "sec-vm" "running" 60
+wait_deployment_state "ring-e2e" "sec-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "sec-vm")
 [ -z "$DEPLOYMENT_ID" ] && fail "could not find deployment id after apply"

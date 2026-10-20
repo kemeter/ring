@@ -1293,7 +1293,7 @@ mod tests {
     fn classify_pull_error_missing_image_stays_not_found() {
         // 404 / manifest unknown is a missing image, not an unreachable or
         // auth-refusing registry — it must keep the ImageNotFound variant so
-        // the deployment lands in ImagePullBackOff with the right reason.
+        // the deployment backs off with the image_pull reason.
         let e = classify_pull_error(
             "manifest unknown: manifest unknown",
             "registry.example.com/app:v1",

@@ -143,7 +143,7 @@ Both should be empty.
 
 - A manifest in YAML describes what you want; Ring reconciles toward it on every tick
 - `ring apply` submits, the scheduler executes
-- Status flows: `creating` → `running` (workers stay there) or `completed` / `failed` (jobs)
+- Status flows: `pending` → `progressing` → `running` (workers stay there) or `completed` / `failed` (jobs); a failed attempt shows `backing_off` with its reason
 - Deleting a deployment tears down its containers
 - Replicas with a single published port hit Docker's port conflict, since real production routing belongs to a reverse proxy
 

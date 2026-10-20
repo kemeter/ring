@@ -47,7 +47,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE"
-wait_deployment_status "ring-e2e" "fc-sized" "running" 240
+wait_deployment_state "ring-e2e" "fc-sized" "running" 240
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-sized")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"
@@ -100,7 +100,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$FIXTURE2"
-wait_deployment_status "ring-e2e" "fc-tiny" "running" 240
+wait_deployment_state "ring-e2e" "fc-tiny" "running" 240
 
 SOCKET2=$(find "$RING_E2E_FC_SOCKET_DIR" -maxdepth 1 -type s -name "*.sock" 2>/dev/null | head -n1)
 [ -n "$SOCKET2" ] || fail "no firecracker API socket for the tiny deployment"

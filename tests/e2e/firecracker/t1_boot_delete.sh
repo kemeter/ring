@@ -37,7 +37,7 @@ EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
 # Booting a real microVM takes longer than a container, but Firecracker is fast.
-wait_deployment_status "ring-e2e" "fc-vm" "running" 60
+wait_deployment_state "ring-e2e" "fc-vm" "running" 60
 
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-vm")
 [ -n "$DEPLOYMENT_ID" ] || fail "could not find deployment id after apply"

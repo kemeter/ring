@@ -106,7 +106,7 @@ log "$COUNT port_allocation_failed event(s) recorded"
 # === 2) The deployment reports the failure and keeps retrying ===
 # A busy port may free up, so the start is retried on the backoff curve
 # rather than given up on.
-wait_deployment_status "ring-e2e" "port-conflict" "error" 60
+wait_deployment_state "ring-e2e" "port-conflict" "backing_off:error" 60
 RC_BEFORE=$(get_restart_count "ring-e2e" "port-conflict")
 sleep 30
 RC_AFTER=$(get_restart_count "ring-e2e" "port-conflict")

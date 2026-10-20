@@ -34,7 +34,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/fc-squashfs.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "fc-squashfs" "running" 60
+wait_deployment_state "ring-e2e" "fc-squashfs" "running" 60
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "fc-squashfs")
 
 # Both guests reach the image's own init through the overlay.

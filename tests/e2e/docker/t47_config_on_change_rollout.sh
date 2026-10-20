@@ -53,7 +53,7 @@ configs:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "rollout-app" "running" 90
+wait_deployment_state "ring-e2e" "rollout-app" "running" 90
 
 V1_ID=$(get_deployment_id "ring-e2e" "rollout-app")
 V1_CID=$(docker ps -q --filter "label=ring_deployment=$V1_ID" | head -n1)

@@ -81,18 +81,18 @@ sleep 45
 COUNT=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null \
   | jq -r '.restart_count // 0')
 STATUS=$("$RING_BIN" deployment inspect "$DEPLOYMENT_ID" --output json 2>/dev/null \
-  | jq -r '.status')
+  | jq -r "$STATE_JQ")
 log "observed: status=$STATUS restart_count=$COUNT"
 
 # Still retrying past the old budget of 5: the deployment was not abandoned.
 [ "${COUNT:-0}" -gt 5 ] \
   || fail "restart_count is ${COUNT:-0} after 45s of failed boots — abandoned, or attempts are not counted"
 
-# A failed boot reports its error; caught right after an attempt, the
-# deployment may be creating.
+# A failed boot backs off with its error; caught right after an attempt, the
+# deployment may be progressing.
 case "$STATUS" in
-  error|creating) ;;
-  *) fail "expected error (or a fresh attempt), got '$STATUS'" ;;
+  backing_off:error|progressing) ;;
+  *) fail "expected backing_off:error (or a fresh attempt), got '$STATUS'" ;;
 esac
 
 # Each failed boot removes its rootfs copy: at most the one of an attempt in

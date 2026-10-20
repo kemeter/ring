@@ -33,7 +33,7 @@ deployments:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "ctr-grace" "running" 90
+wait_deployment_state "ring-e2e" "ctr-grace" "running" 90
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "ctr-grace")
 wait_containerd_container_count "$DEPLOYMENT_ID" 1 60
 

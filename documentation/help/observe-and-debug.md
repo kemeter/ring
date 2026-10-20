@@ -11,7 +11,7 @@ When a deployment misbehaves, work through the streams from outside in:
 curl http://localhost:3030/healthz                 # → {"state":"UP"}
 
 # 2. What's the deployment status?
-ring deployment list                                # any failed / crash_loop_back_off?
+ring deployment list                                # any backing_off / failed?
 
 # 3. What did Ring decide to do?
 ring deployment events <ID> --level error --limit 50
@@ -90,7 +90,7 @@ These are stable strings, safe in monitoring pipelines:
 | `reason` | Level | When |
 |---|---|---|
 | `DeploymentCreated` | `info` | `POST /deployments` succeeded |
-| `StateTransition` | `info` | Status changed (`pending` → `creating` → `running` …) |
+| `StateTransition` | `info` | Status changed (`progressing` → `running`) |
 | `ScaleUp` / `ScaleDown` | `info` | Reaching `replicas` |
 | `ContainerDied` | `warning` | Container exited unexpectedly |
 | `ContainerOom` | `warning` | OOM killer fired |
@@ -182,7 +182,7 @@ Useful alerts:
 
 ```promql
 # A deployment is crash-looping
-ring_deployments_by_status{status="crash_loop_back_off"} > 0
+ring_unhealthy_deployments{status="backing_off",reason="crash_loop"} > 0
 
 # Outbound event queue is backing up
 ring_events_by_status{status="pending"} > 50

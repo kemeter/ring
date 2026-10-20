@@ -59,7 +59,7 @@ At apply time, Ring decrypts each `secretRef` and injects the plaintext into the
 
 Inside the container, `secretRef` values are indistinguishable from plain values, so `echo $DATABASE_URL` works as expected.
 
-**If a referenced secret does not exist in the namespace:** Ring emits an `error` event with `reason: SecretResolutionError`, the scheduler skips the deployment on that tick, and the deployment stays in `creating`. Inspect with `ring deployment events <id> --level error`.
+**If a referenced secret does not exist in the namespace:** Ring emits an `error` event with `reason: SecretResolutionError`, the scheduler skips the deployment on that tick, and the deployment stays in `pending`. Inspect with `ring deployment events <id> --level error`.
 
 ## Pull a private image with a secret
 

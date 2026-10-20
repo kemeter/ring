@@ -5,12 +5,23 @@
 
 import { clearToken, getToken } from './auth';
 
+/** Why a deployment is backing off or failed. */
+export interface DeploymentFailure {
+  reason: string;
+  /** Human-readable detail for `reason`. */
+  message: string;
+}
+
 export interface Deployment {
   id: string;
   name: string;
   namespace: string;
   runtime: string;
+  /** `pending`, `progressing`, `running`, `backing_off`, `completed`,
+   *  `failed` or `deleted`. */
   status: string;
+  /** Why the deployment is backing off or failed; null in any other status. */
+  failure?: DeploymentFailure | null;
   replicas: number;
   image: string;
   /** SQL-style timestamp from the API; parse with `formatDate`. */

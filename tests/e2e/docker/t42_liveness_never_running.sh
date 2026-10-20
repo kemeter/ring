@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T42: Phase 4 liveness-confirmed Running. A container that dies ~immediately
+# T42: Status 4 liveness-confirmed Running. A container that dies ~immediately
 # after start must NEVER be reported `running`.
 #
 # Docker returns Ok from `start` the instant the daemon accepts the container,
@@ -8,8 +8,8 @@
 # promoted to Running for a full reconcile tick before flipping — a lie the next
 # tick had to undo. With the fix the scheduler re-inspects after start and only
 # reports Running once the container is confirmed alive, so this deployment is
-# only ever observed as creating/pending (or, once it has crashed enough,
-# crash_loop_back_off) — never `running`.
+# only ever observed as progressing/pending (or, once it has crashed enough,
+# backing_off:crash_loop) — never `running`.
 #
 # We poll the status tightly right after apply and record every distinct value
 # observed. The assertion is that `running` is never among them.
@@ -39,7 +39,7 @@ DEADLINE=$(( $(date +%s) + 40 ))
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   STATUS=$("$RING_BIN" deployment list --output json 2>/dev/null \
     | jq -r --arg ns "ring-e2e" --arg n "instant-exit" \
-        '.[] | select(.namespace==$ns and .name==$n) | .status' \
+        '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
     | head -n1)
   if [ -n "$STATUS" ]; then
     case " $OBSERVED " in
@@ -50,9 +50,9 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
       SAW_RUNNING=1
       break
     fi
-    # Once it has converged to crash_loop_back_off it will never go Running, so
+    # Once it has converged to backing_off:crash_loop it will never go Running, so
     # we can stop early.
-    if [ "$STATUS" = "crash_loop_back_off" ]; then
+    if [ "$STATUS" = "backing_off:crash_loop" ]; then
       break
     fi
   fi
@@ -63,11 +63,11 @@ log "distinct statuses observed:${OBSERVED:- <none>}"
 
 # 1) Running must never have been observed for an instantly-dying container.
 if [ "$SAW_RUNNING" -eq 1 ]; then
-  fail "deployment was reported 'running' despite the container dying immediately — Phase 4 liveness gate is open"
+  fail "deployment was reported 'running' despite the container dying immediately — Status 4 liveness gate is open"
 fi
 
-# 2) Sanity: it must converge to crash_loop_back_off (it keeps crashing). Give
+# 2) Sanity: it must converge to backing_off:crash_loop (it keeps crashing). Give
 #    it the remaining time to reach the bound if it hasn't already.
-wait_deployment_status "ring-e2e" "instant-exit" "crash_loop_back_off" 90
+wait_deployment_state "ring-e2e" "instant-exit" "backing_off:crash_loop" 90
 
 log "== T42: PASS =="

@@ -9,7 +9,7 @@
 #
 #   1. Valid secret: a Secret holding a dockerconfigjson with an entry for the
 #      target registry. The deployment references it via image_pull_secret. The
-#      pull is attempted with those creds → image_pull_back_off with a "cannot
+#      pull is attempted with those creds → backing_off:image_pull with a "cannot
 #      reach the registry" event (NOT a resolution error).
 #   2. Missing secret: image_pull_secret pointing at a non-existent Secret →
 #      image_pull_secret_resolution_error event.
@@ -57,7 +57,7 @@ deployments:
 EOF
 "$RING_BIN" apply --file "$FIXTURE"
 
-wait_deployment_status "ring-e2e" "pull-secret" "image_pull_back_off" 30
+wait_deployment_state "ring-e2e" "pull-secret" "backing_off:image_pull" 30
 DEP_ID=$(get_deployment_id "ring-e2e" "pull-secret")
 TOKEN=$(jq -r '.default.token' "$RING_TEST_DIR/auth.json")
 MSGS=$(curl -fsS "$RING_URL/deployments/$DEP_ID/events" \

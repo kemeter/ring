@@ -55,7 +55,7 @@ configs:
 EOF
 
 "$RING_BIN" apply --file "$RING_TEST_DIR/deploy.yaml" > /dev/null
-wait_deployment_status "ring-e2e" "ctr-live" "running" 90
+wait_deployment_state "ring-e2e" "ctr-live" "running" 90
 DEPLOYMENT_ID=$(get_deployment_id "ring-e2e" "ctr-live")
 wait_containerd_container_count "$DEPLOYMENT_ID" 1 60
 CID=$(ctr -n "$RING_CONTAINERD_NS" containers list -q "labels.\"ring_deployment\"==$DEPLOYMENT_ID" | head -n1)

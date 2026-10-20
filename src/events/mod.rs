@@ -9,17 +9,17 @@
 //! New event types are added by introducing a `kind` here and calling `publish`
 //! from wherever the event originates.
 
-use crate::models::deployments::{Deployment, DeploymentStatus};
+use crate::models::deployments::{Deployment, DeploymentStatus, Reason, Snapshot};
 use crate::models::event_queue;
 use serde::Serialize;
 use serde_json::json;
 use sqlx::SqlitePool;
 
 /// Bumped on any breaking change to a payload contract. Receivers can branch on
-/// it.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+/// it. 2: deployments carry a status and a reason instead of a status.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
-/// Emitted on every deployment status transition.
+/// Emitted when a deployment changes status, or reason within its status.
 pub(crate) const KIND_DEPLOYMENT_STATUS_CHANGED: &str = "deployment.status_changed";
 
 /// Emitted when a health check fails enough to trigger its `on_failure` action
@@ -146,11 +146,9 @@ pub(crate) struct Event {
 
 impl Event {
     /// Build a `deployment.status_changed` event from a deployment carrying its
-    /// new status and the status it transitioned from.
-    pub(crate) fn deployment_status_changed(
-        deployment: &Deployment,
-        old_status: &DeploymentStatus,
-    ) -> Self {
+    /// new status, and where it stood before.
+    pub(crate) fn deployment_status_changed(deployment: &Deployment, old: &Snapshot) -> Self {
+        let (old_status, old_reason) = old.condition;
         Event {
             kind: KIND_DEPLOYMENT_STATUS_CHANGED.to_string(),
             payload: json!({
@@ -159,8 +157,8 @@ impl Event {
                 "namespace": deployment.namespace,
                 "name": deployment.name,
                 "kind": deployment.kind,
-                "old_status": old_status.to_string(),
-                "new_status": deployment.status.to_string(),
+                "old": state_json(old_status, old_reason, old.message.as_deref()),
+                "new": state_json(deployment.status, deployment.reason, deployment.message.as_deref()),
                 "restart_count": deployment.restart_count,
             }),
         }
@@ -192,13 +190,13 @@ impl Event {
     }
 
     /// Build a `deployment.rolling_update` event for the *child* deployment
-    /// being rolled out. `phase` is `step` (a parent instance was drained),
+    /// being rolled out. `status` is `step` (a parent instance was drained),
     /// `complete` (parent fully replaced), or `failed` (child never became
     /// healthy; parent left running). `drained_instance_id` is set on `step`.
     pub(crate) fn deployment_rolling_update(
         child: &Deployment,
         parent_id: &str,
-        phase: &str,
+        status: &str,
         drained_instance_id: Option<&str>,
     ) -> Self {
         Event {
@@ -210,7 +208,7 @@ impl Event {
                 "name": child.name,
                 "kind": child.kind,
                 "parent_id": parent_id,
-                "phase": phase,
+                "status": status,
                 "drained_instance_id": drained_instance_id,
             }),
         }
@@ -278,6 +276,22 @@ pub(crate) async fn publish(pool: &SqlitePool, event: Event) {
     if let Err(e) = event_queue::enqueue(pool, &event.kind, &payload).await {
         warn!("Failed to enqueue event {}: {}", event.kind, e);
     }
+}
+
+/// A deployment's status as the API shows it: `failure` is set only when it is
+/// backing off or failed.
+fn state_json(
+    status: DeploymentStatus,
+    reason: Option<Reason>,
+    message: Option<&str>,
+) -> serde_json::Value {
+    json!({
+        "status": status,
+        "failure": reason.map(|reason| json!({
+            "reason": reason,
+            "message": message.unwrap_or_default(),
+        })),
+    })
 }
 
 #[cfg(test)]

@@ -95,12 +95,12 @@ struct Snapshot {
     deployments: u64,
     deployments_by_status: BTreeMap<String, u64>,
     deployments_by_runtime: BTreeMap<String, u64>,
-    /// Deployments stuck in a non-healthy state, broken down by
-    /// `(namespace, status)`. Only unhealthy statuses are emitted (running /
-    /// completed / deleted are excluded), so the series count tracks the number
-    /// of deployments actually in trouble rather than namespaces × statuses.
-    /// Lets an operator see *which* tenant is affected, not just the total.
-    unhealthy_deployments_by_namespace: Vec<NamespaceStatusCount>,
+    /// Deployments not running, broken down by `(namespace, status, reason)`.
+    /// Only the unhealthy statuses are emitted (running / progressing /
+    /// completed / deleted are excluded), so the series count tracks the
+    /// number of deployments actually in trouble. Lets an operator see *which*
+    /// tenant is affected, and why, not just the total.
+    unhealthy_deployments_by_namespace: Vec<UnhealthyCount>,
     namespaces: u64,
     secrets: u64,
     volumes: u64,
@@ -121,31 +121,24 @@ struct Snapshot {
     deployment_runtime: Vec<RuntimeSeries>,
 }
 
-/// One `(namespace, status)` bucket with its deployment count, ready to render
-/// as a two-label Prometheus series.
+/// One `(namespace, status, reason)` bucket with its deployment count, ready
+/// to render as a three-label Prometheus series.
 #[derive(Debug, Serialize)]
-struct NamespaceStatusCount {
+struct UnhealthyCount {
     namespace: String,
     status: String,
+    reason: String,
     count: u64,
 }
 
-/// Statuses considered "in trouble": a deployment in one of these is not
-/// serving and needs attention. `running`/`completed`/`deleted` are healthy or
-/// terminal and intentionally excluded so the per-namespace breakdown stays
-/// small and alert-friendly. Listed explicitly (not "everything else") so a new
-/// status is a deliberate decision, not silently bucketed.
-const UNHEALTHY_STATUSES: [&str; 10] = [
-    "pending",
-    "failed",
-    "crash_loop_back_off",
-    "image_pull_back_off",
-    "create_container_error",
-    "network_error",
-    "config_error",
-    "file_system_error",
-    "insufficient_resources",
-    "error",
+/// Statuses considered "in trouble": a deployment in one of these is not serving
+/// and needs attention. Listed explicitly (not "everything else") so a new
+/// status is a deliberate decision, not silently bucketed. `progressing` is
+/// left out: a rollout passes through it.
+const UNHEALTHY_STATUSES: [DeploymentStatus; 3] = [
+    DeploymentStatus::Pending,
+    DeploymentStatus::BackingOff,
+    DeploymentStatus::Failed,
 ];
 
 /// Serializable, render-ready copy of one deployment's cached runtime stats.
@@ -197,12 +190,13 @@ impl Snapshot {
     async fn collect(pool: &sqlx::SqlitePool) -> Self {
         let mut snap = Snapshot::default();
 
-        // Seed every known deployment status at 0, then overlay the DB counts.
-        // A status with no rows still gets a series so alerts never break.
-        let status_keys = DeploymentStatus::all().map(|s| s.to_string());
+        // Seed every status at 0, then overlay the DB counts. A status with no
+        // rows still gets a series so alerts never break.
         snap.deployments_by_status = with_zero_keys(
             group_count(pool, "deployment", "status").await,
-            status_keys.iter().map(String::as_str),
+            DeploymentStatus::all()
+                .into_iter()
+                .map(DeploymentStatus::as_str),
         );
         snap.deployments_by_runtime = group_count(pool, "deployment", "runtime").await;
         snap.unhealthy_deployments_by_namespace =
@@ -210,7 +204,7 @@ impl Snapshot {
         snap.deployments = snap
             .deployments_by_status
             .iter()
-            .filter(|(status, _)| status.as_str() != "deleted")
+            .filter(|(status, _)| status.as_str() != DeploymentStatus::Deleted.as_str())
             .map(|(_, count)| count)
             .sum();
 
@@ -231,27 +225,29 @@ impl Snapshot {
     }
 }
 
-/// Render-ready breakdown of deployments in trouble, per `(namespace, status)`.
-/// Thin adapter over [`deployments::count_by_namespace_and_status`]: maps the
-/// raw rows into [`NamespaceStatusCount`] and, like the other metrics helpers,
-/// is fail-soft — a query error logs and yields an empty list rather than
-/// taking the whole scrape down.
+/// Render-ready breakdown of deployments in trouble, per
+/// `(namespace, status, reason)`. Thin adapter over
+/// [`deployments::count_by_namespace_status_reason`]: maps the raw rows into
+/// [`UnhealthyCount`] and, like the other metrics helpers, is fail-soft — a
+/// query error logs and yields an empty list rather than taking the whole
+/// scrape down.
 async fn unhealthy_by_namespace(
     pool: &sqlx::SqlitePool,
-    statuses: &[&str],
-) -> Vec<NamespaceStatusCount> {
-    match deployments::count_by_namespace_and_status(pool, statuses).await {
+    statuses: &[DeploymentStatus],
+) -> Vec<UnhealthyCount> {
+    match deployments::count_by_namespace_status_reason(pool, statuses).await {
         Ok(rows) => rows
             .into_iter()
-            .map(|(namespace, status, count)| NamespaceStatusCount {
+            .map(|(namespace, status, reason, count)| UnhealthyCount {
                 namespace,
                 status,
+                reason,
                 count: count.max(0) as u64,
             })
             .collect(),
         Err(e) => {
             error!(
-                "metrics: grouping deployment by namespace/status failed: {}",
+                "metrics: grouping deployment by namespace/status/reason failed: {}",
                 e
             );
             Vec::new()
@@ -297,7 +293,7 @@ fn render_prom(snap: &Snapshot) -> String {
         "runtime",
         &snap.deployments_by_runtime,
     );
-    write_namespace_status_gauge(&mut out, snap);
+    write_unhealthy_gauge(&mut out, snap);
 
     write_gauge(
         &mut out,
@@ -474,22 +470,24 @@ fn write_labelled_gauge(
     }
 }
 
-/// Render the unhealthy-deployments breakdown as a two-label gauge
-/// (`namespace`, `status`). The HELP/TYPE pair is always emitted so the metric
-/// is discoverable even when nothing is broken and there are no series.
-fn write_namespace_status_gauge(out: &mut String, snap: &Snapshot) {
+/// Render the unhealthy-deployments breakdown as a three-label gauge
+/// (`namespace`, `status`, `reason`). The HELP/TYPE pair is always emitted so
+/// the metric is discoverable even when nothing is broken and there are no
+/// series.
+fn write_unhealthy_gauge(out: &mut String, snap: &Snapshot) {
     let name = "ring_unhealthy_deployments";
     let _ = writeln!(
         out,
-        "# HELP {name} Deployments in a non-healthy status, by namespace and status."
+        "# HELP {name} Deployments pending, backing off or failed, by namespace, status and reason."
     );
     let _ = writeln!(out, "# TYPE {name} gauge");
     for row in &snap.unhealthy_deployments_by_namespace {
         let _ = writeln!(
             out,
-            "{name}{{namespace=\"{}\",status=\"{}\"}} {}",
+            "{name}{{namespace=\"{}\",status=\"{}\",reason=\"{}\"}} {}",
             escape_label_value(&row.namespace),
             escape_label_value(&row.status),
+            escape_label_value(&row.reason),
             row.count
         );
     }
@@ -605,9 +603,9 @@ mod tests {
         let server = TestServer::new(new_test_app().await).unwrap();
         let body = server.get("/metrics").await.text();
 
-        // Error statuses that have no rows in fixtures must still be present.
-        assert!(body.contains("ring_deployments_by_status{status=\"crash_loop_back_off\"}"));
-        assert!(body.contains("ring_deployments_by_status{status=\"image_pull_back_off\"}"));
+        // Statuses that have no rows in fixtures must still be present.
+        assert!(body.contains("ring_deployments_by_status{status=\"backing_off\"}"));
+        assert!(body.contains("ring_deployments_by_status{status=\"failed\"}"));
         // Event queue statuses are always emitted.
         assert!(body.contains("ring_events_by_status{status=\"pending\"}"));
         assert!(body.contains("ring_events_by_status{status=\"dead\"}"));
@@ -703,13 +701,15 @@ mod tests {
         namespace: &str,
         name: &str,
         status: &str,
+        reason: Option<&str>,
     ) {
         sqlx::query(
-            "INSERT INTO deployment (id, created_at, status, namespace, runtime, kind, name) \
-             VALUES (?, '2024-01-01', ?, ?, 'docker', 'worker', ?)",
+            "INSERT INTO deployment (id, created_at, status, reason, namespace, runtime, kind, name) \
+             VALUES (?, '2024-01-01', ?, ?, ?, 'docker', 'worker', ?)",
         )
         .bind(id)
         .bind(status)
+        .bind(reason)
         .bind(namespace)
         .bind(name)
         .execute(pool)
@@ -725,45 +725,87 @@ mod tests {
         // each tagged with its own namespace so an operator can tell who is hit.
         // Use synthetic namespaces so the fixtures' own deployments don't bleed
         // into the assertion.
-        insert_deployment(&pool, "k1", "ns-trouble-a", "proxysql", "running").await;
-        insert_deployment(&pool, "k2", "ns-trouble-a", "pgbouncer", "config_error").await;
-        insert_deployment(&pool, "c1", "ns-trouble-b", "web", "crash_loop_back_off").await;
-        insert_deployment(&pool, "c2", "ns-trouble-b", "old", "completed").await;
-        insert_deployment(&pool, "c3", "ns-trouble-b", "img", "image_pull_back_off").await;
+        let backing_off = "backing_off";
+        insert_deployment(&pool, "k1", "ns-trouble-a", "proxysql", "running", None).await;
+        insert_deployment(
+            &pool,
+            "k2",
+            "ns-trouble-a",
+            "pgbouncer",
+            backing_off,
+            Some("config_missing"),
+        )
+        .await;
+        insert_deployment(
+            &pool,
+            "c1",
+            "ns-trouble-b",
+            "web",
+            backing_off,
+            Some("crash_loop"),
+        )
+        .await;
+        insert_deployment(&pool, "c2", "ns-trouble-b", "old", "completed", None).await;
+        insert_deployment(
+            &pool,
+            "c3",
+            "ns-trouble-b",
+            "img",
+            backing_off,
+            Some("image_pull"),
+        )
+        .await;
+        insert_deployment(&pool, "c4", "ns-trouble-b", "new", "pending", None).await;
 
         let rows = unhealthy_by_namespace(&pool, &UNHEALTHY_STATUSES).await;
         // Restrict to the namespaces we created — the fixtures seed their own
         // deployments, so assert on our delta rather than the whole set.
-        let got: Vec<(&str, &str, u64)> = rows
+        let got: Vec<(&str, &str, &str, u64)> = rows
             .iter()
             .filter(|r| r.namespace == "ns-trouble-a" || r.namespace == "ns-trouble-b")
-            .map(|r| (r.namespace.as_str(), r.status.as_str(), r.count))
+            .map(|r| {
+                (
+                    r.namespace.as_str(),
+                    r.status.as_str(),
+                    r.reason.as_str(),
+                    r.count,
+                )
+            })
             .collect();
 
-        // running + completed are excluded; the three unhealthy ones remain,
-        // ordered by (namespace, status).
+        // running + completed are excluded; the unhealthy ones remain, ordered
+        // by (namespace, status, reason).
         assert_eq!(
             got,
             vec![
-                ("ns-trouble-a", "config_error", 1),
-                ("ns-trouble-b", "crash_loop_back_off", 1),
-                ("ns-trouble-b", "image_pull_back_off", 1),
+                ("ns-trouble-a", backing_off, "config_missing", 1),
+                ("ns-trouble-b", backing_off, "crash_loop", 1),
+                ("ns-trouble-b", backing_off, "image_pull", 1),
+                ("ns-trouble-b", "pending", "", 1),
             ]
         );
     }
 
     #[tokio::test]
-    async fn unhealthy_deployments_render_with_namespace_and_status_labels() {
+    async fn unhealthy_deployments_render_with_namespace_status_and_reason_labels() {
         let (pool, _app) = new_test_app_with_pool().await;
-        insert_deployment(&pool, "k2", "ns-trouble-a", "pgbouncer", "config_error").await;
-        insert_deployment(&pool, "k1", "ns-trouble-a", "proxysql", "running").await;
+        insert_deployment(
+            &pool,
+            "k2",
+            "ns-trouble-a",
+            "pgbouncer",
+            "backing_off",
+            Some("config_missing"),
+        )
+        .await;
+        insert_deployment(&pool, "k1", "ns-trouble-a", "proxysql", "running", None).await;
 
         let snap = Snapshot::collect(&pool).await;
         let body = render_prom(&snap);
 
         assert!(body.contains("# TYPE ring_unhealthy_deployments gauge"));
         assert!(body.contains(
-            "ring_unhealthy_deployments{namespace=\"ns-trouble-a\",status=\"config_error\"} 1"
+            "ring_unhealthy_deployments{namespace=\"ns-trouble-a\",status=\"backing_off\",reason=\"config_missing\"} 1"
         ));
         // A healthy deployment never appears in *this* metric (the substring is
         // scoped to ring_unhealthy_deployments, not the global by-status gauge).
