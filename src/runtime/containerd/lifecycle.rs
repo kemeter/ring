@@ -119,7 +119,7 @@ impl InstanceDriver for ContainerdLifecycle {
 
         let mut terminated = Vec::with_capacity(ended.len());
         for instance_id in ended {
-            terminated.push(self.termination(&client, instance_id).await);
+            terminated.push(self.termination(&client, instance_id).await?);
         }
         terminated.sort_by_key(|t| t.finished_at);
 
@@ -384,7 +384,7 @@ impl ContainerdLifecycle {
         &self,
         client: &containerd_client::Client,
         instance_id: String,
-    ) -> Termination {
+    ) -> Result<Termination, RuntimeError> {
         let mut tasks = TasksClient::new(client.channel());
         let req = with_namespace!(
             GetRequest {
@@ -393,11 +393,18 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         );
-        let process = tasks
-            .get(req)
-            .await
-            .ok()
-            .and_then(|resp| resp.into_inner().process);
+        // No task at all is an answer; failing to ask is not, and must not be
+        // read as an instance that never ran.
+        let process = match tasks.get(req).await {
+            Ok(resp) => resp.into_inner().process,
+            Err(status) if status.code() == tonic::Code::NotFound => None,
+            Err(status) => {
+                return Err(RuntimeError::Other(format!(
+                    "inspecting task {} failed: {}",
+                    instance_id, status
+                )));
+            }
+        };
         // A task that is not stopped never ran its program: it was created and
         // its start refused, or it was never created at all.
         let stopped = process
@@ -411,13 +418,13 @@ impl ContainerdLifecycle {
         let tail = LOGS_TAIL_LINES.to_string();
         let lines = super::logs::read_logs(&instance_id, Some(&tail), None).await;
 
-        Termination {
+        Ok(Termination {
             exit_code: stopped.map(|p| i64::from(p.exit_status)),
             finished_at,
             started: stopped.is_some(),
             logs_tail: logs_tail(&lines),
             instance_id,
-        }
+        })
     }
 
     async fn remove_all(
