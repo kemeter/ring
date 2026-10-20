@@ -62,20 +62,39 @@ impl VmExits {
     }
 }
 
-/// Whether a live `binary` process was started with `socket_path` as an
+/// The pid of a live `binary` process started with `socket_path` as an
 /// argument: how an instance inherited from an earlier server, not watched,
-/// is told alive when its VMM API does not answer.
-pub(crate) fn vmm_holds_socket(binary: &str, socket_path: &str) -> bool {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    entries.flatten().any(|entry| {
-        entry.file_name().to_str().is_some_and(|name| {
-            name.parse::<u32>().is_ok()
-                && std::fs::read(format!("/proc/{}/cmdline", name))
-                    .is_ok_and(|cmdline| cmdline_holds_socket(&cmdline, binary, socket_path))
+/// is told alive when its VMM API does not answer, and how its VMM is found to
+/// stop it.
+pub(crate) fn vmm_pid(binary: &str, socket_path: &str) -> Option<u32> {
+    std::fs::read_dir("/proc")
+        .ok()?
+        .flatten()
+        .find_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            let cmdline = std::fs::read(format!("/proc/{}/cmdline", pid)).ok()?;
+            cmdline_holds_socket(&cmdline, binary, socket_path).then_some(pid)
         })
-    })
+}
+
+/// SIGTERM `pid`, then SIGKILL it if it is still there after a grace period,
+/// and wait until it is gone.
+pub(crate) async fn kill_vmm(pid: u32) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let target = Pid::from_raw(pid as i32);
+    let _ = kill(target, Signal::SIGTERM);
+    for i in 0..40 {
+        // `kill(pid, None)` only checks existence; an error means it is gone.
+        if kill(target, None).is_err() {
+            return;
+        }
+        if i == 10 {
+            let _ = kill(target, Signal::SIGKILL);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 fn cmdline_holds_socket(cmdline: &[u8], binary: &str, socket_path: &str) -> bool {

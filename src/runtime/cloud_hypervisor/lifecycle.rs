@@ -810,6 +810,14 @@ impl CloudHypervisorLifecycle {
             Some(s) => s,
             None => return false,
         };
+        // Found before the socket goes: an inherited VMM is only found by it.
+        // A process already seen exiting is not looked for, since its pid may
+        // have gone to another one since.
+        let pid = match self.exits.get(instance_id) {
+            Some(Watched::Exited(_)) => None,
+            Some(Watched::Running) => self.process_info(instance_id).map(|info| info.pid),
+            None => vm_exits::vmm_pid(self.binary_name(), socket_str),
+        };
 
         if socket.exists() {
             let client = CloudHypervisorClient::new(socket_str);
@@ -830,6 +838,13 @@ impl CloudHypervisorLifecycle {
                 "Socket {} absent (VM already gone); cleaning artifacts only",
                 socket_str
             );
+        }
+
+        // Deleting the VM leaves the VMM process up, and when no VM was ever
+        // created (a boot refused at `create_vm`) the calls above do nothing:
+        // the process itself has to go, or every failed boot leaves one behind.
+        if let Some(pid) = pid {
+            vm_exits::kill_vmm(pid).await;
         }
 
         self.cleanup_instance_artifacts(instance_id).await;
@@ -1004,7 +1019,7 @@ impl CloudHypervisorLifecycle {
             // Inherited from an earlier server: alive while a cloud-hypervisor
             // process holds its socket, whatever its API says.
             None if socket.to_str().is_some_and(|path| {
-                socket.exists() && vm_exits::vmm_holds_socket(self.binary_name(), path)
+                socket.exists() && vm_exits::vmm_pid(self.binary_name(), path).is_some()
             }) =>
             {
                 VmState::Alive

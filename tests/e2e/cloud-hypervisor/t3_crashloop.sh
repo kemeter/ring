@@ -103,6 +103,13 @@ if [ "$DISK_COUNT" -gt 1 ]; then
   fail "$DISK_COUNT per-instance disks left — failed boots are not cleaned up"
 fi
 
+# Nor do the VMM processes: a boot refused at create_vm leaves its
+# cloud-hypervisor process up unless Ring stops it.
+VMM_COUNT=$(pgrep -fc "cloud-hypervisor --api-socket $RING_E2E_CH_SOCKET_DIR/" || true)
+if [ "${VMM_COUNT:-0}" -gt 1 ]; then
+  fail "$VMM_COUNT cloud-hypervisor processes left — failed boots leak their VMM"
+fi
+
 # Cleanup so cleanup_ch does not complain.
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID" > /dev/null 2>&1 || true
 rm -f "$BOGUS_FW" 2>/dev/null || true
