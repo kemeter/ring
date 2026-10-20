@@ -62,6 +62,30 @@ impl VmExits {
     }
 }
 
+/// Whether a live `binary` process was started with `socket_path` as an
+/// argument: how an instance inherited from an earlier server, not watched,
+/// is told alive when its VMM API does not answer.
+pub(crate) fn vmm_holds_socket(binary: &str, socket_path: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_str().is_some_and(|name| {
+            name.parse::<u32>().is_ok()
+                && std::fs::read(format!("/proc/{}/cmdline", name))
+                    .is_ok_and(|cmdline| cmdline_holds_socket(&cmdline, binary, socket_path))
+        })
+    })
+}
+
+fn cmdline_holds_socket(cmdline: &[u8], binary: &str, socket_path: &str) -> bool {
+    let mut args = cmdline.split(|&b| b == 0);
+    if args.next().map(|a0| a0.ends_with(binary.as_bytes())) != Some(true) {
+        return false;
+    }
+    args.any(|arg| arg == socket_path.as_bytes())
+}
+
 /// The exit code of a process, shell style: `128 + n` for one killed by
 /// signal `n`.
 pub(crate) fn exit_code(status: ExitStatus) -> Option<i64> {
@@ -74,6 +98,22 @@ pub(crate) fn exit_code(status: ExitStatus) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_vmm_holds_the_socket_it_was_started_with() {
+        let cmd = b"/usr/bin/cloud-hypervisor\0--api-socket\0/run/ch/a.sock\0";
+        assert!(cmdline_holds_socket(
+            cmd,
+            "cloud-hypervisor",
+            "/run/ch/a.sock"
+        ));
+        assert!(!cmdline_holds_socket(
+            cmd,
+            "cloud-hypervisor",
+            "/run/ch/a.so"
+        ));
+        assert!(!cmdline_holds_socket(cmd, "firecracker", "/run/ch/a.sock"));
+    }
 
     #[test]
     fn a_signal_reads_as_128_plus_its_number() {

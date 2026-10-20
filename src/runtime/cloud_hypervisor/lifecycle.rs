@@ -10,7 +10,7 @@ use crate::hypervisor::instance_driver::{InstanceDriver, Observation};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
 use crate::hypervisor::virtiofs::{self, VirtiofsMount};
-use crate::hypervisor::vm_exits::{VmExits, Watched};
+use crate::hypervisor::vm_exits::{self, VmExits, Watched};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::HealthCheckStatus;
 use crate::models::restart_state::{LOGS_TAIL_LINES, Termination, logs_tail};
@@ -201,6 +201,15 @@ impl CloudHypervisorLifecycle {
 
     fn deployment_prefix(deployment_id: &str) -> String {
         format!("ch-{}-", &deployment_id[..8.min(deployment_id.len())])
+    }
+
+    /// The file name of the cloud-hypervisor binary, as a process started from
+    /// it shows in its command line.
+    fn binary_name(&self) -> &str {
+        Path::new(&self.config.binary_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&self.config.binary_path)
     }
 
     fn process_info(&self, instance_id: &str) -> Option<InstanceProcessInfo> {
@@ -992,7 +1001,15 @@ impl CloudHypervisorLifecycle {
             // A process this server spawned and saw no exit of still runs: its
             // API is only slow to answer.
             None if watched.is_some() => VmState::Alive,
-            // Inherited from an earlier server, so how it ended was not seen.
+            // Inherited from an earlier server: alive while a cloud-hypervisor
+            // process holds its socket, whatever its API says.
+            None if socket.to_str().is_some_and(|path| {
+                socket.exists() && vm_exits::vmm_holds_socket(self.binary_name(), path)
+            }) =>
+            {
+                VmState::Alive
+            }
+            // Inherited and gone, so how it ended was not seen.
             // cloud-hypervisor removes its socket when it exits cleanly; a
             // crash leaves the socket behind.
             None => VmState::Ended {
