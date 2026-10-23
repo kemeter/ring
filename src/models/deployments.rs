@@ -248,8 +248,13 @@ pub(crate) struct DeploymentConfig {
 /// rather than a maintenance schedule.
 pub(crate) const MIN_RESTART_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
+/// Longest interval accepted. Past it a delay is no longer something to wait
+/// for, and a retry scheduled that far out would not fit a date.
+pub(crate) const MAX_INTERVAL: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
 /// Parse an interval written as a sequence of `<number><unit>` with the units
-/// `s`, `m`, `h` and `d`, e.g. `"30m"`, `"24h"` or `"1h30m"`.
+/// `s`, `m`, `h` and `d`, e.g. `"30m"`, `"24h"` or `"1h30m"`, up to
+/// `MAX_INTERVAL`.
 pub(crate) fn parse_interval(value: &str) -> Result<Duration, String> {
     let invalid = || {
         format!(
@@ -281,6 +286,12 @@ pub(crate) fn parse_interval(value: &str) -> Result<Duration, String> {
     }
     if !digits.is_empty() || total.is_zero() {
         return Err(invalid());
+    }
+    if total > MAX_INTERVAL {
+        return Err(format!(
+            "'{}' is longer than the 365d an interval may last",
+            value
+        ));
     }
     Ok(total)
 }
@@ -1684,6 +1695,14 @@ mod tests {
     fn parse_interval_rejects_what_it_cannot_read() {
         for bad in ["", "h", "10", "5x", "0m", "1h30", "-5m", "1.5h"] {
             assert!(parse_interval(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn parse_interval_rejects_what_outlasts_a_year() {
+        assert_eq!(parse_interval("365d"), Ok(MAX_INTERVAL));
+        for long in ["366d", "365d1s", "100000000d"] {
+            assert!(parse_interval(long).is_err(), "{long:?} should be rejected");
         }
     }
 

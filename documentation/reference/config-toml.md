@@ -75,7 +75,7 @@ The daemon's own configuration, shared by every context in the file. All subsect
 
 ### `[server.restart]`
 
-How the scheduler restarts a failed worker. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy). Durations accept `s`, `m`, `h` and `d` (`"10s"`, `"5m"`, `"1h30m"`). A value Ring cannot parse stops the server at startup.
+How the scheduler restarts a failed worker. See [Reconciliation → restart policy](/documentation/concepts/reconciliation#restart-policy). Durations accept `s`, `m`, `h` and `d` (`"10s"`, `"5m"`, `"1h30m"`), up to `365d`. A value Ring cannot parse stops the server at startup.
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
