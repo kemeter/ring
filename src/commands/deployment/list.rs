@@ -68,7 +68,7 @@ struct DeploymentTableItem {
     kind: String,
     #[table(title = "Replicas")]
     replicas: String,
-    #[table(title = "DeploymentStatus")]
+    #[table(title = "Status")]
     status: String,
     #[table(title = "Reason")]
     reason: String,

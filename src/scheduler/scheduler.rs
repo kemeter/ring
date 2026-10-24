@@ -471,7 +471,7 @@ async fn log_running_transition(
         deployment.id.clone(),
         "info",
         format!(
-            "DeploymentStatus changed from progressing to running ({} instances)",
+            "Status changed from progressing to running ({} instances)",
             deployment.instances.len()
         ),
         "scheduler",
