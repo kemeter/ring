@@ -65,24 +65,24 @@ if [ -z "$ISO_PATH" ]; then
 fi
 log "cidata ISO: $ISO_PATH ($(du -h "$ISO_PATH" | cut -f1))"
 
-# Verify the ISO is a valid ISO9660 with the CIDATA volid (NoCloud requires it).
-volid=$(xorriso -indev "$ISO_PATH" -toc 2>&1 | grep -oP "Volume id\s+:\s+'\K[^']+" | head -n1)
-if [ "$volid" != "CIDATA" ]; then
-  fail "expected ISO volume id 'CIDATA', got '$volid'"
+# Verify the image is an ext4 filesystem labelled CIDATA (NoCloud requires the
+# label, whatever the filesystem; the file only keeps its .iso name).
+label=$(e2label "$ISO_PATH" 2>&1)
+if [ "$label" != "CIDATA" ]; then
+  fail "expected cidata label 'CIDATA', got '$label'"
 fi
-log "volume id is CIDATA"
+log "label is CIDATA"
 
-# Extract user-data and meta-data from the ISO so we can inspect them.
+# Extract user-data and meta-data from the image so we can inspect them.
 EXTRACT_DIR="$RING_TEST_DIR/extracted"
-mkdir -p "$EXTRACT_DIR"
-xorriso -osirrox on -indev "$ISO_PATH" -extract / "$EXTRACT_DIR" > /dev/null 2>&1
+extract_cidata "$ISO_PATH" "$EXTRACT_DIR"
 
 if [ ! -f "$EXTRACT_DIR/user-data" ]; then
   ls -la "$EXTRACT_DIR" >&2
-  fail "user-data not found in ISO"
+  fail "user-data not found in the cidata image"
 fi
 if [ ! -f "$EXTRACT_DIR/meta-data" ]; then
-  fail "meta-data not found in ISO"
+  fail "meta-data not found in the cidata image"
 fi
 log "user-data and meta-data extracted"
 

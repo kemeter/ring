@@ -73,9 +73,21 @@ ensure_ch_image() {
 }
 
 cleanup_ch() {
+  # A VM outlives the server that started it, so kill the ones still bound to
+  # this run's sockets before removing them.
   if [ -n "${RING_E2E_CH_SOCKET_DIR:-}" ] && [ -d "$RING_E2E_CH_SOCKET_DIR" ]; then
+    for sock in "$RING_E2E_CH_SOCKET_DIR"/*.sock; do
+      [ -S "$sock" ] || continue
+      pkill -f "$sock" 2>/dev/null || true
+    done
     rm -rf "$RING_E2E_CH_SOCKET_DIR" 2>/dev/null || true
   fi
+}
+
+# Copy the files of a cidata image, an ext4 filesystem, into a new directory.
+extract_cidata() {
+  mkdir -p "$2"
+  debugfs -R "rdump / $2" "$1" > /dev/null 2>&1
 }
 
 setup_ch() {

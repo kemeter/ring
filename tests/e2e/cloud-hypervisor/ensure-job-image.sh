@@ -15,6 +15,7 @@ set -euo pipefail
 # Sourceable.
 RING_E2E_CACHE_DIR="${RING_E2E_CACHE_DIR:-$HOME/.cache/ring-e2e}"
 RING_E2E_CH_BASE_IMAGE="${RING_E2E_CH_BASE_IMAGE:-$RING_E2E_CACHE_DIR/alpine-nginx.raw}"
+RING_E2E_CH_BASE_IMAGE_URL="https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img"
 RING_E2E_CH_JOB_IMAGE="${RING_E2E_CH_JOB_IMAGE:-$RING_E2E_CACHE_DIR/ch-job.raw}"
 RING_E2E_CH_JOB_STAMP="${RING_E2E_CH_JOB_STAMP:-$RING_E2E_CACHE_DIR/ch-job.raw.built-from-alpine-nginx}"
 
@@ -30,18 +31,21 @@ ensure_ch_job_image() {
     fi
   fi
 
-  if [ ! -f "$RING_E2E_CH_BASE_IMAGE" ]; then
-    echo "[job-image] FAIL: base image $RING_E2E_CH_BASE_IMAGE missing" >&2
-    echo "           build the e2e Ubuntu image first" >&2
-    return 1
-  fi
-
-  for cmd in debugfs dd parted; do
+  for cmd in debugfs dd parted qemu-img; do
     if ! command -v "$cmd" > /dev/null 2>&1; then
       echo "[job-image] FAIL: '$cmd' not found in PATH" >&2
       return 1
     fi
   done
+
+  if [ ! -f "$RING_E2E_CH_BASE_IMAGE" ]; then
+    echo "[job-image] downloading the Ubuntu cloud image to $RING_E2E_CH_BASE_IMAGE..."
+    mkdir -p "$(dirname "$RING_E2E_CH_BASE_IMAGE")"
+    local qcow2="$RING_E2E_CH_BASE_IMAGE.qcow2"
+    curl -fL -C - --retry 5 --retry-all-errors -o "$qcow2" "$RING_E2E_CH_BASE_IMAGE_URL"
+    qemu-img convert -f qcow2 -O raw "$qcow2" "$RING_E2E_CH_BASE_IMAGE"
+    rm -f "$qcow2"
+  fi
 
   echo "[job-image] building $RING_E2E_CH_JOB_IMAGE from $RING_E2E_CH_BASE_IMAGE..."
 
@@ -64,7 +68,8 @@ ensure_ch_job_image() {
 
   local work_dir
   work_dir=$(mktemp -d -t ring-e2e-job-img-XXXXXX)
-  trap 'rm -rf "$work_dir"' EXIT
+  # RETURN, as an EXIT trap would replace the one that stops Ring and its VMs.
+  trap 'rm -rf "$work_dir"; trap - RETURN' RETURN
 
   local rootfs="$work_dir/rootfs.ext4"
   local service_file="$work_dir/ring-job-poweroff.service"

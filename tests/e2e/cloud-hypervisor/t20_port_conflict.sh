@@ -44,7 +44,7 @@ time.sleep(600)
 PY
 BLOCKER_PID=$!
 # Ensure the blocker dies even on early failure paths.
-trap 'kill $BLOCKER_PID 2>/dev/null || true; cleanup_ring' EXIT
+trap 'kill $BLOCKER_PID 2>/dev/null || true; cleanup_ch; cleanup_ring' EXIT
 
 # Wait until the blocker has actually bound the port (otherwise the VM
 # boot would race with the listener spinning up and produce a false PASS).
