@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- **A deployment's status is split into a status and a failure.** `status` now only says where a deployment is in its lifecycle: `pending`, `progressing`, `running`, `backing_off`, `completed`, `failed` or `deleted`. A new `failure` object gives why it is backing off or failed, as a `reason` (`crash_loop`, `run_failed`, `image_pull`, `spec_rejected`, `config_missing`, `insufficient_resources`, `network`, `file_system`, `readiness_timeout`, `error`) and a `message`; it is `null` in any other status. Consequences when upgrading:
+  - the former error statuses (`crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `config_error`, `insufficient_resources`, `network_error`, `file_system_error`, `error`) become `backing_off` with the matching reason. A client, script or alert matching them must match `status` and `reason` instead; the API and `ring deployment list` filter on both
+  - the `deployment.status_changed` webhook carries `old` and `new` as a `status` and a `failure` each, with `schema_version` 2
+  - `ring_unhealthy_deployments` gains a `reason` label, and its `status` label takes the new values
+  - **workers are retried on the first scheduler tick after the upgrade**: those left `failed` (a readiness deadline, a missing firmware) and those left `completed` after exiting 0 were never reconciled again, and every deployment landing in `backing_off` starts over with a fresh counter. A `failed` job stays failed
+- **A failing worker is no longer given up after 5 restarts.** By default it keeps being retried, at most every 5 minutes, until it runs. Set `on_exhaustion = "fail"` in `[server.restart]`, or in a deployment's `restart` block, to mark it `failed` after `max_attempts` failures as before
+- **A worker that exits 0 is restarted** like one that fails, instead of being marked `completed` and left down: a service that shuts down cleanly on `SIGTERM` (host reboot, runtime restart) came back only on the next `ring apply`. Only a job can be `completed`
+
 ### Added
+- A restart policy, set by `[server.restart]` and applied the same way on every runtime: a failed worker is restarted after a random delay below a bound that doubles from `base` (`10s`) up to `cap` (`5m`), and its attempt counter resets once it has run for `stable_after` (`10m`). The restart state is stored, so restarting the server no longer resets the delays
+- A deployment's `restart` block overrides `[server.restart]` key by key, and is checked at `ring apply` time: an unknown key, a key that means nothing for the deployment's kind or a `cap` below `base` is refused. Durations go up to `365d`
+- A job's `backoff_limit` (default `0`) sets how many times a run that exited non-zero is run again. A job that cannot start (image, config, memory) is retried without limit, since nothing ran. A finished job keeps its instance and logs on Docker, Podman and containerd
+- `ring deployment inspect` shows a deployment's status and failure
 - `config.restart_interval` replaces a deployment's instances once they reach a given age (e.g. `24h`), for processes that leak memory without ever failing a health check. One instance at a time, never during a rolling update, and without counting toward `restart_count`. Docker, Podman and containerd workers, at least `5m`. Each replacement is recorded as a `scheduled_restart` event, and `ring deployment inspect` shows the interval
 - containerd supports `on_change: live` and `reload_signal`, which were refused on it
 - containerd honours `config.stop_timeout`, which was refused on it: the grace period is recorded on the container when it is created and waited for when the instance is stopped
@@ -17,7 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ring doctor` warns when the Firecracker runtime lacks what squashfs images need: `ring-init` at `init_path`, or squashfs, overlayfs and devtmpfs in the kernel
 - Health check results record the instance they probed, returned as `instance_id` by `GET /deployments/{id}/health-checks`. `restart_interval` uses it: a failure from an instance that is already gone no longer holds the next replacement back, and the readiness that lets it proceed has to come from the replacement itself
 
+### Changed
+- A readiness deadline no longer fails a worker: its instances are recreated on the restart delays, `backing_off` with `readiness_timeout`, and the deadline counts from the start of the current run
+- `insufficient_resources` and a crash loop are retried on the restart delays instead of leaving the deployment as it is
+- A replica that fails to start while others still serve keeps the deployment `running`: only the next start waits. The new deployment of a rolling update still backs off, so the one it replaces is not drained meanwhile
+
 ### Fixed
+- Bump `rustls-webpki` to 0.103.16 for RUSTSEC-2026-0382, and `tokio` to 1.54.1 for RUSTSEC-2026-0386
+- A Cloud Hypervisor or Firecracker microVM that crashed kept its socket and was never restarted; it is now counted and restarted like a crashed container. Stopping a microVM also stops its VMM process
+- When a runtime cannot list a deployment's instances, the scheduler skips the deployment for that pass instead of starting duplicates, and a deleted deployment is kept until its instances are really gone
+- Stopping a Firecracker microVM, or cleaning up after it failed to boot, could signal another process that had since been given the pid of a Firecracker process already gone
 - Bump `rustls` to 0.23.46 for RUSTSEC-2026-0346, RUSTSEC-2026-0347, RUSTSEC-2026-0348 and RUSTSEC-2026-0349
 - Replace dependencies that are no longer maintained: `serde_yaml`, deprecated and archived along with its `unsafe-libyaml` parser, by `serde_norway`, a maintained fork with the same API that reads `ring apply` manifests; `inquire` 0.9 drops `fxhash`; newer `validator_derive` and `getset` drop `proc-macro-error2`
 - A user label named `ring_deployment` replaced the label Ring uses to find a deployment's containers (Docker, Podman and containerd), so Ring lost track of them. Ring's own labels now take precedence over the user's
