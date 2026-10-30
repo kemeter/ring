@@ -93,7 +93,27 @@ pub(crate) async fn http_probe(
 mod tests {
     use super::*;
     use std::net::Ipv4Addr;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// Tiny one-shot HTTP server: accept one connection, read the request,
+    /// then write `response`. Answering before the request arrives is a
+    /// response on an idle connection, which the client rejects.
+    fn respond_once(listener: TcpListener, response: &'static [u8]) {
+        tokio::spawn(async move {
+            if let Ok((mut socket, _)) = listener.accept().await {
+                let mut request = Vec::new();
+                let mut buf = [0u8; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match socket.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => request.extend_from_slice(&buf[..n]),
+                    }
+                }
+                let _ = socket.write_all(response).await;
+            }
+        });
+    }
 
     #[tokio::test]
     async fn tcp_probe_succeeds_against_listening_port() {
@@ -134,15 +154,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        // Tiny one-shot HTTP server: accept one connection, write 200 OK.
-        tokio::spawn(async move {
-            if let Ok((mut socket, _)) = listener.accept().await {
-                use tokio::io::AsyncWriteExt;
-                let _ = socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-            }
-        });
+        respond_once(listener, b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
 
         let url = format!("http://localhost:{}/", port);
         let (status, _msg) = http_probe(
@@ -160,14 +172,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        tokio::spawn(async move {
-            if let Ok((mut socket, _)) = listener.accept().await {
-                use tokio::io::AsyncWriteExt;
-                let _ = socket
-                    .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-            }
-        });
+        respond_once(
+            listener,
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+        );
 
         let url = format!("http://localhost:{}/", port);
         let (status, msg) = http_probe(
