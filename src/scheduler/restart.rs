@@ -20,6 +20,7 @@
 //!
 //! See `documentation/design/restart-policy.md`.
 
+use crate::models::deployments::MAX_INTERVAL;
 use chrono::{DateTime, Utc};
 use rand::Rng;
 use std::time::Duration;
@@ -294,11 +295,15 @@ pub(crate) fn retry_at(
     } else {
         policy.delay_ceiling(attempt)
     };
-    let delay = jitter(ceiling, rng);
+    // Kept within the longest interval a manifest may set, so that the date
+    // it gives always fits, and reads back once stored.
+    let delay = jitter(ceiling.min(MAX_INTERVAL), rng);
     if delay.is_zero() {
         return None;
     }
-    chrono::Duration::from_std(delay).ok().map(|d| now + d)
+    chrono::Duration::from_std(delay)
+        .ok()
+        .and_then(|d| now.checked_add_signed(d))
 }
 
 /// Full jitter: uniform in `[0, ceiling]`, at millisecond resolution.
@@ -345,6 +350,18 @@ mod tests {
         let p = RestartPolicy::default();
         let ceilings: Vec<u64> = (1..=7).map(|n| p.delay_ceiling(n).as_secs()).collect();
         assert_eq!(ceilings, [10, 20, 40, 80, 160, 300, 300]);
+    }
+
+    #[test]
+    fn a_delay_past_the_last_date_is_cut_down_instead_of_panicking() {
+        let p = RestartPolicy {
+            base: Duration::MAX,
+            cap: Duration::MAX,
+            ..RestartPolicy::default()
+        };
+        let at = retry_at(&p, 1, true, now(), &mut rng()).expect("a retry date");
+        assert!(at > now());
+        assert!((at - now()).to_std().unwrap() <= MAX_INTERVAL);
     }
 
     #[test]

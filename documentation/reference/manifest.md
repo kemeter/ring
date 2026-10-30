@@ -447,7 +447,7 @@ restart:
 | `max_attempts` | workers | Read when `on_exhaustion` is `fail` |
 | `backoff_limit` | jobs | How many times a run that exited non-zero is run again. Default `0`: a failed job is not run again |
 
-Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`). Ring rejects at `ring apply` time a block that does not parse, a `cap` below the effective `base`, an unknown key, `backoff_limit` on a worker and `on_exhaustion`, `max_attempts` or `stable_after` on a job.
+Durations take `s`, `m`, `h` and `d` units (`"90s"`, `"1h30m"`), up to `365d`. Ring rejects at `ring apply` time a block that does not parse, a `cap` below the effective `base`, an unknown key, `backoff_limit` on a worker and `on_exhaustion`, `max_attempts` or `stable_after` on a job.
 
 A job that cannot even start (an image that cannot be pulled, a missing config, not enough memory) is retried without limit on the backoff curve: nothing ran, so nothing can be run twice. `backoff_limit` only counts runs that exited non-zero.
 
@@ -527,7 +527,7 @@ config:
 | `user.group` | Numeric GID. Optional. |
 | `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
 | `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker, Podman and containerd. See below. |
-| `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`. Workers on `docker`, `podman` and `containerd`. See below. |
+| `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`, at most `365d`. Workers on `docker`, `podman` and `containerd`. See below. |
 
 The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
 
