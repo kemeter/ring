@@ -29,7 +29,9 @@ A minimal KVM-backed **micro-VM**, the technology behind AWS Lambda. A tiny devi
 
    The capability goes on the **Ring binary**, not on `firecracker`. This runtime allocates a TAP for *every* microVM, not just those publishing `ports` (Cloud Hypervisor only creates one when ports are declared), so without the capability no Firecracker deployment boots at all — each fails with `could not create tap '…': operation not permitted`. `setcap` does not survive a rebuild or upgrade, so re-run it after replacing the binary.
 
-4. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`). See [Command health checks](#command-health-checks) below.
+4. **`mke2fs`**, to build the disk a microVM gets its network, environment and mounts from, and the writable layer of a squashfs image: `apt install e2fsprogs` / `dnf install e2fsprogs`. It has to be on the `$PATH` of the Ring server; some distributions keep it in `/usr/sbin`.
+
+5. **`ring-agent` inside the guest image** (only if you use `health_checks: [{ type: command, ... }]`). See [Command health checks](#command-health-checks) below.
 
 ## Enable it
 

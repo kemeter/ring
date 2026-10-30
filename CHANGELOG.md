@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A replica that fails to start while others still serve keeps the deployment `running`: only the next start waits. The new deployment of a rolling update still backs off, so the one it replaces is not drained meanwhile
 
 ### Fixed
+- `ring doctor` failed on a host without `xorriso`, which Ring no longer uses, and did not check `mke2fs`, without which a Cloud Hypervisor or Firecracker microVM cannot start. It now checks `mke2fs` on both runtimes
 - Bump `rustls-webpki` to 0.103.16 for RUSTSEC-2026-0382, and `tokio` to 1.54.1 for RUSTSEC-2026-0386
 - A Cloud Hypervisor or Firecracker microVM that crashed kept its socket and was never restarted; it is now counted and restarted like a crashed container. Stopping a microVM also stops its VMM process
 - When a runtime cannot list a deployment's instances, the scheduler skips the deployment for that pass instead of starting duplicates, and a deleted deployment is kept until its instances are really gone

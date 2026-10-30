@@ -184,6 +184,8 @@ fn check_firecracker(config: &Config) -> Vec<Check> {
         .unwrap_or(&default_kernel);
     checks.push(check_file("Kernel", kernel));
 
+    checks.push(check_mke2fs());
+
     // Port forwarding is socat-based, same as CH.
     checks.push(check_socat());
 
@@ -344,7 +346,7 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
 
     checks.push(check_kvm());
     checks.push(check_capabilities(binary));
-    checks.push(check_xorriso());
+    checks.push(check_mke2fs());
     checks.push(check_socat());
 
     let default_firmware = format!("{}/cloud-hypervisor/vmlinux", get_config_dir());
@@ -362,18 +364,16 @@ fn check_cloud_hypervisor(config: &Config) -> Vec<Check> {
     checks
 }
 
-/// xorriso is invoked to build the cloud-init NoCloud cidata ISO when a
-/// deployment ships environment variables. Without it `environment: { ... }`
-/// silently degrades into "VM boots without those vars set."
-fn check_xorriso() -> Check {
-    match ShellCommand::new("xorriso").arg("-version").output() {
-        Ok(out) if out.status.success() => Check::ok(
-            "xorriso",
-            "available (used to build cloud-init cidata ISOs)",
-        ),
+/// mke2fs builds the cloud-init disk a microVM gets its network, environment
+/// and mounts from. Without it the microVM fails to start.
+fn check_mke2fs() -> Check {
+    match ShellCommand::new("mke2fs").arg("-V").output() {
+        Ok(out) if out.status.success() => {
+            Check::ok("mke2fs", "available (used to build cloud-init disks)")
+        }
         _ => Check::fail(
-            "xorriso",
-            "not found — environment variables won't be injected into VMs (apt install xorriso / dnf install xorriso)",
+            "mke2fs",
+            "not found in PATH — microVMs won't start (apt install e2fsprogs / dnf install e2fsprogs)",
         ),
     }
 }
