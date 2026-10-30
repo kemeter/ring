@@ -62,8 +62,8 @@ Run diagnostic checks against the host. Runtime checks only run for runtimes ena
 
 - **Server-side env**: `RING_SECRET_KEY` is set, decodes to base64, and is exactly 32 bytes.
 - **Docker / Podman**: `docker --version` succeeds (the binary is present and the daemon is reachable). Podman reuses this check since it speaks the Docker API.
-- **Cloud Hypervisor**: the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `xorriso` is on `$PATH` (needed for the cloud-init NoCloud ISO when a CH deployment ships `environment`), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
-- **Firecracker** (experimental, only when enabled): the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set, the kernel image at the configured `kernel_path` (an uncompressed `vmlinux`, not a firmware blob) exists, and `socat` is on `$PATH` for port forwarding.
+- **Cloud Hypervisor**: the binary is on `$PATH`, `/dev/kvm` is readable+writable, the binary has `cap_net_admin,cap_net_raw` set (printed by `getcap`), `mke2fs` is on `$PATH` (needed for the cloud-init disk a VM gets its network, environment and mounts from), the firmware file at the configured `firmware_path` exists, and a `virtiofsd` binary is found at `/usr/libexec/virtiofsd`, `/usr/lib/qemu/virtiofsd`, or whatever `RING_VIRTIOFSD` points to.
+- **Firecracker** (experimental, only when enabled): the binary is on `$PATH`, `/dev/kvm` is readable+writable, the Ring binary has `cap_net_admin` set, the kernel image at the configured `kernel_path` (an uncompressed `vmlinux`, not a firmware blob) exists, `mke2fs` is on `$PATH`, and `socat` is on `$PATH` for port forwarding.
 
 ```bash
 ring doctor

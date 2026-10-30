@@ -241,14 +241,7 @@ ring doctor                   # confirms socat presence
 
 ### `environment:` is empty inside the VM
 
-Either `xorriso` isn't installed on the host, or the guest image doesn't ship cloud-init.
-
-```bash
-sudo apt install xorriso
-ring doctor
-```
-
-Custom guest images from scratch (e.g. Buildroot) won't pick up env vars unless you add cloud-init or read `/etc/ring/env` yourself in your boot scripts.
+The guest image doesn't ship cloud-init. Custom guest images from scratch (e.g. Buildroot) won't pick up env vars unless you add cloud-init or read `/etc/ring/env` yourself in your boot scripts.
 
 ### `command:` health check rejected
 
@@ -256,7 +249,7 @@ Either the in-guest `ring-agent` isn't running, or the agent's `cap_net_admin` /
 
 ## Generic diagnostic flow
 
-`ring doctor` is the first-line check: it verifies Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites (binary, KVM, firmware, virtiofsd, xorriso, socat).
+`ring doctor` is the first-line check: it verifies Docker connectivity, the encryption key, and Cloud Hypervisor prerequisites (binary, KVM, firmware, virtiofsd, mke2fs, socat).
 
 ```bash
 ring doctor

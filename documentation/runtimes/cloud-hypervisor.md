@@ -37,7 +37,7 @@ You need all of these on the host:
 
    Despite the filename `vmlinux`, this is the EFI firmware, not a Linux kernel.
 
-5. **`xorriso`** (only if you use `environment:` on a deployment): `apt install xorriso` / `dnf install xorriso`.
+5. **`mke2fs`**, to build the disk a VM gets its network, environment and mounts from: `apt install e2fsprogs` / `dnf install e2fsprogs`. It has to be on the `$PATH` of the Ring server; some distributions keep it in `/usr/sbin`.
 
 6. **`socat`** (only if you publish ports): `apt install socat` / `dnf install socat`.
 
@@ -141,15 +141,15 @@ What Ring does:
 
 ## Environment variables (cloud-init)
 
-`environment:` entries are delivered via cloud-init's NoCloud datasource. Ring builds a small ISO with the env vars and attaches it as a second drive. At boot, cloud-init writes:
+`environment:` entries are delivered via cloud-init's NoCloud datasource. Ring builds a small disk image with the env vars and attaches it as a second drive. At boot, cloud-init writes:
 
 - `/etc/ring/env`: `KEY=value` lines, mode 0600
 - `/etc/profile.d/ring-env.sh`: `export` lines for interactive shells
 - `/etc/systemd/system/service.d/ring-env.conf`: drop-in with `EnvironmentFile=-/etc/ring/env`
 
-**Requires** `xorriso` on the host and a guest image with cloud-init (every standard cloud image ships it). Custom images from scratch (e.g. Buildroot) won't pick the variables up unless you add cloud-init or read `/etc/ring/env` yourself.
+**Requires** a guest image with cloud-init (every standard cloud image ships it). Custom images from scratch (e.g. Buildroot) won't pick the variables up unless you add cloud-init or read `/etc/ring/env` yourself.
 
-The ISO is regenerated on every VM start and removed on stop, so changes to `environment` are picked up the next time the deployment is re-applied.
+The disk image is regenerated on every VM start and removed on stop, so changes to `environment` are picked up the next time the deployment is re-applied.
 
 ## Volumes (virtiofs)
 
@@ -266,7 +266,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | `config.user` (privileged / id / group) | Ignored; a **warning event** is recorded at create |
 | `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`; a `cloud-hypervisor` process that exits non-zero → a failed run. CH does not expose the workload's exit code, so Ring sees VM state only. The finished VM's artifacts are reaped. |
 | Inter-VM networking | Each VM is isolated, with no shared bridge and no DNS between siblings. Cross-VM traffic goes through host-published ports |
-| Environment variables | **Supported** via cloud-init NoCloud (requires `xorriso` + cloud-init in guest) |
+| Environment variables | **Supported** via cloud-init NoCloud (requires cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
 | Port mapping | **Supported** via `socat` userspace forwarders, for both `tcp` and `udp` |
 | Deployment logs | **Supported** via serial console with size-based rotation (10 MiB × 3 backups by default, configurable) |
