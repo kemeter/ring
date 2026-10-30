@@ -426,7 +426,18 @@ async fn scale(
                 &deployment.runtime.clone(),
                 Some(event_reason),
             );
-            deployment.back_off(reason, message.clone());
+            // Instances still serving keep the deployment as it was, their
+            // health checks with it: only the next start waits. With none,
+            // the deployment waits for it. So does a rolling update's new
+            // deployment, which would otherwise drain the one it replaces
+            // toward fewer instances than it can start. One already backing
+            // off says why it last failed.
+            if deployment.instances.is_empty()
+                || deployment.parent_id.is_some()
+                || deployment.status == DeploymentStatus::BackingOff
+            {
+                deployment.back_off(reason, message.clone());
+            }
 
             let failure = match classify_create_error(&err) {
                 Disposition::Terminal(
@@ -861,6 +872,76 @@ mod tests {
         );
         assert_eq!(d.restart_count, 1);
         assert!(reasons(&d).contains(&"config_error".to_string()));
+    }
+
+    /// One more replica fails to start while two serve: the deployment stays
+    /// running, so their health checks keep running, and only the next start
+    /// waits.
+    #[tokio::test]
+    async fn a_start_error_beside_serving_instances_keeps_the_deployment_running() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(3),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(d.condition(), (DeploymentStatus::Running, None));
+        assert_eq!(d.restart_count, 1);
+        assert!(state.next_attempt_at.is_some());
+        assert!(reasons(&d).contains(&"insufficient_resources".to_string()));
+    }
+
+    /// Backing off beside a serving instance, a deployment whose next start
+    /// fails reports that failure, not the one it was backing off for.
+    #[tokio::test]
+    async fn a_start_error_while_backing_off_replaces_the_reason() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("a", Some(127));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+
+        let d = pass(&driver, &policy, worker(2), &mut state, now()).await;
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::SpecRejected))
+        );
+
+        driver.fail_starts_with(RuntimeError::ConfigNotFound("app".to_string()));
+        let later = now() + secs(301);
+        let d = pass(&driver, &policy, d, &mut state, later).await;
+
+        assert_eq!(
+            d.condition(),
+            (DeploymentStatus::BackingOff, Some(Reason::ConfigMissing))
+        );
+    }
+
+    /// A rolling update's new deployment that cannot start all its replicas
+    /// backs off, so the one it replaces is not drained meanwhile.
+    #[tokio::test]
+    async fn a_start_error_holds_a_rolling_update_back() {
+        let driver = FakeDriver::running(&["a"]);
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let mut state = RestartState::default();
+        let mut child = worker(2);
+        child.parent_id = Some("previous".to_string());
+
+        let d = pass(&driver, &RestartPolicy::default(), child, &mut state, now()).await;
+
+        assert_eq!(
+            d.condition(),
+            (
+                DeploymentStatus::BackingOff,
+                Some(Reason::InsufficientResources)
+            )
+        );
     }
 
     #[tokio::test]

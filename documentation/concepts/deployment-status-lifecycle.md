@@ -56,6 +56,7 @@ pending → progressing ─────────────→ running ─�
 
 - **`progressing → running`** happens once a new instance is still up on the next tick, **unless** the deployment declares a `readiness: true` health check, in which case the [readiness gate](#the-readiness-gate) holds it in `progressing` until ready.
 - **`running` is stable.** A liveness check failure triggers the check's `on_failure` action (`restart` removes the instance, counted as a failure, and the reconciler recreates it; `stop` marks the deployment `deleted`; `alert` only emits an event). The status is *not* dragged back to `progressing` once `running` is established.
+- **A replica failing beside others that serve** leaves the deployment `running`, health checks included, whether it crashed or could not start: only its next start waits on the back-off curve. Two exceptions put the deployment in `backing_off` even while others still serve: an instance that exits because its program cannot run (`spec_rejected`), and a replica that cannot start during a rolling update, which holds the drain of the previous deployment.
 - A worker never reaches `completed`, and reaches `failed` only under `on_exhaustion = "fail"`.
 
 ## Job lifecycle
