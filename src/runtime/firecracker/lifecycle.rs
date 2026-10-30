@@ -604,7 +604,7 @@ impl FirecrackerLifecycle {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
         if !ready {
-            self.kill_pid(pid).await;
+            self.kill_spawned(&instance_id, pid).await;
             let _ = std::fs::remove_file(&rootfs_rw);
             return Err(RuntimeError::VmStartFailed(
                 "firecracker API socket never appeared".to_string(),
@@ -635,7 +635,7 @@ impl FirecrackerLifecycle {
                     Some(t)
                 }
                 Err(e) => {
-                    self.kill_pid(pid).await;
+                    self.kill_spawned(&instance_id, pid).await;
                     let _ = std::fs::remove_file(&socket_path);
                     let _ = std::fs::remove_file(&rootfs_rw);
                     return Err(e);
@@ -659,7 +659,7 @@ impl FirecrackerLifecycle {
             .await;
         if let Err(e) = boot {
             // `tap` drops here, deleting the interface.
-            self.kill_pid(pid).await;
+            self.kill_spawned(&instance_id, pid).await;
             let _ = std::fs::remove_file(&socket_path);
             let _ = std::fs::remove_file(&rootfs_rw);
             let _ = std::fs::remove_file(self.cidata_path(&instance_id));
@@ -690,7 +690,7 @@ impl FirecrackerLifecycle {
                     Ok(fw) => forwarders.push(fw),
                     Err(e) => {
                         let _ = client.send_ctrl_alt_del().await;
-                        self.kill_pid(pid).await;
+                        self.kill_spawned(&instance_id, pid).await;
                         let _ = std::fs::remove_file(&socket_path);
                         let _ = std::fs::remove_file(&rootfs_rw);
                         let _ = std::fs::remove_file(self.cidata_path(&instance_id));
@@ -937,13 +937,15 @@ impl FirecrackerLifecycle {
         // /proc. Firecracker has no remote "delete VM" — killing the process is
         // the only way to stop it — so this fallback is what makes teardown
         // survive a restart.
-        let pid = self
+        let tracked = self
             .pids
             .lock()
             .unwrap()
             .remove(instance_id)
-            .map(|info| info.pid)
-            .or_else(|| find_pid_by_socket(&socket_path));
+            .map(|info| info.pid);
+        let pid = pid_to_kill(self.exits.get(instance_id), tracked, || {
+            find_pid_by_socket(&socket_path)
+        });
         if let Some(pid) = pid {
             self.kill_pid(pid).await;
         }
@@ -1004,6 +1006,15 @@ impl FirecrackerLifecycle {
                 let _ = kill(target, Signal::SIGKILL);
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Kill the process this server spawned for `instance_id` while booting
+    /// it, unless it was already seen exiting: its pid may have gone to
+    /// another process since.
+    async fn kill_spawned(&self, instance_id: &str, pid: u32) {
+        if let Some(pid) = pid_to_kill(self.exits.get(instance_id), Some(pid), || None) {
+            self.kill_pid(pid).await;
         }
     }
 
@@ -1263,6 +1274,26 @@ fn instance_id_from_file_name(name: &str) -> Option<&str> {
     }
     let id = name.strip_suffix(".ext4")?;
     (!id.contains(".vol")).then_some(id)
+}
+
+/// The process to kill to stop an instance, from how its process was last seen
+/// (`watched`), the pid tracked when it was booted or re-adopted (`tracked`)
+/// and a search of the live processes by socket (`find`).
+///
+/// A process seen exiting is not killed: its pid may have gone to another
+/// process since. One this server did not watch, re-adopted after a restart,
+/// may have exited unseen just as well, so its tracked pid is not trusted and
+/// only a live process still serving the socket is killed.
+fn pid_to_kill(
+    watched: Option<Watched>,
+    tracked: Option<u32>,
+    find: impl FnOnce() -> Option<u32>,
+) -> Option<u32> {
+    match watched {
+        Some(Watched::Exited(_)) => None,
+        Some(Watched::Running) => tracked.or_else(find),
+        None => find(),
+    }
 }
 
 /// Find the PID of the `firecracker` process bound to `socket_path`, by scanning
@@ -2071,6 +2102,26 @@ mod tests {
         assert_eq!(lc.orphan_instances("dep-1"), vec!["dep-1-bbb".to_string()]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A pid freed by a process that exited may have gone to another one: only
+    /// a process still running, or found serving the socket, is killed.
+    #[test]
+    fn stop_never_kills_the_pid_of_a_process_that_exited() {
+        let exited = Watched::Exited(crate::hypervisor::vm_exits::VmExit {
+            exit_code: Some(1),
+            finished_at: Utc::now(),
+        });
+        let unused = || panic!("no process should be looked for");
+
+        assert_eq!(pid_to_kill(Some(exited), Some(4242), unused), None);
+        assert_eq!(
+            pid_to_kill(Some(Watched::Running), Some(4242), unused),
+            Some(4242)
+        );
+        // Re-adopted after a restart: the tracked pid is not trusted.
+        assert_eq!(pid_to_kill(None, Some(4242), || None), None);
+        assert_eq!(pid_to_kill(None, Some(4242), || Some(77)), Some(77));
     }
 
     #[test]
