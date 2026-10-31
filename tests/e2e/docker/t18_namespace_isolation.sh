@@ -75,6 +75,17 @@ docker network ls --format '{{ .Name }}' | grep -q "^ring_ns-beta$" \
   || fail "no bridge 'ring_ns-beta' (expected one bridge per namespace)"
 log "per-namespace bridges present: ring_ns-alpha, ring_ns-beta"
 
+# === A container is on its namespace's bridge and nothing else ===
+# A second network shared across namespaces, Docker's default bridge in
+# particular, would defeat the isolation probed below without failing it: that
+# probe only targets the namespace bridge address.
+for CID in "$A_CID" "$B_CID"; do
+  NETWORKS=$(docker inspect "$CID" --format '{{ len .NetworkSettings.Networks }}')
+  [ "$NETWORKS" = "1" ] \
+    || fail "container $CID is on $NETWORKS networks, expected only its namespace bridge"
+done
+log "each container is attached to its namespace bridge only"
+
 # === Discover B's IP and assert pod-a cannot reach it across namespaces ===
 # We use `wget` (busybox) on a strict 2-second connect timeout. Cross-bridge
 # reachability is decided by the host's bridge filter (no FORWARD rule
@@ -123,6 +134,10 @@ for _ in $(seq 1 10); do
 done
 [ "$ok" -eq 1 ] || fail "pod-a CANNOT reach pod-a2 inside the same namespace (sanity check failed)"
 log "pod-a reaches pod-a2 inside ns-alpha (sanity check)"
+
+docker exec "$A_CID" wget -q --tries=1 --timeout=2 -O - "http://pod-a2:8080/" > /dev/null 2>&1 \
+  || fail "pod-a cannot resolve pod-a2 by its deployment name"
+log "pod-a resolves pod-a2 by its deployment name"
 
 # Cleanup
 "$RING_BIN" deployment delete "$A_ID"

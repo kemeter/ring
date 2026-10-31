@@ -10,8 +10,8 @@ use bollard::{
     auth::DockerCredentials,
     models::{
         ContainerCreateBody, EndpointSettings, HealthConfig, HostConfig, Mount, MountTypeEnum,
-        MountVolumeOptions, MountVolumeOptionsDriverConfig, NetworkConnectRequest,
-        NetworkCreateRequest, PortBinding,
+        MountVolumeOptions, MountVolumeOptionsDriverConfig, NetworkCreateRequest, NetworkingConfig,
+        PortBinding,
     },
     query_parameters::{
         CreateContainerOptionsBuilder, CreateImageOptionsBuilder, InspectNetworkOptionsBuilder,
@@ -534,10 +534,12 @@ pub(crate) async fn create_container(
     let host_config = HostConfig {
         mounts: Some(mounts),
         privileged: privileged_config,
+        // Named explicitly: left unset, Docker also attaches the container to its
+        // default bridge, which every namespace would then share.
         network_mode: if use_host_network {
             Some("host".to_string())
         } else {
-            None
+            Some(network_name.clone())
         },
         port_bindings: if port_bindings.is_empty() {
             None
@@ -565,6 +567,20 @@ pub(crate) async fn create_container(
         ..Default::default()
     };
 
+    let networking_config = if use_host_network {
+        None
+    } else {
+        Some(NetworkingConfig {
+            endpoints_config: Some(HashMap::from([(
+                network_name.clone(),
+                EndpointSettings {
+                    aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
+                    ..Default::default()
+                },
+            )])),
+        })
+    };
+
     let config = ContainerCreateBody {
         image: Some(deployment.image.clone()),
         cmd: Some(deployment.command.clone()),
@@ -575,6 +591,7 @@ pub(crate) async fn create_container(
         healthcheck: build_health_config(&deployment.health_checks),
         exposed_ports,
         stop_timeout: get_stop_timeout(&deployment.config),
+        networking_config,
         ..Default::default()
     };
 
@@ -586,38 +603,6 @@ pub(crate) async fn create_container(
         Ok(container) => {
             debug!("Docker create container {:?}", container.id);
             deployment.instances.push(container.id.to_string());
-
-            if !use_host_network {
-                let endpoint_config = EndpointSettings {
-                    aliases: Some(vec![deployment.name.clone(), container_name.clone()]),
-                    ..Default::default()
-                };
-
-                let connect_request = NetworkConnectRequest {
-                    container: container.id.clone(),
-                    endpoint_config: Some(endpoint_config),
-                };
-
-                if let Err(e) = docker.connect_network(&network_name, connect_request).await {
-                    // Same orphan guard as `start_container` below: Docker
-                    // accepted `create` (the container exists, in `Created`
-                    // state) but the follow-up call failed. Without this
-                    // cleanup, the orphan would be picked up by
-                    // `list_instances` on the next reconciliation tick as
-                    // if it were a healthy instance, masking the need to
-                    // retry and accumulating one stale container per failed
-                    // attempt.
-                    remove_container(docker.clone(), container.id.clone()).await;
-                    // Also drop the id from in-memory instances so the
-                    // caller doesn't carry a reference to a container that
-                    // no longer exists.
-                    deployment.instances.pop();
-                    return Err(RuntimeError::InstanceCreationFailed(format!(
-                        "Docker failed to connect to network: {}",
-                        e
-                    )));
-                }
-            }
 
             let start_options = StartContainerOptionsBuilder::new().build();
             if let Err(e) = docker
