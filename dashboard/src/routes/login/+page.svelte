@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { login } from '$lib/api';
-  import { getToken, setToken } from '$lib/auth';
+  import { login } from '#lib/api.ts';
+  import { getToken, setToken } from '#lib/auth.ts';
 
   let username = $state('admin');
   let password = $state('');

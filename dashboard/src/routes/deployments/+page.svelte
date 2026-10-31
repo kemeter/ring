@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import { listDeployments, type Deployment } from '$lib/api';
-  import { getToken } from '$lib/auth';
-  import { statusKind, statusLabel } from '$lib/status';
-  import { formatDate, timeAgo } from '$lib/utils';
+  import { page } from '$app/state';
+  import { listDeployments, type Deployment } from '#lib/api.ts';
+  import { getToken } from '#lib/auth.ts';
+  import { statusKind, statusLabel } from '#lib/status.ts';
+  import { formatDate, timeAgo } from '#lib/utils.ts';
 
   let items = $state<Deployment[]>([]);
   let loading = $state(true);
@@ -22,7 +22,7 @@
 
   // One-shot read of the URL on mount; subsequent changes are pushed back
   // by `syncUrl()` below.
-  function loadFiltersFromUrl(url: URL): void {
+  function loadFiltersFromUrl(url: typeof page.url): void {
     namespaceFilter = url.searchParams.get('namespace') ?? '';
     runtimeFilter = url.searchParams.get('runtime') ?? '';
     statusFilter = url.searchParams.get('status') ?? '';
@@ -46,7 +46,7 @@
     const qs = params.toString();
     const next = qs ? `?${qs}` : '';
     // Replace the URL silently — no navigation, no re-mount.
-    history.replaceState(null, '', `${$page.url.pathname}${next}`);
+    history.replaceState(null, '', `${page.url.pathname}${next}`);
   }
 
   function clearFilters() {
@@ -105,7 +105,7 @@
       goto('/login');
       return;
     }
-    loadFiltersFromUrl($page.url);
+    loadFiltersFromUrl(page.url);
     void refresh();
     poll = setInterval(() => void refresh(), 5000);
   });

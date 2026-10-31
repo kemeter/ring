@@ -1,7 +1,7 @@
 <script lang="ts">
-  import ResourceTable from '$lib/ResourceTable.svelte';
-  import { listConfigs, type Config } from '$lib/api';
-  import { formatDate } from '$lib/utils';
+  import ResourceTable from '#lib/ResourceTable.svelte';
+  import { listConfigs, type Config } from '#lib/api.ts';
+  import { formatDate } from '#lib/utils.ts';
 
   let expanded = $state<Set<string>>(new Set());
 

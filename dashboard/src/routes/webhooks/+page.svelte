@@ -1,7 +1,7 @@
 <script lang="ts">
-  import ResourceTable from '$lib/ResourceTable.svelte';
-  import { listWebhooks, type Webhook } from '$lib/api';
-  import { formatDate } from '$lib/utils';
+  import ResourceTable from '#lib/ResourceTable.svelte';
+  import { listWebhooks, type Webhook } from '#lib/api.ts';
+  import { formatDate } from '#lib/utils.ts';
 
   const columns = [
     { label: 'URL' },

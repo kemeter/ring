@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
+import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
 // Single source of truth for the displayed version: the workspace Cargo.toml.
@@ -19,7 +21,23 @@ export default defineConfig({
   define: {
     __RING_VERSION__: JSON.stringify(ringVersion())
   },
-  plugins: [sveltekit()],
+  plugins: [
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({
+        pages: 'build',
+        assets: 'build',
+        fallback: 'index.html',
+        precompress: false,
+        strict: true
+      })
+      // No `paths: { relative: true }` — adapter-static rewrites our absolute
+      // `/foo` URLs to `./foo` relative to the current page, which breaks
+      // dynamic routes (`./deployments/abc` from `/deployments` resolves to
+      // `/deployments/deployments/abc`). Keep paths absolute, served from
+      // root by the Rust backend.
+    })
+  ],
   server: {
     port: 5173,
     // In dev, requests to /api/* hit the Rust backend rather than the

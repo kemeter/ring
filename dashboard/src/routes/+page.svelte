@@ -9,10 +9,10 @@
     listSecrets,
     type Deployment,
     type NodeInfo
-  } from '$lib/api';
-  import { getToken } from '$lib/auth';
-  import { statusKind, statusLabel } from '$lib/status';
-  import { timeAgo } from '$lib/utils';
+  } from '#lib/api.ts';
+  import { getToken } from '#lib/auth.ts';
+  import { statusKind, statusLabel } from '#lib/status.ts';
+  import { timeAgo } from '#lib/utils.ts';
 
   let deployments = $state<Deployment[]>([]);
   let namespaceCount = $state(0);

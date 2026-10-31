@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import {
     getDeployment,
     getDeploymentHealthChecks,
@@ -15,13 +15,13 @@
     type EnvValue,
     type HealthCheck,
     type HealthCheckResult
-  } from '$lib/api';
-  import CopyButton from '$lib/CopyButton.svelte';
-  import DeploymentLogs from '$lib/DeploymentLogs.svelte';
-  import { statusKind, statusLabel } from '$lib/status';
-  import DetailTableCard from '$lib/DetailTableCard.svelte';
-  import { getToken } from '$lib/auth';
-  import { formatBytes, formatDate, timeAgo } from '$lib/utils';
+  } from '#lib/api.ts';
+  import CopyButton from '#lib/CopyButton.svelte';
+  import DeploymentLogs from '#lib/DeploymentLogs.svelte';
+  import { statusKind, statusLabel } from '#lib/status.ts';
+  import DetailTableCard from '#lib/DetailTableCard.svelte';
+  import { getToken } from '#lib/auth.ts';
+  import { formatBytes, formatDate, timeAgo } from '#lib/utils.ts';
 
   let detail = $state<DeploymentDetail | null>(null);
   let events = $state<DeploymentEvent[]>([]);
@@ -33,7 +33,7 @@
   let lastFetch = $state<Date | null>(null);
   let poll: ReturnType<typeof setInterval> | null = null;
 
-  let id = $derived($page.params.id ?? '');
+  let id = $derived(page.params.id ?? '');
 
   async function refresh() {
     if (!id) {

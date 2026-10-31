@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import { getNamespaceAudit, type AuditEntry } from '$lib/api';
-  import { getToken } from '$lib/auth';
-  import { formatDate, timeAgo } from '$lib/utils';
+  import { page } from '$app/state';
+  import { getNamespaceAudit, type AuditEntry } from '#lib/api.ts';
+  import { getToken } from '#lib/auth.ts';
+  import { formatDate, timeAgo } from '#lib/utils.ts';
 
-  let name = $derived($page.params.name ?? '');
+  let name = $derived(page.params.name ?? '');
   let entries = $state<AuditEntry[]>([]);
   let loading = $state(true);
   let errorMsg = $state<string | null>(null);
