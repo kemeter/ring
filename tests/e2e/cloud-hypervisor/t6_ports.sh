@@ -107,8 +107,7 @@ log "found $RING_TAPS ring-* tap interface(s)"
 ISO_PATH=$(find "$RING_E2E_CH_SOCKET_DIR" -maxdepth 1 -name "ch-*.cidata.iso" 2>/dev/null | head -n1)
 [ -z "$ISO_PATH" ] && fail "cidata ISO not found"
 EXTRACT_DIR="$RING_TEST_DIR/extracted"
-mkdir -p "$EXTRACT_DIR"
-xorriso -osirrox on -indev "$ISO_PATH" -extract / "$EXTRACT_DIR" > /dev/null 2>&1
+extract_cidata "$ISO_PATH" "$EXTRACT_DIR"
 if ! grep -q "ip addr add 10\.42\." "$EXTRACT_DIR/user-data"; then
   cat "$EXTRACT_DIR/user-data" >&2
   fail "user-data missing 'ip addr add' for the static IP"

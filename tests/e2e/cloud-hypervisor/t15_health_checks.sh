@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # T15-CH: validate that tcp/http health checks are wired through the shared
-# `hypervisor::health_probes` module on the Cloud Hypervisor runtime, and that
-# `command` is rejected at the API.
+# `hypervisor::health_probes` module on the Cloud Hypervisor runtime. `command`
+# checks are covered by t17.
 #
 # Why a failure-only path: the Cirros image used by the CH e2e suite does
 # not run cloud-config's runcmd reliably, so we cannot guarantee a service
 # inside the guest listening on a known port. We can however validate the
 # *plumbing*: a probe definition produces real probe rows in the database
 # (status `failed` if the port is closed), the `on_failure: alert` action
-# emits a `HealthCheckAlert` event, and the failure message comes from the
+# emits a `health_check_alert` event, and the failure message comes from the
 # shared probe module — proving the default trait impl is no longer a
 # "not supported" stub.
 
@@ -20,53 +20,13 @@ source "$SCRIPT_DIR/../lib.sh"
 # shellcheck source=./setup.sh
 source "$SCRIPT_DIR/setup.sh"
 
-log "== T15-CH: health checks (tcp/http failure path + command rejection) =="
+log "== T15-CH: health checks (tcp/http failure path) =="
 
 setup_ch
 start_ring
 ring_login
 
-# === part 1: command health check is rejected at the API ===
-
-REJECTED_FIXTURE="$RING_TEST_DIR/hc-command-rejected.yaml"
-cat > "$REJECTED_FIXTURE" <<EOF
-deployments:
-  hc-command-rejected:
-    name: hc-command-rejected
-    namespace: ring-e2e
-    runtime: cloud-hypervisor
-    image: "$RING_E2E_CH_IMAGE"
-    replicas: 1
-    health_checks:
-      - type: command
-        command: "true"
-        interval: "5s"
-        timeout: "2s"
-        threshold: 1
-        on_failure: alert
-EOF
-
-# `ring apply` must fail because the API rejects `command` for CH. We do not
-# care about the exit code here (the CLI's mapping varies); we care that the
-# deployment never lands in the database.
-log "applying manifest with command health check (must be rejected)..."
-"$RING_BIN" apply --file "$REJECTED_FIXTURE" > "$RING_TEST_DIR/apply-rejected.log" 2>&1 || true
-
-# Confirm nothing reached the database.
-REJECTED_ID=$(get_deployment_id "ring-e2e" "hc-command-rejected" || true)
-if [ -n "$REJECTED_ID" ]; then
-  cat "$RING_TEST_DIR/apply-rejected.log" >&2
-  fail "command health check should have been rejected, but deployment $REJECTED_ID was created"
-fi
-
-# Confirm the rejection message mentions the unsupported runtime / health check.
-if ! grep -qi "command.*not supported\|cloud-hypervisor" "$RING_TEST_DIR/apply-rejected.log"; then
-  cat "$RING_TEST_DIR/apply-rejected.log" >&2
-  fail "expected rejection message mentioning command/cloud-hypervisor in apply output"
-fi
-log "command health check rejected at the API as expected"
-
-# === part 2: tcp probe runs and produces failed rows for a closed port ===
+# === part 1: tcp probe runs and produces failed rows for a closed port ===
 
 # Pick a high port the guest definitely doesn't listen on. Cirros has no
 # service on 9999 and won't bring up its NIC reliably anyway, so even an
@@ -143,10 +103,10 @@ case "$TCP_MSG" in
 esac
 
 # After threshold consecutive failures, on_failure: alert must emit a
-# HealthCheckAlert event. The CLI's `deployment events` only renders a
+# health_check_alert event. The CLI's `deployment events` only renders a
 # table, so we go through the REST API directly to grep the reason.
 TOKEN=$(jq -r '.default.token' "$RING_CONFIG_DIR/auth.json")
-log "waiting for HealthCheckAlert event..."
+log "waiting for health_check_alert event..."
 ALERTS=0
 for _ in $(seq 1 30); do
   RESP=$(curl -s -H "Authorization: Bearer $TOKEN" \
@@ -154,16 +114,16 @@ for _ in $(seq 1 30); do
   # The endpoint returns either an array of event objects (success) or a
   # JSON object with `error` (failure). Default to 0 on parse errors so the
   # loop keeps polling.
-  ALERTS=$(echo "$RESP" | jq 'if type == "array" then [.[] | select(.reason=="HealthCheckAlert")] | length else 0 end' 2>/dev/null || echo 0)
+  ALERTS=$(echo "$RESP" | jq 'if type == "array" then [.[] | select(.reason=="health_check_alert")] | length else 0 end' 2>/dev/null || echo 0)
   [ "${ALERTS:-0}" -ge 1 ] && break
   sleep 1
 done
 if [ "${ALERTS:-0}" -lt 1 ]; then
   echo "[e2e] last events response:" >&2
   echo "$RESP" | jq . >&2 2>/dev/null || echo "$RESP" >&2
-  fail "no HealthCheckAlert event recorded after threshold failures"
+  fail "no health_check_alert event recorded after threshold failures"
 fi
-log "$ALERTS HealthCheckAlert event(s) recorded"
+log "$ALERTS health_check_alert event(s) recorded"
 
 # Sanity: with on_failure: alert, restart_count must NOT have moved.
 RESTARTS=$(get_restart_count "ring-e2e" "hc-tcp-fail")
@@ -173,7 +133,7 @@ fi
 
 "$RING_BIN" deployment delete "$TCP_ID"
 
-# === part 3: http probe runs and produces failed rows ===
+# === part 2: http probe runs and produces failed rows ===
 
 HTTP_FIXTURE="$RING_TEST_DIR/hc-http-fail.yaml"
 cat > "$HTTP_FIXTURE" <<EOF
