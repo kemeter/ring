@@ -149,6 +149,20 @@ pub(crate) async fn execute(
                 }
             };
 
+            let body = match args.get_many::<String>("reason") {
+                Some(reasons) => {
+                    let reasons: Vec<&str> = reasons.map(String::as_str).collect();
+                    match keep_reasons(&body, &reasons) {
+                        Ok(kept) => kept,
+                        Err(e) => {
+                            eprintln!("Failed to parse deployment list: {}", e);
+                            exit_code::ExitCode::General.exit();
+                        }
+                    }
+                }
+                None => body,
+            };
+
             if output_format(args).is_json() {
                 println!("{}", body);
                 return;
@@ -200,5 +214,45 @@ pub(crate) async fn execute(
             eprintln!("Error fetching deployments: {}", error);
             exit_code::from_reqwest_error(&error).exit();
         }
+    }
+}
+
+/// Keep the deployments failing for one of `reasons`. The server filters on
+/// this too, but one older than the filter ignores it and answers with every
+/// deployment.
+fn keep_reasons(body: &str, reasons: &[&str]) -> serde_json::Result<String> {
+    let mut deployments: Vec<serde_json::Value> = serde_json::from_str(body)?;
+    deployments.retain(|deployment| {
+        deployment["failure"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reasons.contains(&reason))
+    });
+    serde_json::to_string(&deployments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_reasons;
+
+    #[test]
+    fn keep_reasons_keeps_only_the_matching_failures() {
+        let body = r#"[
+            {"name": "a", "failure": {"reason": "crash_loop", "message": ""}},
+            {"name": "b", "failure": {"reason": "image_pull", "message": ""}},
+            {"name": "c", "failure": null}
+        ]"#;
+
+        let kept: serde_json::Value =
+            serde_json::from_str(&keep_reasons(body, &["crash_loop"]).unwrap()).unwrap();
+
+        assert_eq!(kept.as_array().unwrap().len(), 1);
+        assert_eq!(kept[0]["name"], "a");
+    }
+
+    #[test]
+    fn keep_reasons_matches_nothing_on_a_server_without_failures() {
+        let body = include_str!("../../fixtures/deployments_v0_12_0.json");
+
+        assert_eq!(keep_reasons(body, &["crash_loop"]).unwrap(), "[]");
     }
 }
