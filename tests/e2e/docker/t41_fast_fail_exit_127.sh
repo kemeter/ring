@@ -31,19 +31,15 @@ if [ -z "$DEPLOYMENT_ID" ]; then
 fi
 log "deployment id: $DEPLOYMENT_ID"
 
+# 1) The exit code is recognised as needing an operator. The retry delay is
+# drawn at random up to the cap, so a read can land on a retry in flight: give
+# that attempt time to exit before judging the status.
+wait_deployment_state "ring-e2e" "command-not-found" "backing_off:spec_rejected" 15
+
 TOTAL_CONTAINERS=$(docker ps -aq --filter "label=ring_deployment=$DEPLOYMENT_ID" | wc -l | tr -d ' ')
 RESTART_COUNT=$(get_restart_count "ring-e2e" "command-not-found")
-STATUS=$("$RING_BIN" deployment list --output json \
-  | jq -r --arg ns "ring-e2e" --arg n "command-not-found" \
-      '.[] | select(.namespace==$ns and .name==$n) | '"$STATE_JQ" \
-  | head -n1)
 
-log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT status=$STATUS"
-
-# 1) The exit code is recognised as needing an operator.
-if [ "$STATUS" != "backing_off:spec_rejected" ]; then
-  fail "expected backing_off:spec_rejected after an exit 127, got '$STATUS'"
-fi
+log "observed: total_containers=$TOTAL_CONTAINERS restart_count=$RESTART_COUNT"
 
 # 2) Its retries start at the cap: in 30s, at most a couple of attempts.
 if [ "${RESTART_COUNT:-0}" -lt 1 ] || [ "$RESTART_COUNT" -gt 3 ]; then
