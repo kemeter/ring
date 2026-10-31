@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { getNode, type NodeInfo } from '$lib/api';
-  import { getToken } from '$lib/auth';
-  import { timeAgo } from '$lib/utils';
+  import { getNode, type NodeInfo } from '#lib/api.ts';
+  import { getToken } from '#lib/auth.ts';
+  import { timeAgo } from '#lib/utils.ts';
 
   let node = $state<NodeInfo | null>(null);
   let loading = $state(true);

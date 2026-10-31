@@ -11,9 +11,9 @@
   import { onDestroy, onMount } from 'svelte';
   import type { Snippet } from 'svelte';
   import { goto } from '$app/navigation';
-  import { page } from '$app/stores';
-  import { getToken } from '$lib/auth';
-  import { timeAgo } from '$lib/utils';
+  import { page } from '$app/state';
+  import { getToken } from '#lib/auth.ts';
+  import { timeAgo } from '#lib/utils.ts';
 
   interface Props {
     title: string;
@@ -72,7 +72,7 @@
       params.set('namespace', nsFilter);
     }
     const qs = params.toString();
-    history.replaceState(null, '', `${$page.url.pathname}${qs ? `?${qs}` : ''}`);
+    history.replaceState(null, '', `${page.url.pathname}${qs ? `?${qs}` : ''}`);
   }
 
   onMount(() => {
@@ -80,7 +80,7 @@
       goto('/login');
       return;
     }
-    nsFilter = $page.url.searchParams.get('namespace') ?? '';
+    nsFilter = page.url.searchParams.get('namespace') ?? '';
     void refresh();
     if (pollMs > 0) {
       poll = setInterval(() => void refresh(), pollMs);

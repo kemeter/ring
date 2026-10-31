@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { listDeployments, listNamespaces, type Deployment, type Namespace } from '$lib/api';
-  import { getToken } from '$lib/auth';
-  import { formatDate, timeAgo } from '$lib/utils';
+  import { listDeployments, listNamespaces, type Deployment, type Namespace } from '#lib/api.ts';
+  import { getToken } from '#lib/auth.ts';
+  import { formatDate, timeAgo } from '#lib/utils.ts';
 
   let namespaces = $state<Namespace[]>([]);
   let deployments = $state<Deployment[]>([]);

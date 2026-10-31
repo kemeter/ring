@@ -1,7 +1,7 @@
 <script lang="ts">
-  import ResourceTable from '$lib/ResourceTable.svelte';
-  import { listVolumes, type Volume } from '$lib/api';
-  import { formatBytes, formatDate } from '$lib/utils';
+  import ResourceTable from '#lib/ResourceTable.svelte';
+  import { listVolumes, type Volume } from '#lib/api.ts';
+  import { formatBytes, formatDate } from '#lib/utils.ts';
 
   const columns = [
     { label: 'Name' },

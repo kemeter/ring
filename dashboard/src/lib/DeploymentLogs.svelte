@@ -8,7 +8,7 @@
    * has to place it and pass an id.
    */
   import { onDestroy, untrack } from 'svelte';
-  import { fetchLogsSnapshot, streamLogs, type LogEntry, type LogStreamHandle } from '$lib/api';
+  import { fetchLogsSnapshot, streamLogs, type LogEntry, type LogStreamHandle } from '#lib/api.ts';
 
   interface Props {
     /** Deployment whose logs to show. Changing it reloads the viewer. */

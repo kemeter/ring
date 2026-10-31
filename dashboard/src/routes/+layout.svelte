@@ -1,11 +1,11 @@
 <script lang="ts">
   import '../app.css';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { getCurrentUser, logout as apiLogout, type CurrentUser } from '$lib/api';
-  import { clearToken, getToken } from '$lib/auth';
-  import { applyTheme, loadTheme, saveTheme, type Theme } from '$lib/theme';
+  import { getCurrentUser, logout as apiLogout, type CurrentUser } from '#lib/api.ts';
+  import { clearToken, getToken } from '#lib/auth.ts';
+  import { applyTheme, loadTheme, saveTheme, type Theme } from '#lib/theme.ts';
 
   let { children } = $props();
   let currentUser = $state<CurrentUser | null>(null);
@@ -31,7 +31,7 @@
   ];
 
   function isActive(href: string): boolean {
-    const current = $page.url.pathname.replace(/\/$/, '');
+    const current = page.url.pathname.replace(/\/$/, '');
     const target = href.replace(/\/$/, '');
     // Overview lives at the root: only an exact match should highlight it,
     // otherwise every page (which all start with "/") would mark it active.
@@ -41,7 +41,7 @@
     return current === target || current.startsWith(`${target}/`);
   }
 
-  let onLoginPage = $derived($page.url.pathname === '/login');
+  let onLoginPage = $derived(page.url.pathname === '/login');
 
   onMount(async () => {
     // Apply the persisted (or system-preferred) theme as early as possible so
