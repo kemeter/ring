@@ -174,3 +174,33 @@ pub(crate) struct DeploymentVolume {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reload_signal: Option<ReloadSignal>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DeploymentOutput;
+    use serde_json::Value;
+
+    /// A `GET /deployments` response recorded from a v0.12.0 server.
+    const V0_12_0_RESPONSE: &str = include_str!("../../fixtures/deployments_v0_12_0.json");
+
+    #[test]
+    fn the_cli_reads_the_response_of_a_v0_12_0_server() {
+        let deployments: Vec<DeploymentOutput> = serde_json::from_str(V0_12_0_RESPONSE).unwrap();
+
+        assert_eq!(deployments.len(), 2);
+        assert!(deployments.iter().all(|d| d.failure.is_none()));
+    }
+
+    #[test]
+    fn a_v0_12_0_cli_still_finds_every_field_it_knows() {
+        let recorded: Vec<Value> = serde_json::from_str(V0_12_0_RESPONSE).unwrap();
+        let parsed: Vec<DeploymentOutput> = serde_json::from_str(V0_12_0_RESPONSE).unwrap();
+        let served = serde_json::to_value(&parsed).unwrap();
+
+        for (recorded, served) in recorded.iter().zip(served.as_array().unwrap()) {
+            for field in recorded.as_object().unwrap().keys() {
+                assert!(served.get(field).is_some(), "`{field}` is no longer served");
+            }
+        }
+    }
+}

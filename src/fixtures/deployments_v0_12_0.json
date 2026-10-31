@@ -1,0 +1,64 @@
+[
+  {
+    "id": "93dc967b-90f1-4b7c-a6cc-d0a58ab74c7c",
+    "created_at": "2026-10-31 09:33:11.354980811 UTC",
+    "updated_at": "2026-10-31 09:33:45",
+    "status": "creating",
+    "restart_count": 4,
+    "name": "crash",
+    "runtime": "docker",
+    "kind": "worker",
+    "namespace": "compat-fixture",
+    "image": "alpine:3.19",
+    "command": [
+      "sh",
+      "-c",
+      "exit 1"
+    ],
+    "config": {
+      "image_pull_policy": "Always",
+      "server": null,
+      "username": null,
+      "password": null,
+      "user": null
+    },
+    "replicas": 1,
+    "ports": [],
+    "labels": {},
+    "instances": [],
+    "environment": {},
+    "volumes": [],
+    "image_digest": "sha256:6baf43584bcb78f2e5847d1de515f23499913ac9f12bdf834811a3145eb11ca1"
+  },
+  {
+    "id": "93585199-7b53-4e0e-995d-26b8099903d7",
+    "created_at": "2026-10-31 09:33:11.361761214 UTC",
+    "updated_at": "2026-10-31 09:33:46",
+    "status": "running",
+    "restart_count": 0,
+    "name": "web",
+    "runtime": "docker",
+    "kind": "worker",
+    "namespace": "compat-fixture",
+    "image": "nginx:alpine",
+    "command": [],
+    "config": {
+      "image_pull_policy": "Always",
+      "server": null,
+      "username": null,
+      "password": null,
+      "user": null
+    },
+    "replicas": 1,
+    "ports": [],
+    "labels": {},
+    "instances": [
+      {
+        "id": "9d584ca32d33e9f6d06c450fe3f6d9dbb508c4606081e5e81cd91a06bcbcfda4"
+      }
+    ],
+    "environment": {},
+    "volumes": [],
+    "image_digest": "sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606"
+  }
+]
