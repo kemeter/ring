@@ -3009,7 +3009,7 @@ dependencies = [
  "owo-colors",
  "prost",
  "prost-types",
- "rand 0.9.4",
+ "rand 0.10.3",
  "regex",
  "reqwest",
  "rust-argon2",

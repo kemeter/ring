@@ -47,7 +47,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 hyperlocal = "0.9"
 http-body-util = "0.1"
 validator = { version = "0.21.0", features = ["derive"] }
-rand = "0.9.1"
+rand = "0.10.3"
 aes-gcm = "0.11"
 base64 = "0.23"
 sha2 = "0.11"

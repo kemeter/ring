@@ -17,7 +17,7 @@ use crate::config::config::get_config_dir;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueEnum};
-use rand::RngCore;
+use rand::Rng;
 use std::fs;
 use std::io::IsTerminal;
 #[cfg(unix)]

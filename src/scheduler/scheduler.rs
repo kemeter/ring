@@ -15,7 +15,6 @@ use crate::scheduler::health_checker::HealthChecker;
 use crate::scheduler::intentional_shutdowns::IntentionalShutdowns;
 use crate::scheduler::reconcile;
 use crate::scheduler::restart;
-use rand::SeedableRng as _;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::env;
@@ -1681,7 +1680,7 @@ pub(crate) async fn schedule(
 
     // Validated at startup (`commands::server`), so the fallback is never used.
     let policy = config.server.restart.policy().unwrap_or_default();
-    let mut rng = rand::rngs::StdRng::from_os_rng();
+    let mut rng: rand::rngs::StdRng = rand::make_rng();
 
     // Per-deployment autoscaling cooldowns. Only ever consulted for deployments
     // that carry an `autoscale` policy — see `run_autoscaling`.

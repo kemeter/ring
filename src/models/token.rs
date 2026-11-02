@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -190,12 +190,12 @@ pub(crate) fn hash_token(clear: &str) -> String {
 /// Generate a fresh clear token and its derived (prefix, hash). The clear
 /// value is returned to the caller exactly once — it is never stored.
 ///
-/// `OsRng` (OS entropy) rather than a thread-local PRNG: Ring forks processes
+/// `SysRng` (OS entropy) rather than a thread-local PRNG: Ring forks processes
 /// (the scheduler) and a userspace CSPRNG isn't guaranteed to reseed across
 /// fork. This mirrors `models::users::hash_password` and `models::secret`.
 fn generate_token() -> (String, String, String) {
     let mut bytes = [0u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut bytes)
         .expect("OS random generator failed");
     let clear = format!("{}{}", TOKEN_PREFIX, hex::encode(bytes));

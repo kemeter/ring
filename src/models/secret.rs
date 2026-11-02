@@ -3,8 +3,8 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ pub(crate) fn encrypt_value(plaintext: &str) -> Vec<u8> {
     let cipher = Aes256Gcm::new_from_slice(&key).expect("Invalid key length");
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut nonce_bytes)
         .expect("OS random generator failed");
     let nonce = Nonce::from(nonce_bytes);

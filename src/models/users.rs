@@ -1,6 +1,6 @@
 use argon2::{self, Config as Argon2Config};
-use rand::TryRngCore;
-use rand::rngs::OsRng;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -405,12 +405,12 @@ pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<bool, sqlx:
 /// this salt in the returned string, so `verify_encoded` reads it back from
 /// the stored hash — no salt needs to be carried in config.
 ///
-/// We use `OsRng` (OS entropy) rather than a thread-local PRNG: Ring forks
+/// We use `SysRng` (OS entropy) rather than a thread-local PRNG: Ring forks
 /// processes (the scheduler), and a userspace CSPRNG isn't guaranteed to
 /// reseed across fork. This mirrors the nonce generation in `models::secret`.
 pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
     let mut salt = [0u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut salt)
         .expect("OS random generator failed");
 
