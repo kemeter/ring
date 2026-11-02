@@ -876,7 +876,7 @@ async fn write_config_files(
                 // stale files would accumulate. Sha256 keys the same content to the
                 // same file across restarts.
                 let digest = Sha256::digest(content.as_bytes());
-                let file = format!("{}/{:x}", dir, digest);
+                let file = format!("{}/{}", dir, hex::encode(digest));
                 if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
                     tokio::fs::write(&file, content).await?;
                 }

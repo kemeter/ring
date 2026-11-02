@@ -357,6 +357,16 @@ pub(crate) async fn touch_last_used(pool: &SqlitePool, token: &Token) -> Result<
 mod tests {
     use super::*;
 
+    /// Tokens are looked up by this hash: a change would invalidate every
+    /// stored token. The value comes from Node's SHA-256.
+    #[test]
+    fn hash_token_matches_a_stored_hash() {
+        assert_eq!(
+            hash_token("ring_pat_stored"),
+            "28d0f400a6304986b4073c43a96455611c3935aee2a42dfef1824dc58fb61b52"
+        );
+    }
+
     #[test]
     fn generate_yields_prefixed_token_and_stable_hash() {
         let (clear, prefix, hash) = generate_token();
