@@ -781,6 +781,20 @@ async fn write_back(pool: &SqlitePool, old: &Snapshot, deployment: &Deployment) 
     }
 }
 
+async fn release_namespaces(
+    pool: &SqlitePool,
+    runtimes: &HashMap<String, Arc<dyn RuntimeLifecycle>>,
+) {
+    match deployments::active_namespaces(pool).await {
+        Ok(active) => {
+            for runtime in runtimes.values() {
+                runtime.release_namespaces(&active).await;
+            }
+        }
+        Err(e) => error!("Failed to list the namespaces in use: {}", e),
+    }
+}
+
 async fn cleanup_deleted(pool: &SqlitePool, deleted: Vec<String>) {
     if deleted.is_empty() {
         return;
@@ -1673,6 +1687,7 @@ pub(crate) async fn schedule(
 
     let cleanup_interval = Duration::from_secs(300);
     let mut last_cleanup = Instant::now();
+    let mut namespaces_to_release = true;
 
     // One-shot guard so a permanently disconnected event channel (a node with
     // no Docker event listener) is logged once, not every tick.
@@ -2078,10 +2093,17 @@ pub(crate) async fn schedule(
             write_back(&pool, &old, &result).await;
         }
 
+        namespaces_to_release |= !deleted.is_empty();
         cleanup_deleted(&pool, deleted).await;
         }
         .instrument(cycle_span)
         .await;
+
+        // On the first cycle too, for what a previous run left behind.
+        if namespaces_to_release {
+            namespaces_to_release = false;
+            release_namespaces(&pool, &runtimes).await;
+        }
 
         if last_cleanup.elapsed() >= cleanup_interval {
             last_cleanup = Instant::now();

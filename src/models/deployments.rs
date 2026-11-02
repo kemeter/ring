@@ -892,6 +892,17 @@ pub(crate) async fn find_all(
     Ok(rows.into_iter().map(Deployment::from).collect())
 }
 
+/// The namespaces with at least one deployment that is not deleted.
+pub(crate) async fn active_namespaces(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let namespaces: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT namespace FROM deployment WHERE status <> 'deleted'")
+            .fetch_all(pool)
+            .await?;
+    Ok(namespaces.into_iter().collect())
+}
+
 pub(crate) async fn find_active_by_namespace_name(
     pool: &SqlitePool,
     namespace: &str,
@@ -1710,6 +1721,25 @@ mod tests {
         for long in ["366d", "365d1s", "100000000d"] {
             assert!(parse_interval(long).is_err(), "{long:?} should be rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn a_namespace_with_only_deleted_deployments_is_not_active() {
+        let pool = test_pool().await;
+        let mut kept = worker("kept", 0);
+        kept.namespace = "in-use".to_string();
+        create(&pool, &kept).await.unwrap();
+        let mut gone = worker("gone", 0);
+        gone.namespace = "abandoned".to_string();
+        gone.set_status(DeploymentStatus::Deleted);
+        create(&pool, &gone).await.unwrap();
+
+        let active = active_namespaces(&pool).await.unwrap();
+
+        assert_eq!(
+            active,
+            std::collections::HashSet::from(["in-use".to_string()])
+        );
     }
 
     #[tokio::test]

@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A replica that fails to start while others still serve keeps the deployment `running`: only the next start waits. The new deployment of a rolling update still backs off, so the one it replaces is not drained meanwhile
 
 ### Fixed
+- **The Docker network of an unused namespace is released.** It used to stay forever, holding a subnet from the daemon's address pools, until no new network could be created. Ring now removes it once no deployment is left in the namespace, and at startup for those a previous run left behind.
 - `ring doctor` failed on a host without `xorriso`, which Ring no longer uses, and did not check `mke2fs`, without which a Cloud Hypervisor or Firecracker microVM cannot start. It now checks `mke2fs` on both runtimes
 - Bump `rustls-webpki` to 0.103.16 for RUSTSEC-2026-0382, and `tokio` to 1.54.1 for RUSTSEC-2026-0386
 - A Cloud Hypervisor or Firecracker microVM that crashed kept its socket and was never restarted; it is now counted and restarted like a crashed container. Stopping a microVM also stops its VMM process
