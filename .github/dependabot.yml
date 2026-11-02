@@ -1,32 +1,27 @@
 version: 2
+
+multi-ecosystem-groups:
+  dependencies:
+    schedule:
+      interval: "weekly"
+
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      cargo-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+    patterns: ["*"]
+    multi-ecosystem-group: "dependencies"
 
   - package-ecosystem: "bun"
-    directories:
-      - "/dashboard"
-      - "/website"
-    schedule:
-      interval: "weekly"
-    groups:
-      bun-minor-and-patch:
-        update-types:
-          - "minor"
-          - "patch"
+    directory: "/dashboard"
+    patterns: ["*"]
+    multi-ecosystem-group: "dependencies"
+
+  - package-ecosystem: "bun"
+    directory: "/website"
+    patterns: ["*"]
+    multi-ecosystem-group: "dependencies"
 
   - package-ecosystem: "github-actions"
     directory: "/"
-    schedule:
-      interval: "weekly"
-    groups:
-      github-actions:
-        patterns:
-          - "*"
+    patterns: ["*"]
+    multi-ecosystem-group: "dependencies"
