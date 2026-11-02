@@ -9,7 +9,7 @@ use bollard::{
     Docker,
     auth::DockerCredentials,
     models::{
-        ContainerCreateBody, EndpointSettings, HealthConfig, HostConfig, Mount, MountTypeEnum,
+        ContainerCreateBody, EndpointSettings, HealthConfig, HostConfig, Mount, MountType,
         MountVolumeOptions, MountVolumeOptionsDriverConfig, NetworkCreateRequest, NetworkingConfig,
         PortBinding,
     },
@@ -646,9 +646,9 @@ async fn create_mount_from_resolved(
             read_only,
         } => {
             let type_mount = if source.starts_with('/') {
-                Some(MountTypeEnum::BIND)
+                Some(MountType::BIND)
             } else {
-                Some(MountTypeEnum::VOLUME)
+                Some(MountType::VOLUME)
             };
             Ok(Mount {
                 target: Some(destination.clone()),
@@ -678,7 +678,7 @@ async fn create_mount_from_resolved(
             Ok(Mount {
                 target: Some(destination.clone()),
                 source: Some(name.clone()),
-                typ: Some(MountTypeEnum::VOLUME),
+                typ: Some(MountType::VOLUME),
                 read_only: Some(*read_only),
                 volume_options,
                 ..Default::default()
@@ -720,7 +720,7 @@ async fn create_mount_from_resolved(
             Ok(Mount {
                 target: Some(destination.clone()),
                 source: Some(temp_file),
-                typ: Some(MountTypeEnum::BIND),
+                typ: Some(MountType::BIND),
                 read_only: Some(true),
                 ..Default::default()
             })
@@ -1006,7 +1006,7 @@ mod tests {
             .unwrap();
         assert_eq!(mount.target, Some("/container/path".to_string()));
         assert_eq!(mount.source, Some("/host/path".to_string()));
-        assert_eq!(mount.typ, Some(MountTypeEnum::BIND));
+        assert_eq!(mount.typ, Some(MountType::BIND));
         assert_eq!(mount.read_only, Some(false));
     }
 
@@ -1077,7 +1077,7 @@ mod tests {
             .unwrap();
         assert_eq!(mount.target, Some("/app/data".to_string()));
         assert_eq!(mount.source, Some("my-docker-volume".to_string()));
-        assert_eq!(mount.typ, Some(MountTypeEnum::VOLUME));
+        assert_eq!(mount.typ, Some(MountType::VOLUME));
         assert_eq!(mount.read_only, Some(false));
         assert!(mount.volume_options.is_none());
     }

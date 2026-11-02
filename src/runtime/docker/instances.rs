@@ -126,7 +126,9 @@ fn liveness(state: Option<&ContainerSummaryStateEnum>) -> Option<bool> {
         ContainerSummaryStateEnum::EXITED
         | ContainerSummaryStateEnum::DEAD
         | ContainerSummaryStateEnum::CREATED => Some(false),
-        ContainerSummaryStateEnum::REMOVING | ContainerSummaryStateEnum::EMPTY => None,
+        ContainerSummaryStateEnum::STOPPING
+        | ContainerSummaryStateEnum::REMOVING
+        | ContainerSummaryStateEnum::EMPTY => None,
     }
 }
 
@@ -204,7 +206,7 @@ mod tests {
         for state in [EXITED, DEAD, CREATED] {
             assert_eq!(liveness(Some(&state)), Some(false), "{state:?}");
         }
-        for state in [REMOVING, EMPTY] {
+        for state in [STOPPING, REMOVING, EMPTY] {
             assert_eq!(liveness(Some(&state)), None, "{state:?}");
         }
         assert_eq!(liveness(None), None);
