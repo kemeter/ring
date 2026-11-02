@@ -24,7 +24,7 @@ jobs:
     name: Build ring (x86_64-unknown-linux-gnu)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
@@ -72,7 +72,7 @@ jobs:
     name: Build ring-agent and ring-init (x86_64-unknown-linux-musl)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
