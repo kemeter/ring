@@ -779,6 +779,55 @@ pub(crate) async fn remove_container_by_id(docker: &Docker, container_id: String
     }
 }
 
+/// Prefix of the network Ring creates for each namespace.
+const NAMESPACE_NETWORK_PREFIX: &str = "ring_";
+
+/// The namespace networks among `names` that no namespace in `active` uses.
+fn orphan_namespace_networks(
+    names: impl IntoIterator<Item = String>,
+    active: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|name| {
+            name.strip_prefix(NAMESPACE_NETWORK_PREFIX)
+                .is_some_and(|namespace| !namespace.is_empty() && !active.contains(namespace))
+        })
+        .collect()
+}
+
+/// Remove the networks of namespaces no longer in use. Each one holds a subnet
+/// from the daemon's address pools, so leaving them behind eventually stops any
+/// new network from being created. Docker refuses to remove a network with a
+/// container on it, so one still in use stays.
+pub(crate) async fn release_namespace_networks(
+    docker: &Docker,
+    active: &std::collections::HashSet<String>,
+) {
+    let networks = match docker
+        .list_networks(None::<bollard::query_parameters::ListNetworksOptions>)
+        .await
+    {
+        Ok(networks) => networks,
+        Err(e) => {
+            warn!("Could not list Docker networks to release: {}", e);
+            return;
+        }
+    };
+
+    let names = networks.into_iter().filter_map(|network| network.name);
+    remove_networks(docker, orphan_namespace_networks(names, active)).await;
+}
+
+async fn remove_networks(docker: &Docker, names: Vec<String>) {
+    for name in names {
+        match docker.remove_network(&name).await {
+            Ok(()) => info!("Released Docker network {}", name),
+            Err(e) => debug!("Docker network {} stays: {}", name, e),
+        }
+    }
+}
+
 async fn create_network(docker: Docker, network_name: String) -> Result<(), RuntimeError> {
     debug!("Start Docker create network: {}", network_name);
 
@@ -820,6 +869,75 @@ async fn create_network(docker: Docker, network_name: String) -> Result<(), Runt
 mod tests {
     use super::*;
     use crate::models::deployments::UserConfig;
+
+    #[test]
+    fn only_the_networks_of_unused_namespaces_are_orphans() {
+        let active = std::collections::HashSet::from(["kept".to_string()]);
+        let names = ["ring_kept", "ring_gone", "ring_", "bridge", "other_gone"].map(String::from);
+
+        assert_eq!(orphan_namespace_networks(names, &active), vec!["ring_gone"]);
+    }
+
+    /// Works on its own networks only: the real release would also remove the
+    /// unused namespace networks of whatever daemon the tests run against.
+    #[tokio::test]
+    async fn removing_a_network_spares_one_with_a_container_on_it() {
+        use crate::runtime::docker::test_support::{daemon, ensure_image, remove, start_container};
+
+        let Some(docker) = daemon().await else {
+            eprintln!("skipping: no Docker daemon");
+            return;
+        };
+        if !ensure_image(&docker).await {
+            eprintln!("skipping: could not obtain the test image");
+            return;
+        }
+
+        let suffix = super::super::tiny_id();
+        let unused = format!("ring_release-unused-{suffix}");
+        let attached = format!("ring_release-attached-{suffix}");
+        // Explicit subnets, so the test does not depend on the daemon's address
+        // pools having room left.
+        for (name, subnet) in [(&unused, "10.254.251.0/24"), (&attached, "10.254.252.0/24")] {
+            docker
+                .create_network(NetworkCreateRequest {
+                    name: name.clone(),
+                    ipam: Some(bollard::models::Ipam {
+                        config: Some(vec![bollard::models::IpamConfig {
+                            subnet: Some(subnet.to_string()),
+                            ..Default::default()
+                        }]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+        let container = start_container(&docker, &format!("ring-release-{suffix}"), false).await;
+        docker
+            .connect_network(
+                &attached,
+                bollard::models::NetworkConnectRequest {
+                    container: container.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        remove_networks(&docker, vec![unused.clone(), attached.clone()]).await;
+
+        let options = || None::<bollard::query_parameters::InspectNetworkOptions>;
+        let unused_left = docker.inspect_network(&unused, options()).await.is_ok();
+        let attached_left = docker.inspect_network(&attached, options()).await.is_ok();
+
+        remove(&docker, &container).await;
+        let _ = docker.remove_network(&attached).await;
+
+        assert!(!unused_left, "an unused network is removed");
+        assert!(attached_left, "a network with a container on it stays");
+    }
 
     #[test]
     fn a_user_label_cannot_take_over_the_deployment_label() {

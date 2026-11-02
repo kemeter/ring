@@ -164,6 +164,10 @@ impl DockerLifecycle {
 
 #[async_trait]
 impl RuntimeLifecycle for DockerLifecycle {
+    async fn release_namespaces(&self, active: &std::collections::HashSet<String>) {
+        super::container::release_namespace_networks(&self.docker, active).await;
+    }
+
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }

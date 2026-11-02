@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 use futures::stream;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::pin::Pin;
@@ -437,6 +437,10 @@ pub(crate) trait RuntimeLifecycle:
     async fn get_instance_stats(&self, _deployment_id: &str) -> Vec<InstanceStatsOutput> {
         Vec::new()
     }
+
+    /// Give back what the runtime holds per namespace for namespaces no longer
+    /// in use. Runtimes that hold nothing per namespace have nothing to do.
+    async fn release_namespaces(&self, _active: &HashSet<String>) {}
 }
 
 #[cfg(test)]
