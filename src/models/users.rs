@@ -423,6 +423,7 @@ pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
         secret: &[],
         ad: &[],
         hash_length: 32,
+        thread_mode: argon2::ThreadMode::Sequential,
     };
 
     argon2::hash_encoded(password.as_bytes(), &salt, &argon2_config)
