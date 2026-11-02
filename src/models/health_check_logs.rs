@@ -156,7 +156,7 @@ pub(crate) async fn delete_by_instances(
     let sql = format!(
         "DELETE FROM health_check WHERE deployment_id = ? AND instance_id IN ({placeholders})"
     );
-    let mut query = sqlx::query(&sql).bind(deployment_id);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(deployment_id);
     for id in instance_ids {
         query = query.bind(id);
     }

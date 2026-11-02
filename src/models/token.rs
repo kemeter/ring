@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::{DateTime, Utc};
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -190,12 +190,14 @@ pub(crate) fn hash_token(clear: &str) -> String {
 /// Generate a fresh clear token and its derived (prefix, hash). The clear
 /// value is returned to the caller exactly once — it is never stored.
 ///
-/// `OsRng` (OS entropy) rather than a thread-local PRNG: Ring forks processes
+/// `SysRng` (OS entropy) rather than a thread-local PRNG: Ring forks processes
 /// (the scheduler) and a userspace CSPRNG isn't guaranteed to reseed across
 /// fork. This mirrors `models::users::hash_password` and `models::secret`.
 fn generate_token() -> (String, String, String) {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random generator failed");
     let clear = format!("{}{}", TOKEN_PREFIX, hex::encode(bytes));
     let prefix = clear.chars().take(PREFIX_DISPLAY_LEN).collect::<String>();
     let hash = hash_token(&clear);
@@ -262,7 +264,7 @@ pub(crate) async fn find_by_token_hash(
     hash: &str,
 ) -> Result<Option<Token>, sqlx::Error> {
     let sql = format!("SELECT {} FROM token WHERE token_hash = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, TokenRow>(&sql)
+    let row = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(hash)
         .fetch_optional(pool)
         .await?;
@@ -272,7 +274,7 @@ pub(crate) async fn find_by_token_hash(
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Token>, sqlx::Error> {
     let sql = format!("SELECT {} FROM token WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, TokenRow>(&sql)
+    let row = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -290,7 +292,7 @@ pub(crate) async fn find_all_for_user(
         "SELECT {} FROM token WHERE user_id = ? AND kind = ? ORDER BY created_at DESC",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, TokenRow>(&sql)
+    let rows = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
         .bind(TokenKind::Pat.as_str())
         .fetch_all(pool)
@@ -354,6 +356,16 @@ pub(crate) async fn touch_last_used(pool: &SqlitePool, token: &Token) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tokens are looked up by this hash: a change would invalidate every
+    /// stored token. The value comes from Node's SHA-256.
+    #[test]
+    fn hash_token_matches_a_stored_hash() {
+        assert_eq!(
+            hash_token("ring_pat_stored"),
+            "28d0f400a6304986b4073c43a96455611c3935aee2a42dfef1824dc58fb61b52"
+        );
+    }
 
     #[test]
     fn generate_yields_prefixed_token_and_stable_hash() {

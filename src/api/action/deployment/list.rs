@@ -216,7 +216,7 @@ mod tests {
     async fn list() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments?status=running")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -232,7 +232,7 @@ mod tests {
     async fn list_by_namespace() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments?namespace=kemeter")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -248,7 +248,7 @@ mod tests {
     async fn list_by_kind() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments?kind=worker")
             .add_header("Authorization", format!("Bearer {}", token))

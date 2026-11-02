@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use argon2::{self, Config as Argon2Config};
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -165,7 +165,7 @@ impl From<UserRow> for User {
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, UserRow>(&sql)
+    let row = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -178,7 +178,7 @@ pub(crate) async fn find_by_username(
     username: &str,
 ) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE username = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, UserRow>(&sql)
+    let row = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
         .bind(username)
         .fetch_optional(pool)
         .await?;
@@ -188,7 +188,9 @@ pub(crate) async fn find_by_username(
 
 pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user", SELECT_COLUMNS);
-    let rows = sqlx::query_as::<_, UserRow>(&sql).fetch_all(pool).await?;
+    let rows = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.into_iter().map(User::from).collect())
 }
@@ -405,12 +407,14 @@ pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<bool, sqlx:
 /// this salt in the returned string, so `verify_encoded` reads it back from
 /// the stored hash — no salt needs to be carried in config.
 ///
-/// We use `OsRng` (OS entropy) rather than a thread-local PRNG: Ring forks
+/// We use `SysRng` (OS entropy) rather than a thread-local PRNG: Ring forks
 /// processes (the scheduler), and a userspace CSPRNG isn't guaranteed to
 /// reseed across fork. This mirrors the nonce generation in `models::secret`.
 pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    SysRng
+        .try_fill_bytes(&mut salt)
+        .expect("OS random generator failed");
 
     let argon2_config = Argon2Config {
         variant: argon2::Variant::Argon2id,
@@ -421,6 +425,7 @@ pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
         secret: &[],
         ad: &[],
         hash_length: 32,
+        thread_mode: argon2::ThreadMode::Sequential,
     };
 
     argon2::hash_encoded(password.as_bytes(), &salt, &argon2_config)

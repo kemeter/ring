@@ -1296,7 +1296,7 @@ mod tests {
     async fn create_with_invalid_runtime() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1319,7 +1319,7 @@ mod tests {
         // spawning virtiofsd and enriching cloud-init at boot.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1349,7 +1349,7 @@ mod tests {
         // command health checks now route through `ring-agent` over vsock.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1378,7 +1378,7 @@ mod tests {
     async fn create_cloud_hypervisor_accepts_environment() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1400,7 +1400,7 @@ mod tests {
     async fn create_cloud_hypervisor_rejects_command() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1430,7 +1430,7 @@ mod tests {
     async fn create_rejects_shared_rw_volume_with_replicas() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1466,7 +1466,7 @@ mod tests {
     async fn create_accepts_shared_ro_volume_with_replicas() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1496,7 +1496,7 @@ mod tests {
     async fn create_accepts_rw_volume_with_single_replica() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1526,7 +1526,7 @@ mod tests {
     async fn create_cloud_hypervisor_rejects_docker_image_reference() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1555,7 +1555,7 @@ mod tests {
     async fn create_cloud_hypervisor_accepts_tcp_health_check() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1585,7 +1585,7 @@ mod tests {
     #[tokio::test]
     async fn create_with_without_auth() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1604,7 +1604,7 @@ mod tests {
     async fn create() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1624,7 +1624,7 @@ mod tests {
     async fn create_with_volumes() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1660,7 +1660,7 @@ mod tests {
     async fn create_with_invalid_volume_permission() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1694,7 +1694,7 @@ mod tests {
     async fn create_with_bind_volume_missing_source() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1729,7 +1729,7 @@ mod tests {
     async fn create_with_invalid_volume_driver() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1761,7 +1761,7 @@ mod tests {
     async fn create_with_bind_volume_empty_source() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1797,7 +1797,7 @@ mod tests {
     async fn create_with_config_volume_missing_config_reference() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1836,7 +1836,7 @@ mod tests {
     async fn create_with_config_volume_empty_config_reference() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1877,7 +1877,7 @@ mod tests {
     async fn create_with_volume_empty_destination() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1913,7 +1913,7 @@ mod tests {
     async fn create_with_invalid_volume_type() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1945,7 +1945,7 @@ mod tests {
     async fn create_with_valid_bind_volume() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -1974,7 +1974,7 @@ mod tests {
     async fn create_with_valid_config_volume() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2004,7 +2004,7 @@ mod tests {
     async fn create_with_valid_named_volume() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2033,7 +2033,7 @@ mod tests {
     async fn create_with_multiple_volumes_mixed_types() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2077,7 +2077,7 @@ mod tests {
     async fn create_with_multiple_validation_errors() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2108,7 +2108,7 @@ mod tests {
     async fn create_with_config_volume_missing_source_only() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2144,7 +2144,7 @@ mod tests {
     async fn create_with_config_volume_missing_key_only() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2180,7 +2180,7 @@ mod tests {
     async fn create_with_config_volume_empty_source_only() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2217,7 +2217,7 @@ mod tests {
     async fn create_with_config_volume_empty_key_only() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2254,7 +2254,7 @@ mod tests {
     async fn create_with_named_volume_missing_source() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2289,7 +2289,7 @@ mod tests {
     async fn create_with_named_volume_empty_source() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2325,7 +2325,7 @@ mod tests {
     async fn create_with_config_volume_invalid_permission() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2362,7 +2362,7 @@ mod tests {
     async fn create_worker_with_json_array_command() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2389,7 +2389,7 @@ mod tests {
     async fn create_with_health_checks() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2449,7 +2449,7 @@ mod tests {
     async fn create_with_resources() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2489,7 +2489,7 @@ mod tests {
     async fn create_without_resources() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2512,7 +2512,7 @@ mod tests {
     async fn create_with_partial_resources() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2544,7 +2544,7 @@ mod tests {
     async fn create_returns_null_image_digest() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2566,7 +2566,7 @@ mod tests {
     async fn create_with_invalid_health_check_threshold() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -2604,7 +2604,7 @@ mod tests {
         // must be refused rather than silently provisioning it.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let mint = server
             .post("/tokens")
@@ -2653,7 +2653,7 @@ mod tests {
     async fn create_auto_creates_namespace() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Verify namespace doesn't exist yet
         let response = server
@@ -2690,7 +2690,7 @@ mod tests {
     async fn rolling_update_sets_parent_id_with_health_checks() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create initial deployment with health checks
         let response = server
@@ -2743,7 +2743,7 @@ mod tests {
     async fn force_flag_bypasses_rolling_update() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create initial deployment with health checks
         let response = server
@@ -2818,7 +2818,7 @@ mod tests {
     async fn host_port_forces_recreate_instead_of_rolling() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Initial deployment: health checks AND a published host port. Rolling
         // would normally apply (HC present, single active), but the host port
@@ -2899,7 +2899,7 @@ mod tests {
     async fn rolling_update_without_host_port_still_rolls() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Non-regression: HC present, single active, NO host port → still rolling.
         let response = server
@@ -2951,7 +2951,7 @@ mod tests {
     async fn a_job_replaces_its_predecessor_instead_of_rolling() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let job = |image: &str| {
             json!({
                 "runtime": "docker",
@@ -3004,7 +3004,7 @@ mod tests {
     async fn no_health_checks_bypasses_rolling_update() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create initial deployment WITHOUT health checks
         let response = server
@@ -3081,7 +3081,7 @@ mod tests {
     async fn create_with_ports() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3112,7 +3112,7 @@ mod tests {
     async fn create_with_host_network_mode() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3137,7 +3137,7 @@ mod tests {
         // `NetworkMode: host`, so host mode must be accepted on podman too.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3160,7 +3160,7 @@ mod tests {
     async fn create_host_mode_rejects_ports() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3196,7 +3196,7 @@ mod tests {
     async fn create_host_mode_rejects_replicas_above_one() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3224,7 +3224,7 @@ mod tests {
     async fn create_host_mode_rejected_on_cloud_hypervisor() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3263,7 +3263,7 @@ mod tests {
         // see `create_rejects_ports_with_replicas_above_one`).
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3286,7 +3286,7 @@ mod tests {
     async fn create_without_ports_defaults_to_empty() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3317,7 +3317,7 @@ mod tests {
         // the JSONPath convention for any nested-list validation.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3363,7 +3363,7 @@ mod tests {
         // free port", which is not what the user typed. Reject explicitly.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3401,7 +3401,7 @@ mod tests {
     async fn create_rejects_target_zero() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3436,7 +3436,7 @@ mod tests {
         // Two entries publishing the same host port can't both bind.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3475,7 +3475,7 @@ mod tests {
         // opaque runtime event later.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3510,7 +3510,7 @@ mod tests {
         // A well-formed loopback address must pass validation untouched.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3543,7 +3543,7 @@ mod tests {
         // the container shell. Reject up front.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3584,7 +3584,7 @@ mod tests {
     async fn create_rejects_invalid_cpu_string() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3619,7 +3619,7 @@ mod tests {
     async fn create_rejects_invalid_memory_string() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3656,7 +3656,7 @@ mod tests {
         // silently ignored at runtime — fail at API time instead.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3691,7 +3691,7 @@ mod tests {
         // inlining server/username/password alongside it is contradictory.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3730,7 +3730,7 @@ mod tests {
         // use_host_auth on its own (no inline creds) is the supported shape.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3750,7 +3750,7 @@ mod tests {
     async fn stop_timeout_violation_codes(runtime: &str, stop_timeout: u64) -> Vec<String> {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3778,7 +3778,7 @@ mod tests {
     async fn create_accepts_a_stop_timeout_and_stores_it() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3839,7 +3839,7 @@ mod tests {
         // combining it with inline server/username/password is contradictory.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3878,7 +3878,7 @@ mod tests {
         // credential sources.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3913,7 +3913,7 @@ mod tests {
         // supported shape.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3946,7 +3946,7 @@ mod tests {
         // replicas or drop the ports — surface both options.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -3986,7 +3986,7 @@ mod tests {
         // A job is one-shot by definition. replicas > 1 is meaningless.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -4022,7 +4022,7 @@ mod tests {
         // run once and exit. A readiness check on a job is a config gap.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -4067,7 +4067,7 @@ mod tests {
     ) -> (StatusCode, Vec<(String, String)>) {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let image = if runtime == "cloud-hypervisor" {
             "/var/lib/ring/images/app.raw"
@@ -4232,7 +4232,7 @@ mod tests {
         let (pool, app) =
             crate::api::server::tests::new_test_app_with_runtimes(Arc::new(map)).await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let deploy = |runtime: &'static str| {
             server
@@ -4273,7 +4273,7 @@ mod tests {
     ) -> (StatusCode, Vec<String>) {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/deployments")
@@ -4350,7 +4350,7 @@ mod tests {
     async fn create_accepts_autoscale_on_every_container_runtime() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         for runtime in ["docker", "podman", "containerd"] {
             let response: TestResponse = server
@@ -4379,7 +4379,7 @@ mod tests {
     ) -> (StatusCode, Vec<String>, serde_json::Value) {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response: TestResponse = server
             .post("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))

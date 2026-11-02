@@ -17,26 +17,26 @@ path = "src/main.rs"
 [dependencies]
 futures = "0.3.1"
 tokio = { version = "1.20", features = ["full"] }
-bollard = "0.20.2"
+bollard = "0.21.1"
 clap = { version = "4.5.1", features = ["derive"] }
 # Generates the shell completion scripts emitted by `ring completions <shell>`
 # from the same `Command` tree the CLI is parsed with, so the two can't drift.
 clap_complete = "4"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4.1", features = ["v4"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
-reqwest = { version = "0.12.11", features = ["json"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["charset", "http2", "json", "native-tls", "query", "system-proxy"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8.1"
+toml = "1.1.8"
 local-ip-address = "0.6.1"
 cli-table = "0.5.0"
 owo-colors = { version = "4", features = ["supports-colors"] }
 axum = { version = "0.8.4", features = ["ws"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 axum-macros = "0.5.0"
-rust-argon2 = "2.0.0"
+rust-argon2 = "3.0.0"
 regex = "1.6.0"
 serde_norway = "0.9.42"
 http = "1.0.0"
@@ -46,18 +46,18 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
 hyperlocal = "0.9"
 http-body-util = "0.1"
-validator = { version = "0.20.0", features = ["derive"] }
-rand = "0.9.1"
-aes-gcm = "0.10"
-base64 = "0.22"
-sha2 = "0.10"
-hmac = "0.12"
+validator = { version = "0.21.0", features = ["derive"] }
+rand = "0.10.3"
+aes-gcm = "0.11"
+base64 = "0.23"
+sha2 = "0.11"
+hmac = "0.13"
 hex = "0.4"
 once_cell = "1.21.3"
 shell-words = "1.1"
 inquire = "0.9"
 
-sysinfo = "0.35.1"
+sysinfo = "0.40.0"
 # Used by the Firecracker runtime to create/configure the host TAP device via
 # syscalls (ioctl TUNSETIFF + socket ioctls). Direct ioctls are required
 # because shelling out to `ip` loses CAP_NET_ADMIN across the fork-exec.
@@ -73,7 +73,7 @@ caps = "0.5.6"
 nix = { version = "0.31.3", features = ["signal"] }
 # WebSocket client for `ring deployment exec`. Already in the tree via axum's
 # own `ws` support, so this is a direct handle on a crate we compile anyway.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 # containerd runtime: native gRPC over containerd's Unix socket. We drive the
 # raw containerd API (images, content, snapshots, containers, tasks) rather
 # than going through Docker — there is no daemon in between. `containerd-client`
@@ -101,14 +101,14 @@ docker_credential = "1.4.0"
 # With a signal disabled (the default) no exporter is built and there is zero
 # runtime cost. Pinned in lockstep on 0.32 (the core crates release together);
 # `tracing-opentelemetry` 0.33 targets opentelemetry 0.32.
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "metrics", "logs"] }
-tracing-opentelemetry = "0.33"
-opentelemetry-appender-tracing = "0.32"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace", "metrics", "logs"] }
+tracing-opentelemetry = "0.34"
+opentelemetry-appender-tracing = "0.33"
 
 [dev-dependencies]
-axum-test = { version = "17.3.0", features = ["ws"] }
+axum-test = { version = "20.1.0", features = ["ws"] }
 # Only to build the `LogOutput` frames bollard hands back, in the exec tests.
 bytes = "1"
 

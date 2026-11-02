@@ -108,7 +108,7 @@ mod tests {
     async fn create() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -126,7 +126,7 @@ mod tests {
     async fn create_with_short_username() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -151,7 +151,7 @@ mod tests {
     async fn create_with_short_password() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -176,7 +176,7 @@ mod tests {
         // violations in one shot, not stop at the first.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -206,7 +206,7 @@ mod tests {
     async fn create_with_invalid_username_chars() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -228,7 +228,7 @@ mod tests {
         // 51 chars → exceeds max of 50. Trips length only, not format.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -257,7 +257,7 @@ mod tests {
         // protects against unauthenticated callers fingerprinting our
         // field rules.
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")
@@ -277,7 +277,7 @@ mod tests {
         // payload without sniffing.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .post("/users")

@@ -129,7 +129,7 @@ mod tests {
     async fn delete_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .delete("/secrets/00000000-0000-0000-0000-000000000000")
@@ -144,7 +144,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create a namespace first
         server

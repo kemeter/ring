@@ -548,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_is_public_and_prometheus_text() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let response = server.get("/metrics").await;
 
         assert_eq!(response.status_code(), StatusCode::OK);
@@ -567,7 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_accept_json_returns_json() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let response = server
             .get("/metrics")
             .add_header(header::ACCEPT, "application/json")
@@ -600,7 +600,7 @@ mod tests {
 
     #[tokio::test]
     async fn metrics_emit_all_statuses_even_at_zero() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let body = server.get("/metrics").await.text();
 
         // Statuses that have no rows in fixtures must still be present.
@@ -662,7 +662,7 @@ mod tests {
     async fn metrics_counts_deployments_and_excludes_deleted_from_total() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // The fixtures already seed some deployments; measure the delta we add
         // rather than an absolute count.

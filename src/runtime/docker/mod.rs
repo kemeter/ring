@@ -171,7 +171,7 @@ pub(crate) fn connect_with_host(host: &str) -> Result<Docker, RuntimeError> {
 }
 
 pub(crate) fn tiny_id() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     let mut rng = rand::rng();
     format!("{:08x}", rng.random::<u32>())
 }

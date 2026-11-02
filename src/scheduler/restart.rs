@@ -22,7 +22,7 @@
 
 use crate::models::deployments::MAX_INTERVAL;
 use chrono::{DateTime, Utc};
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::time::Duration;
 
 pub(crate) const DEFAULT_BASE: Duration = Duration::from_secs(10);

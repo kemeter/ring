@@ -63,7 +63,7 @@ mod tests {
             .await
             .expect("seed webhook");
         let token = pat(&pool, &["webhooks:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .get("/webhooks")

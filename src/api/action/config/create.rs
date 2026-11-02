@@ -140,7 +140,7 @@ mod tests {
     async fn create_config() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/configs")
@@ -165,7 +165,7 @@ mod tests {
     async fn create_duplicate_config_returns_problem_json_conflict() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let payload = json!({
             "namespace": "test",
@@ -207,7 +207,7 @@ mod tests {
     async fn create_with_missing_fields_returns_422_with_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Missing `namespace` and `data` empty → length violation on data,
         // and an empty namespace fails both length and format.

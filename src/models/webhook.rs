@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::Utc;
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::net::IpAddr;
@@ -158,11 +158,13 @@ fn filter_matches(filter: &str, kind: &str) -> bool {
     filter == kind
 }
 
-/// Generate a fresh HMAC secret (`whsec_<hex>`). Uses `OsRng` for fork safety,
+/// Generate a fresh HMAC secret (`whsec_<hex>`). Uses `SysRng` for fork safety,
 /// consistent with token/password generation elsewhere.
 pub(crate) fn generate_secret() -> String {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random generator failed");
     format!("whsec_{}", hex::encode(bytes))
 }
 
@@ -197,7 +199,7 @@ pub(crate) async fn create(
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Webhook>, sqlx::Error> {
     let sql = format!("SELECT {} FROM webhook WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, WebhookRow>(&sql)
+    let row = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -209,7 +211,7 @@ pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<Webhook>, sqlx::Er
         "SELECT {} FROM webhook ORDER BY created_at DESC",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, WebhookRow>(&sql)
+    let rows = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
     Ok(rows.into_iter().map(Webhook::from).collect())
@@ -224,7 +226,7 @@ pub(crate) async fn subscribers_for(
         "SELECT {} FROM webhook WHERE revoked_at IS NULL",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, WebhookRow>(&sql)
+    let rows = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
     Ok(rows

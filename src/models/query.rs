@@ -10,7 +10,10 @@ use tracing::error;
 /// input, so the format!-built query carries no injection surface.
 pub(crate) async fn table_count(pool: &sqlx::SqlitePool, table: &str) -> u64 {
     let sql = format!("SELECT COUNT(*) FROM {table}");
-    match sqlx::query_scalar::<_, i64>(&sql).fetch_one(pool).await {
+    match sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+        .fetch_one(pool)
+        .await
+    {
         Ok(count) => count.max(0) as u64,
         Err(e) => {
             error!("query: counting {} failed: {}", table, e);
@@ -28,7 +31,7 @@ pub(crate) async fn group_count(
     column: &str,
 ) -> BTreeMap<String, u64> {
     let sql = format!("SELECT {column}, COUNT(*) FROM {table} GROUP BY {column}");
-    match sqlx::query_as::<_, (String, i64)>(&sql)
+    match sqlx::query_as::<_, (String, i64)>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await
     {

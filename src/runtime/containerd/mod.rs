@@ -51,7 +51,7 @@ pub(crate) const RING_DEPLOYMENT_LABEL: &str = "ring_deployment";
 /// Generate a short random suffix for instance ids, matching the Docker
 /// runtime's `tiny_id` so container names read the same across runtimes.
 pub(crate) fn tiny_id() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     let mut rng = rand::rng();
     format!("{:08x}", rng.random::<u32>())
 }

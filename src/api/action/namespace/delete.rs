@@ -95,7 +95,7 @@ mod tests {
     async fn delete_empty_namespace_succeeds() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         server
             .post("/namespaces")
@@ -114,7 +114,7 @@ mod tests {
     async fn delete_unknown_namespace_is_404() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .delete("/namespaces/nope")
@@ -127,7 +127,7 @@ mod tests {
     async fn delete_non_empty_namespace_is_409() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         server
             .post("/namespaces")
@@ -152,7 +152,7 @@ mod tests {
     async fn deleting_namespace_purges_its_audit_trail() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         server
             .post("/namespaces")
@@ -187,7 +187,7 @@ mod tests {
     #[tokio::test]
     async fn delete_requires_authentication() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server.delete("/namespaces/x").await;
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }

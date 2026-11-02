@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Health check results record the instance they probed, returned as `instance_id` by `GET /deployments/{id}/health-checks`. `restart_interval` uses it: a failure from an instance that is already gone no longer holds the next replacement back, and the readiness that lets it proceed has to come from the replacement itself
 
 ### Changed
+- `GET /node/get` answers `500` when the host's information cannot be read
+- A Docker container in the `stopping` state counts neither as live nor as ended, like one being removed
 - A readiness deadline no longer fails a worker: its instances are recreated on the restart delays, `backing_off` with `readiness_timeout`, and the deadline counts from the start of the current run
 - `insufficient_resources` and a crash loop are retried on the restart delays instead of leaving the deployment as it is
 - A replica that fails to start while others still serve keeps the deployment `running`: only the next start waits. The new deployment of a rolling update still backs off, so the one it replaces is not drained meanwhile

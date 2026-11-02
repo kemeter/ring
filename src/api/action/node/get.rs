@@ -1,35 +1,43 @@
 use axum::Json;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::Value;
 use std::env::consts;
 use sysinfo::{LoadAvg, System};
+use tracing::error;
 
 // Scope (`deployments:read`) is enforced centrally by the auth middleware:
 // node info is host-level and has no dedicated scope, so it shares the
 // deployment read scope.
 pub(crate) async fn get() -> impl IntoResponse {
-    Json(get_node_info()).into_response()
+    match get_node_info() {
+        Ok(info) => Json(info).into_response(),
+        Err(e) => {
+            error!("reading the node information failed: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
-fn get_node_info() -> Value {
-    let mut sys = System::new_all();
+fn get_node_info() -> Result<Value, sysinfo::Error> {
+    let mut sys = System::new_all()?;
     sys.refresh_all();
 
-    let load: LoadAvg = System::load_average();
+    let load: LoadAvg = System::load_average()?;
 
     let memory_total_gib = sys.total_memory() as f64 / 1024.0 / 1024.0 / 1024.0; // 3 divisions
     let memory_available_gib = sys.available_memory() as f64 / 1024.0 / 1024.0 / 1024.0;
 
-    serde_json::json!({
+    Ok(serde_json::json!({
         "hostname": System::host_name().unwrap_or_default(),
         "os": consts::OS,
         "arch": consts::ARCH,
-        "uptime": format!("{}s", System::uptime()),
+        "uptime": format!("{}s", System::uptime()?),
         "cpu_count": sys.cpus().len() as i64,
         "memory_total": memory_total_gib,
         "memory_available": memory_available_gib,
         "load_average": [load.one, load.five, load.fifteen]
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -43,7 +51,7 @@ mod tests {
     async fn get() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/node/get")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -55,7 +63,7 @@ mod tests {
     #[tokio::test]
     async fn get_without_auth() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server.get("/node/get").await;
 
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);

@@ -84,7 +84,7 @@ mod tests {
             .await
             .expect("seed webhook");
         let token = pat(&pool, &["deployments:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .delete(&format!("/webhooks/{}", hook.id))
@@ -111,7 +111,7 @@ mod tests {
             .await
             .expect("seed webhook");
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .delete(&format!("/webhooks/{}", hook.id))

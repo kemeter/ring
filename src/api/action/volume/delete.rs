@@ -116,7 +116,7 @@ mod tests {
     async fn delete_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .delete("/volumes/00000000-0000-0000-0000-000000000000")
@@ -130,7 +130,7 @@ mod tests {
     async fn delete_volume_success() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         server
             .post("/namespaces")
@@ -206,7 +206,7 @@ mod tests {
         // only known once the row is loaded.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         for ns in ["team-a", "team-b"] {
             server
@@ -265,7 +265,7 @@ mod tests {
     async fn delete_referenced_volume_is_blocked() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let volume_id = setup_referenced_volume(&server, &token).await;
 
@@ -291,7 +291,7 @@ mod tests {
     async fn delete_referenced_volume_with_force_succeeds() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let volume_id = setup_referenced_volume(&server, &token).await;
 

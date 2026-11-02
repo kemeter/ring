@@ -14,7 +14,7 @@
 //! No persistence — a server restart invalidates outstanding tickets, which
 //! is fine because the SSE connections they protect die at the same moment.
 
-use rand::Rng;
+use rand::RngExt;
 use rand::distr::Alphanumeric;
 use rand::rng;
 use std::collections::HashMap;

@@ -89,7 +89,7 @@ pub(crate) fn client() -> &'static reqwest::Client {
 
 /// HMAC-SHA256 of `body` keyed by `secret`, formatted `sha256=<hex>`.
 fn sign(secret: &str, body: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     let mut mac =

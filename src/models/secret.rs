@@ -1,9 +1,10 @@
-use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::{
     Aes256Gcm, Nonce,
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use rand::TryRng;
+use rand::rngs::SysRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -53,11 +54,13 @@ pub(crate) fn encrypt_value(plaintext: &str) -> Vec<u8> {
     let cipher = Aes256Gcm::new_from_slice(&key).expect("Invalid key length");
 
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    SysRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .expect("OS random generator failed");
+    let nonce = Nonce::from(nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .expect("Encryption failed");
 
     let mut result = Vec::with_capacity(NONCE_SIZE + ciphertext.len());
@@ -74,11 +77,12 @@ pub(crate) fn decrypt_value(encrypted: &[u8]) -> Result<String, String> {
     let key = get_encryption_key();
     let cipher = Aes256Gcm::new_from_slice(&key).expect("Invalid key length");
 
-    let nonce = Nonce::from_slice(&encrypted[..NONCE_SIZE]);
+    let nonce =
+        Nonce::try_from(&encrypted[..NONCE_SIZE]).map_err(|e| format!("Invalid nonce: {}", e))?;
     let ciphertext = &encrypted[NONCE_SIZE..];
 
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Invalid UTF-8: {}", e))
@@ -136,7 +140,7 @@ pub(crate) async fn find_all(
         ALLOWED_FILTER_COLUMNS,
     );
 
-    let mut q = sqlx::query_as::<_, SecretRow>(&query);
+    let mut q = sqlx::query_as::<_, SecretRow>(sqlx::AssertSqlSafe(query));
     for val in &values {
         q = q.bind(val);
     }
@@ -220,6 +224,20 @@ mod tests {
         let decrypted = decrypt_value(&encrypted).unwrap();
 
         assert_eq!(decrypted, plaintext);
+    }
+
+    /// A value produced outside Ring (Node's AES-256-GCM, all-zero key), so a
+    /// dependency upgrade can't change the format and still pass a roundtrip.
+    #[test]
+    fn test_decrypts_a_value_stored_earlier() {
+        set_test_key();
+
+        let stored = hex::decode(
+            "000102030405060708090a0bfbbf5c206599af9ba71e3d979823aa64314cddead8efee92aa178c670d31471342613b9a81ce965e73",
+        )
+        .unwrap();
+
+        assert_eq!(decrypt_value(&stored).unwrap(), "stored before the upgrade");
     }
 
     #[test]

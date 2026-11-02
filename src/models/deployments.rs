@@ -883,7 +883,7 @@ pub(crate) async fn find_all(
     // insertion order — an index on `status` would have reversed it.
     let query = format!("{query} ORDER BY rowid");
 
-    let mut q = sqlx::query_as::<_, DeploymentRow>(&query);
+    let mut q = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(query));
     for val in &values {
         q = q.bind(val);
     }
@@ -902,7 +902,7 @@ pub(crate) async fn find_active_by_namespace_name(
         SELECT_COLUMNS
     );
 
-    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+    let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(name)
         .fetch_all(pool)
@@ -914,7 +914,7 @@ pub(crate) async fn find_active_by_namespace_name(
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Deployment>, sqlx::Error> {
     let sql = format!("SELECT {} FROM deployment WHERE id = ?", SELECT_COLUMNS);
 
-    let row = sqlx::query_as::<_, DeploymentRow>(&sql)
+    let row = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -1124,7 +1124,7 @@ pub(crate) async fn find_referencing_secret(
         SELECT_COLUMNS
     );
 
-    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+    let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(&pattern)
         .fetch_all(pool)
@@ -1147,7 +1147,7 @@ pub(crate) async fn count_by_namespace_status_reason(
          WHERE status IN ({placeholders}) \
          GROUP BY namespace, status, reason ORDER BY namespace, status, reason"
     );
-    let mut query = sqlx::query_as::<_, (String, String, String, i64)>(&sql);
+    let mut query = sqlx::query_as::<_, (String, String, String, i64)>(sqlx::AssertSqlSafe(sql));
     for status in statuses {
         query = query.bind(status.as_str());
     }
@@ -1189,7 +1189,7 @@ pub(crate) async fn find_referencing_volume(
         SELECT_COLUMNS
     );
 
-    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+    let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(&pattern)
         .fetch_all(pool)
@@ -1221,7 +1221,7 @@ pub(crate) async fn find_referencing_config(
         SELECT_COLUMNS
     );
 
-    let rows = sqlx::query_as::<_, DeploymentRow>(&sql)
+    let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(&pattern)
         .fetch_all(pool)
@@ -1509,7 +1509,10 @@ mod tests {
             .iter()
             .filter(|m| m.version < version)
         {
-            sqlx::raw_sql(&migration.sql).execute(&pool).await.unwrap();
+            sqlx::raw_sql(migration.sql.clone())
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         pool
     }
@@ -1517,7 +1520,10 @@ mod tests {
     async fn run_migration(pool: &SqlitePool, version: i64) {
         let migrator = sqlx::migrate!("./migrations");
         let migration = migrator.iter().find(|m| m.version == version).unwrap();
-        sqlx::raw_sql(&migration.sql).execute(pool).await.unwrap();
+        sqlx::raw_sql(migration.sql.clone())
+            .execute(pool)
+            .await
+            .unwrap();
     }
 
     /// Earlier versions left workers that exited 0 in `completed`, out of

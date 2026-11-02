@@ -18,6 +18,7 @@
 use crate::hypervisor::error::RuntimeError;
 use crate::models::deployments::{Deployment, parse_memory_string};
 use sysinfo::System;
+use tracing::warn;
 
 /// The memory figure we admit against, in bytes. `requests.memory` is the
 /// scheduling intent ("how much this workload needs to run"), so it wins;
@@ -68,7 +69,16 @@ pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<(), RuntimeEr
         return Ok(());
     };
 
-    let mut sys = System::new();
+    let mut sys = match System::new() {
+        Ok(sys) => sys,
+        Err(e) => {
+            warn!(
+                "skipping the host memory check for '{}': {}",
+                deployment.name, e
+            );
+            return Ok(());
+        }
+    };
     sys.refresh_memory();
     // sysinfo reports bytes; `available_memory` accounts for reclaimable cache,
     // matching what the kernel would actually hand out.

@@ -103,7 +103,7 @@ mod tests {
     async fn create_namespace() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/namespaces")
@@ -120,7 +120,7 @@ mod tests {
     async fn create_namespace_writes_an_audit_entry() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/namespaces")
@@ -148,7 +148,7 @@ mod tests {
     async fn create_duplicate_namespace_returns_problem_json_conflict() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let payload = json!({ "name": "duplicate-ns" });
         let first = server
@@ -181,7 +181,7 @@ mod tests {
     async fn create_with_short_name_returns_422_problem_json() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/namespaces")
@@ -201,7 +201,7 @@ mod tests {
     async fn create_with_uppercase_name_trips_format() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/namespaces")
@@ -224,7 +224,7 @@ mod tests {
     async fn create_accumulates_all_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // `-` fails length (1 char) AND format (leading dash).
         let response = server

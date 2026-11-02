@@ -30,8 +30,8 @@ pub(crate) fn ensure(init_binary: &Path, cache_dir: &Path) -> Result<PathBuf, Ru
         ))
     })?;
 
-    let digest = Sha256::digest(&binary);
-    let path = cache_dir.join(format!("ring-init-{:x}.cpio", digest));
+    let digest = hex::encode(Sha256::digest(&binary));
+    let path = cache_dir.join(format!("ring-init-{}.cpio", digest));
     if path.exists() {
         return Ok(path);
     }
@@ -42,7 +42,7 @@ pub(crate) fn ensure(init_binary: &Path, cache_dir: &Path) -> Result<PathBuf, Ru
     // the rename is atomic, and the last one simply replaces an identical
     // archive.
     let partial = cache_dir.join(format!(
-        "ring-init-{:x}.cpio.{}.partial",
+        "ring-init-{}.cpio.{}.partial",
         digest,
         uuid::Uuid::new_v4()
     ));

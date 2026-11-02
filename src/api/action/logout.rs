@@ -75,7 +75,7 @@ mod tests {
 
     #[tokio::test]
     async fn logout_revokes_the_presented_session() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let token = login(&server).await;
         let (h, v) = auth(&token);
 
@@ -99,7 +99,7 @@ mod tests {
         // the handler — the auth middleware rejects it with 401. (The handler's
         // own idempotency — unknown token → 204 — is unreachable here precisely
         // because a revoked token never gets past auth, which is the point.)
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let token = login(&server).await;
         let (h, v) = auth(&token);
 
@@ -111,7 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn fresh_login_after_logout_works() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let first = login(&server).await;
         let (h, v) = auth(&first);
         server.post("/logout").add_header(h, v).await;

@@ -138,7 +138,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_success() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let token = login_token(&server).await;
         assert!(!token.is_empty(), "Token key is missing in the response");
         // The session is now a row in the `token` table, so it carries the same
@@ -153,7 +153,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_token_authenticates_a_protected_route() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let token = login_token(&server).await;
 
         // Assert against `/users/me`: it is protected by the same middleware
@@ -169,7 +169,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_login_mints_a_distinct_session() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let first = login_token(&server).await;
         let second = login_token(&server).await;
 
@@ -195,7 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn session_is_hidden_from_the_token_list() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let token = login_token(&server).await;
 
         // The session lives in the `token` table, but it is not a PAT the user
@@ -221,7 +221,7 @@ mod tests {
         // user is free to name a PAT "session" — it must NOT be hidden from the
         // list or treated as a session. This is the regression the magic-name
         // model had: such a PAT used to vanish from `ring token list`.
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         let session = login_token(&server).await;
 
         let mint = server
@@ -254,7 +254,7 @@ mod tests {
         // only via /login and /logout. We mint a session directly on the pool
         // (so we hold its id) and prove every id-based token route rejects it.
         let (pool, router) = crate::api::server::tests::new_test_app_with_pool().await;
-        let server = TestServer::new(router).unwrap();
+        let server = TestServer::new(router);
         let admin = login_token(&server).await;
         let auth = || ("Authorization", format!("Bearer {}", admin));
 
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_fail_returns_problem_json_unauthorized() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
 
         let response: TestResponse = server
             .post("/login")

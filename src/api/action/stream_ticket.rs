@@ -63,7 +63,6 @@ mod tests {
         let token = login(app.clone(), "admin", "changeme").await;
 
         let res = TestServer::new(app)
-            .unwrap()
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({ "scope": "deployment:logs:abc" }))
@@ -79,7 +78,6 @@ mod tests {
     #[tokio::test]
     async fn rejects_without_bearer() {
         let res = TestServer::new(new_test_app().await)
-            .unwrap()
             .post("/auth/stream-ticket")
             .json(&json!({ "scope": "deployment:logs:abc" }))
             .await;
@@ -93,7 +91,6 @@ mod tests {
         let token = login(app.clone(), "admin", "changeme").await;
 
         let res = TestServer::new(app)
-            .unwrap()
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({ "scope": "" }))

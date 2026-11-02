@@ -192,7 +192,7 @@ mod tests {
     async fn create_volume() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "production").await;
 
@@ -216,7 +216,7 @@ mod tests {
     async fn create_volume_in_nonexistent_namespace_returns_404() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/volumes")
@@ -231,7 +231,7 @@ mod tests {
     async fn create_duplicate_volume_returns_conflict() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "staging").await;
         let payload = json!({ "namespace": "staging", "name": "cache-vol" });
@@ -255,7 +255,7 @@ mod tests {
     async fn create_volume_rejects_unknown_backend() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "production").await;
 

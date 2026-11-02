@@ -34,7 +34,7 @@ pub(crate) async fn find_all(
         ALLOWED_FILTER_COLUMNS,
     );
 
-    let mut q = sqlx::query_as::<_, Config>(&query);
+    let mut q = sqlx::query_as::<_, Config>(sqlx::AssertSqlSafe(query));
     for val in &values {
         q = q.bind(val);
     }
