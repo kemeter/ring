@@ -34,7 +34,7 @@ cli-table = "0.5.0"
 owo-colors = { version = "4", features = ["supports-colors"] }
 axum = { version = "0.8.4", features = ["ws"] }
 tower = { version = "0.5.2", features = ["util", "timeout"] }
-tower-http = { version = "0.6", features = ["cors"] }
+tower-http = { version = "0.7", features = ["cors"] }
 axum-macros = "0.5.0"
 rust-argon2 = "3.0.0"
 regex = "1.6.0"
