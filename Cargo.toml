@@ -101,11 +101,11 @@ docker_credential = "1.4.0"
 # With a signal disabled (the default) no exporter is built and there is zero
 # runtime cost. Pinned in lockstep on 0.32 (the core crates release together);
 # `tracing-opentelemetry` 0.33 targets opentelemetry 0.32.
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "trace", "metrics", "logs"] }
-tracing-opentelemetry = "0.33"
-opentelemetry-appender-tracing = "0.32"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace", "metrics", "logs"] }
+tracing-opentelemetry = "0.34"
+opentelemetry-appender-tracing = "0.33"
 
 [dev-dependencies]
 axum-test = { version = "17.3.0", features = ["ws"] }
