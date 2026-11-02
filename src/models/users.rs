@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use argon2::{self, Config as Argon2Config};
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -410,7 +410,9 @@ pub(crate) async fn delete(pool: &SqlitePool, user: &User) -> Result<bool, sqlx:
 /// reseed across fork. This mirrors the nonce generation in `models::secret`.
 pub(crate) fn hash_password(password: &str) -> Result<String, argon2::Error> {
     let mut salt = [0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    OsRng
+        .try_fill_bytes(&mut salt)
+        .expect("OS random generator failed");
 
     let argon2_config = Argon2Config {
         variant: argon2::Variant::Argon2id,

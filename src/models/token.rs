@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::{DateTime, Utc};
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
@@ -195,7 +195,9 @@ pub(crate) fn hash_token(clear: &str) -> String {
 /// fork. This mirrors `models::users::hash_password` and `models::secret`.
 fn generate_token() -> (String, String, String) {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random generator failed");
     let clear = format!("{}{}", TOKEN_PREFIX, hex::encode(bytes));
     let prefix = clear.chars().take(PREFIX_DISPLAY_LEN).collect::<String>();
     let hash = hash_token(&clear);

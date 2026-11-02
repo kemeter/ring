@@ -48,7 +48,7 @@ hyperlocal = "0.9"
 http-body-util = "0.1"
 validator = { version = "0.20.0", features = ["derive"] }
 rand = "0.9.1"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"

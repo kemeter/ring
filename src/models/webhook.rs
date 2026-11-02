@@ -1,6 +1,6 @@
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
 use chrono::Utc;
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::net::IpAddr;
@@ -162,7 +162,9 @@ fn filter_matches(filter: &str, kind: &str) -> bool {
 /// consistent with token/password generation elsewhere.
 pub(crate) fn generate_secret() -> String {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random generator failed");
     format!("whsec_{}", hex::encode(bytes))
 }
 
