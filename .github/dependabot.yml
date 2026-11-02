@@ -15,6 +15,10 @@ updates:
     directory: "/dashboard"
     patterns: ["*"]
     multi-ecosystem-group: "dependencies"
+    ignore:
+      # SvelteKit and svelte-check don't support TypeScript 7 yet.
+      - dependency-name: "typescript"
+        versions: [">=7"]
 
   - package-ecosystem: "bun"
     directory: "/website"
