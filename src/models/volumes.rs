@@ -76,10 +76,12 @@ pub(crate) async fn insert(pool: &SqlitePool, volume: &Volume) -> Result<(), sql
 }
 
 pub(crate) async fn get_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Volume>, sqlx::Error> {
-    sqlx::query_as::<_, Volume>(&format!("SELECT {COLUMNS} FROM volumes WHERE id = ?"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Volume>(sqlx::AssertSqlSafe(format!(
+        "SELECT {COLUMNS} FROM volumes WHERE id = ?"
+    )))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 /// Alias of [`get_by_id`] using the verb the API layer shares across resources
@@ -100,7 +102,7 @@ pub(crate) async fn find_all(
         ALLOWED_FILTER_COLUMNS,
     );
 
-    let mut q = sqlx::query_as::<_, Volume>(&query);
+    let mut q = sqlx::query_as::<_, Volume>(sqlx::AssertSqlSafe(query));
     for val in &values {
         q = q.bind(val);
     }
@@ -140,9 +142,9 @@ pub(crate) async fn register_if_absent(
     // registered" (Ok(false)) rather than a real error.
     let mut tx = pool.begin().await?;
 
-    let exists = sqlx::query_as::<_, Volume>(&format!(
+    let exists = sqlx::query_as::<_, Volume>(sqlx::AssertSqlSafe(format!(
         "SELECT {COLUMNS} FROM volumes WHERE name = ? AND namespace = ?"
-    ))
+    )))
     .bind(name)
     .bind(namespace)
     .fetch_optional(&mut *tx)

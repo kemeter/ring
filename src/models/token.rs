@@ -264,7 +264,7 @@ pub(crate) async fn find_by_token_hash(
     hash: &str,
 ) -> Result<Option<Token>, sqlx::Error> {
     let sql = format!("SELECT {} FROM token WHERE token_hash = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, TokenRow>(&sql)
+    let row = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(hash)
         .fetch_optional(pool)
         .await?;
@@ -274,7 +274,7 @@ pub(crate) async fn find_by_token_hash(
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Token>, sqlx::Error> {
     let sql = format!("SELECT {} FROM token WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, TokenRow>(&sql)
+    let row = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -292,7 +292,7 @@ pub(crate) async fn find_all_for_user(
         "SELECT {} FROM token WHERE user_id = ? AND kind = ? ORDER BY created_at DESC",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, TokenRow>(&sql)
+    let rows = sqlx::query_as::<_, TokenRow>(sqlx::AssertSqlSafe(sql))
         .bind(user_id)
         .bind(TokenKind::Pat.as_str())
         .fetch_all(pool)

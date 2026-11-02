@@ -199,7 +199,7 @@ pub(crate) async fn create(
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Webhook>, sqlx::Error> {
     let sql = format!("SELECT {} FROM webhook WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, WebhookRow>(&sql)
+    let row = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -211,7 +211,7 @@ pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<Webhook>, sqlx::Er
         "SELECT {} FROM webhook ORDER BY created_at DESC",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, WebhookRow>(&sql)
+    let rows = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
     Ok(rows.into_iter().map(Webhook::from).collect())
@@ -226,7 +226,7 @@ pub(crate) async fn subscribers_for(
         "SELECT {} FROM webhook WHERE revoked_at IS NULL",
         SELECT_COLUMNS
     );
-    let rows = sqlx::query_as::<_, WebhookRow>(&sql)
+    let rows = sqlx::query_as::<_, WebhookRow>(sqlx::AssertSqlSafe(sql))
         .fetch_all(pool)
         .await?;
     Ok(rows

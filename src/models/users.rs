@@ -165,7 +165,7 @@ impl From<UserRow> for User {
 
 pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE id = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, UserRow>(&sql)
+    let row = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -178,7 +178,7 @@ pub(crate) async fn find_by_username(
     username: &str,
 ) -> Result<Option<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user WHERE username = ?", SELECT_COLUMNS);
-    let row = sqlx::query_as::<_, UserRow>(&sql)
+    let row = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
         .bind(username)
         .fetch_optional(pool)
         .await?;
@@ -188,7 +188,9 @@ pub(crate) async fn find_by_username(
 
 pub(crate) async fn find_all(pool: &SqlitePool) -> Result<Vec<User>, sqlx::Error> {
     let sql = format!("SELECT {} FROM user", SELECT_COLUMNS);
-    let rows = sqlx::query_as::<_, UserRow>(&sql).fetch_all(pool).await?;
+    let rows = sqlx::query_as::<_, UserRow>(sqlx::AssertSqlSafe(sql))
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows.into_iter().map(User::from).collect())
 }
