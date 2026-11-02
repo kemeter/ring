@@ -8,12 +8,12 @@
   "dependencies": {
     "aplos": "github:alpac0de/aplos",
     "babel-plugin-react-compiler": "19.1.0-rc.3",
-    "js-yaml": "^4.1.1",
+    "js-yaml": "^5.5.0",
     "prismjs": "^1.29.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "7.9.5",
+    "react-router-dom": "7.18.5",
     "rehype-raw": "^7.0.0",
     "remark-directive": "^4.0.0",
     "remark-gfm": "^4.0.1"
