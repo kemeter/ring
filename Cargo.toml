@@ -108,7 +108,7 @@ tracing-opentelemetry = "0.34"
 opentelemetry-appender-tracing = "0.33"
 
 [dev-dependencies]
-axum-test = { version = "20.1.0", features = ["ws"] }
+axum-test = { version = "21.1.0", features = ["ws"] }
 # Only to build the `LogOutput` frames bollard hands back, in the exec tests.
 bytes = "1"
 
