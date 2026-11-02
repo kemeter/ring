@@ -38,7 +38,7 @@ mod tests {
     async fn not_fount() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs/1")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -51,7 +51,7 @@ mod tests {
     async fn get() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
             .add_header("Authorization", format!("Bearer {}", token))

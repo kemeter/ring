@@ -52,7 +52,7 @@ mod tests {
     async fn audit_lists_namespace_write_actions() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Two write actions in the same namespace.
         server
@@ -87,7 +87,7 @@ mod tests {
     #[tokio::test]
     async fn audit_requires_authentication() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server.get("/namespaces/prod/audit").await;
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
@@ -96,7 +96,7 @@ mod tests {
     async fn audit_unknown_namespace_is_empty() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/namespaces/does-not-exist/audit")

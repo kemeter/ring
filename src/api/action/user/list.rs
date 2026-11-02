@@ -48,7 +48,7 @@ mod tests {
     async fn create() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .get("/users")

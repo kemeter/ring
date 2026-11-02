@@ -325,7 +325,7 @@ mod tests {
 
         let (pool, app) = new_test_app_with_runtimes(runtimes).await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         Harness {
             pool,
             server,

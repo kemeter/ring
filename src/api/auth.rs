@@ -732,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn public_routes_need_no_auth() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         // /healthz and /login live in the router without the auth layer.
         assert_eq!(server.get("/healthz").await.status_code(), StatusCode::OK);
         let login = server
@@ -744,7 +744,7 @@ mod tests {
 
     #[tokio::test]
     async fn protected_route_without_token_is_401() {
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         assert_eq!(
             server.get("/deployments").await.status_code(),
             StatusCode::UNAUTHORIZED
@@ -755,7 +755,7 @@ mod tests {
     async fn unknown_route_is_404_not_401() {
         // The route_layer pitfall: auth must NOT turn a missing route into a
         // 401. No token, nonexistent path → 404.
-        let server = TestServer::new(new_test_app().await).unwrap();
+        let server = TestServer::new(new_test_app().await);
         assert_eq!(
             server.get("/does-not-exist").await.status_code(),
             StatusCode::NOT_FOUND
@@ -766,7 +766,7 @@ mod tests {
     async fn valid_bearer_reaches_protected_route() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let res = server
             .get("/deployments")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -778,7 +778,7 @@ mod tests {
     async fn ticket_authorizes_its_scoped_logs_route() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let mint = server
             .post("/auth/stream-ticket")
@@ -803,7 +803,7 @@ mod tests {
     async fn ticket_rejected_on_different_deployment_scope() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let mint = server
             .post("/auth/stream-ticket")
@@ -827,7 +827,7 @@ mod tests {
     async fn ticket_does_not_authorize_non_logs_route() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let mint = server
             .post("/auth/stream-ticket")
@@ -881,7 +881,7 @@ mod tests {
         // Baseline: a correctly-scoped PAT passes the central scope gate.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let pat = mint_pat(&server, &session, &["deployments:read"], &[]).await;
 
         let res = server
@@ -897,7 +897,7 @@ mod tests {
         // the scope gate runs centrally in the middleware.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let pat = mint_pat(&server, &session, &["secrets:read"], &[]).await;
 
         let res = server
@@ -915,7 +915,7 @@ mod tests {
         // stops it — and that boundary is checked after the deployment loads.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let pat = mint_pat(&server, &session, &["deployments:write"], &["kemeter"]).await;
 
         // 658c…118 is a fixture deployment in the `default` namespace.
@@ -932,7 +932,7 @@ mod tests {
         // scoped to `kemeter` must not stream logs of a `default` deployment.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let pat = mint_pat(&server, &session, &["deployments:read"], &["kemeter"]).await;
 
         let res = server
@@ -950,7 +950,7 @@ mod tests {
         // lesser PAT could rotate an admin token into a fresh admin secret.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let pat = mint_pat(&server, &session, &["users:write"], &[]).await;
 
         // Cannot create.
@@ -979,7 +979,7 @@ mod tests {
         // the admin-only token routes reject a fully-scoped non-admin PAT.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         // A PAT with every non-admin scope still can't reach /tokens.
         let pat = mint_pat(
             &server,

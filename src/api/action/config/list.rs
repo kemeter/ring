@@ -102,7 +102,7 @@ mod tests {
     async fn list_all_configs() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -118,7 +118,7 @@ mod tests {
     async fn list_configs_filter_by_namespace_production() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?namespace=production")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -139,7 +139,7 @@ mod tests {
     async fn list_configs_filter_by_namespace_staging() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?namespace=staging")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -157,7 +157,7 @@ mod tests {
     async fn list_configs_filter_by_multiple_namespaces() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?namespace=kemeter&namespace=staging")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -178,7 +178,7 @@ mod tests {
     async fn list_configs_filter_by_nonexistent_namespace() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?namespace=nonexistent")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -194,7 +194,7 @@ mod tests {
     async fn list_configs_filter_by_name() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?name=app.properties")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -213,7 +213,7 @@ mod tests {
     async fn list_configs_filter_by_namespace_and_name() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?namespace=staging&name=app.properties")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -231,7 +231,7 @@ mod tests {
     async fn list_configs_filter_by_nonexistent_name() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/configs?name=nonexistent")
             .add_header("Authorization", format!("Bearer {}", token))

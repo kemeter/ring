@@ -96,7 +96,7 @@ mod tests {
         // a CLI typo is surfaced explicitly instead of silently returning [].
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .get("/webhooks/does-not-exist/events")
@@ -126,7 +126,7 @@ mod tests {
             .await
             .unwrap();
         let token = pat(&pool, &["webhooks:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .get(&format!("/webhooks/{}/events", hook.id))

@@ -43,7 +43,7 @@ mod tests {
     async fn get() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/node/get")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -55,7 +55,7 @@ mod tests {
     #[tokio::test]
     async fn get_without_auth() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server.get("/node/get").await;
 
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);

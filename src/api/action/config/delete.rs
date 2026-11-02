@@ -54,7 +54,7 @@ mod tests {
     async fn delete() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .delete("/configs/cde7806a-21af-473b-968b-08addc7bf0ba")
@@ -75,7 +75,7 @@ mod tests {
     async fn delete_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .delete("/configs/00000000-0000-0000-0000-000000000000")

@@ -382,7 +382,7 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn login(app: Router, username: &str, password: &str) -> String {
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .post("/login")
             .json(&json!({
@@ -402,7 +402,7 @@ pub(crate) mod tests {
     async fn test_health_checks_api_endpoint() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let create_response = server
             .post("/deployments")
@@ -444,7 +444,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_health_checks_api_unauthorized() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server.get("/deployments/some-id/health-checks").await;
 
@@ -455,7 +455,7 @@ pub(crate) mod tests {
     async fn test_health_checks_api_deployment_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/deployments/non-existent-id/health-checks")

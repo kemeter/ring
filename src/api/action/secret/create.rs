@@ -178,7 +178,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "production").await;
 
@@ -206,7 +206,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "alpacode").await;
 
@@ -234,7 +234,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "alpacode").await;
 
@@ -274,7 +274,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .post("/secrets")
@@ -304,7 +304,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         create_namespace(&server, &token, "staging").await;
 
@@ -342,7 +342,7 @@ mod tests {
         set_test_key();
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Namespace and name both invalid (uppercase / leading dash), value empty.
         let response = server

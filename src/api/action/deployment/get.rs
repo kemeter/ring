@@ -54,7 +54,7 @@ mod tests {
     async fn not_fount() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments/1")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -67,7 +67,7 @@ mod tests {
     async fn get() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -80,7 +80,7 @@ mod tests {
     async fn get_deployment_with_image_digest() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments/a71f2492-b7c5-42ef-98f8-4hg2527gh451")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -95,7 +95,7 @@ mod tests {
     async fn get_deployment_without_image_digest() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
             .add_header("Authorization", format!("Bearer {}", token))

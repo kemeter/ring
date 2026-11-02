@@ -288,7 +288,7 @@ mod tests {
         let admin_token = login(app.clone(), "admin", "changeme").await;
         // john.doe logs in, so there is a live session to invalidate.
         let john_token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         assert!(!john_token.is_empty());
         assert!(
@@ -320,7 +320,7 @@ mod tests {
         let (pool, app) = new_test_app_with_pool().await;
         let admin_token = login(app.clone(), "admin", "changeme").await;
         login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -344,7 +344,7 @@ mod tests {
         // read-only must stay read-only.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let mint: TestResponse = server
             .post("/tokens")
@@ -390,7 +390,7 @@ mod tests {
         // Self-service must not become a promotion path.
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -405,7 +405,7 @@ mod tests {
     async fn unknown_role_is_rejected() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -422,7 +422,7 @@ mod tests {
         // with no way back in through the API.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{ADMIN_ID}"))
@@ -437,7 +437,7 @@ mod tests {
     async fn update_not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/non-existent-id")
@@ -454,7 +454,7 @@ mod tests {
     async fn update_username() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -479,7 +479,7 @@ mod tests {
     async fn update_password() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -524,7 +524,7 @@ mod tests {
         // `users:write` does not make it a self-service credential either.
         let app = new_test_app().await;
         let session = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         for scopes in [&["users:read"][..], &["users:write"][..], &["admin"][..]] {
             let pat = mint_pat(&server, &session, scopes).await;
@@ -563,7 +563,7 @@ mod tests {
     async fn changing_your_own_password_requires_the_current_one() {
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let missing: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -590,7 +590,7 @@ mod tests {
         let (pool, app) = new_test_app_with_pool().await;
         let current = login(app.clone(), "john.doe", "changeme").await;
         let other = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -625,7 +625,7 @@ mod tests {
         let (pool, app) = new_test_app_with_pool().await;
         let admin = login(app.clone(), "admin", "changeme").await;
         login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put(&format!("/users/{JOHN_ID}"))
@@ -642,7 +642,7 @@ mod tests {
     async fn update_with_short_username_returns_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -664,7 +664,7 @@ mod tests {
     async fn update_with_invalid_username_chars_returns_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -684,7 +684,7 @@ mod tests {
     async fn update_with_short_password_returns_violations() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -707,7 +707,7 @@ mod tests {
         // Both fields invalid → response must list everything in one shot.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -737,7 +737,7 @@ mod tests {
         // no field changes, and the existing user comes back unchanged.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
@@ -754,7 +754,7 @@ mod tests {
         // the admin account's credentials. Expect 403, before validation.
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47") // admin's id
@@ -773,7 +773,7 @@ mod tests {
         // writes and role changes.
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/6c6d481b-debf-5gb5-937f-2ffa5e9f8e58") // john.doe's id
@@ -789,7 +789,7 @@ mod tests {
         // Admin retains the ability to manage other accounts.
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/6c6d481b-debf-5gb5-937f-2ffa5e9f8e58") // john.doe's id
@@ -806,7 +806,7 @@ mod tests {
         // 401 before validation runs — we don't want validation behavior
         // to leak field names to unauthenticated callers.
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response: TestResponse = server
             .put("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")

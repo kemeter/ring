@@ -940,10 +940,7 @@ mod tests {
     /// connection at all, which surfaces as 426. Either way the response says
     /// nothing about the checks these tests exist to cover.
     fn ws_server(app: Router) -> TestServer {
-        TestServer::builder()
-            .http_transport()
-            .build(app)
-            .expect("test server")
+        TestServer::builder().http_transport().build(app)
     }
     #[tokio::test]
     async fn rejects_without_credentials() {
@@ -1002,7 +999,7 @@ mod tests {
         let token = login(app.clone(), "admin", "changeme").await;
 
         // Create a namespace so the audit endpoint has something to read.
-        let server = TestServer::new(app.clone()).unwrap();
+        let server = TestServer::new(app.clone());
         server
             .post("/namespaces")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -1016,7 +1013,6 @@ mod tests {
             .await;
 
         let entries = TestServer::new(app)
-            .unwrap()
             .get("/namespaces/audit-ns/audit")
             .add_header("Authorization", format!("Bearer {}", token))
             .await

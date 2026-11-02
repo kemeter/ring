@@ -100,7 +100,7 @@ mod tests {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
 
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118/events")
@@ -118,7 +118,7 @@ mod tests {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
 
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118/events?level=error")
@@ -138,7 +138,7 @@ mod tests {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
 
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118/events?limit=5")
@@ -154,7 +154,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_deployment_events_unauthorized() {
         let app = new_test_app().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let response = server
             .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118/events")

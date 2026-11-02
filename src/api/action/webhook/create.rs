@@ -143,7 +143,7 @@ mod tests {
         let (pool, app) = new_test_app_with_pool().await;
         let token = login(app.clone(), "admin", "changeme").await;
         let _ = &pool;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -158,7 +158,7 @@ mod tests {
     async fn pat_with_webhooks_write_can_create() {
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -175,7 +175,7 @@ mod tests {
         // register a webhook, even though it is otherwise a valid credential.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["deployments:read", "secrets:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -191,7 +191,7 @@ mod tests {
         // webhooks:read lets you list, not create.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:read"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -205,7 +205,7 @@ mod tests {
     #[tokio::test]
     async fn no_token_is_unauthorized() {
         let (_pool, app) = new_test_app_with_pool().await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server.post("/webhooks").json(&body()).await;
 
@@ -217,7 +217,7 @@ mod tests {
         // admin is a wildcard over every scope, webhooks:write included.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["admin"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -234,7 +234,7 @@ mod tests {
         // persisted — guards the KNOWN_EVENT_KINDS validation.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -254,7 +254,7 @@ mod tests {
         // `*` and `<family>.*` are valid subscription filters.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         for filter in ["*", "deployment.*"] {
             let res = server
@@ -276,7 +276,7 @@ mod tests {
         // message that tells the caller the right form, not silently never match.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -295,7 +295,7 @@ mod tests {
         // caller's call, so even a short one is accepted and persisted.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")
@@ -312,7 +312,7 @@ mod tests {
         // SSRF guard: a URL pointing at an internal address is a 422.
         let (pool, app) = new_test_app_with_pool().await;
         let token = pat(&pool, &["webhooks:write"]).await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         let res = server
             .post("/webhooks")

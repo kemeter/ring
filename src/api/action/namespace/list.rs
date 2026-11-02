@@ -38,7 +38,7 @@ mod tests {
     async fn list_all_namespaces() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create some namespaces first
         server

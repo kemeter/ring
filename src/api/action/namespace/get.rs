@@ -30,7 +30,7 @@ mod tests {
     async fn not_found() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .get("/namespaces/nonexistent")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -43,7 +43,7 @@ mod tests {
     async fn get_namespace() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Create a namespace first
         let create_response = server

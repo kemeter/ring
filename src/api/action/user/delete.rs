@@ -51,7 +51,7 @@ mod tests {
     async fn delete() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .delete("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -77,7 +77,7 @@ mod tests {
         .unwrap();
 
         let token = login(app.clone(), "second.admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
 
         // Two admins: deleting the seed admin leaves the caller, so it is fine.
         let first = server
@@ -101,7 +101,7 @@ mod tests {
     async fn cannot_delete_self() {
         let app = new_test_app().await;
         let token = login(app.clone(), "admin", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .delete("/users/1c5a5fe9-84e0-4a18-821e-8058232c2c23")
             .add_header("Authorization", format!("Bearer {}", token))
@@ -116,7 +116,7 @@ mod tests {
         // the admin account.
         let app = new_test_app().await;
         let token = login(app.clone(), "john.doe", "changeme").await;
-        let server = TestServer::new(app).unwrap();
+        let server = TestServer::new(app);
         let response = server
             .delete("/users/5b5c370a-cdbf-4fa4-826e-1eea4d8f7d47") // admin's id
             .add_header("Authorization", format!("Bearer {}", token))
