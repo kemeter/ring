@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import yaml from 'js-yaml';
+import { load } from 'js-yaml';
 import CodeBlock from './CodeBlock';
 import TabbedCode from './TabbedCode';
 
@@ -53,7 +53,7 @@ function deploymentBodies(parsed: unknown): string | null {
 export default function YamlJsonTabs({ code }: { code: string }) {
   const json = useMemo(() => {
     try {
-      const parsed = yaml.load(code);
+      const parsed = load(code);
       if (parsed === null || typeof parsed !== 'object') return null;
 
       const apiBody = deploymentBodies(parsed);
