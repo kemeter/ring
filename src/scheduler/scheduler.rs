@@ -1830,7 +1830,7 @@ pub(crate) async fn schedule(
         // Names whose deleted deployment still has instances after this tick's
         // teardown. Deployments are listed oldest first, so a predecessor is
         // torn down before its successor is reached, and the successor must
-        // not start beside it: both may mount the same volume.
+        // not start an instance beside it: both may mount the same volume.
         let mut held_names: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
 
@@ -1880,15 +1880,9 @@ pub(crate) async fn schedule(
                 continue;
             }
 
-            if held_names.contains(&(deployment.namespace.clone(), deployment.name.clone())) {
-                info!(
-                    deployment.id = %deployment.id,
-                    deployment.namespace = %deployment.namespace,
-                    deployment.name = %deployment.name,
-                    "deployment skipped this cycle: the deployment it replaces still has instances"
-                );
-                continue;
-            }
+            // Its instances are still reconciled; only a new one waits.
+            let predecessor_holds_instances =
+                held_names.contains(&(deployment.namespace.clone(), deployment.name.clone()));
 
             let deployment_policy = deployment.restart_policy(&policy);
             let mut state = restart_states.remove(&deployment.id).unwrap_or_default();
@@ -1910,7 +1904,8 @@ pub(crate) async fn schedule(
             // observed, their crashes counted and their health checks run.
             // The blocker is reported when a start is refused, on the restart
             // delays, rather than on every cycle.
-            let mut start_blocker = None;
+            let mut start_blocker =
+                predecessor_holds_instances.then_some(reconcile::StartBlocker::PredecessorHoldsInstances);
             let mut resolved = match prepare_deployment(&pool, &deployment).await {
                 Ok(d) => d,
                 Err(e) => {

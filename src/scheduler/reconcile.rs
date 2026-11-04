@@ -403,6 +403,13 @@ async fn scale(
 
     match start_blocker {
         None => {}
+        Some(StartBlocker::PredecessorHoldsInstances) => {
+            info!(
+                deployment.id = %deployment.id,
+                "no instance started: the deployment it replaces still has instances"
+            );
+            return;
+        }
         Some(StartBlocker::Unresolved {
             event_reason,
             message,
@@ -534,6 +541,9 @@ pub(crate) enum StartBlocker {
         /// ordinary delays instead of those for an operator error.
         transient: bool,
     },
+    /// The deployment it replaces still has instances, which may hold the same
+    /// volumes: waited for, without counting as a failure.
+    PredecessorHoldsInstances,
 }
 
 /// Apply the policy's decision on a failure for `reason`, described by
@@ -1211,6 +1221,35 @@ mod tests {
         assert_eq!(driver.starts(), 0);
         let next = state.next_attempt_at.unwrap();
         assert!(next <= now() + secs(10), "first retry within `base`");
+    }
+
+    #[tokio::test]
+    async fn a_successor_waits_for_its_predecessor_without_failing() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("a", Some(1));
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.set_status(DeploymentStatus::Running);
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let d = reconcile(
+            &driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            d,
+            &[],
+            Some(&StartBlocker::PredecessorHoldsInstances),
+            &mut state,
+            now(),
+            &mut rng,
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(d.restart_count, 1, "its own crash is still counted");
+        assert_eq!(d.instances, ["b"]);
+        assert_eq!(d.status, DeploymentStatus::Running);
+        assert_eq!(d.reason, None);
     }
 
     #[tokio::test]
