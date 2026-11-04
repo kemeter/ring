@@ -37,8 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A readiness deadline no longer fails a worker: its instances are recreated on the restart delays, `backing_off` with `readiness_timeout`, and the deadline counts from the start of the current run
 - `insufficient_resources` and a crash loop are retried on the restart delays instead of leaving the deployment as it is
 - A replica that fails to start while others still serve keeps the deployment `running`: only the next start waits. The new deployment of a rolling update still backs off, so the one it replaces is not drained meanwhile
+- A job always replaces its predecessor immediately, even with health checks: a job runs once, so a rolling update has nothing to hand over
 
 ### Fixed
+- A Docker container was also attached to Docker's default bridge network, which every namespace shares. It is now attached to its namespace's network only
 - **The Docker network of an unused namespace is released.** It used to stay forever, holding a subnet from the daemon's address pools, until no new network could be created. Ring now removes it once no deployment is left in the namespace, and at startup for those a previous run left behind.
 - `ring doctor` failed on a host without `xorriso`, which Ring no longer uses, and did not check `mke2fs`, without which a Cloud Hypervisor or Firecracker microVM cannot start. It now checks `mke2fs` on both runtimes
 - Bump `rustls-webpki` to 0.103.16 for RUSTSEC-2026-0382, and `tokio` to 1.54.1 for RUSTSEC-2026-0386
