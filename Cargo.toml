@@ -3,7 +3,7 @@ members = ["crates/ring-agent", "crates/ring-init"]
 
 [package]
 name = "ring-server"
-version = "0.13.0"
+version = "0.14.0-dev"
 authors = ["Mlanawo Mbechezi mlanawo@mbechezi.kemeter.io"]
 edition = "2024"
 license = "MIT"
