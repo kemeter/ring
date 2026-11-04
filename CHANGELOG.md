@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A deployment replacing another one was started while the one it replaces still had instances, when their teardown failed or timed out: both could mount the same volume at once. It now waits until the instances it replaces are gone
 - Deleting a secret without `force` succeeded while active deployments still used it. It is now refused with `409 Conflict` when the secret is used in a deployment's `environment`, a `secret` volume or `config.image_pull_secret`
 
 ## [0.13.0] - 2026-11-04

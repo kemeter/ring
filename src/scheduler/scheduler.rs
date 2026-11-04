@@ -280,6 +280,12 @@ async fn teardown_runtime(
     }
 }
 
+/// Whether a deleted deployment may still have instances after its teardown:
+/// the teardown failed or timed out (`None`), or left instances behind.
+fn still_holds_instances(torn_down: Option<&Deployment>) -> bool {
+    torn_down.is_none_or(|deployment| !deployment.instances.is_empty())
+}
+
 async fn log_apply_timeout(pool: &SqlitePool, deployment_id: &str, apply_timeout_secs: u64) {
     error!("runtime apply timed out for deployment {}", deployment_id);
     if let Err(e) = deployment_event::log_event(
@@ -1795,6 +1801,13 @@ pub(crate) async fn schedule(
             .collect();
         last_instances.retain(|id, _| list_deployments.iter().any(|d| &d.id == id));
 
+        // Names whose deleted deployment still has instances after this tick's
+        // teardown. Deployments are listed oldest first, so a predecessor is
+        // torn down before its successor is reached, and the successor must
+        // not start beside it: both may mount the same volume.
+        let mut held_names: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
         async {
         for deployment in list_deployments.into_iter() {
             let runtime = match runtimes.get(&deployment.runtime) {
@@ -1818,17 +1831,19 @@ pub(crate) async fn schedule(
             // without reading env or mounts, so tear down the unresolved
             // deployment and go straight to cleanup.
             if deployment.status == DeploymentStatus::Deleted {
-                let mut result = match teardown_runtime(
+                let torn_down = teardown_runtime(
                     &pool,
                     &deployment,
                     apply_timeout,
                     apply_timeout_secs,
                     runtime.as_ref(),
                 )
-                .await
-                {
-                    Some(d) => d,
-                    None => continue,
+                .await;
+                if still_holds_instances(torn_down.as_ref()) {
+                    held_names.insert((deployment.namespace.clone(), deployment.name.clone()));
+                }
+                let Some(mut result) = torn_down else {
+                    continue;
                 };
 
                 let old = deployment.snapshot();
@@ -1836,6 +1851,16 @@ pub(crate) async fn schedule(
                 schedule_cleanup(&pool, &mut result, &mut deleted).await;
 
                 write_back(&pool, &old, &result).await;
+                continue;
+            }
+
+            if held_names.contains(&(deployment.namespace.clone(), deployment.name.clone())) {
+                info!(
+                    deployment.id = %deployment.id,
+                    deployment.namespace = %deployment.namespace,
+                    deployment.name = %deployment.name,
+                    "deployment skipped this cycle: the deployment it replaces still has instances"
+                );
                 continue;
             }
 
@@ -2793,6 +2818,25 @@ mod tests {
         );
         let stored = deployments::find(&pool, "d1").await.unwrap().unwrap();
         assert_eq!(stored.status, DeploymentStatus::Deleted);
+    }
+
+    #[test]
+    fn a_failed_teardown_holds_the_name() {
+        assert!(still_holds_instances(None));
+    }
+
+    #[test]
+    fn a_teardown_that_left_instances_holds_the_name() {
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.instances = vec!["c1".to_string()];
+        assert!(still_holds_instances(Some(&deployment)));
+    }
+
+    #[test]
+    fn a_complete_teardown_releases_the_name() {
+        let mut deployment = child_with_health_checks("d1", vec![]);
+        deployment.instances.clear();
+        assert!(!still_holds_instances(Some(&deployment)));
     }
 
     fn ages(entries: &[(&str, u64)]) -> Vec<(String, Duration)> {
