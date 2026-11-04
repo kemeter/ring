@@ -1670,5 +1670,91 @@ mod tests {
     fn stable_after_reads_naturally() {
         assert_eq!(humanize(Duration::from_secs(600)), "10m");
         assert_eq!(humanize(Duration::from_secs(45)), "45s");
+        assert_eq!(humanize(Duration::from_secs(90)), "90s");
+        assert_eq!(humanize(Duration::from_secs(0)), "0s");
+    }
+
+    /// A worker restarted with no live instance goes through the readiness
+    /// gate again, even though it was running before.
+    #[tokio::test]
+    async fn a_running_worker_restarted_from_zero_instances_is_progressing() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(1),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 1);
+        assert_eq!(d.status, DeploymentStatus::Progressing);
+    }
+
+    /// One more replica started beside a serving instance leaves the
+    /// deployment running.
+    #[tokio::test]
+    async fn a_running_worker_scaled_up_beside_a_live_instance_stays_running() {
+        let driver = FakeDriver::running(&["a"]);
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.instances = vec!["a".to_string()];
+
+        let d = pass(&driver, &RestartPolicy::default(), d, &mut state, now()).await;
+
+        assert_eq!(driver.starts(), 1);
+        assert_eq!(d.status, DeploymentStatus::Running);
+    }
+
+    /// Next attempt delays, over several seeds, after a first start that
+    /// failed with `err`.
+    async fn first_retry_delays(err: fn() -> RuntimeError) -> Vec<chrono::Duration> {
+        let mut delays = Vec::new();
+        for seed in 0..30 {
+            let driver = FakeDriver::default();
+            driver.fail_starts_with(err());
+            let mut state = RestartState::default();
+            let mut d = worker(1);
+            d.set_status(DeploymentStatus::Pending);
+            let mut rng = StdRng::seed_from_u64(seed);
+            reconcile(
+                &driver,
+                &RestartPolicy::default(),
+                WorkloadKind::Worker,
+                d,
+                &[],
+                None,
+                &mut state,
+                now(),
+                &mut rng,
+            )
+            .await;
+            delays.push(state.next_attempt_at.expect("a retry is planned") - now());
+        }
+        delays
+    }
+
+    /// A start the operator has to fix (a missing config, a rejected spec, a
+    /// missing firmware) is retried on the whole `[0, cap]` range, while a
+    /// transient one first waits at most `base`.
+    #[tokio::test]
+    async fn a_start_error_that_needs_an_operator_is_retried_up_to_the_cap() {
+        let base = secs(10);
+        for err in [
+            (|| RuntimeError::ConfigNotFound("app".to_string())) as fn() -> RuntimeError,
+            || RuntimeError::InstanceCreationFailed("bad entrypoint".to_string()),
+            || RuntimeError::FirmwareNotFound("/missing".to_string()),
+        ] {
+            let delays = first_retry_delays(err).await;
+            assert!(delays.iter().any(|d| *d > base), "{delays:?}");
+            assert!(delays.iter().all(|d| *d <= secs(300)), "{delays:?}");
+        }
+
+        let delays =
+            first_retry_delays(|| RuntimeError::InsufficientResources("memory".to_string())).await;
+        assert!(delays.iter().all(|d| *d <= base), "{delays:?}");
     }
 }
