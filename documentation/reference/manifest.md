@@ -608,7 +608,7 @@ config:
 
 > **Credential helpers.** This works when `docker login` stores the credential **inline** in `config.json` (an `"auth": "..."` entry, the common case on Linux servers). If Docker is configured with a credential helper (`credsStore`/`credHelpers`, e.g. Docker Desktop), the file holds no usable credential, because it's in the OS keychain instead. In that case either write the `auths` entry by hand, or use [`use_host_auth`](#use_host_auth-credentials-from-the-host), which resolves helpers on the host.
 
-At deploy time the scheduler decrypts the Secret, picks the `auths` entry matching the image's registry host, and pulls with it. If the Secret is missing or has no entry for the registry, the deployment fails fast with an `image_pull_secret_resolution_error` event (the value is never logged). It must reference a Secret in the **same namespace** as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
+At deploy time the scheduler decrypts the Secret, picks the `auths` entry matching the image's registry host, and pulls with it. If the Secret is missing or has no entry for the registry, no new instance is started: the deployment backs off with `config_missing` and an `image_pull_secret_resolution_error` event (the value is never logged), and is retried until the Secret is fixed. It must reference a Secret in the **same namespace** as the deployment, and is mutually exclusive with inline `server`/`username`/`password` and with `use_host_auth`.
 
 Supported on Docker, Podman and containerd.
 

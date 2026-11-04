@@ -30,7 +30,7 @@ All values serialize as `snake_case`, identically on the wire (JSON), in the CLI
 | `run_failed` | A job run exited non-zero, or was removed by its liveness check. |
 | `image_pull` | The image couldn't be pulled (tag not found, registry auth, `image_pull_policy: Never` forbidding a pull, network). |
 | `spec_rejected` | The runtime rejected the instance (invalid mount, unsupported option, a port conflict the daemon surfaces at create time), or its program cannot run (exit code `126`/`127`). |
-| `config_missing` | A mounted config (or a key within it) doesn't exist in the namespace. |
+| `config_missing` | A config (or a key within it) or a secret the deployment references doesn't exist in the namespace. Instances already running keep running and are still watched; only a new instance waits. |
 | `insufficient_resources` | The host doesn't have enough free memory for the deployment right now. |
 | `network` | Creating the namespace network failed. |
 | `file_system` | An IO error handling volumes or temp config files. |

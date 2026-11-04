@@ -176,4 +176,113 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
     }
+
+    /// Creates the namespace `refs`, the secrets `db-pass` and `db-pass-old`,
+    /// and a live deployment `web` built by `deployment` over a base that runs
+    /// in `refs`. Returns the ids of both secrets.
+    async fn setup_referenced_secret(
+        server: &TestServer,
+        token: &str,
+        deployment: serde_json::Value,
+    ) -> (String, String) {
+        set_test_key();
+        server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": "refs" }))
+            .await;
+
+        let mut ids = Vec::new();
+        for name in ["db-pass", "db-pass-old"] {
+            let response = server
+                .post("/secrets")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({ "namespace": "refs", "name": name, "value": "{}" }))
+                .await;
+            assert_eq!(response.status_code(), StatusCode::CREATED);
+            let secret: serde_json::Value = response.json();
+            ids.push(secret["id"].as_str().unwrap().to_string());
+        }
+
+        let mut body = json!({
+            "runtime": "docker",
+            "name": "web",
+            "namespace": "refs",
+            "image": "nginx:latest",
+        });
+        body.as_object_mut()
+            .unwrap()
+            .extend(deployment.as_object().unwrap().clone());
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::CREATED,
+            "{}",
+            response.text()
+        );
+
+        (ids[0].clone(), ids[1].clone())
+    }
+
+    async fn assert_delete_is_blocked(deployment: serde_json::Value) {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let (used, unused) = setup_referenced_secret(&server, &token, deployment).await;
+
+        let response = server
+            .delete(&format!("/secrets/{}", used))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["deployments"], json!(["refs/web"]));
+
+        // A secret whose name only starts like the used one is not in use.
+        let response = server
+            .delete(&format!("/secrets/{}", unused))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+
+        let response = server
+            .delete(&format!("/secrets/{}?force=true", used))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_secret_used_in_the_environment_cannot_be_deleted_without_force() {
+        assert_delete_is_blocked(json!({
+            "environment": { "DB_PASSWORD": { "secretRef": "db-pass" } }
+        }))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_secret_mounted_as_a_volume_cannot_be_deleted_without_force() {
+        assert_delete_is_blocked(json!({
+            "volumes": [{
+                "type": "secret",
+                "source": "db-pass",
+                "destination": "/run/secrets/db-pass",
+                "driver": "local",
+                "permission": "ro"
+            }]
+        }))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_image_pull_secret_cannot_be_deleted_without_force() {
+        assert_delete_is_blocked(json!({
+            "config": { "image_pull_secret": "db-pass" }
+        }))
+        .await;
+    }
 }

@@ -77,10 +77,15 @@ SECRET_ID=$(curl -fsS "$RING_URL/secrets" -H "Authorization: Bearer $TOKEN" \
   | jq -r '.[] | select(.namespace=="ring-e2e" and .name=="doomed-secret") | .id' | head -n1)
 [ -z "$SECRET_ID" ] && fail "could not resolve id of secret 'doomed-secret'"
 
+# The secret is still in use, so a plain delete is refused; `force` overrides.
 HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
   -X DELETE "$RING_URL/secrets/$SECRET_ID" \
   -H "Authorization: Bearer $TOKEN")
-[ "$HTTP" = "204" ] || [ "$HTTP" = "200" ] || fail "DELETE /secrets/$SECRET_ID returned $HTTP"
+[ "$HTTP" = "409" ] || fail "DELETE /secrets/$SECRET_ID of a secret in use returned $HTTP (expected 409)"
+HTTP=$(curl -s -o /dev/null -w '%{http_code}' \
+  -X DELETE "$RING_URL/secrets/$SECRET_ID?force=true" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$HTTP" = "204" ] || [ "$HTTP" = "200" ] || fail "DELETE /secrets/$SECRET_ID?force=true returned $HTTP"
 
 # Confirm it's really gone — the whole point of the test is a *missing* secret.
 gone=$(curl -fsS "$RING_URL/secrets" -H "Authorization: Bearer $TOKEN" \
