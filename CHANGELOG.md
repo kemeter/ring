@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Deleting a secret without `force` succeeded while active deployments still used it. It is now refused with `409 Conflict` when the secret is used in a deployment's `environment`, a `secret` volume or `config.image_pull_secret`
+
 ## [0.13.0] - 2026-11-04
 
 ### Breaking

@@ -152,7 +152,7 @@ ring secret delete <SECRET_ID>
 ring secret delete <SECRET_ID> --force # bypass the in-use check
 ```
 
-Deleting a secret **referenced by an active deployment** fails with `409 Conflict`. The error body lists every referencing deployment so you can update them first:
+Deleting a secret **referenced by an active deployment** (in its `environment`, a `secret` volume or `config.image_pull_secret`) fails with `409 Conflict`. The error body lists every referencing deployment so you can update them first:
 
 ```json
 {

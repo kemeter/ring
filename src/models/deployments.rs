@@ -1128,20 +1128,47 @@ pub(crate) async fn find_referencing_secret(
     namespace: &str,
     secret_name: &str,
 ) -> Result<Vec<Deployment>, sqlx::Error> {
-    // Search for deployments in the same namespace that reference this secret
-    let pattern = format!("%\"secretRef\":\"{}\"% ", secret_name);
+    // A secret is referenced from three places stored in three columns, so the
+    // live deployments of the namespace are parsed and checked one by one rather
+    // than matched with a `LIKE` on one column.
     let sql = format!(
-        "SELECT {} FROM deployment WHERE namespace = ? AND environment LIKE ? AND status NOT IN ('deleted', 'completed', 'failed')",
+        "SELECT {} FROM deployment WHERE namespace = ? AND status NOT IN ('deleted', 'completed', 'failed')",
         SELECT_COLUMNS
     );
 
     let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
-        .bind(&pattern)
         .fetch_all(pool)
         .await?;
 
-    Ok(rows.into_iter().map(Deployment::from).collect())
+    Ok(rows
+        .into_iter()
+        .map(Deployment::from)
+        .filter(|deployment| deployment_references_secret(deployment, secret_name))
+        .collect())
+}
+
+/// True when `deployment` uses the secret `secret_name`: as a `secretRef`
+/// environment value, as the source of a `type == "secret"` volume, or as its
+/// `image_pull_secret`.
+fn deployment_references_secret(deployment: &Deployment, secret_name: &str) -> bool {
+    let in_environment = deployment.environment.values().any(
+        |value| matches!(value, EnvValue::SecretRef { secret_ref } if secret_ref == secret_name),
+    );
+    let in_volumes = serde_json::from_str::<Vec<DeploymentVolume>>(&deployment.volumes)
+        .map(|mounts| {
+            mounts.iter().any(|mount| {
+                mount.r#type == "secret" && mount.source.as_deref() == Some(secret_name)
+            })
+        })
+        .unwrap_or(false);
+    let as_image_pull_secret = deployment
+        .config
+        .as_ref()
+        .and_then(|config| config.image_pull_secret.as_deref())
+        == Some(secret_name);
+
+    in_environment || in_volumes || as_image_pull_secret
 }
 
 /// Count deployments grouped by `(namespace, status, reason)`, restricted to
