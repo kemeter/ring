@@ -57,7 +57,7 @@ jobs:
           PKG="ring-${TAG}-x86_64-unknown-linux-gnu"
           mkdir -p "dist/${PKG}"
           cp target/release/ring "dist/${PKG}/"
-          cp README.md LICENSE CHANGELOG.md "dist/${PKG}/" 2>/dev/null || true
+          cp README.md LICENSE CHANGELOG.md UPGRADE.md "dist/${PKG}/" 2>/dev/null || true
           tar -czf "${PKG}.tar.gz" -C dist "${PKG}"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
