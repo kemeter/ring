@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- A deployment whose secret or config could not be resolved was no longer reconciled at all: its crashes were not counted, its extra instances were not stopped and its health checks were suspended, while an error event was written on every scheduler cycle. Only the start of a new instance is now held back, as `backing_off` with `config_missing`, and the error is reported on the restart delays
 - A deployment replacing another one was started while the one it replaces still had instances, when their teardown failed or timed out: both could mount the same volume at once. It now waits until the instances it replaces are gone
 - Deleting a secret without `force` succeeded while active deployments still used it. It is now refused with `409 Conflict` when the secret is used in a deployment's `environment`, a `secret` volume or `config.image_pull_secret`
 

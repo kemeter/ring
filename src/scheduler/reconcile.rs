@@ -37,6 +37,7 @@ pub(crate) async fn reconcile(
     kind: WorkloadKind,
     mut deployment: Deployment,
     resolved_mounts: &[ResolvedMount],
+    start_blocker: Option<&StartBlocker>,
     state: &mut RestartState,
     now: DateTime<Utc>,
     rng: &mut (impl Rng + Send),
@@ -204,6 +205,7 @@ pub(crate) async fn reconcile(
         kind,
         &mut deployment,
         resolved_mounts,
+        start_blocker,
         state,
         &mut counter,
         now,
@@ -352,6 +354,7 @@ async fn scale(
     kind: WorkloadKind,
     deployment: &mut Deployment,
     resolved_mounts: &[ResolvedMount],
+    start_blocker: Option<&StartBlocker>,
     state: &mut RestartState,
     counter: &mut restart::RestartState,
     now: DateTime<Utc>,
@@ -398,6 +401,35 @@ async fn scale(
         return;
     }
 
+    match start_blocker {
+        None => {}
+        Some(StartBlocker::Unresolved {
+            event_reason,
+            message,
+            transient,
+        }) => {
+            error!("[{}] {}: {}", deployment.id, event_reason, message);
+            record_start_failure(
+                policy,
+                kind,
+                deployment,
+                state,
+                counter,
+                now,
+                rng,
+                Reason::ConfigMissing,
+                event_reason,
+                message.clone(),
+                if *transient {
+                    StartFailure::Transient
+                } else {
+                    StartFailure::NeedsOperator
+                },
+            );
+            return;
+        }
+    }
+
     match driver.start_instance(deployment, resolved_mounts).await {
         Ok(()) => {
             state.next_attempt_at = None;
@@ -420,43 +452,88 @@ async fn scale(
         Err(err) => {
             let (reason, event_reason, message) = create_error_outcome(&err, deployment);
             error!("[{}] {}: {}", deployment.id, event_reason, err);
-            deployment.emit_event(
-                "error",
-                message.clone(),
-                &deployment.runtime.clone(),
-                Some(event_reason),
-            );
-            // Instances still serving keep the deployment as it was, their
-            // health checks with it: only the next start waits. With none,
-            // the deployment waits for it. So does a rolling update's new
-            // deployment, which would otherwise drain the one it replaces
-            // toward fewer instances than it can start. One already backing
-            // off says why it last failed.
-            if deployment.instances.is_empty()
-                || deployment.parent_id.is_some()
-                || deployment.status == DeploymentStatus::BackingOff
-            {
-                deployment.back_off(reason, message.clone());
-            }
-
             let failure = match classify_create_error(&err) {
                 Disposition::Terminal(
                     Reason::ConfigMissing | Reason::SpecRejected | Reason::Error,
                 ) => StartFailure::NeedsOperator,
                 _ => StartFailure::Transient,
             };
-            let decision =
-                restart::decide(policy, kind, counter, Event::StartFailed(failure), now, rng);
-            apply_decision(
+            record_start_failure(
+                policy,
+                kind,
                 deployment,
                 state,
-                decision,
-                counter.restart_count,
+                counter,
+                now,
+                rng,
                 reason,
-                &message,
+                event_reason,
+                message,
+                failure,
             );
         }
     }
+}
+
+/// Record a start that failed, or that could not be attempted, for `reason`.
+#[allow(clippy::too_many_arguments)]
+fn record_start_failure(
+    policy: &RestartPolicy,
+    kind: WorkloadKind,
+    deployment: &mut Deployment,
+    state: &mut RestartState,
+    counter: &mut restart::RestartState,
+    now: DateTime<Utc>,
+    rng: &mut (impl Rng + Send),
+    reason: Reason,
+    event_reason: &str,
+    message: String,
+    failure: StartFailure,
+) {
+    deployment.emit_event(
+        "error",
+        message.clone(),
+        &deployment.runtime.clone(),
+        Some(event_reason),
+    );
+    // Instances still serving keep the deployment as it was, their health
+    // checks with it: only the next start waits. With none, the deployment
+    // waits for it. So does a rolling update's new deployment, which would
+    // otherwise drain the one it replaces toward fewer instances than it can
+    // start. One already backing off says why it last failed.
+    if deployment.instances.is_empty()
+        || deployment.parent_id.is_some()
+        || deployment.status == DeploymentStatus::BackingOff
+    {
+        deployment.back_off(reason, message.clone());
+    }
+
+    let decision = restart::decide(policy, kind, counter, Event::StartFailed(failure), now, rng);
+    apply_decision(
+        deployment,
+        state,
+        decision,
+        counter.restart_count,
+        reason,
+        &message,
+    );
+}
+
+/// Why no instance of a deployment can be started this pass. The pass still
+/// observes and counts its instances; only the start is refused.
+#[derive(Debug, Clone)]
+pub(crate) enum StartBlocker {
+    /// A config or a secret it references could not be resolved: a failed
+    /// start, reported and retried on the restart delays.
+    Unresolved {
+        /// The reason of the deployment event recorded when a start is refused.
+        event_reason: &'static str,
+        /// Names the missing resource, never a secret value.
+        message: String,
+        /// Reading it failed rather than finding it missing: retried on the
+        /// ordinary delays instead of those for an operator error.
+        transient: bool,
+    },
 }
 
 /// Apply the policy's decision on a failure for `reason`, described by
@@ -662,6 +739,7 @@ mod tests {
             WorkloadKind::Worker,
             deployment,
             &[],
+            None,
             state,
             at,
             &mut rng,
@@ -1004,6 +1082,137 @@ mod tests {
         );
     }
 
+    /// A pass whose start is blocked by a secret that cannot be resolved.
+    async fn blocked_pass(
+        driver: &FakeDriver,
+        deployment: Deployment,
+        state: &mut RestartState,
+        at: DateTime<Utc>,
+    ) -> Deployment {
+        let blocker = StartBlocker::Unresolved {
+            event_reason: "secret_resolution_error",
+            message: "Failed to resolve secrets: Secret 'db-pass' not found".to_string(),
+            transient: false,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        reconcile(
+            driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            deployment,
+            &[],
+            Some(&blocker),
+            state,
+            at,
+            &mut rng,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn a_blocked_start_backs_off_as_config_missing_without_starting() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = worker(1);
+        d.set_status(DeploymentStatus::Pending);
+
+        let d = blocked_pass(&driver, d, &mut state, now()).await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(
+            (d.status, d.reason),
+            (DeploymentStatus::BackingOff, Some(Reason::ConfigMissing))
+        );
+        assert!(reasons(&d).contains(&"secret_resolution_error".to_string()));
+        assert!(
+            state.next_attempt_at.is_some(),
+            "the next attempt waits on the restart delays"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blocked_start_is_not_reported_again_before_the_next_attempt() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = blocked_pass(&driver, worker(1), &mut state, now()).await;
+        let next = state.next_attempt_at.unwrap();
+        assert!(next > now() + secs(1), "the seeded delay is not that short");
+
+        d.pending_events.clear();
+        let mut d = blocked_pass(&driver, d, &mut state, now() + secs(1)).await;
+        assert!(
+            !reasons(&d).contains(&"secret_resolution_error".to_string()),
+            "not reported on every cycle"
+        );
+
+        d.pending_events.clear();
+        let d = blocked_pass(&driver, d, &mut state, next + secs(1)).await;
+        assert!(reasons(&d).contains(&"secret_resolution_error".to_string()));
+        assert_eq!(driver.starts(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_crash_is_still_counted_while_starts_are_blocked() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("a", Some(1));
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.set_status(DeploymentStatus::Running);
+
+        let d = blocked_pass(&driver, d, &mut state, now()).await;
+
+        assert_eq!(d.restart_count, 1);
+        assert_eq!(*driver.discarded.lock().unwrap(), ["a"]);
+        assert_eq!(d.instances, ["b"]);
+        assert_eq!(driver.starts(), 0, "the crashed instance is not replaced");
+        assert_eq!(
+            d.status,
+            DeploymentStatus::Running,
+            "an instance still serves"
+        );
+    }
+
+    #[tokio::test]
+    async fn extra_instances_are_stopped_while_starts_are_blocked() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        let mut state = RestartState::default();
+
+        let d = blocked_pass(&driver, worker(1), &mut state, now()).await;
+
+        assert_eq!(*driver.stopped.lock().unwrap(), ["a"]);
+        assert_eq!(d.instances, ["b"]);
+        assert!(!reasons(&d).contains(&"secret_resolution_error".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_transient_lookup_failure_is_retried_on_the_ordinary_delays() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let blocker = StartBlocker::Unresolved {
+            event_reason: "secret_resolution_error",
+            message: "Failed to resolve secrets: Failed to fetch secret 'db-pass'".to_string(),
+            transient: true,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+
+        reconcile(
+            &driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            worker(1),
+            &[],
+            Some(&blocker),
+            &mut state,
+            now(),
+            &mut rng,
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        let next = state.next_attempt_at.unwrap();
+        assert!(next <= now() + secs(10), "first retry within `base`");
+    }
+
     #[tokio::test]
     async fn extra_instances_are_stopped_one_per_pass() {
         let driver = FakeDriver::running(&["a", "b", "c"]);
@@ -1058,6 +1267,7 @@ mod tests {
             WorkloadKind::Job { backoff_limit },
             deployment,
             &[],
+            None,
             state,
             at,
             &mut rng,

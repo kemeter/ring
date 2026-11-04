@@ -23,7 +23,36 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant, sleep};
 use tracing::Instrument as _;
 
-async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> Result<(), String> {
+/// Why a secret a deployment references could not be resolved. The message
+/// names the secret, never its value. `transient` is set when reading it
+/// failed (a database error) rather than finding it missing or unusable, so a
+/// retry may succeed on its own.
+#[derive(Debug)]
+struct Unresolved {
+    message: String,
+    transient: bool,
+}
+
+impl Unresolved {
+    fn needs_operator(message: String) -> Self {
+        Self {
+            message,
+            transient: false,
+        }
+    }
+
+    fn transient(message: String) -> Self {
+        Self {
+            message,
+            transient: true,
+        }
+    }
+}
+
+async fn resolve_environment(
+    deployment: &mut Deployment,
+    pool: &SqlitePool,
+) -> Result<(), Unresolved> {
     let mut resolved = HashMap::new();
 
     for (key, env_value) in deployment.environment.iter() {
@@ -36,20 +65,23 @@ async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> 
                     Ok(Some(secret)) => match secret.get_decrypted_value() {
                         Ok(v) => EnvValue::Plain(v),
                         Err(e) => {
-                            return Err(format!(
+                            return Err(Unresolved::needs_operator(format!(
                                 "Failed to decrypt secret '{}': {}",
                                 secret_ref, e
-                            ));
+                            )));
                         }
                     },
                     Ok(None) => {
-                        return Err(format!(
+                        return Err(Unresolved::needs_operator(format!(
                             "Secret '{}' not found in namespace '{}'",
                             secret_ref, deployment.namespace
-                        ));
+                        )));
                     }
                     Err(e) => {
-                        return Err(format!("Failed to fetch secret '{}': {}", secret_ref, e));
+                        return Err(Unresolved::transient(format!(
+                            "Failed to fetch secret '{}': {}",
+                            secret_ref, e
+                        )));
                     }
                 }
             }
@@ -75,7 +107,7 @@ async fn resolve_environment(deployment: &mut Deployment, pool: &SqlitePool) -> 
 async fn resolve_image_pull_secret(
     deployment: &mut Deployment,
     pool: &SqlitePool,
-) -> Result<(), String> {
+) -> Result<(), Unresolved> {
     let Some(secret_name) = deployment
         .config
         .as_ref()
@@ -92,22 +124,22 @@ async fn resolve_image_pull_secret(
     .await
     {
         Ok(Some(secret)) => secret.get_decrypted_value().map_err(|e| {
-            format!(
+            Unresolved::needs_operator(format!(
                 "Failed to decrypt image_pull_secret '{}': {}",
                 secret_name, e
-            )
+            ))
         })?,
         Ok(None) => {
-            return Err(format!(
+            return Err(Unresolved::needs_operator(format!(
                 "image_pull_secret '{}' not found in namespace '{}'",
                 secret_name, deployment.namespace
-            ));
+            )));
         }
         Err(e) => {
-            return Err(format!(
+            return Err(Unresolved::transient(format!(
                 "Failed to fetch image_pull_secret '{}': {}",
                 secret_name, e
-            ));
+            )));
         }
     };
 
@@ -116,10 +148,10 @@ async fn resolve_image_pull_secret(
     let host = crate::runtime::registry_auth::registry_host_for(&deployment.image);
     let (username, password) =
         crate::runtime::registry_auth::resolve_auth_from_payload(&host, &payload).map_err(|e| {
-            format!(
+            Unresolved::needs_operator(format!(
                 "image_pull_secret '{}' has no usable credential for registry '{}': {}",
                 secret_name, host, e
-            )
+            ))
         })?;
 
     if let Some(config) = deployment.config.as_mut() {
@@ -222,28 +254,20 @@ async fn load_secrets_for_volumes(
     Some(secrets)
 }
 
-async fn prepare_deployment(pool: &SqlitePool, deployment: &Deployment) -> Option<Deployment> {
+/// The deployment with its `secretRef` environment values resolved, or why
+/// they could not be: a message naming the secret, never its value.
+async fn prepare_deployment(
+    pool: &SqlitePool,
+    deployment: &Deployment,
+) -> Result<Deployment, Unresolved> {
     let mut resolved = deployment.clone();
-    if let Err(e) = resolve_environment(&mut resolved, pool).await {
-        error!(
-            "Failed to resolve secrets for deployment {}: {}",
-            deployment.id, e
-        );
-        if let Err(log_err) = deployment_event::log_event(
-            pool,
-            deployment.id.clone(),
-            "error",
-            format!("Failed to resolve secrets: {}", e),
-            "scheduler",
-            Some("secret_resolution_error"),
-        )
+    resolve_environment(&mut resolved, pool)
         .await
-        {
-            warn!("Failed to log secret resolution error event: {}", log_err);
-        }
-        return None;
-    }
-    Some(resolved)
+        .map_err(|e| Unresolved {
+            message: format!("Failed to resolve secrets: {}", e.message),
+            transient: e.transient,
+        })?;
+    Ok(resolved)
 }
 
 /// Remove every instance of a deleted deployment. Bounded like a reconcile
@@ -330,6 +354,7 @@ async fn reconcile_driven(
     policy: &restart::RestartPolicy,
     resolved: Deployment,
     resolved_mounts: Vec<ResolvedMount>,
+    start_blocker: Option<&reconcile::StartBlocker>,
     state: &mut restart_state::RestartState,
     apply_timeout: Duration,
     apply_timeout_secs: u64,
@@ -343,6 +368,7 @@ async fn reconcile_driven(
         kind,
         resolved,
         &resolved_mounts,
+        start_blocker,
         state,
         chrono::Utc::now(),
         rng,
@@ -1879,38 +1905,39 @@ pub(crate) async fn schedule(
                 None => continue,
             };
 
+            // A config or a secret that cannot be resolved only blocks the start
+            // of a new instance: the instances already running are still
+            // observed, their crashes counted and their health checks run.
+            // The blocker is reported when a start is refused, on the restart
+            // delays, rather than on every cycle.
+            let mut start_blocker = None;
             let mut resolved = match prepare_deployment(&pool, &deployment).await {
-                Some(d) => d,
-                None => continue,
+                Ok(d) => d,
+                Err(e) => {
+                    start_blocker.get_or_insert(reconcile::StartBlocker::Unresolved {
+                        event_reason: "secret_resolution_error",
+                        message: e.message,
+                        transient: e.transient,
+                    });
+                    deployment.clone()
+                }
             };
 
             // Resolve config.image_pull_secret into inline credentials before
-            // the runtime pulls. Like volume/env secret resolution above, a
-            // failure skips this tick and surfaces a deployment event (naming
-            // only the secret, never its value), so the operator can fix it.
-            if let Err(e) = resolve_image_pull_secret(&mut resolved, &pool).await {
-                error!(
-                    "Failed to resolve image_pull_secret for deployment {}: {}",
-                    deployment.id, e
-                );
-                if let Err(log_err) = deployment_event::log_event(
-                    &pool,
-                    deployment.id.clone(),
-                    "error",
-                    e,
-                    "scheduler",
-                    Some("image_pull_secret_resolution_error"),
-                )
-                .await
-                {
-                    warn!(
-                        "Failed to log image_pull_secret resolution error event: {}",
-                        log_err
-                    );
-                }
-                continue;
+            // the runtime pulls. The message names only the secret, never its
+            // value.
+            if start_blocker.is_none()
+                && let Err(e) = resolve_image_pull_secret(&mut resolved, &pool).await
+            {
+                start_blocker = Some(reconcile::StartBlocker::Unresolved {
+                    event_reason: "image_pull_secret_resolution_error",
+                    message: e.message,
+                    transient: e.transient,
+                });
             }
 
+            // The message contains only the resource name (e.g. "Secret 'X'
+            // not found"), never plaintext values.
             let resolved_mounts = match crate::models::volume::resolve_volumes(
                 &deployment.volumes,
                 &configs,
@@ -1918,26 +1945,12 @@ pub(crate) async fn schedule(
             ) {
                 Ok(mounts) => mounts,
                 Err(e) => {
-                    error!(
-                        "Failed to resolve volumes for deployment {}: {}",
-                        deployment.id, e
-                    );
-                    // Surface to the operator via `ring deployment events`.
-                    // The message contains only the resource name (e.g.
-                    // "Secret 'X' not found"), never plaintext values.
-                    if let Err(log_err) = deployment_event::log_event(
-                        &pool,
-                        deployment.id.clone(),
-                        "error",
-                        format!("Failed to resolve volumes: {}", e),
-                        "scheduler",
-                        Some("volume_resolution_error"),
-                    )
-                    .await
-                    {
-                        warn!("Failed to log volume resolution error event: {}", log_err);
-                    }
-                    continue;
+                    start_blocker.get_or_insert(reconcile::StartBlocker::Unresolved {
+                        event_reason: "volume_resolution_error",
+                        message: format!("Failed to resolve volumes: {}", e),
+                        transient: false,
+                    });
+                    Vec::new()
                 }
             };
 
@@ -1978,6 +1991,7 @@ pub(crate) async fn schedule(
                 &deployment_policy,
                 resolved,
                 resolved_mounts,
+                start_blocker.as_ref(),
                 &mut state,
                 apply_timeout,
                 apply_timeout_secs,
