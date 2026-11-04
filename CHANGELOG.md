@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-04
+
 ### Breaking
 - **A deployment's status is split into a status and a failure.** `status` now only says where a deployment is in its lifecycle: `pending`, `progressing`, `running`, `backing_off`, `completed`, `failed` or `deleted`. A new `failure` object gives why it is backing off or failed, as a `reason` (`crash_loop`, `run_failed`, `image_pull`, `spec_rejected`, `config_missing`, `insufficient_resources`, `network`, `file_system`, `readiness_timeout`, `error`) and a `message`; it is `null` in any other status. Consequences when upgrading:
   - the former error statuses (`crash_loop_back_off`, `image_pull_back_off`, `create_container_error`, `config_error`, `insufficient_resources`, `network_error`, `file_system_error`, `error`) become `backing_off` with the matching reason. A client, script or alert matching them must match `status` and `reason` instead; the API and `ring deployment list` filter on both

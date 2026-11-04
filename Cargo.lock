@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "ring-server"
-version = "0.13.0-dev"
+version = "0.13.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
