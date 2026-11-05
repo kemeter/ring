@@ -372,7 +372,10 @@ mod tests {
         let (clear, prefix, hash) = generate_token();
         assert!(clear.starts_with(TOKEN_PREFIX));
         assert!(prefix.starts_with(TOKEN_PREFIX));
-        assert_eq!(prefix.len(), PREFIX_DISPLAY_LEN);
+        // "ring_pat_" and 6 characters: enough to tell tokens apart, too few
+        // to give a token away.
+        assert_eq!(prefix.len(), 15);
+        assert_eq!(prefix, clear[..15]);
         // The hash is reproducible from the clear value, the prefix is not the
         // hash, and two generations differ.
         assert_eq!(hash, hash_token(&clear));

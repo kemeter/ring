@@ -118,12 +118,7 @@ mod tests {
     use axum_test::TestServer;
     use serde_json::json;
 
-    fn set_test_key() {
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-        let key = [0u8; 32];
-        let key_b64 = BASE64.encode(key);
-        unsafe { std::env::set_var("RING_SECRET_KEY", key_b64) };
-    }
+    use crate::models::secret::set_test_key;
 
     #[tokio::test]
     async fn delete_not_found() {
@@ -175,6 +170,13 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+
+        // It is gone.
+        let response = server
+            .get(&format!("/secrets/{}", secret_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
     }
 
     /// Creates the namespace `refs`, the secrets `db-pass` and `db-pass-old`,

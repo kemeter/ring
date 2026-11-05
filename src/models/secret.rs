@@ -19,14 +19,19 @@ const NONCE_SIZE: usize = 12;
 /// fatal error before any request is served) and from `ring doctor` to
 /// surface configuration drift before users hit it via a panic.
 pub(crate) fn try_load_encryption_key() -> Result<[u8; 32], String> {
-    let key_str = env::var("RING_SECRET_KEY").map_err(|_| {
+    parse_encryption_key(env::var("RING_SECRET_KEY").ok().as_deref())
+}
+
+/// Decode the value of `RING_SECRET_KEY`, `None` when it is not set.
+fn parse_encryption_key(value: Option<&str>) -> Result<[u8; 32], String> {
+    let key_str = value.ok_or_else(|| {
         "RING_SECRET_KEY environment variable is not set. \
          Generate one with: openssl rand -base64 32"
             .to_string()
     })?;
 
     let key_bytes = BASE64
-        .decode(&key_str)
+        .decode(key_str)
         .map_err(|e| format!("RING_SECRET_KEY is not valid base64: {}", e))?;
 
     if key_bytes.len() != 32 {
@@ -205,15 +210,24 @@ pub(crate) async fn delete(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Erro
     Ok(())
 }
 
+/// Key every test encrypts with. Not all zeros, so code that ignored the
+/// configured key and fell back to a zeroed one would fail the tests.
+#[cfg(test)]
+pub(crate) const TEST_KEY: [u8; 32] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30, 31,
+];
+
+/// Set `RING_SECRET_KEY` to `TEST_KEY`. Every test sets the same value, so
+/// tests running in parallel never see another key.
+#[cfg(test)]
+pub(crate) fn set_test_key() {
+    unsafe { env::set_var("RING_SECRET_KEY", BASE64.encode(TEST_KEY)) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn set_test_key() {
-        let key = [0u8; 32];
-        let key_b64 = BASE64.encode(key);
-        unsafe { env::set_var("RING_SECRET_KEY", key_b64) };
-    }
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
@@ -226,18 +240,53 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
-    /// A value produced outside Ring (Node's AES-256-GCM, all-zero key), so a
-    /// dependency upgrade can't change the format and still pass a roundtrip.
+    /// A value produced outside Ring (Node's AES-256-GCM under `TEST_KEY`), so
+    /// a dependency upgrade can't change the format and still pass a
+    /// roundtrip, and a key other than the configured one fails to read it.
     #[test]
     fn test_decrypts_a_value_stored_earlier() {
         set_test_key();
 
         let stored = hex::decode(
-            "000102030405060708090a0bfbbf5c206599af9ba71e3d979823aa64314cddead8efee92aa178c670d31471342613b9a81ce965e73",
+            "000102030405060708090a0b3476b969a081e279e827f8f9d4c90c05e6f6f24497093e185d0a8adab019eabbb830b9d9c1e150fe76",
         )
         .unwrap();
 
         assert_eq!(decrypt_value(&stored).unwrap(), "stored before the upgrade");
+    }
+
+    #[test]
+    fn test_data_shorter_than_a_nonce_is_rejected() {
+        set_test_key();
+
+        assert!(decrypt_value(&[0u8; NONCE_SIZE - 1]).is_err());
+        assert!(decrypt_value(&[]).is_err());
+    }
+
+    #[test]
+    fn test_a_valid_key_is_decoded() {
+        assert_eq!(
+            parse_encryption_key(Some(&BASE64.encode(TEST_KEY))),
+            Ok(TEST_KEY)
+        );
+    }
+
+    #[test]
+    fn test_a_missing_key_is_refused() {
+        let err = parse_encryption_key(None).unwrap_err();
+        assert!(err.contains("not set"), "{err}");
+    }
+
+    #[test]
+    fn test_a_key_that_is_not_base64_is_refused() {
+        let err = parse_encryption_key(Some("not base64!")).unwrap_err();
+        assert!(err.contains("not valid base64"), "{err}");
+    }
+
+    #[test]
+    fn test_a_key_of_the_wrong_length_is_refused() {
+        let err = parse_encryption_key(Some(&BASE64.encode([1u8; 16]))).unwrap_err();
+        assert!(err.contains("got 16"), "{err}");
     }
 
     #[test]
