@@ -119,5 +119,16 @@ mod tests {
             .await;
 
         assert_eq!(res.status_code(), StatusCode::NO_CONTENT);
+
+        // Revoked, so it receives no more events.
+        let stored = webhook::find(&pool, &hook.id).await.unwrap().unwrap();
+        assert!(stored.revoked_at.is_some());
+        assert!(
+            webhook::subscribers_for(&pool, "deployment.created")
+                .await
+                .unwrap()
+                .iter()
+                .all(|w| w.id != hook.id)
+        );
     }
 }

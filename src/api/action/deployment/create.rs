@@ -4468,4 +4468,137 @@ mod tests {
         assert_eq!(violation.code, "deployment.autoscale.runtime_unsupported");
         assert!(autoscale_runtime_violation("docker", false).is_none());
     }
+
+    /// POST `body` and return the status and the violation codes.
+    async fn create_codes(body: serde_json::Value) -> (StatusCode, Vec<String>) {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await;
+        let status = response.status_code();
+        let body: serde_json::Value = response.json();
+        let codes = body["violations"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .map(|v| v["code"].as_str().unwrap_or("").to_string())
+            .collect();
+        (status, codes)
+    }
+
+    #[tokio::test]
+    async fn host_mode_accepts_a_single_replica_and_refuses_two() {
+        let manifest = |replicas: u32| {
+            json!({
+                "runtime": "docker",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" },
+                "replicas": replicas
+            })
+        };
+
+        let (status, codes) = create_codes(manifest(1)).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+
+        let (status, codes) = create_codes(manifest(2)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(codes, ["deployment.replicas.host_network_conflict"]);
+    }
+
+    #[tokio::test]
+    async fn host_mode_accepts_an_autoscale_max_of_one_and_refuses_two() {
+        let manifest = |max: u32| {
+            json!({
+                "runtime": "docker",
+                "name": "haproxy",
+                "namespace": "edge",
+                "image": "haproxy:2.9",
+                "network": { "mode": "host" },
+                "autoscale": { "min": 1, "max": max, "target_cpu": 70 }
+            })
+        };
+
+        let (status, codes) = create_codes(manifest(1)).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+
+        let (status, codes) = create_codes(manifest(2)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(codes, ["deployment.autoscale.host_network_conflict"]);
+    }
+
+    #[tokio::test]
+    async fn an_unsatisfiable_autoscale_policy_is_refused() {
+        for autoscale in [
+            json!({ "min": 0, "max": 3, "target_cpu": 70 }),
+            json!({ "min": 3, "max": 2, "target_cpu": 70 }),
+            json!({ "min": 1, "max": 3, "target_cpu": 100 }),
+        ] {
+            let (status, codes) = create_codes(json!({
+                "runtime": "docker",
+                "name": "web",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "autoscale": autoscale
+            }))
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{autoscale}");
+            assert_eq!(codes, ["deployment.autoscale.invalid"], "{autoscale}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_secret_volume_needs_a_source() {
+        for source in [None, Some("")] {
+            let mut volume = json!({
+                "type": "secret",
+                "destination": "/run/secrets/db",
+                "driver": "local",
+                "permission": "ro"
+            });
+            if let Some(source) = source {
+                volume["source"] = json!(source);
+            }
+            let (status, codes) = create_codes(json!({
+                "runtime": "docker",
+                "name": "web",
+                "namespace": "ring",
+                "image": "nginx:latest",
+                "volumes": [volume]
+            }))
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "source {source:?}: {codes:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn replicas_default_to_one() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response: TestResponse = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "runtime": "docker",
+                "name": "web",
+                "namespace": "ring",
+                "image": "nginx:latest"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["replicas"], 1, "{body}");
+    }
 }
