@@ -158,12 +158,7 @@ mod tests {
     use axum::http::StatusCode;
     use axum_test::TestServer;
 
-    fn set_test_key() {
-        use base64::Engine;
-        let key = [0u8; 32];
-        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
-        unsafe { std::env::set_var("RING_SECRET_KEY", key_b64) };
-    }
+    use crate::models::secret::set_test_key;
 
     async fn create_namespace(server: &TestServer, token: &str, name: &str) {
         server

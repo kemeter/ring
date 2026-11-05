@@ -88,3 +88,52 @@ pub(crate) async fn list(
 
     Json(output).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::api::server::tests::{login, new_test_app};
+    use crate::models::secret::set_test_key;
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn list_returns_the_secrets_of_the_requested_namespace() {
+        set_test_key();
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        for (namespace, name) in [
+            ("list-a", "first"),
+            ("list-a", "second"),
+            ("list-b", "other"),
+        ] {
+            server
+                .post("/namespaces")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({ "name": namespace }))
+                .await;
+            let response = server
+                .post("/secrets")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({ "namespace": namespace, "name": name, "value": "v" }))
+                .await;
+            assert_eq!(response.status_code(), StatusCode::CREATED);
+        }
+
+        let response = server
+            .get("/secrets?namespace=list-a")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::OK);
+        let body: Vec<serde_json::Value> = response.json();
+        let mut names: Vec<&str> = body.iter().map(|s| s["name"].as_str().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["first", "second"]);
+        assert!(
+            body.iter().all(|s| s.get("value").is_none()),
+            "values are never listed"
+        );
+    }
+}

@@ -218,9 +218,7 @@ pub fn resolve_volumes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::secret::encrypt_value;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-    use std::env;
+    use crate::models::secret::{encrypt_value, set_test_key};
 
     fn make_config(name: &str, data: &str) -> Config {
         Config {
@@ -232,12 +230,6 @@ mod tests {
             data: data.to_string(),
             labels: "{}".to_string(),
         }
-    }
-
-    fn set_test_key() {
-        let key = [0u8; 32];
-        let key_b64 = BASE64.encode(key);
-        unsafe { env::set_var("RING_SECRET_KEY", key_b64) };
     }
 
     fn make_secret(name: &str, plaintext: &str) -> Secret {

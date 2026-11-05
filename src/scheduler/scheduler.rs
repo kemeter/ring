@@ -2217,16 +2217,9 @@ mod tests {
     #[tokio::test]
     async fn secret_value_with_dollar_is_preserved_through_resolution() {
         use crate::models::secret::{Secret, create as create_secret, encrypt_value};
-        use base64::Engine as _;
 
         let pool = new_test_pool().await;
-        // Test key for encrypt/decrypt (same shape as secret.rs tests).
-        unsafe {
-            std::env::set_var(
-                "RING_SECRET_KEY",
-                base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
-            );
-        }
+        crate::models::secret::set_test_key();
 
         let raw = "pa$$w0rd$with$dollars";
         let secret = Secret {
