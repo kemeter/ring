@@ -39,3 +39,37 @@ pub(crate) fn validate_scopes(scopes: &[String], violations: &mut ViolationList)
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn codes(scopes: &[&str]) -> Vec<String> {
+        let scopes: Vec<String> = scopes.iter().map(|s| s.to_string()).collect();
+        let mut violations = ViolationList::new();
+        validate_scopes(&scopes, &mut violations);
+        violations
+            .violations
+            .iter()
+            .map(|v| v.code.clone())
+            .collect()
+    }
+
+    #[test]
+    fn known_scopes_are_accepted() {
+        assert!(codes(&["deployments:read", "secrets:write", "admin"]).is_empty());
+    }
+
+    #[test]
+    fn an_empty_scope_list_is_refused() {
+        assert_eq!(codes(&[]), ["token.scopes.empty"]);
+    }
+
+    #[test]
+    fn an_unknown_scope_is_refused() {
+        assert_eq!(
+            codes(&["deployments:read", "root", "secrets:wrte"]),
+            ["token.scopes.unknown", "token.scopes.unknown"]
+        );
+    }
+}

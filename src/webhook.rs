@@ -249,6 +249,98 @@ mod tests {
         assert_eq!(allowed.len(), 3);
     }
 
+    /// Resolves every name to `addrs` and counts how often it was asked.
+    struct CountingResolver {
+        addrs: Vec<IpAddr>,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Resolve for CountingResolver {
+        fn resolve(&self, _name: Name) -> Resolving {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let addrs: Vec<SocketAddr> = self
+                .addrs
+                .iter()
+                .map(|ip| SocketAddr::new(*ip, 0))
+                .collect();
+            Box::pin(async move { Ok(Box::new(addrs.into_iter()) as Addrs) })
+        }
+    }
+
+    #[tokio::test]
+    async fn the_delivery_client_resolves_names_through_the_given_resolver() {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let client = build_client(CountingResolver {
+            addrs: ips(&["127.0.0.1"]),
+            calls: calls.clone(),
+        });
+
+        let result = deliver(
+            &client,
+            &hook("http://subscriber.example:1/hook".to_string()),
+            "deployment.created",
+            b"{}",
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// Accept one connection on `listener` and answer it with `response`.
+    async fn answer_once(listener: TcpListener, response: &'static str) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 4096];
+        let _ = socket.read(&mut buf).await;
+        socket.write_all(response.as_bytes()).await.unwrap();
+        socket.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_delivery_client_does_not_follow_redirects() {
+        // An IP literal reaches the client without going through the resolver,
+        // so the redirect policy is tested on its own.
+        let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let subscriber = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let subscriber_port = subscriber.local_addr().unwrap().port();
+        let response: &'static str = Box::leak(
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{target_port}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .into_boxed_str(),
+        );
+        let server = tokio::spawn(answer_once(subscriber, response));
+        let client = build_client(FixedResolver(vec![]));
+
+        let response = client
+            .post(format!("http://127.0.0.1:{subscriber_port}/hook"))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(response.status(), 302);
+        assert_no_connection(&target).await;
+    }
+
+    #[tokio::test]
+    async fn the_shared_client_refuses_names_resolving_to_loopback() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let result = super::client()
+            .post(format!("http://localhost:{port}/hook"))
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await;
+
+        assert!(result.is_err());
+        assert_no_connection(&listener).await;
+    }
+
     #[test]
     fn sign_matches_known_hmac_vector() {
         // HMAC-SHA256(key="secret", msg="body"), computed with openssl.
