@@ -753,6 +753,16 @@ mod tests {
     }
 
     #[test]
+    fn a_cap_equal_to_the_base_is_valid() {
+        let policy = RestartPolicy {
+            base: secs(30),
+            cap: secs(30),
+            ..RestartPolicy::default()
+        };
+        assert_eq!(policy.validate(), Ok(()));
+    }
+
+    #[test]
     fn override_replaces_only_the_keys_it_sets() {
         let server = RestartPolicy::default();
         let resolved = server
