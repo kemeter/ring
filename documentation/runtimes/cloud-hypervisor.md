@@ -198,6 +198,8 @@ If `published` is already taken on the host, Ring **refuses to start the VM** an
 
 Both `tcp` (default) and `udp` are supported via the port's `protocol` field; `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
+Each `socat` logs its connections, and `virtiofsd` its own messages, at debug level under the `ring::hypervisor::child_output` target: run Ring with `RUST_LOG=ring::hypervisor::child_output=debug` to see them.
+
 ### Outbound access
 
 The per-VM /30 lets the guest reach the host, but reaching *external* networks (package installs, `git clone`, …) needs the host to masquerade the guest subnet. Ring installs that itself — a single idempotent rule set covering `10.42.0.0/16`, so it is set up once and re-asserted for free on later boots. The operator never touches `iptables`.
