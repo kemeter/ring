@@ -1825,6 +1825,15 @@ pub(crate) async fn schedule(
             .iter()
             .filter_map(|d| d.parent_id.clone())
             .collect();
+        // Deployments a running child is draining: one that loses an instance
+        // to the drain must not start it again, or with `replicas >= 2` the
+        // drain never reaches zero. A child that is not running yet (or that
+        // failed) drains nothing, so its parent keeps replacing what it loses.
+        let drained_parents: std::collections::HashSet<String> = list_deployments
+            .iter()
+            .filter(|d| d.status == DeploymentStatus::Running)
+            .filter_map(|d| d.parent_id.clone())
+            .collect();
         last_instances.retain(|id, _| list_deployments.iter().any(|d| &d.id == id));
 
         // Names whose deleted deployment still has instances after this tick's
@@ -1904,8 +1913,11 @@ pub(crate) async fn schedule(
             // observed, their crashes counted and their health checks run.
             // The blocker is reported when a start is refused, on the restart
             // delays, rather than on every cycle.
-            let mut start_blocker =
-                predecessor_holds_instances.then_some(reconcile::StartBlocker::PredecessorHoldsInstances);
+            let mut start_blocker = if drained_parents.contains(&deployment.id) {
+                Some(reconcile::StartBlocker::BeingReplaced)
+            } else {
+                predecessor_holds_instances.then_some(reconcile::StartBlocker::PredecessorHoldsInstances)
+            };
             let mut resolved = match prepare_deployment(&pool, &deployment).await {
                 Ok(d) => d,
                 Err(e) => {

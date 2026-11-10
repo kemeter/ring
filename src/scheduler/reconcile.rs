@@ -410,6 +410,13 @@ async fn scale(
             );
             return;
         }
+        Some(StartBlocker::BeingReplaced) => {
+            debug!(
+                deployment.id = %deployment.id,
+                "no instance started: a rolling update is draining the deployment"
+            );
+            return;
+        }
         Some(StartBlocker::Unresolved {
             event_reason,
             message,
@@ -544,6 +551,9 @@ pub(crate) enum StartBlocker {
     /// The deployment it replaces still has instances, which may hold the same
     /// volumes: waited for, without counting as a failure.
     PredecessorHoldsInstances,
+    /// A rolling update is draining it one instance per cycle: an instance it
+    /// loses must not come back, or the drain never reaches zero.
+    BeingReplaced,
 }
 
 /// Apply the policy's decision on a failure for `reason`, described by
@@ -1250,6 +1260,34 @@ mod tests {
         assert_eq!(d.instances, ["b"]);
         assert_eq!(d.status, DeploymentStatus::Running);
         assert_eq!(d.reason, None);
+    }
+
+    #[tokio::test]
+    async fn a_deployment_being_drained_does_not_replace_what_it_loses() {
+        let driver = FakeDriver::running(&["b"]);
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.set_status(DeploymentStatus::Running);
+        let mut rng = StdRng::seed_from_u64(7);
+
+        let d = reconcile(
+            &driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            d,
+            &[],
+            Some(&StartBlocker::BeingReplaced),
+            &mut state,
+            now(),
+            &mut rng,
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(d.instances, ["b"]);
+        assert_eq!(d.status, DeploymentStatus::Running);
+        assert_eq!(d.reason, None);
+        assert_eq!(d.restart_count, 0);
     }
 
     #[tokio::test]
