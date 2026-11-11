@@ -632,6 +632,7 @@ impl FirecrackerLifecycle {
         let tap = match &net_alloc {
             Some(n) => match TapDevice::create(&n.tap_name, &n.host_ip, n.prefix_len) {
                 Ok(t) => {
+                    crate::hypervisor::host_nat::guard_tap_source(&n.tap_name);
                     // The tap lets the guest reach the host; outbound NAT lets it
                     // reach the Internet (git clone, composer, …). Idempotent and
                     // global to the guest supernet, so it's a no-op after the

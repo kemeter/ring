@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 - The decrypted content of `secret` and `config` volumes was written to `/tmp/ring_configs`, readable by every user of the host. It now goes to a directory only Ring's user can enter: `$RUNTIME_DIRECTORY/configs` under systemd's `RuntimeDirectory=`, else `$XDG_RUNTIME_DIR/ring/configs`, else `/var/lib/ring/configs`. The Cloud Hypervisor and Firecracker `socket_dir`, which stages the same files for the guests, is restricted to `0700` as well. Add `RuntimeDirectory=ring` to a systemd unit to keep these files in memory
+- A Cloud Hypervisor or Firecracker guest could reach every other guest, the host through its gateway, the host's private networks and link-local addresses such as `169.254.169.254`, and send packets with another guest's address. Guests now reach the Internet only: Ring installs the `RING-GUEST-FORWARD` and `RING-GUEST-INPUT` iptables chains with outbound NAT, and filters each tap's source address. Replies to the host's connections (health checks, published ports) and DNS still flow
 
 ### Fixed
 - A port published by a Cloud Hypervisor or Firecracker VM stopped answering after a few hundred connections: `socat` logged each one to a pipe nobody read, and blocked once it was full. Its output, and that of `virtiofsd`, is now read and logged at debug level
