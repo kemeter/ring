@@ -137,7 +137,7 @@ A map of deployment declarations. A manifest may carry `configs:` alone, to upda
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
-| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. |
+| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. `0` keeps a worker without any instance, to pause it without deleting it: `ring apply` warns about it, and the deployment gets a `zero_replicas` warning event. |
 | `autoscale` | object | unset | Adjust the instance count from observed CPU. Opt-in: without it the count never changes on its own. See [autoscale](#autoscale). |
 | `restart` | object | unset | How this deployment is restarted after a failure, over the server's `[server.restart]`. See [restart](#restart). |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only**, rejected at the API on the CH runtime. |

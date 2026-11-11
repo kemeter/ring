@@ -1208,6 +1208,20 @@ pub(crate) async fn deploy(
     )
     .await;
 
+    // A worker held at zero replicas starts nothing and stays pending: valid
+    // (a paused service), but say so instead of leaving it silent.
+    if deployment.kind == "worker" && deployment.replicas == 0 && deployment.autoscale.is_none() {
+        let _ = deployment_event::log_event(
+            pool,
+            deployment.id.clone(),
+            "warning",
+            "replicas is 0: no instance will be started".to_string(),
+            "api",
+            Some("zero_replicas"),
+        )
+        .await;
+    }
+
     // Cloud Hypervisor silently ignores some fields that Docker
     // honours (no registry pull, sizing from `limits` only). Rather
     // than drop them without a trace, surface a single warning event
@@ -2812,6 +2826,50 @@ mod tests {
         .expect("ForceReplace event must be logged");
         assert_eq!(event.0, "warning");
         assert!(event.1.contains("force=true"), "got message: {}", event.1);
+    }
+
+    #[tokio::test]
+    async fn a_worker_at_zero_replicas_gets_a_warning_event() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let mut ids = Vec::new();
+        for (name, replicas) in [("paused", 0), ("running", 1)] {
+            let response = server
+                .post("/deployments")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({
+                    "runtime": "docker",
+                    "name": name,
+                    "namespace": "zero-ns",
+                    "image": "nginx:alpine",
+                    "replicas": replicas,
+                }))
+                .await;
+            assert_eq!(response.status_code(), StatusCode::CREATED);
+            ids.push(
+                response.json::<serde_json::Value>()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+
+        let count = |id: String| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM deployment_event WHERE deployment_id = ? AND reason = 'zero_replicas' AND level = 'warning'",
+                )
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!(count(ids[0].clone()).await, 1);
+        assert_eq!(count(ids[1].clone()).await, 0);
     }
 
     #[tokio::test]
