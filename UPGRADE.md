@@ -2,6 +2,19 @@
 
 What to change when moving from one Ring version to the next. Only the steps that need action are listed here; [`CHANGELOG.md`](CHANGELOG.md) lists every change.
 
+## Upgrade to 0.14
+
+### Secret and config files
+
+The decrypted content of `secret` and `config` volumes moves out of `/tmp/ring_configs` to a directory only Ring's user can enter (see [Mount a secret as a file](documentation/how-to/deploy-with-secrets.md#mount-a-secret-as-a-file)). Under systemd, add to the unit:
+
+```ini
+RuntimeDirectory=ring
+RuntimeDirectoryMode=0700
+```
+
+Containers started before the upgrade still mount their files from `/tmp/ring_configs`. A config with `on_change: live` updated after the upgrade no longer reaches them: redeploy those deployments once, then delete `/tmp/ring_configs`.
+
 ## Upgrade to 0.13
 
 The database migrates on the first start of the new server, and a 0.12 server refuses to start on a migrated database. Back up the database file before upgrading to be able to go back.

@@ -473,7 +473,12 @@ impl FirecrackerLifecycle {
         // Firecracker had no memory gate at all.
         crate::hypervisor::resources::check_host_memory(deployment)?;
 
-        std::fs::create_dir_all(&self.config.socket_dir).map_err(|e| {
+        // Private to Ring's user: it stages the decrypted config files and the
+        // environment handed to the guest.
+        crate::runtime::config_files::create_private_dir(std::path::Path::new(
+            &self.config.socket_dir,
+        ))
+        .map_err(|e| {
             RuntimeError::VmStartFailed(format!(
                 "could not create socket_dir '{}': {}",
                 self.config.socket_dir, e

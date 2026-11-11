@@ -79,7 +79,10 @@ impl ReloadSignal {
 /// file must be rewritten in place: a bind-mounted file is pinned to its inode,
 /// and replacing it with `rename(2)` would leave the instances on the old one.
 pub fn live_config_path(deployment_id: &str, slot: usize) -> String {
-    format!("/tmp/ring_configs/{}/live-{}", deployment_id, slot)
+    crate::runtime::config_files::deployment_dir(deployment_id)
+        .join(format!("live-{}", slot))
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Create the file backing a live config volume if it does not exist yet, and
@@ -98,10 +101,8 @@ pub async fn create_live_config(
 ) -> std::io::Result<String> {
     use tokio::io::AsyncWriteExt;
 
+    crate::runtime::config_files::ensure_deployment_dir(deployment_id).await?;
     let path = live_config_path(deployment_id, slot);
-    if let Some(dir) = std::path::Path::new(&path).parent() {
-        tokio::fs::create_dir_all(dir).await?;
-    }
     match tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -502,8 +503,8 @@ mod tests {
     #[test]
     fn live_config_path_depends_only_on_deployment_and_slot() {
         assert_eq!(
-            live_config_path("dep-1", 2),
-            "/tmp/ring_configs/dep-1/live-2"
+            std::path::PathBuf::from(live_config_path("dep-1", 2)),
+            crate::runtime::config_files::deployment_dir("dep-1").join("live-2")
         );
     }
 

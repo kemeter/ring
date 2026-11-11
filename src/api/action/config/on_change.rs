@@ -473,7 +473,7 @@ mod tests {
         assert!(reasons.contains(&"config_reloaded".to_string()));
         assert!(reasons.contains(&"config_reload_signal".to_string()));
 
-        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", id));
+        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
     }
 
     #[tokio::test]
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "level: debug");
         assert!(h.signals.lock().unwrap().is_empty());
 
-        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", id));
+        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
     }
 
     #[tokio::test]
@@ -574,6 +574,6 @@ mod tests {
         let path = live_config_path(&id, 0);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "v2");
 
-        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", id));
+        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
     }
 }

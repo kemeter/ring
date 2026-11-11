@@ -126,7 +126,17 @@ scrape_configs:
       - targets: ['synomilia.example.com:443']
 ```
 
-Ring decrypts the secret at reconciliation time, writes the plaintext to a per-deployment temp file, and mounts that file at `destination` inside the container. The mount is always read-only.
+Ring decrypts the secret at reconciliation time, writes the plaintext to a per-deployment file, and mounts that file at `destination` inside the container. The mount is always read-only.
+
+On the host, the file lives in a directory only Ring's user can enter (mode `0700`), the first of:
+
+| Directory | When |
+|---|---|
+| `$RUNTIME_DIRECTORY/configs` | Ring runs under systemd with `RuntimeDirectory=` (see [Run Ring as a service](/documentation/how-to/run-as-service)) |
+| `$XDG_RUNTIME_DIR/ring/configs` | Ring runs in a user session |
+| `/var/lib/ring/configs` | otherwise |
+
+The first two are in memory (tmpfs), so the plaintext never reaches the disk. `/var/lib/ring/configs` is on disk: prefer `RuntimeDirectory=` when running Ring as a service. Config volumes use the same directory. The Cloud Hypervisor and Firecracker runtimes stage these files in their `socket_dir`, which Ring also restricts to `0700`.
 
 A secret has **no `key:` field**, so its single decrypted value becomes the entire file contents. If you need to mount multiple files, declare one `type: secret` volume per file.
 
