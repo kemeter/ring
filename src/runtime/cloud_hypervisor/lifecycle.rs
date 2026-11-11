@@ -419,9 +419,9 @@ impl CloudHypervisorLifecycle {
         let socket = self.socket_path(instance_id);
         let socket_str = Self::path_str(&socket)?;
 
-        // Ensure socket directory exists
-        tokio::fs::create_dir_all(&self.config.socket_dir)
-            .await
+        // Private to Ring's user: it stages the decrypted config files shared
+        // with the guest.
+        crate::runtime::config_files::create_private_dir(Path::new(&self.config.socket_dir))
             .map_err(RuntimeError::Io)?;
 
         // Permanent: missing VM image. The operator must fix the deployment.

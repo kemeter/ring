@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- The decrypted content of `secret` and `config` volumes was written to `/tmp/ring_configs`, readable by every user of the host. It now goes to a directory only Ring's user can enter: `$RUNTIME_DIRECTORY/configs` under systemd's `RuntimeDirectory=`, else `$XDG_RUNTIME_DIR/ring/configs`, else `/var/lib/ring/configs`. The Cloud Hypervisor and Firecracker `socket_dir`, which stages the same files for the guests, is restricted to `0700` as well. Add `RuntimeDirectory=ring` to a systemd unit to keep these files in memory
+
 ### Fixed
 - A port published by a Cloud Hypervisor or Firecracker VM stopped answering after a few hundred connections: `socat` logged each one to a pipe nobody read, and blocked once it was full. Its output, and that of `virtiofsd`, is now read and logged at debug level
 - A deployment whose secret or config could not be resolved was no longer reconciled at all: its crashes were not counted, its extra instances were not stopped and its health checks were suspended, while an error event was written on every scheduler cycle. Only the start of a new instance is now held back, as `backing_off` with `config_missing`, and the error is reported on the restart delays

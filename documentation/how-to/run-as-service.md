@@ -20,6 +20,8 @@ User=root
 WorkingDirectory=/opt/ring
 EnvironmentFile=/etc/ring/env
 ExecStart=/usr/local/bin/ring server start
+RuntimeDirectory=ring
+RuntimeDirectoryMode=0700
 Restart=always
 RestartSec=10
 
@@ -58,6 +60,10 @@ Follow the logs:
 ```bash
 sudo journalctl -u ring -f
 ```
+
+### Why `RuntimeDirectory=`
+
+Ring writes the decrypted content of `secret` and `config` volumes before mounting it. `RuntimeDirectory=ring` gives it `/run/ring`, an in-memory directory only Ring can enter, so that plaintext never reaches the disk. Without it, Ring falls back to `/var/lib/ring/configs`, on disk. See [Mount a secret as a file](/documentation/how-to/deploy-with-secrets#mount-a-secret-as-a-file).
 
 ### Why `EnvironmentFile` rather than `Environment=`
 

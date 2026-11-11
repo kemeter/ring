@@ -105,11 +105,6 @@ fn log_path(instance_id: &str) -> String {
     format!("/var/log/ring/containerd/{}.log", instance_id)
 }
 
-/// Host directory for content/config/secret mount temp files.
-fn config_dir(deployment_id: &str) -> String {
-    format!("/var/lib/ring/configs/{}", deployment_id)
-}
-
 #[async_trait]
 impl InstanceDriver for ContainerdLifecycle {
     async fn observe(&self, deployment: &Deployment) -> Result<Observation, RuntimeError> {
@@ -453,11 +448,11 @@ impl ContainerdLifecycle {
             );
         }
         // Clean up config temp files.
-        let dir = config_dir(&deployment.id);
-        if std::path::Path::new(&dir).exists()
-            && let Err(e) = std::fs::remove_dir_all(&dir)
-        {
-            warn!("failed to clean config temp files at {}: {}", dir, e);
+        if let Err(e) = crate::runtime::config_files::remove_deployment_dir(&deployment.id) {
+            warn!(
+                "failed to clean the config files of deployment {}: {}",
+                deployment.id, e
+            );
         }
     }
 
@@ -849,7 +844,6 @@ async fn write_config_files(
 ) -> Result<Vec<(String, String)>, RuntimeError> {
     use sha2::{Digest, Sha256};
     let mut out = Vec::new();
-    let dir = config_dir(&deployment.id);
     for m in resolved_mounts {
         match m {
             // A live config keeps one file per deployment at a stable path, so
@@ -869,14 +863,15 @@ async fn write_config_files(
                 destination,
                 live_slot: None,
             } => {
-                tokio::fs::create_dir_all(&dir).await?;
+                let dir =
+                    crate::runtime::config_files::ensure_deployment_dir(&deployment.id).await?;
                 // Derive the filename from a *stable* content hash. DefaultHasher is
                 // seeded randomly per process, so it would produce a new filename on
                 // every daemon restart — the try_exists guard would never hit and
                 // stale files would accumulate. Sha256 keys the same content to the
                 // same file across restarts.
                 let digest = Sha256::digest(content.as_bytes());
-                let file = format!("{}/{}", dir, hex::encode(digest));
+                let file = dir.join(hex::encode(digest)).to_string_lossy().into_owned();
                 if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
                     tokio::fs::write(&file, content).await?;
                 }

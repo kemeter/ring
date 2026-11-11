@@ -689,8 +689,8 @@ async fn create_mount_from_resolved(
             destination,
             live_slot,
         } => {
-            let temp_dir = format!("/tmp/ring_configs/{}", deployment_id);
-            tokio::fs::create_dir_all(&temp_dir).await?;
+            let temp_dir =
+                crate::runtime::config_files::ensure_deployment_dir(deployment_id).await?;
 
             let temp_file = match live_slot {
                 // A live config keeps one file for the whole deployment, which
@@ -704,7 +704,7 @@ async fn create_mount_from_resolved(
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
                     content.hash(&mut hasher);
                     let hash = format!("{:x}", hasher.finish());
-                    let file = format!("{}/{}", temp_dir, hash);
+                    let file = temp_dir.join(hash).to_string_lossy().into_owned();
                     if !tokio::fs::try_exists(&file).await.unwrap_or(false) {
                         tokio::fs::write(&file, content).await?;
                     }
@@ -1139,11 +1139,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mount.target, Some("/app/nginx.conf".to_string()));
+        let source = mount.source.unwrap();
+        let dir = crate::runtime::config_files::deployment_dir("test-deployment");
         assert!(
-            mount
-                .source
-                .unwrap()
-                .contains("/tmp/ring_configs/test-deployment")
+            std::path::Path::new(&source).starts_with(&dir),
+            "{source} should be under {dir:?}"
         );
         assert_eq!(mount.read_only, Some(true));
     }
@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "level: debug");
         assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
 
-        let _ = std::fs::remove_dir_all(format!("/tmp/ring_configs/{}", deployment_id));
+        let _ = crate::runtime::config_files::remove_deployment_dir(&deployment_id);
     }
 
     #[tokio::test]
