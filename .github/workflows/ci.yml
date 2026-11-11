@@ -78,4 +78,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo install cargo-audit
-      - run: cargo audit --ignore RUSTSEC-2023-0071
+      # RUSTSEC-2026-0459 (bundled SQLite < 3.54): fixed in libsqlite3-sys 0.39,
+      # which no sqlx release accepts yet (sqlx-sqlite 0.9.0 caps it below 0.38).
+      # It needs a database and -wal file written by a less trusted party, and
+      # Ring only opens its own database in its data directory. Drop the ignore
+      # and bump libsqlite3-sys once a sqlx release allows 0.39.
+      - run: cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0459
