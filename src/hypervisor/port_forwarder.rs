@@ -150,8 +150,8 @@ pub(crate) async fn spawn_forwarder(
         return Err(RuntimeError::PortAlreadyInUse(published_port));
     }
 
-    // -d -d gives info-level diagnostics to stderr (handy when this fails
-    // because the host port is already bound). `reuseaddr` lets us restart
+    // -d -d gives info-level diagnostics to stderr, forwarded to the debug
+    // log (handy when this fails because the host port is already bound). `reuseaddr` lets us restart
     // a forwarder fast across deployment recreations without TIME_WAIT.
     // `fork` spawns a child per accepted connection (UDP: per source peer) —
     // without it, socat serves a single client and exits.
@@ -165,7 +165,7 @@ pub(crate) async fn spawn_forwarder(
     let listen = listen_arg(host_ip, published_port, protocol);
     let connect = format!("{}:{}:{}", proto, guest_ip, target_port);
 
-    let child = Command::new("socat")
+    let mut child = Command::new("socat")
         .arg("-d")
         .arg("-d")
         .arg(&listen)
@@ -179,6 +179,13 @@ pub(crate) async fn spawn_forwarder(
                 published_port, guest_ip, target_port, e
             ))
         })?;
+
+    // socat logs every connection: its stderr has to be read, or the pipe
+    // fills and socat blocks on its next write.
+    crate::hypervisor::child_output::drain_stderr(
+        &mut child,
+        format!("socat {}->{}:{}", published_port, guest_ip, target_port),
+    );
 
     // Give socat a beat to bind the listening socket. If the port is
     // occupied, socat exits fast and the caller will see a closed pipe on
@@ -356,6 +363,50 @@ mod tests {
             "socat should hold 127.0.0.1:{} but bind succeeded",
             host_port
         );
+
+        drop(fw);
+    }
+
+    /// socat logs every connection on stderr. Nothing may let that output
+    /// fill a pipe nobody reads, or socat blocks on its next write and the
+    /// published port stops answering after a few hundred connections.
+    #[tokio::test]
+    async fn forwarder_keeps_answering_after_many_connections() {
+        use std::io::{Read, Write};
+        use std::time::Duration;
+
+        if socat_or_skip("forwarder_keeps_answering_after_many_connections") {
+            return;
+        }
+
+        let (backend, backend_port) = hold_free_port("127.0.0.1");
+        std::thread::spawn(move || {
+            for stream in backend.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let _ = stream.write_all(b"ok");
+            }
+        });
+
+        let (fw, host_port) = spawn_on_free_port("127.0.0.1", backend_port, None).await;
+
+        tokio::task::spawn_blocking(move || {
+            let address = format!("127.0.0.1:{}", host_port).parse().unwrap();
+            for i in 0..1500 {
+                let mut stream =
+                    std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2))
+                        .unwrap_or_else(|e| panic!("connection {i} refused: {e}"));
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut answer = String::new();
+                stream
+                    .read_to_string(&mut answer)
+                    .unwrap_or_else(|e| panic!("connection {i} got no answer: {e}"));
+                assert_eq!(answer, "ok", "connection {i}");
+            }
+        })
+        .await
+        .unwrap();
 
         drop(fw);
     }

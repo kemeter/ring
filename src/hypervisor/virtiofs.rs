@@ -140,12 +140,15 @@ pub(crate) async fn spawn_virtiofsd(
         command.arg("--cache").arg("never");
     }
 
-    let child = command.spawn().map_err(|e| {
+    let mut child = command.spawn().map_err(|e| {
         RuntimeError::Other(format!(
             "failed to spawn virtiofsd at {:?}: {}",
             binary_path, e
         ))
     })?;
+
+    // Read its stderr, or a full pipe blocks virtiofsd on its next log line.
+    crate::hypervisor::child_output::drain_stderr(&mut child, format!("virtiofsd {}", tag));
 
     // Wait for the socket to appear (virtiofsd creates it once it's ready).
     for _ in 0..50 {
