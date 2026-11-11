@@ -47,7 +47,7 @@ Two rules follow:
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
 | `current` | bool | yes | none | Mark this context as the default. Exactly one context should be `true` per file |
-| `host` | string | yes | none | The IP or hostname the server binds to. Set `"127.0.0.1"` for loopback-only; `"0.0.0.0"` to listen on every interface. The CLI uses the same value to reach the server |
+| `host` | string | yes | none | The IP or hostname the CLI reaches the server at. `ring init` writes `"127.0.0.1"`. The server listens on [`[server] bind`](#server), not on this value |
 | `api` | inline table | yes | none | See [`api`](#contextsnameapi) |
 | `user` | inline table | yes | none | See [`user`](#contextsnameuser) |
 
@@ -66,6 +66,10 @@ Two rules follow:
 ### `[server]`
 
 The daemon's own configuration, shared by every context in the file. All subsections optional.
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `bind` | string | no | `"127.0.0.1"` | Address the API listens on, with the current context's `api.port`. Override with `RING_BIND`. The API speaks plain HTTP: to reach it from other machines, keep the default and put a TLS reverse proxy in front (see [How do I manage TLS?](/documentation/help/faq#how-do-i-manage-tls)). Ring logs a warning when it listens beyond loopback |
 
 ### `[server.scheduler]`
 

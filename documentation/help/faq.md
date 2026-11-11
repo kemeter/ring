@@ -284,7 +284,7 @@ No. Ring is single-node. Multi-node clustering is not currently planned.
 
 ### How do I secure Ring in production?
 
-Network: front Ring with a reverse proxy doing TLS termination, and restrict the API port to trusted networks:
+Network: Ring listens on `127.0.0.1` by default. To reach it from other machines, front it with a reverse proxy doing TLS termination (below). If you set `[server] bind` to another address instead, restrict the API port to trusted networks:
 
 ```bash
 # UFW: allow only the LAN to reach 3030

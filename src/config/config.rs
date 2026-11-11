@@ -1,6 +1,5 @@
 use crate::config::api::Api;
 use crate::config::server::ServerConfig;
-use local_ip_address::local_ip;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::env;
@@ -49,12 +48,7 @@ impl Default for Config {
         Config {
             current: true,
             name: "default".to_string(),
-            host: local_ip()
-                .unwrap_or_else(|_| {
-                    warn!("Failed to get local IP, using localhost");
-                    "127.0.0.1".parse().unwrap()
-                })
-                .to_string(),
+            host: crate::config::server::DEFAULT_BIND.to_string(),
             api: Api {
                 scheme: "http".to_string(),
                 port: 3030,

@@ -4,6 +4,13 @@ What to change when moving from one Ring version to the next. Only the steps tha
 
 ## Upgrade to 0.14
 
+### API listen address
+
+The server used to listen on the `host` of the current context, which `ring init` set to the machine's LAN IP. It now listens on `[server] bind`, `127.0.0.1` by default, so the API is no longer reachable from other machines until you choose to expose it.
+
+- If clients reach Ring from other machines, put a TLS reverse proxy in front of `127.0.0.1:3030` (see the [FAQ](documentation/help/faq.md#how-do-i-manage-tls)), or set `bind = "0.0.0.0"` under `[server]` (or `RING_BIND=0.0.0.0`) to keep the previous exposure.
+- If the `host` of your context is your LAN IP, the CLI on the same machine no longer reaches the server: set it to `127.0.0.1`.
+
 ### Secret and config files
 
 The decrypted content of `secret` and `config` volumes moves out of `/tmp/ring_configs` to a directory only Ring's user can enter (see [Mount a secret as a file](documentation/how-to/deploy-with-secrets.md#mount-a-secret-as-a-file)). Under systemd, add to the unit:
