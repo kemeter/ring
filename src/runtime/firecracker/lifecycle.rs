@@ -625,7 +625,13 @@ impl FirecrackerLifecycle {
         // `tap` so an early return on any later error deletes it via Drop) and
         // hands its name to Firecracker, while cloud-init configures the
         // matching guest IP.
-        let net_alloc = Some(InstanceNet::for_instance(&instance_id));
+        let net_alloc = Some(
+            crate::hypervisor::net_slots::slots()
+                .claim(&instance_id)
+                .map_err(|e| {
+                    RuntimeError::VmStartFailed(format!("could not claim a network slot: {e}"))
+                })?,
+        );
         if let Some(n) = &net_alloc {
             self.reclaim_stale_tap(&n.tap_name, &instance_id);
         }
@@ -958,15 +964,18 @@ impl FirecrackerLifecycle {
 
         // Delete the host tap. For instances we booted it's in `taps` and its
         // Drop runs TapDevice::delete. After a restart the map is empty, so
-        // re-derive the tap from the instance id (the name is a pure function of
-        // it) and delete it directly — otherwise the interface leaks on the
-        // host. The VM process is already dead (kill_pid waited), so the tap's
+        // look the tap up from the instance's network slot, which is kept on
+        // disk (see `net_slots`), and delete it directly, otherwise the
+        // interface leaks on the host. The VM process is already dead (kill_pid waited), so the tap's
         // backend is free. Harmless if the instance never had a tap: delete just
         // fails to re-attach and no-ops.
         if self.taps.lock().unwrap().remove(instance_id).is_none() {
-            let name = InstanceNet::for_instance(instance_id).tap_name;
+            let name = crate::hypervisor::net_slots::slots()
+                .lookup(instance_id)
+                .tap_name;
             TapDevice::adopt(&name).delete();
         }
+        crate::hypervisor::net_slots::slots().release(instance_id);
 
         let _ = std::fs::remove_file(&socket_path);
         let _ = std::fs::remove_file(self.rootfs_path(instance_id));
@@ -1105,7 +1114,7 @@ impl FirecrackerLifecycle {
             .all_instances()
             .into_iter()
             .filter(|id| id != booting_instance_id)
-            .any(|id| InstanceNet::for_instance(&id).tap_name == tap_name);
+            .any(|id| crate::hypervisor::net_slots::slots().lookup(&id).tap_name == tap_name);
         if claimed {
             return;
         }
@@ -1148,11 +1157,10 @@ impl FirecrackerLifecycle {
     /// `ring-server` (socket on disk, but no PID in our map). The VM and its
     /// persistent tap survive a restart, but the socat forwarders — children of
     /// the old process — died with it, so a deployment with `ports` loses its
-    /// host port-forwarding. Re-derive the network from the instance id (the IP
-    /// and tap name are pure functions of it), re-adopt the tap, re-spawn one
-    /// socat per published port, and re-register the PID so the instance is
-    /// fully owned again. Nothing is persisted: every input is either
-    /// deterministic or already in the deployment. No-op for portless
+    /// host port-forwarding. Look the network up from the instance's slot
+    /// (kept on disk, see `net_slots`), re-adopt the tap, re-spawn one socat
+    /// per published port, and re-register the PID so the instance is fully
+    /// owned again. Every other input is already in the deployment. No-op for portless
     /// deployments (no network to lose) and for instances we already track.
     async fn readopt_networking(&self, deployment: &Deployment) {
         if deployment.ports.is_empty() {
@@ -1168,7 +1176,7 @@ impl FirecrackerLifecycle {
             {
                 continue;
             }
-            let net = InstanceNet::for_instance(&instance_id);
+            let net = crate::hypervisor::net_slots::slots().lookup(&instance_id);
             // The tap is persistent, so it's still on the host — adopt by name
             // and bring it back under our ownership. ensure_outbound_nat is
             // idempotent and global, so re-running it after a restart is a no-op.
@@ -1440,7 +1448,11 @@ fn live_vm_uses_tap(tap_name: &str, booting_instance_id: &str) -> bool {
         if instance_id == booting_instance_id {
             continue;
         }
-        if InstanceNet::for_instance(&instance_id).tap_name == tap_name {
+        if crate::hypervisor::net_slots::slots()
+            .lookup(&instance_id)
+            .tap_name
+            == tap_name
+        {
             return true;
         }
     }
@@ -1792,17 +1804,16 @@ impl RuntimeLifecycle for FirecrackerLifecycle {
         Box::pin(stream::select_all(streams))
     }
 
-    /// The guest IP is a pure function of the instance id (same allocation as
-    /// at boot), so TCP/HTTP health probes can reach the workload without any
-    /// persistent state. Returns `None` for instances without a network (no
+    /// The guest IP comes from the instance's network slot (same allocation as
+    /// at boot), so TCP/HTTP health probes can reach the workload. Returns `None` for instances without a network (no
     /// published ports) — there's no reachable address to probe.
     async fn instance_address(&self, instance_id: &str) -> Option<IpAddr> {
         // An instance has a reachable IP iff it allocated a tap. That's tracked
         // in `taps` for instances we booted; after a ring-server restart the map
         // is empty, so fall back to checking the host for the tap interface
-        // (its name is a pure function of the instance id). Either source means
+        // (its name comes from the instance's network slot). Either source means
         // "has a network" → return the deterministic guest IP.
-        let net = InstanceNet::for_instance(instance_id);
+        let net = crate::hypervisor::net_slots::slots().lookup(instance_id);
         let has_tap =
             self.taps.lock().unwrap().contains_key(instance_id) || TapDevice::exists(&net.tap_name);
         if !has_tap {
@@ -1916,7 +1927,9 @@ impl FirecrackerLifecycle {
         let rss = crate::hypervisor::stats::read_rss_bytes(info.pid).await;
         let memory = crate::hypervisor::stats::memory_stats(rss, info.memory_limit_bytes);
 
-        let tap_name = InstanceNet::for_instance(instance_id).tap_name;
+        let tap_name = crate::hypervisor::net_slots::slots()
+            .lookup(instance_id)
+            .tap_name;
         let network = crate::hypervisor::stats::network_stats_from_tap(&tap_name).await;
         let disk_io = crate::hypervisor::stats::disk_io_stats(info.pid).await;
         let pids = crate::hypervisor::stats::pid_stats(info.pid).await;

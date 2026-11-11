@@ -7,22 +7,15 @@
 //! filesystem capabilities); Ring just decides on the parameters and feeds
 //! them to the VMM and to cloud-init.
 //!
-//! The allocation is a pure function of the instance id, so two replicas of
-//! the same deployment cannot collide and a Ring restart sees the same
-//! mapping for a still-running VM.
+//! `10.42.0.0/16` carries 16384 /30 subnets, one per slot. Which slot an
+//! instance gets is decided by [`super::net_slots`], which claims a free one
+//! at boot and keeps the claim on disk, so two guests never share a tap or an
+//! IP and a Ring restart finds every running guest's slot again. This module
+//! only turns a slot into network parameters.
 //!
-//! `10.42.0.0/16` carries 16384 /30 subnets — far more than any realistic
-//! single-host VM workload, but the 14-bit space still admits hash collisions.
-//!
-//! On **Firecracker**, Ring owns tap creation, and [`TapDevice::create`] refuses
-//! a name that already exists: a collision surfaces as a plain boot failure
-//! naming the interface. This matters because `TUNSETIFF` on an existing name
-//! *succeeds* — without that guard the two guests would silently share one tap
-//! and one host IP, and tearing one VM down would delete the other's interface.
-//!
-//! On **Cloud Hypervisor** the VMM creates the tap itself, so Ring does not
-//! gate it. A collision there remains a known limitation: `cloud-hypervisor`
-//! would reuse the existing interface with the same silent consequences.
+//! On **Firecracker**, Ring owns tap creation, and [`TapDevice::create`] still
+//! refuses a name that already exists: `TUNSETIFF` on an existing name
+//! *succeeds*, so without that guard two guests would silently share one tap.
 //!
 //! [`TapDevice::create`]: super::tap::TapDevice::create
 
@@ -49,10 +42,21 @@ pub(crate) struct InstanceNet {
 
 impl InstanceNet {
     /// Build the network parameters for a given VM instance id.
+    ///
+    /// This is the slot an instance gets when it holds no claim (see
+    /// [`super::net_slots`]): every instance booted by an earlier version, and
+    /// the slot a new instance tries first.
+    #[cfg(test)]
     pub fn for_instance(instance_id: &str) -> Self {
-        // 14 bits of entropy → covers 16384 /30 subnets (10.42.0.0/16).
+        Self::for_slot(preferred_slot(instance_id), instance_id)
+    }
+
+    /// Build the network parameters of `slot`, one of the [`SLOT_COUNT`] /30
+    /// subnets of the guest supernet. The MAC still derives from the instance
+    /// id, so it stays stable across boots of the same instance.
+    pub fn for_slot(slot: u32, instance_id: &str) -> Self {
         let h = stable_hash(instance_id);
-        let n = (h & 0x3fff) as u32;
+        let n = slot % SLOT_COUNT;
 
         // /30 layout: .0 = network, .1 = host, .2 = guest, .3 = broadcast.
         let third = (n >> 6) as u8;
@@ -73,7 +77,7 @@ impl InstanceNet {
         );
 
         // 15 chars max for the tap name. Hex of the 14-bit slot fits in 4.
-        let tap_name = format!("{}{:x}", TAP_PREFIX, n);
+        let tap_name = tap_name_for_slot(n);
 
         // Locally-administered MAC: first byte is `02:` (bit 1 set, bit 0 clear
         // for unicast). The remaining 5 bytes are the low bits of the hash, so
@@ -96,6 +100,19 @@ impl InstanceNet {
             mac,
         }
     }
+}
+
+/// Number of /30 subnets in `10.42.0.0/16`.
+pub(crate) const SLOT_COUNT: u32 = 1 << 14;
+
+/// The slot `instance_id` hashes to: 14 bits of the hash.
+pub(crate) fn preferred_slot(instance_id: &str) -> u32 {
+    (stable_hash(instance_id) & 0x3fff) as u32
+}
+
+/// Tap name of `slot`, the one [`InstanceNet::for_slot`] uses.
+pub(crate) fn tap_name_for_slot(slot: u32) -> String {
+    format!("{}{:x}", TAP_PREFIX, slot % SLOT_COUNT)
 }
 
 /// Deterministic AF_VSOCK CID for a given instance id. CIDs 0/1/2 are
