@@ -1,4 +1,6 @@
-@import url('https://rsms.me/inter/inter.css');
+/* Served from the dashboard's own origin: the CSP allows no third-party
+ * stylesheet or font. */
+@import '@fontsource-variable/inter';
 
 :root {
   --bg-0: #0a0c10;
@@ -29,7 +31,7 @@
   --radius: 6px;
   --radius-lg: 10px;
 
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Inter Variable', 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -76,11 +78,6 @@
   color-scheme: light;
 }
 
-@supports (font-variation-settings: normal) {
-  :root {
-    font-family: 'Inter var', var(--font-sans);
-  }
-}
 
 * {
   box-sizing: border-box;
