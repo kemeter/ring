@@ -1,5 +1,6 @@
 use crate::api::action::config::validation::{
     CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
+    data_violation,
 };
 use crate::api::action::namespace::validation::{
     NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
@@ -69,8 +70,14 @@ pub(crate) async fn create(
     auth: Auth,
     Json(input): Json<ConfigInput>,
 ) -> Response {
-    if let Err(errs) = input.validate() {
-        let violations: ViolationList = errs.into();
+    let mut violations: ViolationList = match input.validate() {
+        Ok(()) => ViolationList::new(),
+        Err(errs) => errs.into(),
+    };
+    if let Some(violation) = data_violation(&input.data) {
+        violations.push(violation);
+    }
+    if !violations.is_empty() {
         return violations.into_response();
     }
 
@@ -148,7 +155,7 @@ mod tests {
             .json(&json!({
                 "namespace": "test",
                 "name": "test-config",
-                "data": "test data",
+                "data": "{\"app.conf\": \"test data\"}",
                 "labels": "test-label"
             }))
             .await;
@@ -157,7 +164,7 @@ mod tests {
         let config = response.json::<ConfigOutput>();
         assert_eq!(config.namespace, "test");
         assert_eq!(config.name, "test-config");
-        assert_eq!(config.data, "test data");
+        assert_eq!(config.data, "{\"app.conf\": \"test data\"}");
         assert_eq!(config.labels, "test-label");
     }
 
@@ -170,7 +177,7 @@ mod tests {
         let payload = json!({
             "namespace": "test",
             "name": "duplicate-config",
-            "data": "test data"
+            "data": "{}"
         });
 
         let first = server
@@ -201,6 +208,28 @@ mod tests {
                 .unwrap()
                 .contains("duplicate-config")
         );
+    }
+
+    #[tokio::test]
+    async fn refuses_data_that_a_volume_could_not_mount() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/configs")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({
+                "namespace": "test",
+                "name": "not-json",
+                "data": "log_level = info"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["violations"][0]["property_path"], "data");
+        assert_eq!(body["violations"][0]["code"], "config.data.invalid_json");
     }
 
     #[tokio::test]

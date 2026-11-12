@@ -1084,7 +1084,7 @@ A config is a named blob (typically a config file or JSON document) attached to 
 | --- | --- | --- |
 | `namespace` | 2-63 lowercase DNS-label characters | `config.namespace.length`, `config.namespace.format` |
 | `name` | 1-253 lowercase DNS-subdomain characters | `config.name.length`, `config.name.format` |
-| `data` | 1 byte to 1 MiB | `config.data.length` |
+| `data` | 1 byte to 1 MiB, a JSON object mapping keys to string contents (what a `type: config` volume mounts by `key`) | `config.data.length`, `config.data.invalid_json` |
 | `labels` | at most 1000 characters | `config.labels.length` |
 
 **Errors** (all in `application/problem+json`):
@@ -1128,7 +1128,7 @@ When `data` changes and `name` does not, the deployments of the namespace that m
 | Field | Rule | Code |
 | --- | --- | --- |
 | `name` | 1-253 lowercase DNS-subdomain characters | `config.name.length`, `config.name.format` |
-| `data` | 1 byte to 1 MiB, must round-trip as JSON when non-empty | `config.data.length`, `config.data.invalid_json` |
+| `data` | 1 byte to 1 MiB, a JSON object mapping keys to string contents (what a `type: config` volume mounts by `key`) | `config.data.length`, `config.data.invalid_json` |
 | `labels` | at most 1000 characters | `config.labels.length` |
 
 **Errors** (all in `application/problem+json`):
