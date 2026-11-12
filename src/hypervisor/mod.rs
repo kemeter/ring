@@ -15,6 +15,7 @@ pub(crate) mod instance_driver;
 pub(crate) mod lifecycle_trait;
 #[cfg(test)]
 pub(crate) mod mock;
+pub(crate) mod net_slots;
 pub(crate) mod port_forwarder;
 pub(crate) mod resources;
 pub(crate) mod stats;

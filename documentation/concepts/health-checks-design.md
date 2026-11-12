@@ -140,7 +140,7 @@ On **Cloud Hypervisor**, there is no equivalent to Docker's `HEALTHCHECK`: VMs d
 Health checks run **per running container/VM**, not per deployment, and they use the runtime-private IP, not the published host port:
 
 - Docker: Ring inspects each container to get its bridge IP (e.g. `172.17.0.3`) and probes that
-- CH: Ring uses the deterministic /30 guest IP
+- CH: Ring uses the guest IP of the VM's /30
 
 This means a deployment with 3 replicas runs 3× the probes per check definition. The trade-off: each replica is verified independently, so `restart` only kills the actually-broken instance instead of taking the whole deployment down. Probing the published host port couldn't distinguish replicas, since the kernel would just round-robin one of them.
 

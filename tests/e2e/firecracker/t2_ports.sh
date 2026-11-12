@@ -106,6 +106,17 @@ done
 [ "$have_ip" = true ] || { ip addr show dev "$TAP" >&2; fail "tap $TAP has no 10.42.x.y/30 host IP"; }
 log "tap $TAP has a /30 host IP"
 
+# === network slot claimed on disk ===
+# The tap is named after the claimed slot (ring-<hex slot>), and the claim
+# file names the instance holding it.
+SLOT=$((16#${TAP#ring-}))
+CLAIM="$RING_CONFIG_DIR/net-slots/slots/$SLOT"
+[ -f "$CLAIM" ] || { ls -R "$RING_CONFIG_DIR/net-slots" >&2 || true; fail "no claim for slot $SLOT at $CLAIM"; }
+case "$(cat "$CLAIM")" in
+  "$DEPLOYMENT_ID"-*) log "slot $SLOT claimed by $(cat "$CLAIM")" ;;
+  *) fail "slot $SLOT is claimed by '$(cat "$CLAIM")', not by an instance of $DEPLOYMENT_ID" ;;
+esac
+
 # === socat forwarders ===
 SOCAT_COUNT=0
 for _ in $(seq 1 30); do
@@ -128,5 +139,7 @@ for _ in $(seq 1 20); do
 done
 [ "${still_tap:-1}" -eq 0 ] || fail "tap $TAP not removed after delete"
 [ "${still_socat:-1}" -eq 0 ] || fail "socat forwarders not killed after delete"
+[ ! -e "$CLAIM" ] || fail "slot $SLOT is still claimed after delete"
+log "slot $SLOT released after delete"
 
-log "PASS — T2-FC: tap + socat created on boot, cleaned up on delete."
+log "PASS — T2-FC: tap, network slot and socat created on boot, cleaned up on delete."

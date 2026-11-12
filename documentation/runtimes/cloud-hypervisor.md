@@ -192,13 +192,19 @@ ports:
   - { published: 5353, target: 53, protocol: udp }
 ```
 
-Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>` → `<guest_ip>:<target>`. The guest IP is a deterministic /30 under `10.42.0.0/16` derived from the instance ID.
+Each entry spawns one `socat` userspace process forwarding `0.0.0.0:<published>` → `<guest_ip>:<target>`. The guest IP is in the VM's own /30 under `10.42.0.0/16` (see [Network slots](#network-slots)).
 
 If `published` is already taken on the host, Ring **refuses to start the VM** and emits a `port_allocation_failed` event. The start is retried on the [restart policy](/documentation/concepts/reconciliation#restart-policy)'s backoff curve until the port is free.
 
 Both `tcp` (default) and `udp` are supported via the port's `protocol` field; `socat` uses a `UDP4-LISTEN`/`UDP4` pair for UDP.
 
 Each `socat` logs its connections, and `virtiofsd` its own messages, at debug level under the `ring::hypervisor::child_output` target: run Ring with `RUST_LOG=ring::hypervisor::child_output=debug` to see them.
+
+### Network slots
+
+`10.42.0.0/16` holds 16384 /30 subnets, or slots, each with its tap `ring-<slot in hex>`. A VM claims a free slot when it boots, starting from the one its instance ID hashes to, and releases it when it stops. Two VMs therefore never share a tap or an IP. The claims live under `<config dir>/net-slots`, so a restarted Ring finds the slot of every running VM again. Firecracker VMs draw from the same slots.
+
+A slot is also skipped while its tap exists on the host. A claim left by a boot that failed is taken over once its tap has been missing for 10 minutes.
 
 ### Outbound access
 

@@ -5,7 +5,7 @@ use super::client::{
 use crate::config::config::get_config_dir;
 use crate::config::server::CloudHypervisorConfig;
 use crate::hypervisor::error::RuntimeError;
-use crate::hypervisor::host_net::{InstanceNet, cid_for_instance};
+use crate::hypervisor::host_net::cid_for_instance;
 use crate::hypervisor::instance_driver::{InstanceDriver, Observation};
 use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, classify_log, extract_date};
 use crate::hypervisor::port_forwarder::{self, PortForwarder};
@@ -596,7 +596,13 @@ impl CloudHypervisorLifecycle {
         // configures the matching guest-side IP at first boot.
         let needs_net = !deployment.ports.is_empty();
         let net_alloc = if needs_net {
-            Some(InstanceNet::for_instance(instance_id))
+            Some(
+                crate::hypervisor::net_slots::slots()
+                    .claim(instance_id)
+                    .map_err(|e| {
+                        RuntimeError::VmStartFailed(format!("could not claim a network slot: {e}"))
+                    })?,
+            )
         } else {
             None
         };
@@ -853,6 +859,7 @@ impl CloudHypervisorLifecycle {
         }
 
         self.cleanup_instance_artifacts(instance_id).await;
+        crate::hypervisor::net_slots::slots().release(instance_id);
 
         info!("Cloud Hypervisor VM {} stopped", instance_id);
         true
@@ -1305,12 +1312,14 @@ impl RuntimeLifecycle for CloudHypervisorLifecycle {
         Box::pin(stream::select_all(streams))
     }
 
-    /// Resolve the guest IP for `instance_id` from the deterministic /30
-    /// allocation. The mapping is a pure function of the instance id (see
-    /// `InstanceNet::for_instance`), so we don't need any persistent state
-    /// — every probe recomputes the same address the VM was booted with.
+    /// Resolve the guest IP for `instance_id` from the slot it claimed at boot
+    /// (see [`crate::hypervisor::net_slots`]).
     async fn instance_address(&self, instance_id: &str) -> Option<std::net::IpAddr> {
-        InstanceNet::for_instance(instance_id).guest_ip.parse().ok()
+        crate::hypervisor::net_slots::slots()
+            .lookup(instance_id)
+            .guest_ip
+            .parse()
+            .ok()
     }
 
     /// Execute the probe via vsock against `ring-agent` running in the guest.
@@ -1418,7 +1427,9 @@ impl CloudHypervisorLifecycle {
         let rss = crate::hypervisor::stats::read_rss_bytes(info.pid).await;
         let memory = crate::hypervisor::stats::memory_stats(rss, info.memory_limit_bytes);
 
-        let tap_name = InstanceNet::for_instance(instance_id).tap_name;
+        let tap_name = crate::hypervisor::net_slots::slots()
+            .lookup(instance_id)
+            .tap_name;
         let network = crate::hypervisor::stats::network_stats_from_tap(&tap_name).await;
         let disk_io = crate::hypervisor::stats::disk_io_stats(info.pid).await;
         let pids = crate::hypervisor::stats::pid_stats(info.pid).await;

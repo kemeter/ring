@@ -59,7 +59,7 @@ This is the right tool for L4/L7 reverse proxies, VPN gateways, mDNS / multicast
 
 The Cloud Hypervisor runtime uses a different model entirely. There is no shared bridge per namespace.
 
-Each VM gets a deterministic /30 subnet under `10.42.0.0/16` derived from its instance ID. Cloud Hypervisor creates a tap interface (`ring-<14-bit-hex>`) and brings up the host-side IP. Cloud-init configures the matching guest-side IP at boot. Ports declared in `ports:` are forwarded by a `socat` userspace process from the host's listen address to the guest IP.
+Each VM gets its own /30 subnet under `10.42.0.0/16`, claimed when it boots (see [Network slots](/documentation/runtimes/cloud-hypervisor#network-slots)). Cloud Hypervisor creates a tap interface (`ring-<14-bit-hex>`) and brings up the host-side IP. Cloud-init configures the matching guest-side IP at boot. Ports declared in `ports:` are forwarded by a `socat` userspace process from the host's listen address to the guest IP.
 
 What this means in practice:
 
