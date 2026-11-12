@@ -56,7 +56,7 @@ struct Deployment {
     image: String,
     name: String,
 
-    #[serde(default)]
+    #[serde(default = "default_replicas")]
     replicas: u32,
 
     #[serde(default, deserialize_with = "crate::utils::labels::deserialize_labels")]
@@ -357,8 +357,23 @@ fn default_runtime() -> String {
 fn default_kind() -> String {
     "worker".to_string()
 }
+fn default_replicas() -> u32 {
+    1
+}
 
 impl Deployment {
+    /// A worker asked to run no instance: valid (it pauses a service without
+    /// deleting it), but easy to write by mistake. An autoscaled one only
+    /// starts from `replicas`.
+    fn zero_replicas_warning(&self) -> Option<String> {
+        (self.kind == "worker" && self.replicas == 0 && self.autoscale.is_none()).then(|| {
+            format!(
+                "'{}' has replicas: 0, so no instance will be started",
+                self.name
+            )
+        })
+    }
+
     fn validate(&self) -> Result<(), ApplyError> {
         if self.name.trim().is_empty() {
             return Err(ApplyError::Validation(
@@ -950,6 +965,10 @@ async fn apply_internal(
             continue;
         }
 
+        if let Some(warning) = deployment.zero_replicas_warning() {
+            eprintln!("Warning: {}", warning);
+        }
+
         deployment.resolve_env_vars(&env_vars);
 
         if is_verbose {
@@ -1139,6 +1158,46 @@ deployments:
         );
         let payload = serde_json::to_value(deployment).unwrap();
         assert_eq!(payload["config"]["stop_timeout"], 120);
+    }
+
+    #[test]
+    fn replicas_default_to_one_when_the_manifest_leaves_them_out() {
+        let yaml_content = r#"
+deployments:
+  web:
+    name: web
+    image: nginx:alpine
+"#;
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
+        assert_eq!(config.deployments["web"].replicas, 1);
+    }
+
+    #[test]
+    fn an_explicit_zero_replicas_worker_gets_a_warning() {
+        let yaml_content = r#"
+deployments:
+  paused:
+    name: paused
+    image: nginx:alpine
+    replicas: 0
+  job:
+    name: job
+    image: alpine
+    kind: job
+    replicas: 0
+  web:
+    name: web
+    image: nginx:alpine
+"#;
+        let config: ConfigFile = serde_norway::from_str(yaml_content).unwrap();
+        assert_eq!(
+            config.deployments["paused"]
+                .zero_replicas_warning()
+                .as_deref(),
+            Some("'paused' has replicas: 0, so no instance will be started")
+        );
+        assert_eq!(config.deployments["job"].zero_replicas_warning(), None);
+        assert_eq!(config.deployments["web"].zero_replicas_warning(), None);
     }
 
     #[test]
