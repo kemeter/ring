@@ -207,7 +207,7 @@ docker network prune --filter "name=ring_"
 
 ## Cloud Hypervisor: a different model entirely
 
-The CH runtime has no shared bridge per namespace. Each VM gets a deterministic /30 subnet under `10.42.0.0/16` derived from its instance ID; ports declared in `ports:` are forwarded by `socat` from the host. **Namespaces have no networking effect on CH**: two CH deployments in the same namespace cannot reach each other by name.
+The CH runtime has no shared bridge per namespace. Each VM gets a deterministic /30 subnet under `10.42.0.0/16` derived from its instance ID; ports declared in `ports:` are forwarded by `socat` from the host. **Namespaces have no networking effect on CH**: two CH deployments cannot reach each other at all, whatever their namespace (see [Guest isolation](/documentation/runtimes/cloud-hypervisor#guest-isolation)).
 
 If your workload depends on inter-instance discovery, Docker is currently the only runtime with a working answer. See [Namespaces and networking → Cloud Hypervisor](/documentation/concepts/namespaces-and-networking#cloud-hypervisor-per-vm-30-subnets).
 

@@ -208,6 +208,18 @@ This requires `CAP_NET_ADMIN` on the Ring binary (`setcap cap_net_admin+ep $(com
 
 Note that the guest network is only allocated when the deployment publishes at least one port; a VM with no `ports:` has no network at all.
 
+### Guest isolation
+
+A guest reaches the Internet and nothing else on the host's side. Ring drops, for traffic coming out of a guest tap:
+
+- any destination in `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and `169.254.0.0/16`: the other guests, the host's private networks, and cloud metadata endpoints such as `169.254.169.254`;
+- any new connection to the host itself, its gateway address included;
+- a source address that is not the guest's own, so a guest cannot pose as another one.
+
+Replies still flow: health checks and published ports, opened from the host, keep working. DNS (port 53) is allowed to any address, since a guest image often points at a resolver on the host's LAN.
+
+The rules live in two iptables chains, `RING-GUEST-FORWARD` and `RING-GUEST-INPUT`, jumped to from the top of `FORWARD` and `INPUT` for the `ring-*` interfaces. Ring installs them with outbound NAT on the first VM start, under the same `CAP_NET_ADMIN` requirement, and refills them on every server start. The same rules apply to Firecracker guests.
+
 ## Health checks
 
 `tcp`, `http`, `command` all work. `tcp` and `http` probe from the host against the guest IP (no agent required). `command` goes through the in-guest `ring-agent` over AF_VSOCK port 2375, so install the agent in the guest image. If the agent isn't reachable (missing from the image, or not started yet), the `command` probe fails with an explicit message naming ring-agent rather than a bare connection error.
@@ -267,7 +279,7 @@ This is the canonical parity table. Other pages link here rather than restate it
 | `config.image_pull_policy` / `server` / `username` / `password` | Ignored (no image to pull); a **warning event** is recorded at create |
 | `config.user` (privileged / id / group) | Ignored; a **warning event** is recorded at create |
 | `kind: job` | **Supported, coarser signal.** Clean guest shutdown → `completed`; a `cloud-hypervisor` process that exits non-zero → a failed run. CH does not expose the workload's exit code, so Ring sees VM state only. The finished VM's artifacts are reaped. |
-| Inter-VM networking | Each VM is isolated, with no shared bridge and no DNS between siblings. Cross-VM traffic goes through host-published ports |
+| Inter-VM networking | Each VM is isolated, with no shared bridge and no DNS between siblings. A guest cannot reach another guest, even through its published ports on the host's private addresses (see [Guest isolation](#guest-isolation)) |
 | Environment variables | **Supported** via cloud-init NoCloud (requires cloud-init in guest) |
 | Volumes (bind / volume / config) | **Supported** via virtio-fs (requires `virtiofsd` + `CONFIG_VIRTIO_FS=y` guest kernel) |
 | Port mapping | **Supported** via `socat` userspace forwarders, for both `tcp` and `udp` |

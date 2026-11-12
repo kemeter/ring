@@ -744,6 +744,12 @@ impl CloudHypervisorLifecycle {
             )));
         }
 
+        // `create_vm` created the tap: guard its source address before the
+        // guest can send anything.
+        if let Some(n) = &net_alloc {
+            crate::hypervisor::host_nat::guard_tap_source(&n.tap_name);
+        }
+
         if let Err(e) = client.boot_vm().await {
             self.stop_vm(instance_id).await;
             return Err(RuntimeError::VmStartFailed(format!(

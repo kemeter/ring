@@ -13,6 +13,10 @@
 //! for every VM, present or future), so it's set up once and costs nothing to
 //! re-assert on later boots.
 //!
+//! The same pass isolates the guests (see [`ensure_guest_isolation`]): a guest
+//! reaches the Internet, but not another guest, the host, or any private or
+//! link-local range. [`guard_tap_source`] adds per-tap anti-spoofing.
+//!
 //! Implemented by shelling out to `iptables`: unlike `ip tuntap` (which needs
 //! the *ambient* capability set to work in a child process), iptables performs
 //! its netfilter syscalls itself and inherits ring-server's effective
@@ -25,6 +29,24 @@ use tracing::{info, warn};
 
 /// The guest supernet every per-instance /30 is carved from.
 const GUEST_SUPERNET: &str = "10.42.0.0/16";
+
+/// Every guest tap is named `ring-<slot>` (see [`super::host_net`]).
+const GUEST_IFACES: &str = "ring-+";
+
+/// Chain filtering what guests send through the host (FORWARD).
+const FORWARD_CHAIN: &str = "RING-GUEST-FORWARD";
+
+/// Chain filtering what guests send to the host itself (INPUT).
+const INPUT_CHAIN: &str = "RING-GUEST-INPUT";
+
+/// Destinations a guest must not reach: the other guests (inside 10/8), the
+/// host's private networks and link-local addresses, cloud metadata included.
+const BLOCKED_RANGES: [&str; 4] = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+];
 
 static ENSURE_ONCE: Once = Once::new();
 
@@ -52,7 +74,126 @@ pub(crate) fn ensure_outbound_nat() {
         } else {
             info!("outbound NAT ready for guest subnet {GUEST_SUPERNET}");
         }
+        if let Err(e) = ensure_guest_isolation() {
+            warn!(
+                "could not isolate the guest network: {e} \
+                 (guests may reach each other and the host's private networks)"
+            );
+        } else {
+            info!("guest network isolation ready for {GUEST_IFACES}");
+        }
     });
+}
+
+/// Install the chains that isolate guests, and jump to them from the top of
+/// FORWARD and INPUT for traffic entering from a guest tap.
+///
+/// A guest may:
+/// - get the replies of connections the host opened to it (health checks,
+///   published ports) and of its own outbound connections;
+/// - resolve names (port 53), wherever its resolver is: guest images often
+///   point at a resolver on the host's LAN;
+/// - reach any public address.
+///
+/// Everything else from a guest is dropped: a source outside the guest
+/// supernet (spoofing), a private or link-local destination, and any new
+/// connection to the host itself.
+///
+/// The chains are flushed and refilled, so a server restart applies the rules
+/// of its own version.
+fn ensure_guest_isolation() -> Result<(), String> {
+    for (chain, rules) in [
+        (FORWARD_CHAIN, forward_rules()),
+        (INPUT_CHAIN, input_rules()),
+    ] {
+        reset_chain(chain)?;
+        for rule in rules {
+            let mut args = vec!["-A", chain];
+            args.extend(rule.iter().copied());
+            if !run_iptables(&args)? {
+                return Err(format!("iptables -A {chain} failed for {:?}", rule));
+            }
+        }
+    }
+    ensure_jump("FORWARD", FORWARD_CHAIN)?;
+    ensure_jump("INPUT", INPUT_CHAIN)?;
+    Ok(())
+}
+
+fn forward_rules() -> Vec<Vec<&'static str>> {
+    let mut rules = vec![
+        vec![
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "RETURN",
+        ],
+        vec!["!", "-s", GUEST_SUPERNET, "-j", "DROP"],
+        vec!["-p", "udp", "--dport", "53", "-j", "RETURN"],
+        vec!["-p", "tcp", "--dport", "53", "-j", "RETURN"],
+    ];
+    for range in BLOCKED_RANGES {
+        rules.push(vec!["-d", range, "-j", "DROP"]);
+    }
+    rules
+}
+
+fn input_rules() -> Vec<Vec<&'static str>> {
+    vec![
+        vec![
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "RELATED,ESTABLISHED",
+            "-j",
+            "RETURN",
+        ],
+        vec!["-j", "DROP"],
+    ]
+}
+
+/// Create `chain` if it does not exist, and empty it.
+fn reset_chain(chain: &str) -> Result<(), String> {
+    if !run_iptables_quiet(&["-L", chain, "-n"])? && !run_iptables(&["-N", chain])? {
+        return Err(format!("iptables -N {chain} failed"));
+    }
+    if !run_iptables(&["-F", chain])? {
+        return Err(format!("iptables -F {chain} failed"));
+    }
+    Ok(())
+}
+
+/// Jump from the top of `from` to `chain` for traffic entering from a guest
+/// tap, unless that jump is already there.
+fn ensure_jump(from: &str, chain: &str) -> Result<(), String> {
+    let rule = ["-i", GUEST_IFACES, "-j", chain];
+    let mut check = vec!["-C", from];
+    check.extend(rule);
+    if run_iptables_quiet(&check)? {
+        return Ok(());
+    }
+    let mut insert = vec!["-I", from, "1"];
+    insert.extend(rule);
+    if run_iptables(&insert)? {
+        Ok(())
+    } else {
+        Err(format!("iptables -I {from} failed for the jump to {chain}"))
+    }
+}
+
+/// Drop what a guest sends from another address than the one routed to its
+/// tap, so it cannot pose as another guest. The guest supernet is routed per
+/// /30, one tap each, so strict reverse-path filtering does exactly that.
+/// Call it once the tap exists and before the guest boots.
+pub(crate) fn guard_tap_source(tap_name: &str) {
+    let path = format!("/proc/sys/net/ipv4/conf/{tap_name}/rp_filter");
+    if let Err(e) = std::fs::write(&path, "1") {
+        warn!(
+            "could not enable reverse-path filtering on {tap_name}: {e} (the guest may spoof its source address)"
+        );
+    }
 }
 
 /// Raise CAP_NET_ADMIN into the ambient set so child processes (iptables)
@@ -228,9 +369,72 @@ fn run_iptables(args: &[&str]) -> Result<bool, String> {
     Ok(out.status.success())
 }
 
+/// Like [`run_iptables`], for probes whose failure is an expected answer
+/// (`-C` on a missing rule, `-L` on a missing chain): nothing is logged.
+fn run_iptables_quiet(args: &[&str]) -> Result<bool, String> {
+    Command::new(iptables_bin())
+        .args(args)
+        .output()
+        .map(|out| out.status.success())
+        .map_err(|e| format!("could not run iptables: {e} (is it installed?)"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forward_rules_let_replies_and_dns_through_before_the_drops() {
+        let rules = forward_rules();
+        let first_drop = rules.iter().position(|r| r.ends_with(&["DROP"])).unwrap();
+        assert_eq!(
+            rules[0][..4],
+            ["-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED"]
+        );
+        assert_eq!(rules[first_drop], ["!", "-s", GUEST_SUPERNET, "-j", "DROP"]);
+        let dns = rules.iter().rposition(|r| r.contains(&"53")).unwrap();
+        let first_destination_drop = rules.iter().position(|r| r[0] == "-d").unwrap();
+        assert!(
+            dns < first_destination_drop,
+            "DNS must be allowed before the range drops"
+        );
+    }
+
+    #[test]
+    fn forward_rules_drop_every_private_and_link_local_range() {
+        let rules = forward_rules();
+        for range in [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "169.254.0.0/16",
+        ] {
+            assert!(
+                rules.contains(&vec!["-d", range, "-j", "DROP"]),
+                "{range} is not dropped"
+            );
+        }
+        // The guest supernet, other guests included, sits inside 10/8.
+        assert!(GUEST_SUPERNET.starts_with("10."));
+    }
+
+    #[test]
+    fn input_rules_only_let_replies_reach_the_host() {
+        assert_eq!(
+            input_rules(),
+            vec![
+                vec![
+                    "-m",
+                    "conntrack",
+                    "--ctstate",
+                    "RELATED,ESTABLISHED",
+                    "-j",
+                    "RETURN"
+                ],
+                vec!["-j", "DROP"],
+            ]
+        );
+    }
 
     #[test]
     fn with_verb_inserts_after_table_for_nat_rules() {
