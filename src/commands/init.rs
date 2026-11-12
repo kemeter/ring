@@ -263,9 +263,9 @@ fn is_tty() -> bool {
 /// Build the `config.toml` body from settings. Pure function — no I/O — so
 /// it's trivially testable with every combination of runtime and port.
 pub(crate) fn build_config_toml(settings: &InitSettings) -> String {
-    let host = local_ip_address::local_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    // The server listens on loopback by default (`[server] bind`), so the
+    // CLI on this host reaches it there.
+    let host = crate::config::server::DEFAULT_BIND;
 
     // Salt for password hashing. Random per-init so two unrelated installs
     // don't end up with the same hash for identical passwords.

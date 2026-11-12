@@ -103,7 +103,7 @@ Check that the server is listening on the address the CLI thinks it should:
 curl http://localhost:3030/healthz             # should return {"state":"UP"}
 ```
 
-Ring binds to its detected local IP by default (e.g. `192.168.1.x`), not `localhost`. The CLI uses whatever `host` value is in your `config.toml`. If they disagree, either change `host` to `127.0.0.1` for loopback-only, or point the CLI at the actual bind IP.
+The server listens on `[server] bind` (`127.0.0.1` by default, or `RING_BIND`); the CLI reaches the `host` of its context in `config.toml`. If they disagree, point the context's `host` at an address the server listens on. A config written by an earlier `ring init` may carry your LAN IP as `host`: set it to `127.0.0.1`.
 
 ## Deployment problems
 

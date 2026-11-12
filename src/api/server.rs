@@ -219,13 +219,19 @@ pub(crate) fn router(state: AppState) -> Router {
 
 pub(crate) async fn start(
     pool: SqlitePool,
-    mut configuration: Config,
+    configuration: Config,
     runtimes: RuntimeMap,
     stats_cache: StatsCacheState,
 ) {
-    info!("Starting server on {}", configuration.get_api_url());
-
-    let bind_addr = format!("{}:{}", configuration.host, configuration.api.port);
+    let bind_addr = format!(
+        "{}:{}",
+        configuration.server.bind_host(),
+        configuration.api.port
+    );
+    info!(
+        "Starting server on {}://{}",
+        configuration.api.scheme, bind_addr
+    );
 
     let exec_limiter = ExecLimiterState::new(&configuration.server.exec);
 

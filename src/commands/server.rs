@@ -50,6 +50,20 @@ pub(crate) async fn execute(
     {
         configuration.server.dashboard.enabled = true;
     }
+    // Address the API listens on, over `[server] bind`: a container has to
+    // listen beyond its loopback to be reachable at all.
+    if let Ok(bind) = std::env::var("RING_BIND")
+        && !bind.trim().is_empty()
+    {
+        configuration.server.bind = Some(bind);
+    }
+    if configuration.server.bind_host() != crate::config::server::DEFAULT_BIND {
+        warn!(
+            "The API listens on {} in plain HTTP: put a TLS reverse proxy in front of it before exposing it beyond this host",
+            configuration.server.bind_host()
+        );
+    }
+
     // Optional override of the bind address; useful in containers where
     // the default `127.0.0.1:3031` is unreachable from the host.
     if let Ok(addr) = std::env::var("RING_DASHBOARD_LISTEN")
@@ -449,7 +463,7 @@ fn print_startup_banner(
     let version = env!("CARGO_PKG_VERSION");
     let scheme = &configuration.api.scheme;
     let port = configuration.api.port;
-    let host = configuration.host.as_str();
+    let host = configuration.server.bind_host();
 
     // Vite-style Local / Network lines. When bound to all interfaces we show
     // both loopback and the machine's LAN IP (the actually-reachable address);

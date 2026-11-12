@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- **The API listens on `127.0.0.1` by default.** It used to listen on the context's `host`, which `ring init` set to the machine's LAN IP, exposing plain-HTTP API to the network. The new `[server] bind` setting (or `RING_BIND`) chooses the address, and Ring warns when it listens beyond loopback. `ring init` now writes `127.0.0.1` as the context's `host`. See `UPGRADE.md`
+
 ### Added
 - The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
 - The dashboard can delete a deployment from its detail page, after an inline confirmation

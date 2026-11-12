@@ -134,7 +134,7 @@ ring server start
 
 On first start, Ring:
 
-- Binds to `<local-IP>:3030` by default (typically your LAN IP; falls back to `127.0.0.1`)
+- Listens on `127.0.0.1:3030`, reachable from this machine only (see [`[server] bind`](/documentation/reference/config-toml#server))
 - Runs SQLite migrations to create `ring.db` in the current directory
 - Seeds the default admin user: username `admin`, password `changeme`
 
@@ -144,14 +144,12 @@ It prints a short banner telling you where it's reachable:
   Ring 0.8.0  ready
 
   ➜  Local:     http://127.0.0.1:3030
-  ➜  Network:   http://192.168.1.67:3030
   ➜  Dashboard: disabled (enable with --dashboard)
   ➜  Runtimes:  cloud-hypervisor, docker
 ```
 
-- **Local** is the loopback address; **Network** is your machine's LAN IP, resolved automatically. Share it to reach Ring from another host.
+- **Local** is the loopback address. With `[server] bind = "0.0.0.0"`, a **Network** line adds your machine's LAN IP. The API is plain HTTP, so reach it from other hosts through a TLS reverse proxy (see [How do I manage TLS?](/documentation/help/faq#how-do-i-manage-tls)).
 - With `--dashboard`, the `Dashboard` line shows its URL (default `http://127.0.0.1:3031`).
-- When `host` is set to a specific address (not `0.0.0.0`), only the matching line is shown.
 
 Leave this terminal running. You should see log output if you set `RUST_LOG=info` before starting:
 
@@ -173,7 +171,7 @@ Expected output:
 {"state":"UP"}
 ```
 
-If you get a connection refused, check the server's startup log, where Ring prints the actual bind address (which might be your LAN IP, not `localhost`).
+If you get a connection refused, check the server's startup log, where Ring prints the address it listens on.
 
 ## 5. Log in
 

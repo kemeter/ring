@@ -14,6 +14,11 @@ use serde::Deserialize;
 /// whatever client contexts point at it).
 #[derive(Deserialize, Debug, Clone, Default)]
 pub(crate) struct ServerConfig {
+    /// Address the API listens on, with the port of the current context's
+    /// `api.port`. Unset means loopback only: the API speaks plain HTTP, so
+    /// exposing it takes a TLS reverse proxy in front, or an explicit choice.
+    #[serde(default)]
+    pub(crate) bind: Option<String>,
     #[serde(default)]
     pub(crate) scheduler: Scheduler,
     #[serde(default)]
@@ -26,6 +31,20 @@ pub(crate) struct ServerConfig {
     pub(crate) exec: ExecConfig,
     #[serde(default)]
     pub(crate) restart: RestartConfig,
+}
+
+/// Loopback: reachable from this host only.
+pub(crate) const DEFAULT_BIND: &str = "127.0.0.1";
+
+impl ServerConfig {
+    /// Address the API listens on: `[server] bind`, else loopback.
+    pub(crate) fn bind_host(&self) -> &str {
+        self.bind
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty())
+            .unwrap_or(DEFAULT_BIND)
+    }
 }
 
 /// `[server.restart]`: how the scheduler restarts failed workloads. See
@@ -781,5 +800,26 @@ mod restart_tests {
             let cfg: ServerConfig = toml::from_str(toml).unwrap();
             assert!(cfg.restart.policy().is_err(), "accepted: {toml}");
         }
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    fn parse(toml_str: &str) -> ServerConfig {
+        toml::from_str(toml_str).expect("test TOML must parse")
+    }
+
+    #[test]
+    fn the_api_listens_on_loopback_by_default() {
+        assert_eq!(parse("").bind_host(), "127.0.0.1");
+        assert_eq!(ServerConfig::default().bind_host(), "127.0.0.1");
+        assert_eq!(parse("bind = \"  \"").bind_host(), "127.0.0.1");
+    }
+
+    #[test]
+    fn bind_sets_the_listen_address() {
+        assert_eq!(parse("bind = \"0.0.0.0\"").bind_host(), "0.0.0.0");
     }
 }
