@@ -249,6 +249,24 @@ tbody tr:hover {
   cursor: not-allowed;
 }
 
+.btn-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.btn-danger:hover {
+  background: var(--danger);
+  color: var(--bg-0);
+}
+.btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .filter-bar {
   display: flex;
   align-items: center;

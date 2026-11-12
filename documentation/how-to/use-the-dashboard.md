@@ -1,6 +1,6 @@
 # Use the web dashboard
 
-Ring ships with a read-only web dashboard. It lists deployments across all namespaces, with status, runtime, replicas, and image. Authentication uses the same Bearer JWT as the CLI.
+Ring ships with a web dashboard. It lists deployments across all namespaces, with status, runtime, replicas, and image. Authentication uses the same Bearer JWT as the CLI.
 
 There are **two ways to run it**, both serving the same bundled UI:
 
@@ -94,7 +94,8 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - Ports, volumes, environment variables, and configured health checks
   - **Health check history**: recorded probe results over time (time, type, success/failed/timeout status, message), sourced from `GET /deployments/{id}/health-checks`. Shown only when the deployment has health checks configured.
   - Streamed logs (live tail) and a recent-events timeline
+  - A **Delete** button that tears the deployment down after an inline confirmation (`DELETE /deployments/{id}`, requires the `deployments:write` scope)
 - Read-only views for namespaces, secrets, and configs
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
-The dashboard is read-only: the CLI and manifest remain the source of truth for anything mutating (create, scale, restart, delete).
+Apart from deleting a deployment, the dashboard is read-only: the CLI and manifest remain the source of truth for creating, scaling and restarting.

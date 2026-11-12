@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import {
+    deleteDeployment,
     getDeployment,
     getDeploymentHealthChecks,
     getDeploymentMetrics,
@@ -16,6 +17,7 @@
     type HealthCheck,
     type HealthCheckResult
   } from '#lib/api.ts';
+  import ConfirmAction from '#lib/ConfirmAction.svelte';
   import CopyButton from '#lib/CopyButton.svelte';
   import DeploymentLogs from '#lib/DeploymentLogs.svelte';
   import { statusKind, statusLabel } from '#lib/status.ts';
@@ -97,6 +99,11 @@
       clearInterval(poll);
     }
   });
+
+  async function removeDeployment() {
+    await deleteDeployment(id);
+    goto('/deployments');
+  }
 
   function envDisplay(value: EnvValue): { kind: 'literal' | 'secret'; text: string } {
     if (typeof value === 'string') {
@@ -215,6 +222,14 @@
       <button class="btn-secondary" onclick={refresh} disabled={loading}>
         {loading ? 'loading…' : 'Refresh'}
       </button>
+      {#if detail.status !== 'deleted'}
+        <ConfirmAction
+          label="Delete"
+          prompt={`Delete ${detail.namespace}/${detail.name}?`}
+          pendingLabel="Deleting…"
+          action={removeDeployment}
+        />
+      {/if}
     </div>
   </header>
 

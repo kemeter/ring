@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The dashboard can delete a deployment from its detail page, after an inline confirmation
+
 ### Security
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`
 - Any web page open in the browser could send requests through `ring dashboard`, which signed them with the operator's token. The local dashboard now answers only the browser that opened the link it prints, which holds a secret generated at each launch, and refuses requests from another origin or for another host name. It no longer has a login screen, and no longer adds the operator's token to `/login` and `/logout`
