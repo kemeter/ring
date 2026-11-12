@@ -147,6 +147,7 @@
     <button class="btn-secondary" onclick={refresh} disabled={loading}>
       {loading ? 'loading…' : 'Refresh'}
     </button>
+    <a class="btn-primary" href="/deployments/new">New deployment</a>
   </div>
 </header>
 

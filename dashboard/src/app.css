@@ -278,6 +278,10 @@ tbody tr:hover {
 }
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  color: #042f25;
+}
+a.btn-primary {
+  display: inline-block;
 }
 .btn-primary:disabled {
   opacity: 0.6;
