@@ -99,6 +99,7 @@ Local mode is always available; there's nothing to disable, it only runs when yo
 - Resource pages, with a **New** button and row actions confirmed inline:
   - **Secrets** (`/secrets`): create (the value is encrypted and never shown again) and delete. A secret still used by deployments is refused first, naming them, then can be deleted anyway
   - **Configs** (`/configs`): create, edit and delete. Each entry of the config (a file name and its contents) gets its own field, so nothing has to be escaped into JSON by hand
+  - **Volumes** (`/volumes`): create (`local` or `directory` backend, optional size) and delete, guarded like secrets
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
 Apart from deleting a deployment, the dashboard is read-only: the CLI and manifest remain the source of truth for creating, scaling and restarting.
