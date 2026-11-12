@@ -20,6 +20,7 @@
   import ConfirmAction from '#lib/ConfirmAction.svelte';
   import CopyButton from '#lib/CopyButton.svelte';
   import DeploymentLogs from '#lib/DeploymentLogs.svelte';
+  import ExecTerminal from '#lib/ExecTerminal.svelte';
   import { statusKind, statusLabel } from '#lib/status.ts';
   import DetailTableCard from '#lib/DetailTableCard.svelte';
   import { hasSession } from '#lib/auth.ts';
@@ -512,6 +513,8 @@
   {/if}
 
   <DeploymentLogs {id} />
+
+  <ExecTerminal {id} instances={detail.instances} />
 
   {#if events.length > 0}
     <section class="card">

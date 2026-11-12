@@ -547,3 +547,128 @@ export async function streamLogs(
     }
   };
 }
+
+export interface ExecOptions {
+  /** argv of the process to start, e.g. `['/bin/sh']`. */
+  command: string[];
+  /** Instance (container id or name) to enter; the first one by default. */
+  container?: string;
+  cols: number;
+  rows: number;
+}
+
+export interface ExecHandlers {
+  onOutput(data: Uint8Array): void;
+  /** The process exited; `code` is null when the runtime could not tell. */
+  onExit(code: number | null): void;
+  /** The server reported a failure inside the session. */
+  onError(message: string): void;
+  /** The socket closed, after `onExit` or on its own. */
+  onClose(): void;
+}
+
+export interface ExecSession {
+  send(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
+}
+
+type ExecServerFrame =
+  | { type: 'stdout' | 'stderr'; data: string }
+  | { type: 'exit'; code: number | null }
+  | { type: 'error'; message: string };
+
+const textEncoder = new TextEncoder();
+
+function toBase64(text: string): string {
+  let binary = '';
+  for (const byte of textEncoder.encode(text)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
+
+function fromBase64(data: string): Uint8Array {
+  return Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+}
+
+/** Opens an interactive exec session over a WebSocket. Like the log stream,
+ *  it authenticates with a ticket, since a WebSocket cannot carry an
+ *  Authorization header. Resolves once the socket is open; rejects when the
+ *  server refuses it (exec disabled, missing scope, no running instance). */
+export async function openExec(
+  id: string,
+  options: ExecOptions,
+  handlers: ExecHandlers
+): Promise<ExecSession> {
+  const { ticket } = await mintStreamTicket(`deployment:exec:${id}`);
+  const params = new URLSearchParams();
+  for (const arg of options.command) {
+    params.append('command', arg);
+  }
+  params.set('tty', 'true');
+  params.set('cols', String(options.cols));
+  params.set('rows', String(options.rows));
+  if (options.container) {
+    params.set('container', options.container);
+  }
+  params.set('ticket', ticket);
+
+  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const socket = new WebSocket(
+    `${scheme}://${window.location.host}/api/deployments/${encodeURIComponent(id)}/exec?${params}`
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    socket.onopen = () => resolve();
+    // The browser hides the HTTP status of a refused handshake, so the
+    // likely causes are spelled out instead.
+    socket.onerror = () =>
+      reject(
+        new Error(
+          'The server refused the session: exec may be disabled, your token may lack the admin scope, or no instance is running.'
+        )
+      );
+  });
+
+  socket.onerror = null;
+  socket.onmessage = (event) => {
+    let frame: ExecServerFrame;
+    try {
+      frame = JSON.parse(event.data) as ExecServerFrame;
+    } catch {
+      return;
+    }
+    switch (frame.type) {
+      case 'stdout':
+      case 'stderr':
+        handlers.onOutput(fromBase64(frame.data));
+        break;
+      case 'exit':
+        handlers.onExit(frame.code);
+        break;
+      case 'error':
+        handlers.onError(frame.message);
+        break;
+    }
+  };
+  socket.onclose = () => handlers.onClose();
+
+  const sendFrame = (frame: object) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(frame));
+    }
+  };
+
+  return {
+    send(data) {
+      sendFrame({ type: 'stdin', data: toBase64(data) });
+    },
+    resize(cols, rows) {
+      sendFrame({ type: 'resize', cols, rows });
+    },
+    close() {
+      socket.close();
+    }
+  };
+}
