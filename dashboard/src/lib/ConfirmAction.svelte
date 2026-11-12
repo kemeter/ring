@@ -57,9 +57,9 @@
 
 <style>
   .confirm {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    flex-wrap: wrap;
+    white-space: nowrap;
     gap: 0.5rem;
   }
   .prompt {

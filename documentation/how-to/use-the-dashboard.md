@@ -96,7 +96,8 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - Streamed logs (live tail) and a recent-events timeline
   - A **Delete** button that tears the deployment down after an inline confirmation (`DELETE /deployments/{id}`, requires the `deployments:write` scope)
   - A **Terminal** card that opens a shell in a running instance (`GET /deployments/{id}/exec` over a WebSocket). It starts `/bin/sh` unless you type another command, and lets you pick the instance when there are several. Nothing runs until you press **Connect**. It needs `[server.exec] enabled = true` on the server and a user with the `admin` scope, like `ring deployment exec`
-- Read-only views for namespaces, secrets, and configs
+- Resource pages, with a **New** button and row actions confirmed inline:
+  - **Secrets** (`/secrets`): create (the value is encrypted and never shown again) and delete. A secret still used by deployments is refused first, naming them, then can be deleted anyway
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
 Apart from deleting a deployment, the dashboard is read-only: the CLI and manifest remain the source of truth for creating, scaling and restarting.

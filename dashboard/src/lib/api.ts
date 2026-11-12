@@ -252,12 +252,68 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`);
+    throw new ApiError(res.status, res.statusText, text);
   }
-  if (res.status === 204) {
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
     return undefined as T;
   }
   return res.json() as Promise<T>;
+}
+
+/** A refusal from the API, keeping its status and parsed body so a page can
+ *  react to a specific case (a 409 naming the deployments in the way). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: Record<string, unknown> | null;
+
+  constructor(status: number, statusText: string, text: string) {
+    super(`${status} ${statusText}${text ? `: ${errorDetail(text)}` : ''}`);
+    this.status = status;
+    try {
+      this.body = JSON.parse(text);
+    } catch {
+      this.body = null;
+    }
+  }
+}
+
+/** The deployments a 409 says still use the resource, when it says so. */
+export function blockingDeployments(error: unknown): string[] | null {
+  if (!(error instanceof ApiError) || error.status !== 409) {
+    return null;
+  }
+  const names = error.body?.deployments;
+  return Array.isArray(names) ? names.map(String) : null;
+}
+
+/** The readable part of an error body. Validation failures are RFC 7807
+ *  problem+json (`violations`); other refusals are `{ error, hint }` or
+ *  `{ errors: [...] }`. Anything else is shown as received. */
+function errorDetail(text: string): string {
+  let body: {
+    detail?: string;
+    violations?: Array<{ property_path: string; message: string }>;
+    error?: string;
+    errors?: string[];
+    hint?: string;
+  };
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (body.violations?.length) {
+    return body.violations.map((v) => `${v.property_path}: ${v.message}`).join('; ');
+  }
+  const message = body.error ?? body.errors?.join('; ') ?? body.detail;
+  if (!message) {
+    return text;
+  }
+  return body.hint ? `${message} (${body.hint})` : message;
+}
+
+function jsonBody(body: unknown): RequestInit {
+  return { body: JSON.stringify(body) };
 }
 
 export async function login(username: string, password: string): Promise<string> {
@@ -546,6 +602,179 @@ export async function streamLogs(
       es.close();
     }
   };
+}
+
+// Mutations. Each resource can be created and deleted from its list page;
+// the API enforces scopes and namespaces, the dashboard only shows its
+// refusals.
+
+export interface SecretInput {
+  namespace: string;
+  name: string;
+  value: string;
+}
+
+export function createSecret(input: SecretInput): Promise<Secret> {
+  return request<Secret>('/secrets', { method: 'POST', ...jsonBody(input) });
+}
+
+/** Refused with 409 while a deployment uses the secret, unless `force`. */
+export function deleteSecret(id: string, force = false): Promise<void> {
+  const qs = force ? '?force=true' : '';
+  return request<void>(`/secrets/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+}
+
+export interface ConfigInput {
+  namespace: string;
+  name: string;
+  data: string;
+  labels?: string;
+}
+
+export function createConfig(input: ConfigInput): Promise<Config> {
+  return request<Config>('/configs', { method: 'POST', ...jsonBody(input) });
+}
+
+/** Replaces a config's name, data and labels; its namespace cannot change. */
+export function updateConfig(id: string, input: Omit<ConfigInput, 'namespace'>): Promise<Config> {
+  return request<Config>(`/configs/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    ...jsonBody(input)
+  });
+}
+
+export function deleteConfig(id: string): Promise<void> {
+  return request<void>(`/configs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export interface VolumeInput {
+  namespace: string;
+  name: string;
+  /** Bytes. */
+  size?: number;
+  backend_type?: 'local' | 'directory';
+  labels?: Record<string, string>;
+}
+
+export function createVolume(input: VolumeInput): Promise<Volume> {
+  return request<Volume>('/volumes', { method: 'POST', ...jsonBody(input) });
+}
+
+/** Refused with 409 while a deployment mounts the volume, unless `force`. */
+export function deleteVolume(id: string, force = false): Promise<void> {
+  const qs = force ? '?force=true' : '';
+  return request<void>(`/volumes/${encodeURIComponent(id)}${qs}`, { method: 'DELETE' });
+}
+
+export function createNamespace(name: string): Promise<Namespace> {
+  return request<Namespace>('/namespaces', { method: 'POST', ...jsonBody({ name }) });
+}
+
+/** Refused with 409 while the namespace still holds resources. */
+export function deleteNamespace(name: string): Promise<void> {
+  return request<void>(`/namespaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+/** Event kinds a webhook can subscribe to, mirroring `KNOWN_EVENT_KINDS`
+ *  in `src/events/mod.rs`. `*` and `deployment.*` are accepted too. */
+export const WEBHOOK_EVENTS = [
+  'deployment.status_changed',
+  'deployment.health_check_failed',
+  'deployment.rolling_update',
+  'deployment.scaled',
+  'deployment.error'
+] as const;
+
+export interface WebhookInput {
+  url: string;
+  events: string[];
+  /** Generated by the server when omitted. */
+  secret?: string;
+}
+
+/** The HMAC secret comes back here, once, and is never returned again. */
+export interface WebhookCreated extends Webhook {
+  secret: string;
+}
+
+export function createWebhook(input: WebhookInput): Promise<WebhookCreated> {
+  return request<WebhookCreated>('/webhooks', { method: 'POST', ...jsonBody(input) });
+}
+
+/** Revokes the webhook: it stays listed, and stops receiving deliveries. */
+export function deleteWebhook(id: string): Promise<void> {
+  return request<void>(`/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export interface UserInput {
+  username: string;
+  password: string;
+}
+
+export function createUser(input: UserInput): Promise<User> {
+  return request<User>('/users', { method: 'POST', ...jsonBody(input) });
+}
+
+export const USER_ROLES = ['admin', 'operator', 'viewer'] as const;
+
+export function setUserRole(id: string, role: (typeof USER_ROLES)[number]): Promise<void> {
+  return request<void>(`/users/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    ...jsonBody({ role })
+  });
+}
+
+export function deleteUser(id: string): Promise<void> {
+  return request<void>(`/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** Scopes a token may carry, mirroring `KNOWN_SCOPES` in `src/models/token.rs`. */
+export const TOKEN_SCOPES = [
+  'deployments:read',
+  'deployments:write',
+  'secrets:read',
+  'secrets:write',
+  'configs:read',
+  'configs:write',
+  'namespaces:read',
+  'namespaces:write',
+  'volumes:read',
+  'volumes:write',
+  'users:read',
+  'users:write',
+  'webhooks:read',
+  'webhooks:write',
+  'admin'
+] as const;
+
+export interface TokenInput {
+  name: string;
+  scopes: string[];
+  /** Empty means every namespace. */
+  namespaces: string[];
+  /** RFC 3339; never expires when omitted. */
+  expire_at?: string;
+}
+
+/** The clear `ring_pat_…` value comes back here, once. */
+export interface TokenCreated {
+  id: string;
+  name: string;
+  token: string;
+  message: string;
+}
+
+export function createToken(input: TokenInput): Promise<TokenCreated> {
+  return request<TokenCreated>('/tokens', { method: 'POST', ...jsonBody(input) });
+}
+
+/** Issues a new value for the token and revokes the old one. */
+export function rotateToken(id: string): Promise<TokenCreated> {
+  return request<TokenCreated>(`/tokens/${encodeURIComponent(id)}/rotate`, { method: 'POST' });
+}
+
+export function revokeToken(id: string): Promise<void> {
+  return request<void>(`/tokens/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export interface ExecOptions {
