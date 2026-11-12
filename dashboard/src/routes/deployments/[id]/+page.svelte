@@ -20,7 +20,7 @@
   import DeploymentLogs from '#lib/DeploymentLogs.svelte';
   import { statusKind, statusLabel } from '#lib/status.ts';
   import DetailTableCard from '#lib/DetailTableCard.svelte';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { formatBytes, formatDate, timeAgo } from '#lib/utils.ts';
 
   let detail = $state<DeploymentDetail | null>(null);
@@ -84,7 +84,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }

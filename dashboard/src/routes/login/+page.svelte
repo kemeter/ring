@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { login } from '#lib/api.ts';
-  import { getToken, setToken } from '#lib/auth.ts';
+  import { hasSession, setToken } from '#lib/auth.ts';
 
   let username = $state('admin');
   let password = $state('');
@@ -10,7 +10,7 @@
   let pending = $state(false);
 
   onMount(() => {
-    if (getToken()) {
+    if (hasSession()) {
       goto('/');
     }
   });

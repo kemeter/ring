@@ -3,7 +3,7 @@
 // the embedded mode), the Rust side proxies the same prefix to the real
 // API. The dashboard JS therefore never needs to know the API URL.
 
-import { clearToken, getToken } from './auth';
+import { clearToken, getToken, isLocalMode } from './auth';
 
 /** Why a deployment is backing off or failed. */
 export interface DeploymentFailure {
@@ -237,6 +237,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, { ...init, headers });
 
   if (res.status === 401) {
+    if (isLocalMode()) {
+      // Nothing to sign in to: it is the CLI token that is no longer valid.
+      throw new Error(
+        '401 Unauthorized: the CLI token of this context was refused, run `ring login`'
+      );
+    }
     clearToken();
     if (typeof window !== 'undefined' && !window.location.pathname.endsWith('/login')) {
       window.location.assign('/login');

@@ -12,7 +12,7 @@
   import type { Snippet } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { timeAgo } from '#lib/utils.ts';
 
   interface Props {
@@ -76,7 +76,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }

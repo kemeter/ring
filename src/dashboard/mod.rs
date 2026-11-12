@@ -11,11 +11,14 @@
 //!   user's laptop. It serves the same embedded assets and reverse-proxies
 //!   `/api/*` to a remote Ring API, injecting the user's bearer token from
 //!   `auth.json`. Lets one operator monitor any cluster without exposing
-//!   the dashboard from the server.
+//!   the dashboard from the server. Since anything reaching that port acts
+//!   as the operator, [`guard`] restricts it to the browser tab opened with
+//!   this launch's secret.
 //!
 //! The bundled assets are baked at compile time by `rust-embed`, so a
 //! single binary ships with the UI regardless of mode.
 
+pub(crate) mod guard;
 pub(crate) mod proxy;
 pub(crate) mod server;
 
@@ -34,8 +37,12 @@ pub(crate) enum Mode {
     /// Run alongside the API in `ring server start`. Proxies to localhost.
     Embedded { api_port: u16 },
     /// Run on the operator's machine via `ring dashboard`. Proxies to a
-    /// remote API with an injected token.
-    Local { upstream: UpstreamApi },
+    /// remote API with an injected token, behind [`guard::LocalGuard`].
+    Local {
+        upstream: UpstreamApi,
+        /// Secret generated for this launch, see [`guard`].
+        session_secret: String,
+    },
 }
 
 impl Mode {
@@ -45,7 +52,7 @@ impl Mode {
                 url: format!("http://127.0.0.1:{}", api_port),
                 bearer_token: None,
             },
-            Mode::Local { upstream } => upstream.clone(),
+            Mode::Local { upstream, .. } => upstream.clone(),
         }
     }
 }

@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { listDeployments, listNamespaces, type Deployment, type Namespace } from '#lib/api.ts';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
 
   let namespaces = $state<Namespace[]>([]);
@@ -29,7 +29,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }

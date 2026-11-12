@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Security
+- Any web page open in the browser could send requests through `ring dashboard`, which signed them with the operator's token. The local dashboard now answers only the browser that opened the link it prints, which holds a secret generated at each launch, and refuses requests from another origin or for another host name. It no longer has a login screen, and no longer adds the operator's token to `/login` and `/logout`
 - The decrypted content of `secret` and `config` volumes was written to `/tmp/ring_configs`, readable by every user of the host. It now goes to a directory only Ring's user can enter: `$RUNTIME_DIRECTORY/configs` under systemd's `RuntimeDirectory=`, else `$XDG_RUNTIME_DIR/ring/configs`, else `/var/lib/ring/configs`. The Cloud Hypervisor and Firecracker `socket_dir`, which stages the same files for the guests, is restricted to `0700` as well. Add `RuntimeDirectory=ring` to a systemd unit to keep these files in memory
 
 ### Fixed

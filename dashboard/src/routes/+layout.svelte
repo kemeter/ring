@@ -4,7 +4,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { getCurrentUser, logout as apiLogout, type CurrentUser } from '#lib/api.ts';
-  import { clearToken, getToken } from '#lib/auth.ts';
+  import { clearToken, hasSession, isLocalMode } from '#lib/auth.ts';
   import { applyTheme, loadTheme, saveTheme, type Theme } from '#lib/theme.ts';
 
   let { children } = $props();
@@ -42,6 +42,8 @@
   }
 
   let onLoginPage = $derived(page.url.pathname === '/login');
+  // Under `ring dashboard` the session is the CLI's: nothing to sign out of.
+  const localMode = isLocalMode();
 
   onMount(async () => {
     // Apply the persisted (or system-preferred) theme as early as possible so
@@ -52,7 +54,7 @@
     if (onLoginPage) {
       return;
     }
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }
@@ -224,7 +226,9 @@
             <div class="user-status">{currentUser.status}</div>
           </div>
         {/if}
-        <button class="logout" onclick={logout}>Sign out</button>
+        {#if !localMode}
+          <button class="logout" onclick={logout}>Sign out</button>
+        {/if}
         <a
           class="doc-link"
           href="https://ring.kemeter.io/documentation"
