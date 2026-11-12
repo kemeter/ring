@@ -63,6 +63,11 @@ async fn forward(state: ProxyState, req: Request) -> anyhow::Result<Response> {
     let method = reqwest::Method::from_bytes(parts.method.as_str().as_bytes())?;
     let mut builder = state.client.request(method, &upstream_url);
 
+    // `/login` and `/logout` act on the credential they carry: injecting the
+    // operator's token would let the page revoke it, so they go upstream
+    // with only what the browser sent.
+    let inject_token = !matches!(upstream_path, "/login" | "/logout");
+
     // Forward headers, dropping hop-by-hop ones the proxy must rewrite.
     let mut filtered = HeaderMap::new();
     for (name, value) in parts.headers.iter() {
@@ -80,7 +85,13 @@ async fn forward(state: ProxyState, req: Request) -> anyhow::Result<Response> {
         }
         filtered.insert(name.clone(), value.clone());
     }
-    if let Some(token) = &state.upstream.bearer_token {
+    super::guard::strip_session_cookie(&mut filtered);
+    if let Some(token) = state
+        .upstream
+        .bearer_token
+        .as_ref()
+        .filter(|_| inject_token)
+    {
         filtered.insert(
             AUTHORIZATION,
             HeaderValue::from_str(&format!("Bearer {}", token))?,

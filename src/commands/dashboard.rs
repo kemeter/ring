@@ -5,13 +5,16 @@
 //! then boots an axum server on the user's machine that:
 //!
 //! - serves the embedded SvelteKit build,
-//! - proxies `/api/*` to the remote API, injecting the bearer token.
+//! - proxies `/api/*` to the remote API, injecting the bearer token,
+//! - answers only the browser opened with this launch's secret, see
+//!   [`crate::dashboard::guard`].
 //!
 //! Lets one operator monitor *any* Ring cluster from their laptop without
 //! exposing the dashboard from the server side.
 
 use crate::config::auth::load_auth_config;
 use crate::config::config::Config;
+use crate::dashboard::guard::{SESSION_PARAM, generate_secret};
 use crate::dashboard::{Mode, UpstreamApi};
 use clap::{Arg, ArgMatches, Command};
 use std::process::exit;
@@ -51,9 +54,13 @@ pub(crate) async fn execute(args: &ArgMatches, mut config: Config, context: Stri
         url: api_url.clone(),
         bearer_token: Some(auth.token),
     };
-    let mode = Mode::Local { upstream };
+    let session_secret = generate_secret();
+    let url = format!("http://{}/?{}={}", listen, SESSION_PARAM, session_secret);
+    let mode = Mode::Local {
+        upstream,
+        session_secret,
+    };
 
-    let url = format!("http://{}", listen);
     println!("Dashboard:  {}", url);
     println!("Upstream:   {}", api_url);
 

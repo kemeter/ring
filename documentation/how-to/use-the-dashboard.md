@@ -17,11 +17,13 @@ Boots a tiny web server on your machine that serves the static UI and reverse-pr
 
 ```bash
 ring dashboard
-# Dashboard:  http://127.0.0.1:3031
+# Dashboard:  http://127.0.0.1:3031/?session=Xq3…
 # Upstream:   http://prod-ring.internal:3030
 ```
 
-The browser opens automatically (pass `--no-open` to skip). The dashboard reads the context the rest of the CLI uses, so to switch clusters you change context first:
+The browser opens automatically (pass `--no-open` to skip, and open the printed link yourself). There is no login screen: the dashboard acts with your CLI token.
+
+Since anything that reaches the port would act as you, the local dashboard only answers the browser holding this launch's secret. The link carries it once, and the dashboard moves it into a `SameSite=Strict` cookie. A request without it, or from another site (`Origin`), or for another host name (`Host`, which defeats DNS rebinding) is refused with `403`. The secret changes on every launch, so open the new link after restarting `ring dashboard`. The dashboard reads the context the rest of the CLI uses, so to switch clusters you change context first:
 
 ```bash
 ring -c staging dashboard
