@@ -33,6 +33,10 @@
     row: Snippet<[T]>;
     /** Shown when the list comes back empty. */
     empty: Snippet;
+    /** Extra header buttons, such as "New secret". */
+    actions?: Snippet;
+    /** Shown between the header and the table: create forms, one-time values. */
+    toolbar?: Snippet;
   }
 
   let {
@@ -44,7 +48,9 @@
     namespaceOf,
     pollMs = 5000,
     row,
-    empty
+    empty,
+    actions,
+    toolbar
   }: Props = $props();
 
   let items = $state<T[]>([]);
@@ -121,8 +127,11 @@
     <button class="btn-secondary" onclick={refresh} disabled={loading}>
       {loading ? 'loading…' : 'Refresh'}
     </button>
+    {@render actions?.()}
   </div>
 </header>
+
+{@render toolbar?.()}
 
 {#if errorMsg}
   <div class="alert">

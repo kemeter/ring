@@ -1,7 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { listDeployments, listNamespaces, type Deployment, type Namespace } from '#lib/api.ts';
+  import ConfirmAction from '#lib/ConfirmAction.svelte';
+  import CreatePanel from '#lib/CreatePanel.svelte';
+  import {
+    createNamespace,
+    deleteNamespace,
+    listDeployments,
+    listNamespaces,
+    type Deployment,
+    type Namespace
+  } from '#lib/api.ts';
   import { hasSession } from '#lib/auth.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
 
@@ -11,6 +20,19 @@
   let errorMsg = $state<string | null>(null);
   let lastFetch = $state<Date | null>(null);
   let poll: ReturnType<typeof setInterval> | null = null;
+  let creating = $state(false);
+  let newName = $state('');
+
+  async function create() {
+    await createNamespace(newName);
+    newName = '';
+    await refresh();
+  }
+
+  async function remove(name: string) {
+    await deleteNamespace(name);
+    await refresh();
+  }
 
   async function refresh() {
     try {
@@ -73,8 +95,19 @@
     <button class="btn-secondary" onclick={refresh} disabled={loading}>
       {loading ? 'loading…' : 'Refresh'}
     </button>
+    <button class="btn-primary" type="button" onclick={() => (creating = true)}>New namespace</button>
   </div>
 </header>
+
+<CreatePanel bind:open={creating} title="New namespace" submit={create}>
+  <div class="form-grid">
+    <label class="field">
+      <span>Name</span>
+      <input bind:value={newName} required autocomplete="off" />
+      <span class="hint">Lowercase letters, digits and '-'.</span>
+    </label>
+  </div>
+</CreatePanel>
 
 <section class="stats">
   <div class="stat-card">
@@ -128,8 +161,14 @@
             </td>
             <td class="muted">{formatDate(ns.created_at)}</td>
             <td class="muted">{ns.updated_at ? formatDate(ns.updated_at) : '—'}</td>
-            <td>
-              <a class="ns-link" href="/namespaces/{ns.name}/audit">Audit</a>
+            <td class="actions">
+              <a class="ns-link audit" href="/namespaces/{ns.name}/audit">Audit</a>
+              <ConfirmAction
+                label="Delete"
+                prompt={`Delete namespace ${ns.name}?`}
+                pendingLabel="Deleting…"
+                action={() => remove(ns.name)}
+              />
             </td>
           </tr>
         {/each}
@@ -209,5 +248,8 @@
   }
   .dot-inline.warn {
     background: var(--warning);
+  }
+  .audit {
+    margin-right: 0.75rem;
   }
 </style>
