@@ -8,11 +8,12 @@ use validator::Validate;
 use crate::api::action::config::on_change;
 use crate::api::action::config::validation::{
     CONFIG_DATA_MAX, CONFIG_LABELS_MAX, CONFIG_NAME_MAX, CONFIG_NAME_MIN, CONFIG_NAME_PATTERN,
+    data_violation,
 };
 use crate::api::auth::{Auth, require_namespace};
 use crate::api::dto::config::ConfigOutput;
 use crate::api::server::{Db, RuntimeMap};
-use crate::api::validation::{Violation, ViolationList, problem_response};
+use crate::api::validation::{ViolationList, problem_response};
 use crate::models::audit_log;
 use crate::models::config as ConfigModel;
 
@@ -73,17 +74,8 @@ pub(crate) async fn update(
         Err(errs) => errs.into(),
     };
 
-    // JSON-shape rule for `data`: the field must round-trip as a JSON
-    // value. We add this as a regular violation so it shows up alongside
-    // any length/format failures rather than overriding them with a
-    // single 400.
-    if !request.data.is_empty() && serde_json::from_str::<serde_json::Value>(&request.data).is_err()
-    {
-        violations.push(Violation::new(
-            "data",
-            "must be valid JSON",
-            "config.data.invalid_json",
-        ));
+    if let Some(violation) = data_violation(&request.data) {
+        violations.push(violation);
     }
 
     if !violations.is_empty() {
@@ -221,7 +213,7 @@ mod tests {
             .add_header("Authorization", format!("Bearer {}", token))
             .json(&json!({
                 "name": "new-name",
-                "data": "{\"test\": true}"
+                "data": "{\"test\": \"true\"}"
             }))
             .await;
 
