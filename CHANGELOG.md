@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard can create and delete volumes
 - The dashboard can create and delete namespaces
 - The dashboard can create and revoke webhooks
+- The dashboard can create, rotate and revoke personal access tokens
 
 ### Security
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`

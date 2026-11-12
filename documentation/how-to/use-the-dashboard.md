@@ -102,6 +102,7 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - **Volumes** (`/volumes`): create (`local` or `directory` backend, optional size) and delete, guarded like secrets
   - **Namespaces** (`/namespaces`): create and delete. A namespace that still holds deployments, secrets or configs is refused
   - **Webhooks** (`/webhooks`): create (the signing secret is shown once) and revoke
+  - **Tokens** (`/tokens`): create (scopes, namespaces, expiry; the value is shown once), rotate and revoke
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
 Apart from deleting a deployment, the dashboard is read-only: the CLI and manifest remain the source of truth for creating, scaling and restarting.
