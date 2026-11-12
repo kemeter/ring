@@ -6,7 +6,7 @@
 use axum::Router;
 use axum::body::Body;
 use axum::extract::{FromRef, Path, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
@@ -74,13 +74,46 @@ pub(crate) fn router(mode: &Mode, listen: SocketAddr) -> anyhow::Result<Router> 
         .route("/{*path}", get(asset))
         .with_state(state);
 
-    Ok(match mode {
+    let app = match mode {
         Mode::Local { session_secret, .. } => {
             let local_guard = Arc::new(LocalGuard::new(listen, session_secret.clone()));
             app.layer(middleware::from_fn_with_state(local_guard, guard))
         }
         Mode::Embedded { .. } => app,
-    })
+    };
+    // Outermost, so the guard's refusals carry the headers too.
+    Ok(app.layer(middleware::map_response(security_headers)))
+}
+
+/// Headers sent with every dashboard response. The page's own CSP (scripts,
+/// styles, connections) is a `<meta>` tag SvelteKit writes into the HTML with
+/// the hash of its inline script, see `dashboard/vite.config.ts`; these are
+/// the parts a `<meta>` policy cannot express, or that apply to the API
+/// answers as well.
+async fn security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    // Nobody may frame the dashboard: a framed page can be clickjacked into
+    // deleting a deployment.
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    // The link `ring dashboard` opens carries the session secret: it must
+    // never leave in a Referer, e.g. when following the documentation link.
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "cross-origin-opener-policy",
+        HeaderValue::from_static("same-origin"),
+    );
+    response
 }
 
 async fn index(State(state): State<DashboardState>) -> Response {
@@ -314,6 +347,56 @@ mod tests {
         assert!(
             page.text()
                 .contains(r#"<meta name="ring-dashboard-mode" content="local">"#)
+        );
+    }
+
+    fn assert_security_headers(response: &axum_test::TestResponse) {
+        assert_eq!(
+            response.header("content-security-policy"),
+            "frame-ancestors 'none'"
+        );
+        assert_eq!(response.header("x-frame-options"), "DENY");
+        assert_eq!(response.header("x-content-type-options"), "nosniff");
+        assert_eq!(response.header("referrer-policy"), "no-referrer");
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_security_headers() {
+        let server = local_dashboard().await;
+        let page = server
+            .get("/")
+            .add_header("host", HOST)
+            .add_header("cookie", session())
+            .await;
+        assert_security_headers(&page);
+        let api = server
+            .get("/api/deployments")
+            .add_header("host", HOST)
+            .add_header("cookie", session())
+            .await;
+        assert_security_headers(&api);
+        // Including the guard's refusals and the redirect holding the secret.
+        let refused = server.get("/").add_header("host", HOST).await;
+        assert_security_headers(&refused);
+        let redirect = server
+            .get("/")
+            .add_query_param("session", SECRET)
+            .add_header("host", HOST)
+            .await;
+        assert_security_headers(&redirect);
+    }
+
+    #[tokio::test]
+    async fn pages_carry_the_csp_with_the_script_hash() {
+        let mode = Mode::Embedded { api_port: 1 };
+        let server = TestServer::new(router(&mode, HOST.parse().unwrap()).unwrap());
+        let page = server.get("/").await;
+        assert_security_headers(&page);
+        let html = page.text();
+        assert!(
+            html.contains(r#"<meta http-equiv="content-security-policy""#)
+                && html.contains("script-src 'self' 'sha256-"),
+            "the build must embed the hash-based CSP, see dashboard/vite.config.ts"
         );
     }
 

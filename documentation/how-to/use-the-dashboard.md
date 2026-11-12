@@ -73,6 +73,10 @@ After restarting `ring server start`, the dashboard is served on the configured 
 
 > The default `listen_address` binds to `127.0.0.1:3031`. Set it to `0.0.0.0:3031` only if you intend to expose the dashboard beyond the host, and put HTTPS in front of it (Sozune, Caddy, etc.).
 
+## Browser security
+
+Both modes send a strict Content Security Policy: the pages only run the dashboard's own scripts and only talk to their own origin, so injected markup cannot load or run anything else. The dashboard refuses to be framed (`frame-ancestors 'none'`), which rules out clickjacking its delete buttons, and sends `Referrer-Policy: no-referrer`, so the session link of `ring dashboard` never leaks through a `Referer` header.
+
 ## Disabling the dashboard
 
 Embedded mode is **off by default**. If you've enabled it and want to roll back, set `enabled = false` (or remove the `[dashboard]` block) and restart the server.

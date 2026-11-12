@@ -24,6 +24,26 @@ export default defineConfig({
   plugins: [
     sveltekit({
       preprocess: vitePreprocess(),
+      // A strict policy: only this origin's scripts, plus the inline
+      // bootstrap script each page carries, allowed by its hash (computed by
+      // SvelteKit and written as a <meta> tag into the prerendered pages).
+      // Inline styles stay allowed: Svelte sets style attributes, and xterm
+      // injects its theme as a <style> element. The Rust server adds what a
+      // <meta> policy cannot carry, such as `frame-ancestors`.
+      csp: {
+        mode: 'hash',
+        directives: {
+          'default-src': ['self'],
+          'script-src': ['self'],
+          'style-src': ['self', 'unsafe-inline'],
+          'img-src': ['self', 'data:'],
+          'font-src': ['self'],
+          'connect-src': ['self'],
+          'object-src': ['none'],
+          'base-uri': ['self'],
+          'form-action': ['self']
+        }
+      },
       adapter: adapter({
         pages: 'build',
         assets: 'build',
