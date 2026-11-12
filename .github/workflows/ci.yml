@@ -67,6 +67,33 @@ jobs:
       - run: docker pull nginx:alpine
       - run: cargo test
 
+  dashboard-e2e:
+    name: Dashboard E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Build dashboard
+        run: cd dashboard && bun install --frozen-lockfile && bun run build
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build
+      - run: docker pull busybox:latest
+      - name: Install Chromium
+        run: cd dashboard && bunx playwright install --with-deps chromium
+      - name: Functional tests
+        run: cd dashboard && bun run test:e2e
+      - name: Keep the traces of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: dashboard/test-results
+          retention-days: 7
+
   audit:
     name: Security Audit
     runs-on: ubuntu-latest

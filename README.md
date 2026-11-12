@@ -33,6 +33,16 @@ ring apply -f examples/nginx.yaml
 
 See [Install and run](documentation/tutorials/install-and-run.md) for prerequisites and [Your first deployment](documentation/tutorials/first-deployment.md) for a full walkthrough.
 
+## Development
+
+`cargo test` runs the Rust suite. The dashboard has functional tests: Playwright drives a real Chromium against a throwaway `ring server start`, so they need Docker and the binary built with the dashboard:
+
+```bash
+cd dashboard && bun install && bun run build && cd ..
+cargo build
+cd dashboard && bunx playwright install chromium && bun run test:e2e
+```
+
 ## Documentation
 
 - [Documentation index](documentation/index.md) — start here
