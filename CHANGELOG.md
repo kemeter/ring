@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The dashboard can delete a deployment from its detail page, after an inline confirmation
+
 ### Security
 - The decrypted content of `secret` and `config` volumes was written to `/tmp/ring_configs`, readable by every user of the host. It now goes to a directory only Ring's user can enter: `$RUNTIME_DIRECTORY/configs` under systemd's `RuntimeDirectory=`, else `$XDG_RUNTIME_DIR/ring/configs`, else `/var/lib/ring/configs`. The Cloud Hypervisor and Firecracker `socket_dir`, which stages the same files for the guests, is restricted to `0700` as well. Add `RuntimeDirectory=ring` to a systemd unit to keep these files in memory
 

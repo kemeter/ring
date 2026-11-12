@@ -310,6 +310,12 @@ export function getDeployment(id: string): Promise<DeploymentDetail> {
   return request<DeploymentDetail>(`/deployments/${encodeURIComponent(id)}`);
 }
 
+/** Ask the server to tear a deployment down. The row is kept with a
+ *  `deleted` status while the scheduler removes its instances. */
+export function deleteDeployment(id: string): Promise<void> {
+  return request<void>(`/deployments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 export function listDeploymentEvents(id: string): Promise<DeploymentEvent[]> {
   return request<DeploymentEvent[]>(`/deployments/${encodeURIComponent(id)}/events`);
 }
