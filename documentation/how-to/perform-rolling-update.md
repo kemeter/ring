@@ -74,7 +74,7 @@ In terminal 2 you'll see, in order:
 1. A child deployment is created with `parent_id` pointing at the old one
 2. The child's instances boot
 3. Health checks on the child pass
-4. Parent instances are removed one at a time
+4. Parent instances are removed one at a time, and the parent does not start new ones in the meantime
 5. Once the parent has zero instances, it's marked `deleted`
 
 Terminal 1 should keep returning `200`s the whole time.

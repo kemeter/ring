@@ -51,7 +51,7 @@ A deployment that declares **at least one health check** gets a rolling update o
 1. Ring finds an active deployment with the same `name` + `namespace`.
 2. A **child deployment** is created (with `parent_id` pointing at the old one) using the new manifest.
 3. The reconciler boots the child's instances. Old containers keep serving traffic.
-4. Once the child's readiness gate opens (see [Health checks](/documentation/concepts/health-checks-design#readiness-gate)), Ring removes one old instance.
+4. Once the child's readiness gate opens (see [Health checks](/documentation/concepts/health-checks-design#readiness-gate)), Ring removes one old instance per tick. While the child is running, the parent does not replace an instance it loses, so the drain converges whatever its `replicas`.
 5. When the parent has zero instances, it's marked `deleted`.
 
 If the child never becomes healthy, the parent stays running and the child is marked `failed`. No traffic is dropped, no operator action needed to roll back: just inspect and `ring apply` a fix.
