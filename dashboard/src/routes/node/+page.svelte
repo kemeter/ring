@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { getNode, type NodeInfo } from '#lib/api.ts';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { timeAgo } from '#lib/utils.ts';
 
   let node = $state<NodeInfo | null>(null);
@@ -24,7 +24,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }

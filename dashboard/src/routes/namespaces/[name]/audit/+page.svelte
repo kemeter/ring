@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { getNamespaceAudit, type AuditEntry } from '#lib/api.ts';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
 
   let name = $derived(page.params.name ?? '');
@@ -26,7 +26,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }

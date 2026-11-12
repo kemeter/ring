@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
   import { listDeployments, type Deployment } from '#lib/api.ts';
-  import { getToken } from '#lib/auth.ts';
+  import { hasSession } from '#lib/auth.ts';
   import { statusKind, statusLabel } from '#lib/status.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
 
@@ -101,7 +101,7 @@
   }
 
   onMount(() => {
-    if (!getToken()) {
+    if (!hasSession()) {
       goto('/login');
       return;
     }
