@@ -295,6 +295,7 @@ function errorDetail(text: string): string {
     violations?: Array<{ property_path: string; message: string }>;
     error?: string;
     errors?: string[];
+    message?: string;
     hint?: string;
   };
   try {
@@ -305,7 +306,7 @@ function errorDetail(text: string): string {
   if (body.violations?.length) {
     return body.violations.map((v) => `${v.property_path}: ${v.message}`).join('; ');
   }
-  const message = body.error ?? body.errors?.join('; ') ?? body.detail;
+  const message = body.error ?? body.errors?.join('; ') ?? body.message ?? body.detail;
   if (!message) {
     return text;
   }
@@ -900,4 +901,33 @@ export async function openExec(
       socket.close();
     }
   };
+}
+
+export const RUNTIMES = [
+  'docker',
+  'podman',
+  'containerd',
+  'cloud-hypervisor',
+  'firecracker'
+] as const;
+
+/** The body of `POST /deployments`. Only the fields the form edits are
+ *  typed; the JSON mode can send any other field the API accepts. */
+export interface DeploymentInput {
+  namespace: string;
+  name: string;
+  image: string;
+  runtime: string;
+  kind: 'worker' | 'job';
+  replicas: number;
+  command?: string[];
+  environment?: Record<string, EnvValue>;
+  ports?: Array<{ published: number; target: number; protocol: 'tcp' | 'udp' }>;
+  [field: string]: unknown;
+}
+
+/** Creates a deployment, or rolls out a new version of the one with the
+ *  same name in the namespace. */
+export function createDeployment(input: DeploymentInput): Promise<Deployment> {
+  return request<Deployment>('/deployments', { method: 'POST', ...jsonBody(input) });
 }

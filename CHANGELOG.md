@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
 - The dashboard can delete a deployment from its detail page, after an inline confirmation
 - The dashboard's deployment page has a terminal that opens a shell in a running instance, like `ring deployment exec`
 - The dashboard can create and delete secrets, and says which deployments still use one before deleting it anyway

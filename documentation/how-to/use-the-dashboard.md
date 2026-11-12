@@ -87,6 +87,7 @@ Local mode is always available; there's nothing to disable, it only runs when yo
 
 - A login screen
 - A list of all deployments visible to your account, with namespace / name / runtime / status / replicas / image, plus namespace filters
+- A **New deployment** page (`/deployments/new`): namespace, name, image, runtime, kind, replicas, command (one argument per line), environment variables (plain or from a secret) and ports. **Edit as JSON** opens the whole `POST /deployments` body for the other fields (volumes, health checks, resources…). Using the name of an existing deployment in the namespace rolls out a new version of it
 - A deployment **detail page** (`/deployments/{id}`) with:
   - Overview and configured resources
   - Running instances
@@ -106,4 +107,4 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - **Users** (`/users`): create (new accounts start as `viewer`), change role (which revokes the account's sessions and tokens) and delete
 - A **Node** page (`/node`) showing the host the server runs on: hostname, OS, architecture, uptime, CPU cores, memory usage, and load average (sourced from `GET /node/get`, refreshed every few seconds)
 
-The CLI and manifest remain the source of truth for creating, scaling and restarting deployments.
+A manifest applied with `ring apply` remains the way to keep a whole stack (namespaces, configs, deployments) in one versioned file.
