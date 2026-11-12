@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard can delete a deployment from its detail page, after an inline confirmation
 - The dashboard's deployment page has a terminal that opens a shell in a running instance, like `ring deployment exec`
 - The dashboard can create and delete secrets, and says which deployments still use one before deleting it anyway
+- The dashboard can create, edit and delete configs, one field per file
 
 ### Security
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`
