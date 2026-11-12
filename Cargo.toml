@@ -25,7 +25,7 @@ clap_complete = "4"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.4.1", features = ["v4"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite", "migrate"] }
-reqwest = { version = "0.13.5", default-features = false, features = ["charset", "http2", "json", "native-tls", "query", "system-proxy"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["charset", "http2", "json", "native-tls", "query", "stream", "system-proxy"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.1.8"
