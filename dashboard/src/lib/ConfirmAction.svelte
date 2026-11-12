@@ -8,16 +8,23 @@
     prompt,
     confirmLabel = label,
     pendingLabel = 'Working…',
-    action
+    action,
+    startConfirming = false,
+    oncancel
   }: {
     label: string;
     prompt: string;
     confirmLabel?: string;
     pendingLabel?: string;
     action: () => Promise<void>;
+    /** Open on the confirmation, for an action the user already chose
+     *  elsewhere (a role picked in a select). */
+    startConfirming?: boolean;
+    oncancel?: () => void;
   } = $props();
 
-  let confirming = $state(false);
+  // svelte-ignore state_referenced_locally
+  let confirming = $state(startConfirming);
   let pending = $state(false);
   let error = $state<string | null>(null);
 
@@ -37,6 +44,7 @@
   function cancel() {
     confirming = false;
     error = null;
+    oncancel?.();
   }
 </script>
 
