@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard can create and delete secrets, and says which deployments still use one before deleting it anyway
 - The dashboard can create, edit and delete configs, one field per file
 - The dashboard can create and delete volumes
+- The dashboard can create and delete namespaces
 
 ### Security
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`
