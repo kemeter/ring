@@ -8,8 +8,11 @@
     deleteNamespace,
     listDeployments,
     listNamespaces,
+    setNamespaceSecurityLevel,
+    SECURITY_LEVELS,
     type Deployment,
-    type Namespace
+    type Namespace,
+    type SecurityLevel
   } from '#lib/api.ts';
   import { hasSession } from '#lib/auth.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
@@ -26,6 +29,15 @@
   async function create() {
     await createNamespace(newName);
     newName = '';
+    await refresh();
+  }
+
+  /** Level picked in a row, waiting for confirmation. */
+  let pickedLevel = $state<Record<string, SecurityLevel | ''>>({});
+
+  async function applyLevel(name: string, level: SecurityLevel) {
+    await setNamespaceSecurityLevel(name, level);
+    pickedLevel[name] = '';
     await refresh();
   }
 
@@ -136,6 +148,7 @@
           <th>Name</th>
           <th class="num">Deployments</th>
           <th class="num">Running</th>
+          <th>Security level</th>
           <th>Created</th>
           <th>Updated</th>
           <th></th>
@@ -159,16 +172,41 @@
                 <span class="dot-inline warn"></span>{running}
               {/if}
             </td>
+            <td class="mono">{ns.security_level}</td>
             <td class="muted">{formatDate(ns.created_at)}</td>
             <td class="muted">{ns.updated_at ? formatDate(ns.updated_at) : '—'}</td>
             <td class="actions">
-              <a class="ns-link audit" href="/namespaces/{ns.name}/audit">Audit</a>
-              <ConfirmAction
-                label="Delete"
-                prompt={`Delete namespace ${ns.name}?`}
-                pendingLabel="Deleting…"
-                action={() => remove(ns.name)}
-              />
+              {#if pickedLevel[ns.name]}
+                {@const level = pickedLevel[ns.name] as SecurityLevel}
+                <ConfirmAction
+                  label={`Make ${level}`}
+                  prompt={level === 'privileged'
+                    ? `Deployments of ${ns.name} may then reach the host, and every other namespace.`
+                    : `Deployments of ${ns.name} that ${level} does not allow stop starting new instances.`}
+                  pendingLabel="Saving…"
+                  action={() => applyLevel(ns.name, level)}
+                  startConfirming
+                  oncancel={() => (pickedLevel[ns.name] = '')}
+                />
+              {:else}
+                <a class="ns-link audit" href="/namespaces/{ns.name}/audit">Audit</a>
+                <select
+                  class="level-picker"
+                  bind:value={pickedLevel[ns.name]}
+                  aria-label={`Change the security level of ${ns.name}`}
+                >
+                  <option value="">Change level…</option>
+                  {#each SECURITY_LEVELS.filter((l) => l !== ns.security_level) as l}
+                    <option value={l}>{l}</option>
+                  {/each}
+                </select>
+                <ConfirmAction
+                  label="Delete"
+                  prompt={`Delete namespace ${ns.name}?`}
+                  pendingLabel="Deleting…"
+                  action={() => remove(ns.name)}
+                />
+              {/if}
             </td>
           </tr>
         {/each}
@@ -188,6 +226,14 @@
 {/if}
 
 <style>
+  .level-picker {
+    margin-right: 0.4rem;
+    background: var(--bg-2);
+    color: var(--fg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.45rem 0.5rem;
+  }
   .stats {
     display: grid;
     grid-template-columns: repeat(4, 1fr);

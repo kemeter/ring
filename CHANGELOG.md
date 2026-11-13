@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A namespace refuses deployments that reach the host by default.** Each namespace has a security level, after Kubernetes' Pod Security Standards: `privileged` allows everything, `baseline` refuses privileged containers, host networking and `bind` volumes, and `restricted` also refuses containers running as root. Namespaces follow `[server.admission] default`, `baseline` unless set. The level is checked on `POST /deployments` and before each new instance. Namespaces already running such a deployment are set to `privileged` on upgrade. See `UPGRADE.md`
 
 ### Added
+- An admin changes a namespace's security level with `ring namespace update <namespace> --security-level`, `PATCH /namespaces/{name}` or the dashboard's Namespaces page. Namespaces now report their `security_level`, and `ring namespace list` shows it
 - The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
 - The dashboard can delete a deployment from its detail page, after an inline confirmation
 - The dashboard's deployment page has a terminal that opens a shell in a running instance, like `ring deployment exec`

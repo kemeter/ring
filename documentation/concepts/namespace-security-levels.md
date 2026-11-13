@@ -21,6 +21,15 @@ A namespace without a level of its own follows the server's default, `[server.ad
 default = "baseline"
 ```
 
+An admin sets a namespace's own level, or resets it to the default:
+
+```bash
+ring namespace update production --security-level privileged
+ring namespace update production --security-level default
+```
+
+The dashboard's **Namespaces** page does the same, and `ring namespace list` shows each namespace's level. Only an admin can change a level, and only from a session or a token valid for every namespace: a token limited to `tenant-a` cannot open `tenant-a` to the host.
+
 Upgrading to the version that introduced levels pins every namespace already running a privileged container, a host-network deployment or a bind volume to `privileged`, so nothing stops. See [UPGRADE.md](https://github.com/kemeter/ring/blob/main/UPGRADE.md).
 
 ## When the level is checked

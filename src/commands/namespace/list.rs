@@ -18,6 +18,8 @@ struct NamespaceTableItem {
     id: String,
     #[table(title = "Name")]
     name: String,
+    #[table(title = "Security level")]
+    security_level: String,
     #[table(title = "Created at (UTC)")]
     created_at: String,
 }
@@ -26,6 +28,9 @@ struct NamespaceTableItem {
 struct NamespaceOutput {
     id: String,
     name: String,
+    // Absent from servers older than security levels.
+    #[serde(default)]
+    security_level: Option<String>,
     created_at: String,
 }
 
@@ -66,6 +71,7 @@ pub(crate) async fn execute(
                 namespaces.push(NamespaceTableItem {
                     id: ns.id,
                     name: ns.name,
+                    security_level: ns.security_level.unwrap_or_default(),
                     created_at: style::format_date(&ns.created_at),
                 });
             }

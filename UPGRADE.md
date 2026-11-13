@@ -15,7 +15,7 @@ The server used to listen on the `host` of the current context, which `ring init
 
 A privileged container, host networking or a `bind` volume gives a deployment the host, and with it every namespace. They are now refused unless the deployment's namespace is at the `privileged` security level (see [Namespace security levels](documentation/concepts/namespace-security-levels.md)). Namespaces without a level of their own follow `[server.admission] default`, which is `baseline`.
 
-The upgrade sets every namespace that holds such a deployment to `privileged`, so nothing stops. Review those namespaces. To keep the previous behavior everywhere instead, set:
+The upgrade sets every namespace that holds such a deployment to `privileged`, so nothing stops. `ring namespace list` shows them: lower the ones that should not reach the host with `ring namespace update <namespace> --security-level baseline`. To keep the previous behavior everywhere instead, set:
 
 ```toml
 [server.admission]

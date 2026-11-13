@@ -34,11 +34,18 @@ export interface CurrentUser {
   status: string;
 }
 
+/** What a namespace's deployments may ask of the host, mirroring
+ *  `SecurityLevel` in `src/models/security_level.rs`. */
+export const SECURITY_LEVELS = ['privileged', 'baseline', 'restricted'] as const;
+export type SecurityLevel = (typeof SECURITY_LEVELS)[number];
+
 export interface Namespace {
   id: string;
   name: string;
   created_at: string;
   updated_at: string | null;
+  /** Its own level, else the server's default. */
+  security_level: SecurityLevel;
 }
 
 export interface DeploymentPort {
@@ -669,6 +676,17 @@ export function deleteVolume(id: string, force = false): Promise<void> {
 
 export function createNamespace(name: string): Promise<Namespace> {
   return request<Namespace>('/namespaces', { method: 'POST', ...jsonBody({ name }) });
+}
+
+/** Admin only. `null` makes the namespace follow the server's default. */
+export function setNamespaceSecurityLevel(
+  name: string,
+  level: SecurityLevel | null
+): Promise<Namespace> {
+  return request<Namespace>(`/namespaces/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    ...jsonBody({ security_level: level })
+  });
 }
 
 /** Refused with 409 while the namespace still holds resources. */
