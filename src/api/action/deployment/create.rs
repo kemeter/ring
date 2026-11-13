@@ -1016,7 +1016,11 @@ pub(crate) async fn create(
             return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
         }
     };
-    let breaches = security_level::breaches(&deployment, level);
+    let breaches = security_level::breaches(
+        &deployment,
+        level,
+        &configuration.server.admission.allowed_host_paths,
+    );
     if !breaches.is_empty() {
         let mut violations = ViolationList::new();
         for breach in breaches {
@@ -4818,5 +4822,34 @@ mod tests {
             .json(&manifest(json!({ "id": 1000 })))
             .await
             .assert_status(StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn a_bind_under_an_allowed_host_path_is_admitted() {
+        let mut configuration = crate::config::config::Config::default();
+        configuration.server.admission.allowed_host_paths =
+            vec!["/mnt/zerofs".to_string().try_into().unwrap()];
+        let (_, app) = crate::api::server::tests::new_test_app_with_config(configuration).await;
+        let manifest = |source: &str| {
+            json!({
+                "runtime": "docker",
+                "name": "files",
+                "namespace": "tenant-a",
+                "image": "nginx:1.27",
+                "volumes": [{
+                    "type": "bind", "source": source, "destination": "/data",
+                    "driver": "local", "permission": "rw"
+                }]
+            })
+        };
+
+        let (status, codes) =
+            create_codes_in(app.clone(), manifest("/mnt/zerofs/acme/files")).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+
+        let (status, codes) =
+            create_codes_in(app, manifest("/mnt/zerofs/../../var/run/docker.sock")).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(codes, ["deployment.volumes.bind.forbidden"]);
     }
 }

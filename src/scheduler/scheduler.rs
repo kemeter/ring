@@ -1705,13 +1705,14 @@ pub(crate) fn apply_timeout_secs() -> u64 {
 fn admission_blocker(
     deployment: &Deployment,
     levels: &HashMap<String, SecurityLevel>,
-    default_level: SecurityLevel,
+    admission: &crate::config::server::AdmissionConfig,
 ) -> Option<reconcile::StartBlocker> {
     let level = levels
         .get(&deployment.namespace)
         .copied()
-        .unwrap_or(default_level);
-    let breaches = crate::models::security_level::breaches(deployment, level);
+        .unwrap_or(admission.default_level);
+    let breaches =
+        crate::models::security_level::breaches(deployment, level, &admission.allowed_host_paths);
     if breaches.is_empty() {
         return None;
     }
@@ -1958,7 +1959,7 @@ pub(crate) async fn schedule(
             if let Some(forbidden) = admission_blocker(
                 &deployment,
                 &security_levels,
-                config.server.admission.default_level,
+                &config.server.admission,
             ) {
                 start_blocker.get_or_insert(forbidden);
             }
@@ -2241,11 +2242,16 @@ mod tests {
         };
         let namespace = host_network.namespace.clone();
 
+        let at = |default_level| crate::config::server::AdmissionConfig {
+            default_level,
+            allowed_host_paths: vec![],
+        };
+
         let pinned = HashMap::from([(namespace.clone(), SecurityLevel::Privileged)]);
-        assert!(admission_blocker(&host_network, &pinned, SecurityLevel::Baseline).is_none());
+        assert!(admission_blocker(&host_network, &pinned, &at(SecurityLevel::Baseline)).is_none());
 
         let lowered = HashMap::from([(namespace, SecurityLevel::Baseline)]);
-        let blocker = admission_blocker(&host_network, &lowered, SecurityLevel::Privileged);
+        let blocker = admission_blocker(&host_network, &lowered, &at(SecurityLevel::Privileged));
         assert!(
             matches!(&blocker, Some(reconcile::StartBlocker::Forbidden { message }) if message.starts_with("network.mode:")),
             "{blocker:?}"
@@ -2253,7 +2259,8 @@ mod tests {
 
         // A namespace without a level of its own follows the server's default.
         assert!(
-            admission_blocker(&host_network, &HashMap::new(), SecurityLevel::Baseline).is_some()
+            admission_blocker(&host_network, &HashMap::new(), &at(SecurityLevel::Baseline))
+                .is_some()
         );
     }
 

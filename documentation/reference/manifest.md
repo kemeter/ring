@@ -192,7 +192,7 @@ A list of volume objects. **Four** types are supported:
 
 | `type` | Source | Description |
 |---|---|---|
-| `bind` | host path | Mount a directory or file from the host into the container. Refused unless the namespace's [security level](/documentation/concepts/namespace-security-levels) is `privileged`. |
+| `bind` | host path | Mount a directory or file from the host into the container. Refused unless the namespace's [security level](/documentation/concepts/namespace-security-levels) is `privileged`, or the path lies under `[server.admission] allowed_host_paths`. |
 | `volume` | volume name | Mount a named Docker volume (driver `local` or `nfs`). |
 | `config` | config name | Mount a file rendered from a `ring config` entry in the same namespace. |
 | `secret` | secret name | Mount a file rendered from a `ring secret` entry in the same namespace. Always read-only. |

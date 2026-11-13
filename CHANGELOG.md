@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A namespace refuses deployments that reach the host by default.** Each namespace has a security level, after Kubernetes' Pod Security Standards: `privileged` allows everything, `baseline` refuses privileged containers, host networking and `bind` volumes, and `restricted` also refuses containers running as root. Namespaces follow `[server.admission] default`, `baseline` unless set. The level is checked on `POST /deployments` and before each new instance. Namespaces already running such a deployment are set to `privileged` on upgrade. See `UPGRADE.md`
 
 ### Added
+- `[server.admission] allowed_host_paths` lets `bind` volumes mount host directories under the listed paths at every security level, for storage a platform manages for its tenants
 - An admin changes a namespace's security level with `ring namespace update <namespace> --security-level`, `PATCH /namespaces/{name}` or the dashboard's Namespaces page. Namespaces now report their `security_level`, and `ring namespace list` shows it
 - A `deployments:exec` scope opens a shell with `ring deployment exec` or the dashboard's terminal. Exec used to require `admin`, so giving someone a shell gave them the whole server; the new scope can be limited to namespaces like the others
 - The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
