@@ -8,6 +8,7 @@ use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::health_check_logs;
 use crate::models::restart_state;
 use crate::models::secret as SecretModel;
+use crate::models::security_level::SecurityLevel;
 use crate::models::volume::ResolvedMount;
 use crate::scheduler::autoscaler::{Autoscaler, Decision};
 use crate::scheduler::docker_events::DockerEvent;
@@ -1698,6 +1699,31 @@ pub(crate) fn apply_timeout_secs() -> u64 {
         .unwrap_or(300)
 }
 
+/// What blocks a new instance of `deployment` when its namespace's security
+/// level does not allow it. Checked on every cycle, not only on submission: the
+/// level may have been lowered since the deployment was admitted.
+fn admission_blocker(
+    deployment: &Deployment,
+    levels: &HashMap<String, SecurityLevel>,
+    default_level: SecurityLevel,
+) -> Option<reconcile::StartBlocker> {
+    let level = levels
+        .get(&deployment.namespace)
+        .copied()
+        .unwrap_or(default_level);
+    let breaches = crate::models::security_level::breaches(deployment, level);
+    if breaches.is_empty() {
+        return None;
+    }
+    Some(reconcile::StartBlocker::Forbidden {
+        message: breaches
+            .into_iter()
+            .map(|b| format!("{}: {}", b.field, b.message))
+            .collect::<Vec<_>>()
+            .join("; "),
+    })
+}
+
 pub(crate) async fn schedule(
     pool: SqlitePool,
     config: crate::config::config::Config,
@@ -1779,6 +1805,17 @@ pub(crate) async fn schedule(
         };
 
         debug!("Processing {} deployments", list_deployments.len());
+
+        // Read once per cycle: a level changed by an operator applies from the
+        // next cycle on.
+        let security_levels = match crate::models::namespace::security_levels(&pool).await {
+            Ok(levels) => levels,
+            Err(e) => {
+                error!("Failed to fetch namespace security levels: {}", e);
+                sleep(duration).await;
+                continue;
+            }
+        };
 
         let mut restart_states = match restart_state::find_all(&pool).await {
             Ok(states) => states,
@@ -1918,6 +1955,13 @@ pub(crate) async fn schedule(
             } else {
                 predecessor_holds_instances.then_some(reconcile::StartBlocker::PredecessorHoldsInstances)
             };
+            if let Some(forbidden) = admission_blocker(
+                &deployment,
+                &security_levels,
+                config.server.admission.default_level,
+            ) {
+                start_blocker.get_or_insert(forbidden);
+            }
             let mut resolved = match prepare_deployment(&pool, &deployment).await {
                 Ok(d) => d,
                 Err(e) => {
@@ -2185,6 +2229,32 @@ mod tests {
             .expect("Could not execute database migrations");
 
         pool
+    }
+
+    #[test]
+    fn a_lowered_level_blocks_the_next_instance() {
+        let host_network = Deployment {
+            network: Some(crate::models::deployments::NetworkConfig {
+                mode: crate::models::deployments::NetworkMode::Host,
+            }),
+            ..simple_running("d1", vec![])
+        };
+        let namespace = host_network.namespace.clone();
+
+        let pinned = HashMap::from([(namespace.clone(), SecurityLevel::Privileged)]);
+        assert!(admission_blocker(&host_network, &pinned, SecurityLevel::Baseline).is_none());
+
+        let lowered = HashMap::from([(namespace, SecurityLevel::Baseline)]);
+        let blocker = admission_blocker(&host_network, &lowered, SecurityLevel::Privileged);
+        assert!(
+            matches!(&blocker, Some(reconcile::StartBlocker::Forbidden { message }) if message.starts_with("network.mode:")),
+            "{blocker:?}"
+        );
+
+        // A namespace without a level of its own follows the server's default.
+        assert!(
+            admission_blocker(&host_network, &HashMap::new(), SecurityLevel::Baseline).is_some()
+        );
     }
 
     fn child_with_health_checks(id: &str, hcs: Vec<HealthCheck>) -> Deployment {

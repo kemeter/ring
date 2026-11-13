@@ -29,7 +29,7 @@ All values serialize as `snake_case`, identically on the wire (JSON), in the CLI
 | `crash_loop` | A worker's instances keep ending: a crash, a clean exit, an instance removed by its liveness check. |
 | `run_failed` | A job run exited non-zero, or was removed by its liveness check. |
 | `image_pull` | The image couldn't be pulled (tag not found, registry auth, `image_pull_policy: Never` forbidding a pull, network). |
-| `spec_rejected` | The runtime rejected the instance (invalid mount, unsupported option, a port conflict the daemon surfaces at create time), or its program cannot run (exit code `126`/`127`). |
+| `spec_rejected` | The runtime rejected the instance (invalid mount, unsupported option, a port conflict the daemon surfaces at create time), its program cannot run (exit code `126`/`127`), or its namespace's [security level](/documentation/concepts/namespace-security-levels) no longer allows it (`admission_denied` event). |
 | `config_missing` | A config (or a key within it) or a secret the deployment references doesn't exist in the namespace. Instances already running keep running and are still watched; only a new instance waits. |
 | `insufficient_resources` | The host doesn't have enough free memory for the deployment right now. |
 | `network` | Creating the namespace network failed. |

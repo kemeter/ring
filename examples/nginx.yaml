@@ -26,14 +26,9 @@ deployments:
         image: "nginx:1.19.5"
         replicas: 1
         volumes:
-            - type: bind
-              source: /tmp/ring
+            - type: volume
+              source: project
               destination: /project/ring
-              driver: local
-              permission: rw
-            - type: bind
-              source: /tmp/ring
-              destination: /project2/ring
               driver: local
               permission: rw
             - type: config

@@ -91,6 +91,14 @@ How the scheduler restarts a failed worker. See [Reconciliation → restart poli
 
 Applies on every runtime; a manifest can override any key for one deployment with its [`restart`](/documentation/reference/manifest#restart) block.
 
+### `[server.admission]`
+
+What deployments may ask of the host. See [Namespace security levels](/documentation/concepts/namespace-security-levels).
+
+| Field | Type | Required | Default | Purpose |
+|---|---|---|---|---|
+| `default` | string | no | `"baseline"` | The level of a namespace that has none of its own: `"privileged"`, `"baseline"` or `"restricted"`. Any other value stops the server at startup |
+
 ### `[server.dashboard]`
 
 | Field | Type | Required | Default | Purpose |

@@ -70,6 +70,11 @@ user.salt = "e2e-test-salt"
 
 [server.scheduler]
 interval = 1
+
+# The suites exercise what the runtimes do with bind mounts, host networking
+# and privileged containers, which the default baseline level refuses.
+[server.admission]
+default = "privileged"
 EOF
 
   # Runtimes are opt-in. Docker is enabled by default (the docker/ suite needs

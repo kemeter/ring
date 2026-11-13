@@ -51,6 +51,7 @@ The API rejects the deployment up front if any of these hold:
 
 | You wrote… | Why Ring rejects it |
 |---|---|
+| A namespace whose security level is not `privileged` | Host networking reaches the host. An admin sets the namespace to `privileged` first (see [Namespace security levels](/documentation/concepts/namespace-security-levels)). |
 | `ports:` is non-empty | Host networking bypasses Docker's port bindings, so `ports:` would be silently ignored. |
 | `replicas: 2` or more | All replicas would compete for the same host ports. |
 | `runtime: cloud-hypervisor` (or `firecracker`) | Host mode is Docker/Podman-only. The microVM runtimes have their own network model (per-VM /30 subnet under `10.42.0.0/16`). |

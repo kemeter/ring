@@ -192,7 +192,7 @@ A list of volume objects. **Four** types are supported:
 
 | `type` | Source | Description |
 |---|---|---|
-| `bind` | host path | Mount a directory or file from the host into the container. |
+| `bind` | host path | Mount a directory or file from the host into the container. Refused unless the namespace's [security level](/documentation/concepts/namespace-security-levels) is `privileged`. |
 | `volume` | volume name | Mount a named Docker volume (driver `local` or `nfs`). |
 | `config` | config name | Mount a file rendered from a `ring config` entry in the same namespace. |
 | `secret` | secret name | Mount a file rendered from a `ring secret` entry in the same namespace. Always read-only. |
@@ -317,7 +317,7 @@ network:
 
 **`bridge`**: the deployment is attached to a per-namespace bridge network (`ring_{namespace}`). This is the standard Docker behavior and matches what Ring did before this field existed.
 
-**`host`**: the container shares the host's network namespace directly. It can bind to host ports without `ports:` mapping, sees real client IPs, and can use multicast / broadcast. Useful for L4/L7 reverse proxies (HAProxy, Nginx as edge), packet-capture sidecars, VPN gateways (WireGuard, Tailscale), and service-discovery agents (mDNS, Consul gossip).
+**`host`**: the container shares the host's network namespace directly. It can bind to host ports without `ports:` mapping, sees real client IPs, and can use multicast / broadcast. Useful for L4/L7 reverse proxies (HAProxy, Nginx as edge), packet-capture sidecars, VPN gateways (WireGuard, Tailscale), and service-discovery agents (mDNS, Consul gossip). Refused unless the namespace's [security level](/documentation/concepts/namespace-security-levels) is `privileged`.
 
 When `mode: host`, the API rejects the deployment if:
 
@@ -523,9 +523,9 @@ config:
 | `username`, `password` | Registry credentials. Sent to the runtime on `pull`. |
 | `use_host_auth` | `true` to resolve registry credentials from the **host's** Docker config instead of inlining them. Mutually exclusive with `server`/`username`/`password`. See below. |
 | `image_pull_secret` | Name of a `Secret` (same namespace) holding registry credentials as a `dockerconfigjson` payload. Resolved and decrypted server-side before the pull. Mutually exclusive with inline credentials and `use_host_auth`. See below. |
-| `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
+| `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional, except in a `restricted` namespace, which requires a value other than `0`. |
 | `user.group` | Numeric GID. Optional. |
-| `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. |
+| `user.privileged` | Boolean. If `true`, the container is started with `HostConfig.Privileged = true`. Default `false`. Refused unless the namespace's [security level](/documentation/concepts/namespace-security-levels) is `privileged`. |
 | `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker, Podman and containerd. See below. |
 | `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`, at most `365d`. Workers on `docker`, `podman` and `containerd`. See below. |
 

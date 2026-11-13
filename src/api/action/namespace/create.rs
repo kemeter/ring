@@ -51,6 +51,7 @@ pub(crate) async fn create(
         created_at: utc.to_string(),
         updated_at: None,
         name: input.name,
+        security_level: None,
     };
 
     match namespace::create(&pool, new_namespace.clone()).await {
