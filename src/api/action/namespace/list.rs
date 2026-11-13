@@ -7,7 +7,10 @@ use crate::api::server::Db;
 use crate::models::namespace as NamespaceModel;
 
 // Scope (`namespaces:read`) is enforced centrally by the auth middleware.
-pub(crate) async fn list(State(pool): State<Db>) -> Response {
+pub(crate) async fn list(
+    State(pool): State<Db>,
+    State(configuration): State<crate::config::config::Config>,
+) -> Response {
     let mut namespaces: Vec<NamespaceOutput> = Vec::new();
 
     let list_namespaces = match NamespaceModel::find_all(&pool).await {
@@ -19,7 +22,8 @@ pub(crate) async fn list(State(pool): State<Db>) -> Response {
     };
 
     for namespace in list_namespaces.into_iter() {
-        let output = NamespaceOutput::from_to_model(namespace);
+        let output =
+            NamespaceOutput::from_to_model(namespace, configuration.server.admission.default_level);
         namespaces.push(output);
     }
 

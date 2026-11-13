@@ -214,6 +214,7 @@ fn build_cli() -> Command {
                 .subcommand(commands::namespace::list::command_config())
                 .subcommand(commands::namespace::prune::command_config())
                 .subcommand(commands::namespace::audit::command_config())
+                .subcommand(commands::namespace::update::command_config())
                 .subcommand(commands::namespace::delete::command_config()),
         )
         .subcommand(
@@ -380,6 +381,9 @@ async fn main() {
                 }
                 ("audit", sub_matches) => {
                     commands::namespace::audit::execute(sub_matches, config, &client).await;
+                }
+                ("update", sub_matches) => {
+                    commands::namespace::update::execute(sub_matches, config, &client).await;
                 }
                 ("delete", sub_matches) => {
                     commands::namespace::delete::execute(sub_matches, config, &client).await;

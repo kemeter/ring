@@ -1153,7 +1153,8 @@ When `data` changes and `name` does not, the deployments of the namespace that m
     "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "default",
     "created_at": "2026-04-15T10:00:00Z",
-    "updated_at": null
+    "updated_at": null,
+    "security_level": "baseline"
   }
 ]
 ```
@@ -1165,7 +1166,8 @@ When `data` changes and `name` does not, the deployments of the namespace that m
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "name": "production",
   "created_at": "2026-04-15T09:00:00Z",
-  "updated_at": null
+  "updated_at": null,
+  "security_level": "baseline"
 }
 ```
 
@@ -1184,7 +1186,8 @@ When `data` changes and `name` does not, the deployments of the namespace that m
   "id": "c3d4e5f6-...",
   "name": "staging",
   "created_at": "2026-04-15T14:00:00Z",
-  "updated_at": null
+  "updated_at": null,
+  "security_level": "baseline"
 }
 ```
 
@@ -1200,6 +1203,27 @@ When `data` changes and `name` does not, the deployments of the namespace that m
 - `409 Conflict`: a namespace with the same name already exists.
 
 > Namespaces are also auto-created when a deployment is applied to a non-existent namespace; calling `POST /namespaces` upfront is optional.
+
+`security_level` is the level the namespace's deployments are held to: its own, else `[server.admission] default`. See [Namespace security levels](/documentation/concepts/namespace-security-levels).
+
+### `PATCH /namespaces/{name}`
+
+Sets the namespace's security level: `privileged`, `baseline` or `restricted`, or `null` to follow `[server.admission] default` again. Requires `admin`, from a session or a token valid for every namespace: a token limited to some namespaces is refused, as it could open the host to itself.
+
+```json
+{ "security_level": "privileged" }
+```
+
+**Response:** `200 OK` with the namespace.
+
+**Validation:**
+
+| Rule | Code |
+| --- | --- |
+| `security_level` is required | `namespace.security_level.required` |
+| `security_level` is `privileged`, `baseline`, `restricted` or `null` | `namespace.security_level.unknown` |
+
+**Errors:** `403 Forbidden` without `admin` or with a token limited to some namespaces, `404 Not Found` if the namespace doesn't exist.
 
 ## Node
 

@@ -101,7 +101,7 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - **Secrets** (`/secrets`): create (the value is encrypted and never shown again) and delete. A secret still used by deployments is refused first, naming them, then can be deleted anyway
   - **Configs** (`/configs`): create, edit and delete. Each entry of the config (a file name and its contents) gets its own field, so nothing has to be escaped into JSON by hand
   - **Volumes** (`/volumes`): create (`local` or `directory` backend, optional size) and delete, guarded like secrets
-  - **Namespaces** (`/namespaces`): create and delete. A namespace that still holds deployments, secrets or configs is refused
+  - **Namespaces** (`/namespaces`): create, delete, and change the security level (admin only). Deleting a namespace that still holds deployments, secrets or configs is refused
   - **Webhooks** (`/webhooks`): create (the signing secret is shown once) and revoke
   - **Tokens** (`/tokens`): create (scopes, namespaces, expiry; the value is shown once), rotate and revoke
   - **Users** (`/users`): create (new accounts start as `viewer`), change role (which revokes the account's sessions and tokens) and delete

@@ -36,6 +36,7 @@ pub(crate) struct NamespaceInput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
+    State(configuration): State<crate::config::config::Config>,
     auth: Auth,
     Json(input): Json<NamespaceInput>,
 ) -> Response {
@@ -67,7 +68,10 @@ pub(crate) async fn create(
                 Some(&new_namespace.name),
             )
             .await;
-            let output = NamespaceOutput::from_to_model(new_namespace);
+            let output = NamespaceOutput::from_to_model(
+                new_namespace,
+                configuration.server.admission.default_level,
+            );
             (
                 StatusCode::CREATED,
                 Json(serde_json::to_value(output).unwrap()),

@@ -72,6 +72,22 @@ pub(crate) async fn security_level(
     Ok(own.flatten().unwrap_or(default))
 }
 
+/// Set the security level of namespace `name`, `None` to follow the server's
+/// default again.
+pub(crate) async fn set_security_level(
+    pool: &SqlitePool,
+    name: &str,
+    level: Option<SecurityLevel>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE namespace SET security_level = ?, updated_at = ? WHERE name = ?")
+        .bind(level)
+        .bind(chrono::Utc::now().to_string())
+        .bind(name)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// The level of every namespace that has one of its own, by name.
 pub(crate) async fn security_levels(
     pool: &SqlitePool,

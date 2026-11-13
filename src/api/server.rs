@@ -39,6 +39,7 @@ use crate::api::action::namespace::create as namespace_create;
 use crate::api::action::namespace::delete as namespace_delete;
 use crate::api::action::namespace::get as namespace_get;
 use crate::api::action::namespace::list as namespace_list;
+use crate::api::action::namespace::update as namespace_update;
 
 use crate::api::action::user::create::create as user_create;
 use crate::api::action::user::delete::delete as user_delete;
@@ -136,7 +137,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/namespaces", get(namespace_list).post(namespace_create))
         .route(
             "/namespaces/{id}",
-            get(namespace_get).delete(namespace_delete),
+            get(namespace_get)
+                .patch(namespace_update)
+                .delete(namespace_delete),
         )
         .route("/namespaces/{id}/audit", get(namespace_audit))
         .route("/configs", get(config_list).post(config_create))
