@@ -29,6 +29,7 @@ The decrypted content of `secret` and `config` volumes moves out of `/tmp/ring_c
 ```ini
 RuntimeDirectory=ring
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 ```
 
 Containers started before the upgrade still mount their files from `/tmp/ring_configs`. A config with `on_change: live` updated after the upgrade no longer reaches them: redeploy those deployments once, then delete `/tmp/ring_configs`.
