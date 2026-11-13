@@ -46,7 +46,7 @@ pub(crate) async fn get(
 #[cfg(test)]
 mod tests {
     use crate::api::server::tests::login;
-    use crate::api::server::tests::new_test_app;
+    use crate::api::server::tests::{new_test_app, new_test_app_with_pool};
     use axum::http::StatusCode;
     use axum_test::TestServer;
 
@@ -104,5 +104,35 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::OK);
         let body: serde_json::Value = response.json();
         assert!(body.get("image_digest").is_none() || body["image_digest"].is_null());
+    }
+
+    #[tokio::test]
+    async fn never_returns_the_registry_password() {
+        let (pool, app) = new_test_app_with_pool().await;
+        sqlx::query("UPDATE deployment SET config = ? WHERE id = ?")
+            .bind(r#"{"image_pull_policy":"Always","server":"registry.example.com","username":"ci","password":"hunter2"}"#)
+            .bind("658c0199-85a2-49da-86d6-1ecd2e427118")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response = server
+            .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        response.assert_status_ok();
+        assert!(!response.text().contains("hunter2"));
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["config"]["username"], "ci");
+        assert!(body["config"]["password"].is_null());
+
+        let list = server
+            .get("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+        list.assert_status_ok();
+        assert!(!list.text().contains("hunter2"));
     }
 }

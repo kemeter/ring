@@ -520,7 +520,7 @@ config:
 |---|---|
 | `image_pull_policy` | `Always` (default) or `IfNotPresent`. The third historical value `Never` skips the pull entirely. |
 | `server` | Private-registry hostname (only for non-Docker-Hub registries). |
-| `username`, `password` | Registry credentials. Sent to the runtime on `pull`. |
+| `username`, `password` | Registry credentials. Sent to the runtime on `pull`. The API never returns `password`: it reads back as `null`. |
 | `use_host_auth` | `true` to resolve registry credentials from the **host's** Docker config instead of inlining them. Mutually exclusive with `server`/`username`/`password`. See below. |
 | `image_pull_secret` | Name of a `Secret` (same namespace) holding registry credentials as a `dockerconfigjson` payload. Resolved and decrypted server-side before the pull. Mutually exclusive with inline credentials and `use_host_auth`. See below. |
 | `user.id` | Numeric UID the container runs as (forwarded to `User` in Docker config). Optional. |
@@ -529,7 +529,7 @@ config:
 | `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker, Podman and containerd. See below. |
 | `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`, at most `365d`. Workers on `docker`, `podman` and `containerd`. See below. |
 
-The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
+The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. The API never returns it. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
 
 ### `stop_timeout`: time to shut down
 

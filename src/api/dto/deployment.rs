@@ -6,6 +6,10 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 
+/// The registry password is write-only: it is stored to pull the image, but
+/// never returned, so `deployments:read` does not hand out registry
+/// credentials. It is left out rather than masked, so a client that sends back
+/// what it read cannot store a placeholder as the password.
 fn serialize_option_deployment_config<S>(
     opt: &Option<DeploymentConfig>,
     serializer: S,
@@ -14,7 +18,11 @@ where
     S: Serializer,
 {
     match opt {
-        Some(config) => config.serialize(serializer),
+        Some(config) => DeploymentConfig {
+            password: None,
+            ..config.clone()
+        }
+        .serialize(serializer),
         None => {
             let s = serializer.serialize_struct("DeploymentConfig", 0)?;
             s.end()
