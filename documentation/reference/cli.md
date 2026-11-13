@@ -312,8 +312,9 @@ command nobody can vouch for must not let `&&` proceed.
 
 > **Exec is opt-in.** The server answers `501` until `[server.exec] enabled =
 > true` is set. Because a shell can read every mounted secret and every file
-> the process can reach, the endpoint requires an `admin` token rather than
-> `deployments:write`. See [config.toml](config-toml.md#serverexec).
+> the process can reach, the endpoint requires the `deployments:exec` scope
+> rather than `deployments:write`, and a token limited to namespaces only
+> enters deployments in them. See [config.toml](config-toml.md#serverexec).
 
 ### `ring deployment events`
 
@@ -412,7 +413,7 @@ The clear token (`ring_pat_…`) is shown **once**, at creation, and never again
 
 Login sessions (`ring login`) use the same storage and format: a session is a token scoped `admin`, created automatically on login and revoked on `ring logout`. It is distinguished from a PAT by its **kind** (not by its name), so naming a PAT `session` is fine and has no special effect. Sessions are **not** shown by `ring token list` and cannot be managed by id (`ring token revoke`/`rotate`); that command lists and acts only on the PATs you created. End a session with `ring logout`.
 
-**Scopes:** `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (grants everything).
+**Scopes:** `deployments:read`, `deployments:write`, `deployments:exec`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (grants everything).
 
 ### `ring token create`
 

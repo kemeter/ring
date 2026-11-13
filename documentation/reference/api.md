@@ -446,11 +446,26 @@ Server to client:
 With `tty=true` the runtime folds stderr into `stdout`, which is what a
 terminal does. Ask for `tty=false` when you need the two apart.
 
-**Authentication.** A WebSocket handshake is a normal HTTP request, so a
-Bearer token works. Browsers cannot set headers on `WebSocket`, so they mint a
-stream ticket (`POST /auth/stream-ticket` with scope
-`deployment:exec:<id>`) and pass it as `?ticket=`. An exec ticket is bound to
-that scope alone: a ticket minted for logs cannot open a shell, and vice versa.
+**Authentication.** Requires the `deployments:exec` scope, and a token limited
+to namespaces only reaches deployments in them. The scope is separate from
+`deployments:write`, which lets a caller redeploy a service without entering
+it, and from `admin`, so a shell in one namespace can be granted without the
+rest of the server:
+
+```bash
+ring token create tenant-a-shell \
+  --scope deployments:read --scope deployments:exec --namespace tenant-a
+```
+
+A WebSocket handshake is a normal HTTP request, so a Bearer token works.
+Browsers cannot set headers on `WebSocket`, so they mint a stream ticket
+(`POST /auth/stream-ticket` with scope `deployment:exec:<id>`) and pass it as
+`?ticket=`. An exec ticket is bound to that scope alone: a ticket minted for
+logs cannot open a shell, and vice versa. Minting one asks what opening the
+stream directly would: `deployments:exec` for `deployment:exec:<id>`,
+`deployments:read` for `deployment:logs:<id>`, and the deployment's namespace
+for a token limited to namespaces (`403` otherwise, `404` for an unknown
+deployment, `400` for any other scope).
 
 **Status codes:**
 
@@ -841,11 +856,11 @@ A password change revokes the account's login sessions, except the one that made
 
 Scoped API tokens (Personal Access Tokens). A token authenticates like a session (`Authorization: Bearer ring_pat_…`) but is limited to its scopes and namespaces, can expire, and is individually revocable. The clear value is returned **once**, by `POST /tokens` and `POST /tokens/{id}/rotate`; every other response carries only the prefix.
 
-**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
+**Scopes** (`verb:resource`): `deployments:read`, `deployments:write`, `deployments:exec`, `secrets:read`, `secrets:write`, `configs:read`, `configs:write`, `volumes:read`, `volumes:write`, `namespaces:read`, `namespaces:write`, `users:read`, `users:write`, `webhooks:read`, `webhooks:write`, and `admin` (all of the above).
 
 Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`), otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
 
-All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) and `POST /auth/stream-ticket` require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation: a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
+All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation: a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
 
 ### `POST /tokens`
 

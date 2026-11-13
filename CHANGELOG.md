@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - An admin changes a namespace's security level with `ring namespace update <namespace> --security-level`, `PATCH /namespaces/{name}` or the dashboard's Namespaces page. Namespaces now report their `security_level`, and `ring namespace list` shows it
+- A `deployments:exec` scope opens a shell with `ring deployment exec` or the dashboard's terminal. Exec used to require `admin`, so giving someone a shell gave them the whole server; the new scope can be limited to namespaces like the others
 - The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
 - The dashboard can delete a deployment from its detail page, after an inline confirmation
 - The dashboard's deployment page has a terminal that opens a shell in a running instance, like `ring deployment exec`
@@ -25,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard can create users, change their role and delete them
 
 ### Security
+- A token limited to namespaces could mint a stream ticket for a deployment outside them and open its logs or a shell with it, since a ticket is not checked against namespaces when used. `POST /auth/stream-ticket` now authorises the stream it opens: the scope it needs and the deployment's namespace
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`
 - Any web page open in the browser could send requests through `ring dashboard`, which signed them with the operator's token. The local dashboard now answers only the browser that opened the link it prints, which holds a secret generated at each launch, and refuses requests from another origin or for another host name. It no longer has a login screen, and no longer adds the operator's token to `/login` and `/logout`
 - The decrypted content of `secret` and `config` volumes was written to `/tmp/ring_configs`, readable by every user of the host. It now goes to a directory only Ring's user can enter: `$RUNTIME_DIRECTORY/configs` under systemd's `RuntimeDirectory=`, else `$XDG_RUNTIME_DIR/ring/configs`, else `/var/lib/ring/configs`. The Cloud Hypervisor and Firecracker `socket_dir`, which stages the same files for the guests, is restricted to `0700` as well. Add `RuntimeDirectory=ring` to a systemd unit to keep these files in memory
@@ -32,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /deployments` and `GET /deployments/{id}` returned the registry `config.password` to any token allowed to read deployments. The API no longer returns it; it reads back as `null`
 
 ### Fixed
+- Following logs live in the dashboard needed an `admin` token, since it goes through a stream ticket that only `admin` could mint. Any token that can read the deployment can now follow its logs
 - `POST /configs` accepted any `data`, such as plain text, that no `type: config` volume could mount, and that every later `PUT` (`ring apply` included) then refused. Both now require a JSON object mapping keys to string contents, and `PUT` no longer accepts other JSON values such as arrays or numbers. Configs already stored in another shape can still be read and deleted; updating one requires fixing its `data`
 - The dashboard lost its font: it loaded Inter from `rsms.me`, which its new Content Security Policy blocks. The font is now served by the dashboard itself, so the browser no longer contacts a third party either
 - The dashboard's live log tail showed nothing: its proxy waited for a response to end before passing it on, which a followed log stream never does, and cut every request after 60 seconds. Responses are now streamed through as they come, with only a connect timeout, and WebSocket connections are relayed too

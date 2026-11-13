@@ -751,6 +751,7 @@ export function deleteUser(id: string): Promise<void> {
 export const TOKEN_SCOPES = [
   'deployments:read',
   'deployments:write',
+  'deployments:exec',
   'secrets:read',
   'secrets:write',
   'configs:read',
