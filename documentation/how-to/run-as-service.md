@@ -22,6 +22,7 @@ EnvironmentFile=/etc/ring/env
 ExecStart=/usr/local/bin/ring server start
 RuntimeDirectory=ring
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 Restart=always
 RestartSec=10
 
@@ -64,6 +65,8 @@ sudo journalctl -u ring -f
 ### Why `RuntimeDirectory=`
 
 Ring writes the decrypted content of `secret` and `config` volumes before mounting it. `RuntimeDirectory=ring` gives it `/run/ring`, an in-memory directory only Ring can enter, so that plaintext never reaches the disk. Without it, Ring falls back to `/var/lib/ring/configs`, on disk. See [Mount a secret as a file](/documentation/how-to/deploy-with-secrets#mount-a-secret-as-a-file).
+
+`RuntimeDirectoryPreserve=yes` keeps that directory when Ring stops. Otherwise systemd deletes it on `systemctl stop` while the containers mounting its files keep running, and an `on_change: live` config updated after the restart no longer reaches them: Ring writes a new file, and they still see the deleted one. The directory stays in memory, so a reboot still clears it.
 
 ### Why `EnvironmentFile` rather than `Environment=`
 
