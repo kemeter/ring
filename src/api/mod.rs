@@ -4,4 +4,6 @@ pub(crate) mod dto;
 pub(crate) mod exec_sessions;
 pub(crate) mod server;
 pub(crate) mod stream_tickets;
+#[cfg(test)]
+pub(crate) mod testing;
 pub(crate) mod validation;
