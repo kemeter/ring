@@ -146,6 +146,8 @@ pub(crate) async fn update(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::dto::config::ConfigOutput;
     use crate::api::server::tests::login;
     use crate::api::server::tests::new_test_app;
@@ -245,5 +247,35 @@ mod tests {
         assert_eq!(config.name, "multi-update");
         assert_eq!(config.data, "{\"env\": \"production\"}");
         assert_eq!(config.labels, "{\"team\": \"backend\"}");
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_update_it() {
+        let mut app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/configs",
+                serde_json::json!({
+                    "namespace": "tenant-b",
+                    "name": "app",
+                    "data": "{\"app.conf\": \"port=80\"}"
+                }),
+            )
+            .await;
+        app.act_as_pat(&["configs:write"], &["tenant-a"]).await;
+        app.put(&format!("/configs/{id}"))
+            .json(&serde_json::json!({ "name": "app", "data": "{\"app.conf\": \"port=81\"}" }))
+            .await
+            .assert_status_forbidden();
+
+        let data: String = sqlx::query_scalar("SELECT data FROM config WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            data, "{\"app.conf\": \"port=80\"}",
+            "a refused update must not write"
+        );
     }
 }

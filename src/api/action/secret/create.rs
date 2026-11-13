@@ -153,6 +153,8 @@ pub(crate) async fn create(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::login;
     use crate::api::server::tests::new_test_app;
     use axum::http::StatusCode;
@@ -361,5 +363,24 @@ mod tests {
         assert!(codes.contains(&"secret.namespace.format".to_string()));
         assert!(codes.contains(&"secret.name.format".to_string()));
         assert!(codes.contains(&"secret.value.length".to_string()));
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_create_in_it() {
+        crate::models::secret::set_test_key();
+        let mut app = TestApp::admin().await;
+        app.namespace("tenant-b").await;
+        app.act_as_pat(&["secrets:write"], &["tenant-a"]).await;
+        app.post("/secrets")
+            .json(&serde_json::json!({ "namespace": "tenant-b", "name": "db", "value": "hunter2" }))
+            .await
+            .assert_status_forbidden();
+
+        let created: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM secret WHERE namespace = 'tenant-b'")
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(created, 0, "a refused create must not write");
     }
 }

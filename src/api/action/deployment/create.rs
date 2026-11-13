@@ -1300,6 +1300,8 @@ pub(crate) async fn deploy(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use super::*;
     use crate::api::dto::namespace::NamespaceOutput;
     use crate::api::server::tests::{login, new_test_app, new_test_app_with_pool};
@@ -4658,5 +4660,30 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
         let body: serde_json::Value = response.json();
         assert_eq!(body["replicas"], 1, "{body}");
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_deploy_in_it() {
+        let mut app = TestApp::admin().await;
+        // Existing, so the refusal cannot come from the `namespaces:write`
+        // check that guards creating it on the fly.
+        app.namespace("tenant-b").await;
+        app.act_as_pat(&["deployments:write"], &["tenant-a"]).await;
+        app.post("/deployments")
+            .json(&json!({
+                "runtime": "docker",
+                "namespace": "tenant-b",
+                "name": "web",
+                "image": "nginx:alpine"
+            }))
+            .await
+            .assert_status_forbidden();
+
+        let created: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deployment WHERE namespace = 'tenant-b'")
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(created, 0, "a refused deploy must not write");
     }
 }
