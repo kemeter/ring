@@ -8,8 +8,8 @@
 //! let app = TestApp::admin().await;
 //! app.get("/deployments").await.assert_status_ok();
 //!
-//! let app = TestApp::with_pat(&["deployments:write"], &["staging"]).await;
-//! app.delete(&format!("/deployments/{prod_id}")).await.assert_status_forbidden();
+//! let app = TestApp::with_pat(&["deployments:write"], &["tenant-a"]).await;
+//! app.delete(&format!("/deployments/{other_tenant_id}")).await.assert_status_forbidden();
 //! ```
 //!
 //! Credentials are minted in the database the way `/login` and `POST /tokens`

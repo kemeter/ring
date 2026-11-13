@@ -113,6 +113,8 @@ pub(crate) async fn delete(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::{login, new_test_app};
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -286,5 +288,29 @@ mod tests {
             "config": { "image_pull_secret": "db-pass" }
         }))
         .await;
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_delete_it() {
+        crate::models::secret::set_test_key();
+        let mut app = TestApp::admin().await;
+        app.namespace("tenant-b").await;
+        let id = app
+            .create(
+                "/secrets",
+                serde_json::json!({ "namespace": "tenant-b", "name": "db", "value": "hunter2" }),
+            )
+            .await;
+        app.act_as_pat(&["secrets:write"], &["tenant-a"]).await;
+        app.delete(&format!("/secrets/{id}"))
+            .await
+            .assert_status_forbidden();
+
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM secret WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1, "a refused delete must leave the secret in place");
     }
 }

@@ -175,6 +175,8 @@ pub(crate) async fn create(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::{login, new_test_app};
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -270,5 +272,23 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_create_in_it() {
+        let mut app = TestApp::admin().await;
+        app.namespace("tenant-b").await;
+        app.act_as_pat(&["volumes:write"], &["tenant-a"]).await;
+        app.post("/volumes")
+            .json(&serde_json::json!({ "namespace": "tenant-b", "name": "data" }))
+            .await
+            .assert_status_forbidden();
+
+        let created: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM volumes WHERE namespace = 'tenant-b'")
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(created, 0, "a refused create must not write");
     }
 }

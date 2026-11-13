@@ -91,6 +91,8 @@ pub async fn get_deployment_events(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use super::*;
     use crate::api::server::tests::{login, new_test_app};
     use axum_test::TestServer;
@@ -161,5 +163,25 @@ mod tests {
             .await;
 
         response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_read_its_events() {
+        let mut app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/deployments",
+                serde_json::json!({
+                    "runtime": "docker",
+                    "namespace": "tenant-b",
+                    "name": "web",
+                    "image": "nginx:alpine"
+                }),
+            )
+            .await;
+        app.act_as_pat(&["deployments:read"], &["tenant-a"]).await;
+        app.get(&format!("/deployments/{id}/events"))
+            .await
+            .assert_status_forbidden();
     }
 }

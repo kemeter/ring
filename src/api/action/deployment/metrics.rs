@@ -73,3 +73,28 @@ pub(crate) async fn metrics(
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::api::testing::TestApp;
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_read_its_metrics() {
+        let mut app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/deployments",
+                serde_json::json!({
+                    "runtime": "docker",
+                    "namespace": "tenant-b",
+                    "name": "web",
+                    "image": "nginx:alpine"
+                }),
+            )
+            .await;
+        app.act_as_pat(&["deployments:read"], &["tenant-a"]).await;
+        app.get(&format!("/deployments/{id}/metrics"))
+            .await
+            .assert_status_forbidden();
+    }
+}
