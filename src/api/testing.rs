@@ -17,6 +17,7 @@
 //! not depend on the seeded admin's password.
 
 use crate::api::server::tests::new_test_app_with_pool;
+use crate::models::security_level::SecurityLevel;
 use crate::models::token::{self, TokenKind};
 use crate::models::users::Role;
 use axum::Router;
@@ -160,6 +161,15 @@ impl TestApp {
 
     /// Create the namespace `name`, which secrets and volumes need to exist.
     pub(crate) async fn namespace(&self, name: &str) {
+        self.create_namespace(name, None).await;
+    }
+
+    /// Create the namespace `name` at the security level `level`.
+    pub(crate) async fn namespace_at(&self, name: &str, level: SecurityLevel) {
+        self.create_namespace(name, Some(level)).await;
+    }
+
+    async fn create_namespace(&self, name: &str, security_level: Option<SecurityLevel>) {
         crate::models::namespace::create(
             &self.pool,
             crate::models::namespace::Namespace {
@@ -167,6 +177,7 @@ impl TestApp {
                 created_at: chrono::Utc::now().to_rfc3339(),
                 updated_at: None,
                 name: name.to_string(),
+                security_level,
             },
         )
         .await

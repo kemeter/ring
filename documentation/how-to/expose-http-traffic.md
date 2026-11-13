@@ -51,6 +51,8 @@ deployments:
         permission: rw
 ```
 
+These `bind` volumes, the Docker socket above all, give Sozune the host. Ring refuses them unless `production` is at the `privileged` [security level](/documentation/concepts/namespace-security-levels).
+
 Create the config file on the host before applying:
 
 ```bash

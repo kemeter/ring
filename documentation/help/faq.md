@@ -146,7 +146,7 @@ server {
 
 ### How do I persist data?
 
-Use a `bind` volume:
+Use a `bind` volume, in a namespace at the `privileged` [security level](/documentation/concepts/namespace-security-levels):
 
 ```yaml
 deployments:

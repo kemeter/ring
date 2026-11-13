@@ -843,7 +843,7 @@ deployments:
 
 Three `type` values are supported:
 
-- `bind`: host path mount
+- `bind`: host path mount, in a `privileged` namespace only (see [Namespace security levels](/documentation/concepts/namespace-security-levels))
 - `volume`: named Docker volume
 - `config`: file rendered from a Ring config and mounted at `destination`. Requires a `key` field that selects which entry in the config to mount; `permission` is forced to `ro`.
 

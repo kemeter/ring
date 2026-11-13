@@ -442,6 +442,23 @@ async fn scale(
             );
             return;
         }
+        Some(StartBlocker::Forbidden { message }) => {
+            error!("[{}] admission_denied: {}", deployment.id, message);
+            record_start_failure(
+                policy,
+                kind,
+                deployment,
+                state,
+                counter,
+                now,
+                rng,
+                Reason::SpecRejected,
+                "admission_denied",
+                message.clone(),
+                StartFailure::NeedsOperator,
+            );
+            return;
+        }
     }
 
     match driver.start_instance(deployment, resolved_mounts).await {
@@ -547,6 +564,13 @@ pub(crate) enum StartBlocker {
         /// Reading it failed rather than finding it missing: retried on the
         /// ordinary delays instead of those for an operator error.
         transient: bool,
+    },
+    /// Its namespace's security level does not allow what it asks of the
+    /// host, typically after the level was lowered: refused like a spec the
+    /// runtime rejects, until an operator changes one or the other.
+    Forbidden {
+        /// Names each field at fault.
+        message: String,
     },
     /// The deployment it replaces still has instances, which may hold the same
     /// volumes: waited for, without counting as a failure.
@@ -1127,6 +1151,38 @@ mod tests {
             &mut rng,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_start_its_namespace_forbids_backs_off_as_spec_rejected() {
+        let driver = FakeDriver::default();
+        let mut state = RestartState::default();
+        let mut d = worker(1);
+        d.set_status(DeploymentStatus::Pending);
+        let blocker = StartBlocker::Forbidden {
+            message: "config.user.privileged: not allowed".to_string(),
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+
+        d = reconcile(
+            &driver,
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            d,
+            &[],
+            Some(&blocker),
+            &mut state,
+            now(),
+            &mut rng,
+        )
+        .await;
+
+        assert_eq!(driver.starts(), 0);
+        assert_eq!(
+            (d.status, d.reason),
+            (DeploymentStatus::BackingOff, Some(Reason::SpecRejected))
+        );
+        assert!(reasons(&d).contains(&"admission_denied".to_string()));
     }
 
     #[tokio::test]

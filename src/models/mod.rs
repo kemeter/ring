@@ -9,6 +9,7 @@ pub(crate) mod namespace;
 pub(crate) mod query;
 pub(crate) mod restart_state;
 pub(crate) mod secret;
+pub(crate) mod security_level;
 pub(crate) mod token;
 pub(crate) mod users;
 pub(crate) mod volume;
