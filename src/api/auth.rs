@@ -176,11 +176,16 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         "/webhooks" => Some("webhooks:write"),
         "/webhooks/{id}" => Some("webhooks:write"),
         "/webhooks/{id}/events" => Some("webhooks:read"),
-        // Token lifecycle and stream-ticket minting are full-access actions:
-        // a PAT may only reach them when it carries `admin`. This closes the
-        // privilege-escalation path where a `users:write` PAT could rotate an
-        // `admin` token (and receive a fresh admin secret) or revoke siblings.
-        "/tokens" | "/tokens/{id}" | "/tokens/{id}/rotate" | "/auth/stream-ticket" => Some("admin"),
+        // Token lifecycle is a full-access action: a PAT may only reach it
+        // when it carries `admin`. This closes the privilege-escalation path
+        // where a `users:write` PAT could rotate an `admin` token (and receive
+        // a fresh admin secret) or revoke siblings.
+        "/tokens" | "/tokens/{id}" | "/tokens/{id}/rotate" => Some("admin"),
+        // Both tickets open a stream of one deployment, so minting needs at
+        // least `deployments:read`. The handler then authorises the requested
+        // ticket itself (`deployments:exec` for a shell) against the
+        // deployment's namespace, since a ticket skips this gate when used.
+        "/auth/stream-ticket" => Some("deployments:read"),
         // Exec runs arbitrary code inside a workload, so it has a scope of its
         // own rather than riding on `deployments:write`: an operator who may
         // redeploy a service has not thereby been granted a shell inside it,
@@ -658,7 +663,7 @@ mod tests {
         );
         assert_eq!(
             scope_for_route(&Method::POST, "/auth/stream-ticket"),
-            Some("admin")
+            Some("deployments:read")
         );
         // Unmapped routes return None → middleware denies PATs by default.
         assert_eq!(scope_for_route(&Method::GET, "/some/new/route"), None);
@@ -678,18 +683,6 @@ mod tests {
         assert_eq!(ticket_scope_from_path("/deployments/a/b/logs"), None);
         assert_eq!(ticket_scope_from_path("/secrets/abc"), None);
         assert_eq!(ticket_scope_from_path("/"), None);
-    }
-
-    #[test]
-    fn minting_a_stream_ticket_requires_admin() {
-        // A ticket skips the scope gate when presented, so whoever can mint
-        // one decides what it unlocks. That is only safe while minting is
-        // itself admin-only: loosen this and an exec ticket becomes a
-        // privilege-escalation path to a shell.
-        assert_eq!(
-            scope_for_route(&Method::POST, "/auth/stream-ticket"),
-            Some("admin")
-        );
     }
 
     #[test]
@@ -783,17 +776,16 @@ mod tests {
         let mint = server
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&json!({ "scope": "deployment:logs:dep1" }))
+            .json(&json!({ "scope": "deployment:logs:658c0199-85a2-49da-86d6-1ecd2e427118" }))
             .await;
         let ticket = mint.json::<serde_json::Value>()["ticket"]
             .as_str()
             .unwrap()
             .to_string();
 
-        // Same deployment id as the ticket scope → middleware lets it through
-        // (handler then returns empty logs for an unknown deployment).
+        // Same deployment id as the ticket scope → middleware lets it through.
         let res = server
-            .get("/deployments/dep1/logs")
+            .get("/deployments/658c0199-85a2-49da-86d6-1ecd2e427118/logs")
             .add_query_param("ticket", &ticket)
             .await;
         assert_eq!(res.status_code(), StatusCode::OK);
@@ -808,16 +800,16 @@ mod tests {
         let mint = server
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&json!({ "scope": "deployment:logs:dep1" }))
+            .json(&json!({ "scope": "deployment:logs:658c0199-85a2-49da-86d6-1ecd2e427118" }))
             .await;
         let ticket = mint.json::<serde_json::Value>()["ticket"]
             .as_str()
             .unwrap()
             .to_string();
 
-        // Ticket minted for dep1 must NOT open dep2's logs.
+        // A ticket minted for one deployment must NOT open another's logs.
         let res = server
-            .get("/deployments/dep2/logs")
+            .get("/deployments/759d1280-95a3-40da-86d6-2fde3f538229/logs")
             .add_query_param("ticket", &ticket)
             .await;
         assert_eq!(res.status_code(), StatusCode::UNAUTHORIZED);
@@ -832,7 +824,7 @@ mod tests {
         let mint = server
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", token))
-            .json(&json!({ "scope": "deployment:logs:dep1" }))
+            .json(&json!({ "scope": "deployment:logs:658c0199-85a2-49da-86d6-1ecd2e427118" }))
             .await;
         let ticket = mint.json::<serde_json::Value>()["ticket"]
             .as_str()
@@ -961,11 +953,11 @@ mod tests {
             .await;
         assert_eq!(create.status_code(), StatusCode::FORBIDDEN);
 
-        // Cannot mint a stream ticket either (also admin-gated now).
+        // Cannot mint a stream ticket either: that needs `deployments:read`.
         let ticket = server
             .post("/auth/stream-ticket")
             .add_header("Authorization", format!("Bearer {}", pat))
-            .json(&json!({ "scope": "deployment:logs:dep1" }))
+            .json(&json!({ "scope": "deployment:logs:658c0199-85a2-49da-86d6-1ecd2e427118" }))
             .await;
         assert_eq!(ticket.status_code(), StatusCode::FORBIDDEN);
     }
