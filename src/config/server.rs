@@ -57,6 +57,10 @@ pub(crate) struct AdmissionConfig {
     /// bind mounts of host paths.
     #[serde(default, rename = "default")]
     pub(crate) default_level: crate::models::security_level::SecurityLevel,
+    /// Host directories a bind volume may mount below at every level, for
+    /// storage the platform manages itself. Empty unless set.
+    #[serde(default)]
+    pub(crate) allowed_host_paths: Vec<crate::models::security_level::HostPathPrefix>,
 }
 
 /// `[server.restart]`: how the scheduler restarts failed workloads. See
@@ -856,5 +860,19 @@ mod admission_tests {
     #[test]
     fn an_unknown_level_is_refused() {
         assert!(toml::from_str::<ServerConfig>("[admission]\ndefault = \"root\"").is_err());
+    }
+
+    #[test]
+    fn allowed_host_paths_are_checked_on_load() {
+        let cfg: ServerConfig =
+            toml::from_str("[admission]\nallowed_host_paths = [\"/mnt/zerofs\"]").unwrap();
+        assert_eq!(cfg.admission.allowed_host_paths.len(), 1);
+        assert!(
+            toml::from_str::<ServerConfig>("[admission]\nallowed_host_paths = [\"/\"]").is_err()
+        );
+        assert!(
+            toml::from_str::<ServerConfig>("[admission]\nallowed_host_paths = [\"/mnt/../etc\"]")
+                .is_err()
+        );
     }
 }

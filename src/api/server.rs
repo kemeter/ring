@@ -329,6 +329,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn new_test_app_with_pool() -> (sqlx::SqlitePool, Router) {
+        new_test_app_with_config(Config::default()).await
+    }
+
+    /// Like [`new_test_app_with_pool`], with the server running `configuration`.
+    pub(crate) async fn new_test_app_with_config(
+        configuration: Config,
+    ) -> (sqlx::SqlitePool, Router) {
         // Every runtime registered, as on a node where all of them are up:
         // `POST /deployments` refuses a runtime the node did not load.
         let mut runtimes: std::collections::HashMap<
@@ -347,7 +354,7 @@ pub(crate) mod tests {
                 std::sync::Arc::new(crate::hypervisor::mock::MockRuntime::healthy()),
             );
         }
-        new_test_app_with_runtimes(std::sync::Arc::new(runtimes)).await
+        new_test_app_with(std::sync::Arc::new(runtimes), configuration).await
     }
 
     /// Like [`new_test_app_with_pool`], with the given runtimes registered, for
@@ -355,8 +362,13 @@ pub(crate) mod tests {
     pub(crate) async fn new_test_app_with_runtimes(
         runtimes: RuntimeMap,
     ) -> (sqlx::SqlitePool, Router) {
-        let configuration = Config::default();
+        new_test_app_with(runtimes, Config::default()).await
+    }
 
+    async fn new_test_app_with(
+        runtimes: RuntimeMap,
+        configuration: Config,
+    ) -> (sqlx::SqlitePool, Router) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")

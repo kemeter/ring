@@ -8,14 +8,18 @@
 //! - `restricted` also requires a container to run as a user other than root.
 //!
 //! A namespace without a level of its own gets the server's default,
-//! `[server.admission] default`. The level is checked when a deployment is
-//! submitted and again before the scheduler starts an instance, so lowering a
-//! namespace's level also stops its deployments from starting new instances
-//! that it no longer allows.
+//! `[server.admission] default`. `[server.admission] allowed_host_paths` lets
+//! `baseline` and `restricted` bind a host path under one of its prefixes,
+//! for a platform that mounts storage it manages into its tenants.
+//!
+//! The level is checked when a deployment is submitted and again before the
+//! scheduler starts an instance, so lowering a namespace's level also stops
+//! its deployments from starting new instances that it no longer allows.
 
 use crate::models::deployments::{Deployment, NetworkMode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::path::{Component, Path};
 use std::str::FromStr;
 
 #[derive(
@@ -61,6 +65,52 @@ impl FromStr for SecurityLevel {
     }
 }
 
+/// A host directory that `baseline` and `restricted` let a bind volume mount,
+/// with everything below it. Absolute and without `.` or `..`, and never `/`,
+/// which would allow every path: that is `privileged`.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(try_from = "String")]
+pub(crate) struct HostPathPrefix(String);
+
+impl TryFrom<String> for HostPathPrefix {
+    type Error = String;
+
+    fn try_from(path: String) -> Result<Self, Self::Error> {
+        if !is_plain_absolute(&path) {
+            return Err(format!(
+                "allowed host path '{path}' must be absolute, without '.' or '..'"
+            ));
+        }
+        if Path::new(&path).parent().is_none() {
+            return Err(
+                "allowed host path '/' would allow every path; set the namespace to privileged instead"
+                    .to_string(),
+            );
+        }
+        Ok(Self(path))
+    }
+}
+
+impl HostPathPrefix {
+    /// Whether `source` is this directory or lies below it. Compared component
+    /// by component, so `/srv/data` does not hold `/srv/database`, and a source
+    /// with `..` is never held, as it could climb out.
+    fn holds(&self, source: &str) -> bool {
+        is_plain_absolute(source) && Path::new(source).starts_with(&self.0)
+    }
+}
+
+/// An absolute path with no `.` or `..` component.
+fn is_plain_absolute(path: &str) -> bool {
+    path.starts_with('/')
+        && !path
+            .split('/')
+            .any(|segment| segment == "." || segment == "..")
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+}
+
 /// One thing a deployment asks for that its namespace's level does not allow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Breach {
@@ -79,8 +129,13 @@ fn runs_on_the_host_kernel(runtime: &str) -> bool {
 }
 
 /// Everything in `deployment` that `level` does not allow, empty when it is
-/// admitted.
-pub(crate) fn breaches(deployment: &Deployment, level: SecurityLevel) -> Vec<Breach> {
+/// admitted. A bind volume whose source lies under one of `allowed_host_paths`
+/// is allowed at every level.
+pub(crate) fn breaches(
+    deployment: &Deployment,
+    level: SecurityLevel,
+    allowed_host_paths: &[HostPathPrefix],
+) -> Vec<Breach> {
     let mut breaches = Vec::new();
     if level == SecurityLevel::Privileged {
         return breaches;
@@ -119,16 +174,21 @@ pub(crate) fn breaches(deployment: &Deployment, level: SecurityLevel) -> Vec<Bre
     let volumes: Vec<serde_json::Value> =
         serde_json::from_str(&deployment.volumes).unwrap_or_default();
     for (index, volume) in volumes.iter().enumerate() {
-        if volume.get("type").and_then(|t| t.as_str()) == Some("bind") {
-            breaches.push(Breach {
-                field: format!("volumes[{index}].type"),
-                code: "deployment.volumes.bind.forbidden",
-                message: format!(
-                    "a bind volume mounts a path of the host, which the {level} level of namespace '{}' does not allow; use a named volume instead",
-                    deployment.namespace
-                ),
-            });
+        if volume.get("type").and_then(|t| t.as_str()) != Some("bind") {
+            continue;
         }
+        let source = volume.get("source").and_then(|s| s.as_str()).unwrap_or("");
+        if allowed_host_paths.iter().any(|prefix| prefix.holds(source)) {
+            continue;
+        }
+        breaches.push(Breach {
+            field: format!("volumes[{index}].type"),
+            code: "deployment.volumes.bind.forbidden",
+            message: format!(
+                "a bind volume mounts a path of the host, which the {level} level of namespace '{}' does not allow; use a named volume instead",
+                deployment.namespace
+            ),
+        });
     }
 
     if level == SecurityLevel::Restricted && runs_on_the_host_kernel(&deployment.runtime) {
@@ -214,7 +274,10 @@ mod tests {
     }
 
     fn codes(deployment: &Deployment, level: SecurityLevel) -> Vec<&'static str> {
-        breaches(deployment, level).iter().map(|b| b.code).collect()
+        breaches(deployment, level, &[])
+            .iter()
+            .map(|b| b.code)
+            .collect()
     }
 
     /// A deployment asking for every host-level option.
@@ -232,12 +295,12 @@ mod tests {
 
     #[test]
     fn privileged_admits_everything() {
-        assert!(breaches(&reaching_the_host(), SecurityLevel::Privileged).is_empty());
+        assert!(breaches(&reaching_the_host(), SecurityLevel::Privileged, &[]).is_empty());
     }
 
     #[test]
     fn baseline_refuses_each_way_to_the_host() {
-        let found = breaches(&reaching_the_host(), SecurityLevel::Baseline);
+        let found = breaches(&reaching_the_host(), SecurityLevel::Baseline, &[]);
         let fields: Vec<&str> = found.iter().map(|b| b.field.as_str()).collect();
         assert_eq!(
             fields,
@@ -279,6 +342,77 @@ mod tests {
             ..deployment()
         };
         assert!(codes(&vm, SecurityLevel::Restricted).is_empty());
+    }
+
+    fn binding(source: &str) -> Deployment {
+        Deployment {
+            volumes: serde_json::json!([{
+                "type": "bind", "source": source, "destination": "/data",
+                "driver": "local", "permission": "rw"
+            }])
+            .to_string(),
+            ..deployment()
+        }
+    }
+
+    fn allowed(paths: &[&str]) -> Vec<HostPathPrefix> {
+        paths
+            .iter()
+            .map(|p| HostPathPrefix::try_from(p.to_string()).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_bind_under_an_allowed_host_path_is_admitted_at_every_level() {
+        let zerofs = allowed(&["/mnt/zerofs"]);
+        for source in ["/mnt/zerofs", "/mnt/zerofs/acme/files", "/mnt/zerofs/acme/"] {
+            for level in [SecurityLevel::Baseline, SecurityLevel::Restricted] {
+                let found: Vec<_> = breaches(&binding(source), level, &zerofs)
+                    .into_iter()
+                    .map(|b| b.code)
+                    .collect();
+                assert!(
+                    !found.contains(&"deployment.volumes.bind.forbidden"),
+                    "{source} at {level}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_bind_that_climbs_out_or_merely_shares_a_prefix_is_refused() {
+        let zerofs = allowed(&["/mnt/zerofs"]);
+        for source in [
+            "/mnt/zerofs/../../var/run/docker.sock",
+            "/mnt/zerofs/acme/../../../etc",
+            "/mnt/zerofs/./acme",
+            "/mnt/zerofsx",
+            "/mnt",
+            "mnt/zerofs/acme",
+            "",
+        ] {
+            assert_eq!(
+                breaches(&binding(source), SecurityLevel::Baseline, &zerofs)
+                    .into_iter()
+                    .map(|b| b.code)
+                    .collect::<Vec<_>>(),
+                ["deployment.volumes.bind.forbidden"],
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_allowed_host_path_is_absolute_plain_and_not_the_root() {
+        for path in ["/mnt/zerofs", "/srv/data/"] {
+            assert!(HostPathPrefix::try_from(path.to_string()).is_ok(), "{path}");
+        }
+        for path in ["/", "//", "mnt/zerofs", "/mnt/../etc", "/mnt/./zerofs", ""] {
+            assert!(
+                HostPathPrefix::try_from(path.to_string()).is_err(),
+                "{path}"
+            );
+        }
     }
 
     #[test]

@@ -98,6 +98,7 @@ What deployments may ask of the host. See [Namespace security levels](/documenta
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
 | `default` | string | no | `"baseline"` | The level of a namespace that has none of its own: `"privileged"`, `"baseline"` or `"restricted"`. Any other value stops the server at startup |
+| `allowed_host_paths` | list of strings | no | `[]` | Host directories that a `bind` volume may mount, with everything below them, at every level. Each must be absolute, without `.` or `..`, and not `/`, or the server stops at startup |
 
 ### `[server.dashboard]`
 

@@ -30,6 +30,19 @@ ring namespace update production --security-level default
 
 The dashboard's **Namespaces** page does the same, and `ring namespace list` shows each namespace's level. Only an admin can change a level, and only from a session or a token valid for every namespace: a token limited to `tenant-a` cannot open `tenant-a` to the host.
 
+## Host paths a platform manages
+
+A platform that mounts storage it manages into its tenants, such as a shared filesystem with one directory per tenant, can allow those paths without making the tenants' namespaces `privileged`:
+
+```toml
+[server.admission]
+allowed_host_paths = ["/mnt/zerofs"]
+```
+
+A `bind` volume whose source is one of these directories, or lies below one, is then allowed at every level. Any other host path is still refused. A source with `..` is always refused, and paths are compared directory by directory, so `/mnt/zerofsx` is not under `/mnt/zerofs`.
+
+Ring compares the path as written and does not follow symbolic links. Allow only directories whose content the platform controls: a symbolic link inside one that points elsewhere on the host would be followed when the container starts.
+
 Upgrading to the version that introduced levels pins every namespace already running a privileged container, a host-network deployment or a bind volume to `privileged`, so nothing stops. See [UPGRADE.md](https://github.com/kemeter/ring/blob/main/UPGRADE.md).
 
 ## When the level is checked
