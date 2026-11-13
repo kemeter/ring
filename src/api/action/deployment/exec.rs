@@ -1064,14 +1064,47 @@ mod tests {
                 }),
             )
             .await;
-        // Exec requires `admin`; the namespace list still bounds such a PAT.
-        let pat = app.pat(&["admin"], &["tenant-a"]).await;
+        let pat = app.pat(&["deployments:exec"], &["tenant-a"]).await;
 
         let res = ws_server(app.router())
             .get_websocket(&format!("/deployments/{id}/exec?command=/bin/sh"))
             .authorization_bearer(pat)
             .await;
 
+        assert_eq!(res.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn exec_scope_reaches_a_deployment_in_its_namespace() {
+        let app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/deployments",
+                serde_json::json!({
+                    "runtime": "docker",
+                    "namespace": "tenant-a",
+                    "name": "web",
+                    "image": "nginx:alpine"
+                }),
+            )
+            .await;
+        let server = ws_server(app.router());
+
+        // Past authorisation, the handler looks for a running instance; the
+        // mock runtime has none, hence 404 rather than 401 or 403.
+        let exec = app.pat(&["deployments:exec"], &["tenant-a"]).await;
+        let res = server
+            .get_websocket(&format!("/deployments/{id}/exec?command=/bin/sh"))
+            .authorization_bearer(exec)
+            .await;
+        assert_eq!(res.status_code(), StatusCode::NOT_FOUND);
+
+        // `deployments:write` lets a caller redeploy, not enter the workload.
+        let write = app.pat(&["deployments:write"], &["tenant-a"]).await;
+        let res = server
+            .get_websocket(&format!("/deployments/{id}/exec?command=/bin/sh"))
+            .authorization_bearer(write)
+            .await;
         assert_eq!(res.status_code(), StatusCode::FORBIDDEN);
     }
 }

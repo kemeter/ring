@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - An admin changes a namespace's security level with `ring namespace update <namespace> --security-level`, `PATCH /namespaces/{name}` or the dashboard's Namespaces page. Namespaces now report their `security_level`, and `ring namespace list` shows it
+- A `deployments:exec` scope opens a shell with `ring deployment exec` or the dashboard's terminal. Exec used to require `admin`, so giving someone a shell gave them the whole server; the new scope can be limited to namespaces like the others
 - The dashboard can create a deployment, from a form or as the raw `POST /deployments` body
 - The dashboard can delete a deployment from its detail page, after an inline confirmation
 - The dashboard's deployment page has a terminal that opens a shell in a running instance, like `ring deployment exec`

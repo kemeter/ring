@@ -181,16 +181,13 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         // privilege-escalation path where a `users:write` PAT could rotate an
         // `admin` token (and receive a fresh admin secret) or revoke siblings.
         "/tokens" | "/tokens/{id}" | "/tokens/{id}/rotate" | "/auth/stream-ticket" => Some("admin"),
-        // Exec runs arbitrary code inside a workload, so it is `admin` and not
-        // `deployments:write`: an operator who may redeploy a service has not
-        // thereby been granted a shell inside it, where it can read every
-        // mounted secret and every file the process can reach.
-        //
-        // Deny-by-default already lands on the same answer for an unmapped
-        // route, but only as a side effect. Stating it here means the decision
-        // survives a future change to that fallback, and says which of the two
-        // scopes was chosen on purpose.
-        "/deployments/{id}/exec" => Some("admin"),
+        // Exec runs arbitrary code inside a workload, so it has a scope of its
+        // own rather than riding on `deployments:write`: an operator who may
+        // redeploy a service has not thereby been granted a shell inside it,
+        // where it can read every mounted secret and every file the process
+        // can reach. Being separate from `admin`, it can be granted on one
+        // namespace without handing over the rest of the server.
+        "/deployments/{id}/exec" => Some("deployments:exec"),
         _ => None,
     }
 }
@@ -696,14 +693,14 @@ mod tests {
     }
 
     #[test]
-    fn exec_route_requires_admin_not_deployments_write() {
+    fn exec_route_requires_its_own_scope_not_deployments_write() {
         // Exec is a shell inside the workload: it reads every mounted secret
         // and every file the process can reach. `deployments:write` is the
         // tempting mapping and the wrong one, since it would hand a shell to
         // every operator who may redeploy a service.
         assert_eq!(
             scope_for_route(&Method::GET, "/deployments/{id}/exec"),
-            Some("admin")
+            Some("deployments:exec")
         );
         // Read-only siblings must stay read-only.
         assert_eq!(

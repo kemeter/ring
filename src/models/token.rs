@@ -58,6 +58,7 @@ const PREFIX_DISPLAY_LEN: usize = TOKEN_PREFIX.len() + 6;
 pub(crate) const KNOWN_SCOPES: &[&str] = &[
     "deployments:read",
     "deployments:write",
+    "deployments:exec",
     "secrets:read",
     "secrets:write",
     "configs:read",

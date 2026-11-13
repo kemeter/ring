@@ -96,7 +96,7 @@ Local mode is always available; there's nothing to disable, it only runs when yo
   - **Health check history**: recorded probe results over time (time, type, success/failed/timeout status, message), sourced from `GET /deployments/{id}/health-checks`. Shown only when the deployment has health checks configured.
   - Streamed logs (live tail) and a recent-events timeline
   - A **Delete** button that tears the deployment down after an inline confirmation (`DELETE /deployments/{id}`, requires the `deployments:write` scope)
-  - A **Terminal** card that opens a shell in a running instance (`GET /deployments/{id}/exec` over a WebSocket). It starts `/bin/sh` unless you type another command, and lets you pick the instance when there are several. Nothing runs until you press **Connect**. It needs `[server.exec] enabled = true` on the server and a user with the `admin` scope, like `ring deployment exec`
+  - A **Terminal** card that opens a shell in a running instance (`GET /deployments/{id}/exec` over a WebSocket). It starts `/bin/sh` unless you type another command, and lets you pick the instance when there are several. Nothing runs until you press **Connect**. It needs `[server.exec] enabled = true` on the server and the `deployments:exec` scope (an admin has it), like `ring deployment exec`
 - Resource pages, with a **New** button and row actions confirmed inline:
   - **Secrets** (`/secrets`): create (the value is encrypted and never shown again) and delete. A secret still used by deployments is refused first, naming them, then can be deleted anyway
   - **Configs** (`/configs`): create, edit and delete. Each entry of the config (a file name and its contents) gets its own field, so nothing has to be escaped into JSON by hand
