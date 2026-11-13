@@ -20,8 +20,26 @@ permissions:
   contents: write  # required to upload assets to the release
 
 jobs:
+  # The tag is typed by hand on a manual run. Expressions are only ever passed
+  # to scripts through `env:`, never interpolated into them, so a crafted
+  # value cannot run as shell; this check also refuses anything that is not a
+  # version tag before a build or an upload uses it.
+  check-tag:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anything but a version tag
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not a version tag such as v0.8.0"
+            exit 1
+          fi
+
   ring-server:
     name: Build ring (x86_64-unknown-linux-gnu)
+    needs: check-tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -51,9 +69,10 @@ jobs:
         run: cargo build --release --bin ring
 
       - name: Package
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           PKG="ring-${TAG}-x86_64-unknown-linux-gnu"
           mkdir -p "dist/${PKG}"
           cp target/release/ring "dist/${PKG}/"
@@ -70,6 +89,7 @@ jobs:
 
   ring-agent:
     name: Build ring-agent and ring-init (x86_64-unknown-linux-musl)
+    needs: check-tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -93,9 +113,10 @@ jobs:
         run: cargo build --release --target x86_64-unknown-linux-musl -p ring-agent -p ring-init
 
       - name: Package
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           for BIN in ring-agent ring-init; do
             PKG="${BIN}-${TAG}-x86_64-unknown-linux-musl"
             mkdir -p "dist/${PKG}"
@@ -126,14 +147,14 @@ jobs:
       - name: Upload assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           shopt -s globstar
           # `gh release upload` normally infers the repo from the local git
           # remote, but this job has no checkout (just downloaded artifacts),
           # so we pass --repo explicitly to skip the git lookup.
           gh release upload "$TAG" \
-            --repo "${{ github.repository }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --clobber \
             artifacts/**/*.tar.gz artifacts/**/*.tar.gz.sha256
