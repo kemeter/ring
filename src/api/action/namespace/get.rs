@@ -7,10 +7,15 @@ use crate::models::namespace;
 use axum::http::StatusCode;
 
 // Scope (`namespaces:read`) is enforced centrally by the auth middleware.
-pub(crate) async fn get(Path(id): Path<String>, State(pool): State<Db>) -> impl IntoResponse {
+pub(crate) async fn get(
+    Path(id): Path<String>,
+    State(pool): State<Db>,
+    State(configuration): State<crate::config::config::Config>,
+) -> impl IntoResponse {
     match namespace::find(&pool, &id).await {
         Ok(Some(ns)) => {
-            let output = NamespaceOutput::from_to_model(ns);
+            let output =
+                NamespaceOutput::from_to_model(ns, configuration.server.admission.default_level);
             Json(output).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

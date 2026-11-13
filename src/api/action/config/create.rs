@@ -136,6 +136,8 @@ pub(crate) async fn create(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::dto::config::ConfigOutput;
     use crate::api::server::tests::login;
     use crate::api::server::tests::new_test_app;
@@ -260,5 +262,25 @@ mod tests {
             .collect();
         assert!(codes.contains(&"config.namespace.length".to_string()));
         assert!(codes.contains(&"config.data.length".to_string()));
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_create_in_it() {
+        let app = TestApp::with_pat(&["configs:write"], &["tenant-a"]).await;
+        app.post("/configs")
+            .json(&json!({
+                "namespace": "tenant-b",
+                "name": "app",
+                "data": "{\"app.conf\": \"port=80\"}"
+            }))
+            .await
+            .assert_status_forbidden();
+
+        let created: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM config WHERE namespace = 'tenant-b'")
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(created, 0, "a refused create must not write");
     }
 }

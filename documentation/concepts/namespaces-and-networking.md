@@ -51,7 +51,7 @@ network:
   mode: host
 ```
 
-The container then bypasses the bridge entirely: it sees the host's interfaces, can bind privileged ports without a NAT hop, and observes real client IPs. The trade-off is no network isolation and no `ports:` mapping (the process binds the host directly). Ring restricts host mode to a single replica and rejects deployments that combine it with `ports:`.
+The container then bypasses the bridge entirely: it sees the host's interfaces, can bind privileged ports without a NAT hop, and observes real client IPs. The trade-off is no network isolation and no `ports:` mapping (the process binds the host directly). Ring restricts host mode to a single replica, rejects deployments that combine it with `ports:`, and only allows it in a namespace whose [security level](/documentation/concepts/namespace-security-levels) is `privileged`.
 
 This is the right tool for L4/L7 reverse proxies, VPN gateways, mDNS / multicast workloads, and packet-capture sidecars. For everything else, keep the default `bridge`. See [how-to: use host network mode](/documentation/how-to/use-host-network).
 
@@ -93,4 +93,5 @@ For production-grade routing, run a reverse proxy as a Ring deployment in front 
 - [Architecture](/documentation/concepts/architecture): where the runtime sits
 - [Runtimes](/documentation/concepts/runtimes): Docker vs CH trade-offs
 - [How-to: isolate namespaces and route traffic](/documentation/how-to/isolate-namespaces-network)
+- [Namespace security levels](/documentation/concepts/namespace-security-levels): what a namespace's deployments may ask of the host
 - [Manifest reference: namespace](/documentation/reference/manifest#namespace)

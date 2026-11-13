@@ -144,6 +144,7 @@ Once you're past the basics, pick a [how-to guide](#how-to-guides) for the speci
 - [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle)
 - [Runtimes](/documentation/concepts/runtimes)
 - [Namespaces and networking](/documentation/concepts/namespaces-and-networking)
+- [Namespace security levels](/documentation/concepts/namespace-security-levels)
 - [Secrets and encryption](/documentation/concepts/secrets-encryption)
 - [Health checks (design)](/documentation/concepts/health-checks-design)
 - [Why not Kubernetes](/documentation/concepts/why-not-kubernetes)

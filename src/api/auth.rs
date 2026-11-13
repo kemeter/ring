@@ -132,6 +132,9 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         "/namespaces" if is_read => Some("namespaces:read"),
         "/namespaces" => Some("namespaces:write"),
         "/namespaces/{id}" if is_read => Some("namespaces:read"),
+        // Changing a namespace's security level decides whether its
+        // deployments may reach the host, which is an admin's call.
+        "/namespaces/{id}" if *method == Method::PATCH => Some("admin"),
         "/namespaces/{id}" => Some("namespaces:write"),
         "/namespaces/{id}/audit" => Some("namespaces:read"),
         // Volumes. These were previously unmapped, which deny-by-default turned

@@ -130,6 +130,12 @@ deployments:
         permission: ro
 ```
 
+The `bind` volumes, the Docker socket above all, give Traefik the host. Ring refuses them unless `production` is at the `privileged` [security level](/documentation/concepts/namespace-security-levels). An admin sets it once:
+
+```bash
+ring namespace update production --security-level privileged
+```
+
 > **Same-namespace constraint.** Traefik can only route to containers it can reach on its Docker network. The simplest setup keeps Traefik and its backends in the same Ring namespace. If you want Traefik in a `routing` namespace and backends in `production`, you must `docker network connect ring_production <traefik-container>` manually.
 
 ### Nginx with manual upstreams

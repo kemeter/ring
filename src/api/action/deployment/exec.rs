@@ -646,6 +646,8 @@ fn decode(data: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use super::*;
     use crate::api::server::tests::{login, new_test_app};
     use axum::Router;
@@ -1046,5 +1048,30 @@ mod tests {
 
         let limiter = ExecSessionLimiter::new(&ExecConfig::default());
         assert!(!limiter.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_exec_in_it() {
+        let app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/deployments",
+                serde_json::json!({
+                    "runtime": "docker",
+                    "namespace": "tenant-b",
+                    "name": "web",
+                    "image": "nginx:alpine"
+                }),
+            )
+            .await;
+        // Exec requires `admin`; the namespace list still bounds such a PAT.
+        let pat = app.pat(&["admin"], &["tenant-a"]).await;
+
+        let res = ws_server(app.router())
+            .get_websocket(&format!("/deployments/{id}/exec?command=/bin/sh"))
+            .authorization_bearer(pat)
+            .await;
+
+        assert_eq!(res.status_code(), StatusCode::FORBIDDEN);
     }
 }

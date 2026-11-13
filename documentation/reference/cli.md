@@ -604,6 +604,18 @@ For Docker-runtime deployments, each namespace gets a dedicated Docker bridge ne
 ring namespace list
 ```
 
+Shows each namespace's security level.
+
+### `ring namespace update`
+
+Change a namespace's security level. Admin only.
+
+```bash
+ring namespace update <NAMESPACE> --security-level <privileged|baseline|restricted|default>
+```
+
+`default` makes the namespace follow `[server.admission] default` again. See [Namespace security levels](/documentation/concepts/namespace-security-levels).
+
 ### `ring namespace prune`
 
 Remove inactive deployments from a namespace.
@@ -843,7 +855,7 @@ deployments:
 
 Three `type` values are supported:
 
-- `bind`: host path mount
+- `bind`: host path mount, in a `privileged` namespace only (see [Namespace security levels](/documentation/concepts/namespace-security-levels))
 - `volume`: named Docker volume
 - `config`: file rendered from a Ring config and mounted at `destination`. Requires a `key` field that selects which entry in the config to mount; `permission` is forced to `ro`.
 

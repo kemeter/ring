@@ -11,6 +11,17 @@ The server used to listen on the `host` of the current context, which `ring init
 - If clients reach Ring from other machines, put a TLS reverse proxy in front of `127.0.0.1:3030` (see the [FAQ](documentation/help/faq.md#how-do-i-manage-tls)), or set `bind = "0.0.0.0"` under `[server]` (or `RING_BIND=0.0.0.0`) to keep the previous exposure.
 - If the `host` of your context is your LAN IP, the CLI on the same machine no longer reaches the server: set it to `127.0.0.1`.
 
+### Namespace security levels
+
+A privileged container, host networking or a `bind` volume gives a deployment the host, and with it every namespace. They are now refused unless the deployment's namespace is at the `privileged` security level (see [Namespace security levels](documentation/concepts/namespace-security-levels.md)). Namespaces without a level of their own follow `[server.admission] default`, which is `baseline`.
+
+The upgrade sets every namespace that holds such a deployment to `privileged`, so nothing stops. `ring namespace list` shows them: lower the ones that should not reach the host with `ring namespace update <namespace> --security-level baseline`. To keep the previous behavior everywhere instead, set:
+
+```toml
+[server.admission]
+default = "privileged"
+```
+
 ### Secret and config files
 
 The decrypted content of `secret` and `config` volumes moves out of `/tmp/ring_configs` to a directory only Ring's user can enter (see [Mount a secret as a file](documentation/how-to/deploy-with-secrets.md#mount-a-secret-as-a-file)). Under systemd, add to the unit:

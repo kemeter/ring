@@ -45,6 +45,8 @@ pub(crate) async fn get(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::login;
     use crate::api::server::tests::{new_test_app, new_test_app_with_pool};
     use axum::http::StatusCode;
@@ -134,5 +136,25 @@ mod tests {
             .await;
         list.assert_status_ok();
         assert!(!list.text().contains("hunter2"));
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_read_it() {
+        let mut app = TestApp::admin().await;
+        let id = app
+            .create(
+                "/deployments",
+                serde_json::json!({
+                    "runtime": "docker",
+                    "namespace": "tenant-b",
+                    "name": "web",
+                    "image": "nginx:alpine"
+                }),
+            )
+            .await;
+        app.act_as_pat(&["deployments:read"], &["tenant-a"]).await;
+        app.get(&format!("/deployments/{id}"))
+            .await
+            .assert_status_forbidden();
     }
 }

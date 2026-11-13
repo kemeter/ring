@@ -25,6 +25,7 @@ use crate::models::deployments::{
     NetworkMode, Resource, default_image_pull_policy,
 };
 use crate::models::namespace;
+use crate::models::security_level;
 use crate::models::volume::{OnChange, ReloadSignal};
 
 fn default_replicas() -> u32 {
@@ -947,45 +948,6 @@ pub(crate) async fn create(
         );
     }
 
-    // Auto-create namespace if it doesn't exist
-    match namespace::find_by_name(&pool, &input.namespace).await {
-        Ok(None) => {
-            // Creating a namespace is an administrative act gated by
-            // `namespaces:write`. Deploying into a namespace that does not exist
-            // yet must not become a side door around that: without this check,
-            // `deployments:write` alone would let an operator create namespaces
-            // simply by naming one, and the boundary we document would not hold.
-            if let Err(response) = require_scope(&auth.source, "namespaces:write") {
-                return response;
-            }
-
-            let new_namespace = namespace::Namespace {
-                id: Uuid::new_v4().to_string(),
-                created_at: Utc::now().to_string(),
-                updated_at: None,
-                name: input.namespace.clone(),
-            };
-            if let Err(e) = namespace::create(&pool, new_namespace).await
-                && !e.to_string().contains("UNIQUE constraint failed")
-            {
-                error!("Failed to create namespace '{}': {}", input.namespace, e);
-                let message = Message {
-                    message: "Failed to create namespace".to_string(),
-                };
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-            }
-            info!("Namespace '{}' created automatically", input.namespace);
-        }
-        Ok(Some(_)) => {}
-        Err(e) => {
-            error!("Failed to check namespace '{}': {}", input.namespace, e);
-            let message = Message {
-                message: "Internal server error".to_string(),
-            };
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
-        }
-    }
-
     let volumes = match serde_json::to_string(&input.volumes) {
         Ok(json_str) => json_str,
         Err(e) => {
@@ -1032,6 +994,76 @@ pub(crate) async fn create(
         network: input.network.clone(),
         restart: input.restart.clone(),
     };
+
+    // What the deployment asks of the host is held to its namespace's
+    // security level before anything is stored, the namespace included.
+    let level = match namespace::security_level(
+        &pool,
+        &input.namespace,
+        configuration.server.admission.default_level,
+    )
+    .await
+    {
+        Ok(level) => level,
+        Err(e) => {
+            error!(
+                "Failed to read the security level of '{}': {}",
+                input.namespace, e
+            );
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+        }
+    };
+    let breaches = security_level::breaches(&deployment, level);
+    if !breaches.is_empty() {
+        let mut violations = ViolationList::new();
+        for breach in breaches {
+            violations.push(Violation::new(breach.field, breach.message, breach.code));
+        }
+        return violations.into_response();
+    }
+
+    // Auto-create namespace if it doesn't exist
+    match namespace::find_by_name(&pool, &input.namespace).await {
+        Ok(None) => {
+            // Creating a namespace is an administrative act gated by
+            // `namespaces:write`. Deploying into a namespace that does not exist
+            // yet must not become a side door around that: without this check,
+            // `deployments:write` alone would let an operator create namespaces
+            // simply by naming one, and the boundary we document would not hold.
+            if let Err(response) = require_scope(&auth.source, "namespaces:write") {
+                return response;
+            }
+
+            let new_namespace = namespace::Namespace {
+                id: Uuid::new_v4().to_string(),
+                created_at: Utc::now().to_string(),
+                updated_at: None,
+                name: input.namespace.clone(),
+                security_level: None,
+            };
+            if let Err(e) = namespace::create(&pool, new_namespace).await
+                && !e.to_string().contains("UNIQUE constraint failed")
+            {
+                error!("Failed to create namespace '{}': {}", input.namespace, e);
+                let message = Message {
+                    message: "Failed to create namespace".to_string(),
+                };
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+            }
+            info!("Namespace '{}' created automatically", input.namespace);
+        }
+        Ok(Some(_)) => {}
+        Err(e) => {
+            error!("Failed to check namespace '{}': {}", input.namespace, e);
+            let message = Message {
+                message: "Internal server error".to_string(),
+            };
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(message)).into_response();
+        }
+    }
 
     match deploy(&pool, deployment, params.force).await {
         Ok(deployment) => {
@@ -1300,9 +1332,12 @@ pub(crate) async fn deploy(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use super::*;
     use crate::api::dto::namespace::NamespaceOutput;
     use crate::api::server::tests::{login, new_test_app, new_test_app_with_pool};
+    use crate::models::security_level::SecurityLevel;
     use axum_test::{TestResponse, TestServer};
     use serde_json::json;
 
@@ -1331,7 +1366,7 @@ mod tests {
         // virtio-fs covers all three volume types on the CH runtime, so the
         // API no longer rejects them. The runtime layer is responsible for
         // spawning virtiofsd and enriching cloud-init at boot.
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["ring"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -1636,7 +1671,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_volumes() {
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["ring"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -1957,7 +1992,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_valid_bind_volume() {
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["ring"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -2045,7 +2080,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_multiple_volumes_mixed_types() {
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["ring"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -3168,7 +3203,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_with_host_network_mode() {
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["edge"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -3193,7 +3228,7 @@ mod tests {
     async fn create_host_network_mode_accepted_on_podman() {
         // Podman shares the Docker-compatible lifecycle and honours
         // `NetworkMode: host`, so host mode must be accepted on podman too.
-        let app = new_test_app().await;
+        let app = app_privileged_in(&["edge"]).await;
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
 
@@ -4527,9 +4562,26 @@ mod tests {
         assert!(autoscale_runtime_violation("docker", false).is_none());
     }
 
+    /// A test app where `namespaces` exist at the `privileged` level, for
+    /// tests about host-level options rather than about what a level allows.
+    async fn app_privileged_in(namespaces: &[&str]) -> axum::Router {
+        let app = TestApp::anonymous().await;
+        for name in namespaces {
+            app.namespace_at(name, SecurityLevel::Privileged).await;
+        }
+        app.router()
+    }
+
     /// POST `body` and return the status and the violation codes.
     async fn create_codes(body: serde_json::Value) -> (StatusCode, Vec<String>) {
-        let app = new_test_app().await;
+        create_codes_in(new_test_app().await, body).await
+    }
+
+    /// [`create_codes`] against `app`.
+    async fn create_codes_in(
+        app: axum::Router,
+        body: serde_json::Value,
+    ) -> (StatusCode, Vec<String>) {
         let token = login(app.clone(), "admin", "changeme").await;
         let server = TestServer::new(app);
         let response: TestResponse = server
@@ -4561,10 +4613,12 @@ mod tests {
             })
         };
 
-        let (status, codes) = create_codes(manifest(1)).await;
+        let (status, codes) =
+            create_codes_in(app_privileged_in(&["edge"]).await, manifest(1)).await;
         assert_eq!(status, StatusCode::CREATED, "{codes:?}");
 
-        let (status, codes) = create_codes(manifest(2)).await;
+        let (status, codes) =
+            create_codes_in(app_privileged_in(&["edge"]).await, manifest(2)).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(codes, ["deployment.replicas.host_network_conflict"]);
     }
@@ -4582,10 +4636,12 @@ mod tests {
             })
         };
 
-        let (status, codes) = create_codes(manifest(1)).await;
+        let (status, codes) =
+            create_codes_in(app_privileged_in(&["edge"]).await, manifest(1)).await;
         assert_eq!(status, StatusCode::CREATED, "{codes:?}");
 
-        let (status, codes) = create_codes(manifest(2)).await;
+        let (status, codes) =
+            create_codes_in(app_privileged_in(&["edge"]).await, manifest(2)).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(codes, ["deployment.autoscale.host_network_conflict"]);
     }
@@ -4658,5 +4714,109 @@ mod tests {
         assert_eq!(response.status_code(), StatusCode::CREATED);
         let body: serde_json::Value = response.json();
         assert_eq!(body["replicas"], 1, "{body}");
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_deploy_in_it() {
+        let mut app = TestApp::admin().await;
+        // Existing, so the refusal cannot come from the `namespaces:write`
+        // check that guards creating it on the fly.
+        app.namespace("tenant-b").await;
+        app.act_as_pat(&["deployments:write"], &["tenant-a"]).await;
+        app.post("/deployments")
+            .json(&json!({
+                "runtime": "docker",
+                "namespace": "tenant-b",
+                "name": "web",
+                "image": "nginx:alpine"
+            }))
+            .await
+            .assert_status_forbidden();
+
+        let created: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM deployment WHERE namespace = 'tenant-b'")
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(created, 0, "a refused deploy must not write");
+    }
+
+    /// A deployment reaching the host three ways: a privileged container,
+    /// the host's network and a bind mount of the Docker socket.
+    fn reaching_the_host(namespace: &str) -> serde_json::Value {
+        json!({
+            "runtime": "docker",
+            "name": "agent",
+            "namespace": namespace,
+            "image": "alpine:3",
+            "config": { "user": { "privileged": true } },
+            "network": { "mode": "host" },
+            "volumes": [{
+                "type": "bind",
+                "source": "/var/run/docker.sock",
+                "destination": "/var/run/docker.sock",
+                "driver": "local",
+                "permission": "rw"
+            }]
+        })
+    }
+
+    #[tokio::test]
+    async fn a_new_namespace_refuses_what_reaches_the_host() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let (status, codes) = create_codes_in(app, reaching_the_host("tenant-a")).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            codes,
+            [
+                "deployment.config.user.privileged.forbidden",
+                "deployment.network.mode.forbidden",
+                "deployment.volumes.bind.forbidden",
+            ]
+        );
+        // Refused before anything is stored, the namespace included.
+        let namespace = crate::models::namespace::find_by_name(&pool, "tenant-a")
+            .await
+            .unwrap();
+        assert!(namespace.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_privileged_namespace_admits_what_reaches_the_host() {
+        let app = app_privileged_in(&["tenant-a"]).await;
+        let (status, codes) = create_codes_in(app, reaching_the_host("tenant-a")).await;
+        assert_eq!(status, StatusCode::CREATED, "{codes:?}");
+    }
+
+    #[tokio::test]
+    async fn a_restricted_namespace_requires_a_non_root_user() {
+        let app = TestApp::admin().await;
+        app.namespace_at("tenant-a", SecurityLevel::Restricted)
+            .await;
+        let manifest = |user: serde_json::Value| {
+            json!({
+                "runtime": "docker",
+                "name": "web",
+                "namespace": "tenant-a",
+                "image": "nginx:1.27",
+                "config": { "user": user }
+            })
+        };
+
+        let as_root = app
+            .post("/deployments")
+            .json(&manifest(json!({ "id": 0 })))
+            .await;
+        as_root.assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            as_root.json::<serde_json::Value>()["violations"][0]["code"],
+            "deployment.config.user.id.root_forbidden"
+        );
+
+        app.post("/deployments")
+            .json(&manifest(json!({ "id": 1000 })))
+            .await
+            .assert_status(StatusCode::CREATED);
     }
 }

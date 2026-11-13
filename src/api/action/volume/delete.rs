@@ -107,6 +107,8 @@ pub(crate) async fn delete(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::{login, new_test_app};
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -301,5 +303,28 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_delete_it() {
+        let mut app = TestApp::admin().await;
+        app.namespace("tenant-b").await;
+        let id = app
+            .create(
+                "/volumes",
+                serde_json::json!({ "namespace": "tenant-b", "name": "data" }),
+            )
+            .await;
+        app.act_as_pat(&["volumes:write"], &["tenant-a"]).await;
+        app.delete(&format!("/volumes/{id}"))
+            .await
+            .assert_status_forbidden();
+
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM volumes WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1, "a refused delete must leave the volume in place");
     }
 }

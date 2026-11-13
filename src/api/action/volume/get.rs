@@ -66,6 +66,8 @@ pub(crate) async fn get(
 
 #[cfg(test)]
 mod tests {
+    use crate::api::testing::TestApp;
+
     use crate::api::server::tests::{login, new_test_app};
     use axum::http::StatusCode;
     use axum_test::TestServer;
@@ -82,5 +84,21 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn pat_limited_to_another_namespace_cannot_read_it() {
+        let mut app = TestApp::admin().await;
+        app.namespace("tenant-b").await;
+        let id = app
+            .create(
+                "/volumes",
+                serde_json::json!({ "namespace": "tenant-b", "name": "data" }),
+            )
+            .await;
+        app.act_as_pat(&["volumes:read"], &["tenant-a"]).await;
+        app.get(&format!("/volumes/{id}"))
+            .await
+            .assert_status_forbidden();
     }
 }

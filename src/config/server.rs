@@ -31,6 +31,8 @@ pub(crate) struct ServerConfig {
     pub(crate) exec: ExecConfig,
     #[serde(default)]
     pub(crate) restart: RestartConfig,
+    #[serde(default)]
+    pub(crate) admission: AdmissionConfig,
 }
 
 /// Loopback: reachable from this host only.
@@ -45,6 +47,16 @@ impl ServerConfig {
             .filter(|b| !b.is_empty())
             .unwrap_or(DEFAULT_BIND)
     }
+}
+
+/// `[server.admission]`: what a deployment may ask of the host.
+#[derive(Deserialize, Debug, Clone, Default)]
+pub(crate) struct AdmissionConfig {
+    /// The security level of a namespace that has none of its own. Defaults to
+    /// `baseline`, which refuses privileged containers, host networking and
+    /// bind mounts of host paths.
+    #[serde(default, rename = "default")]
+    pub(crate) default_level: crate::models::security_level::SecurityLevel,
 }
 
 /// `[server.restart]`: how the scheduler restarts failed workloads. See
@@ -821,5 +833,28 @@ mod bind_tests {
     #[test]
     fn bind_sets_the_listen_address() {
         assert_eq!(parse("bind = \"0.0.0.0\"").bind_host(), "0.0.0.0");
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    use crate::models::security_level::SecurityLevel;
+
+    #[test]
+    fn namespaces_default_to_baseline() {
+        let cfg: ServerConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg.admission.default_level, SecurityLevel::Baseline);
+    }
+
+    #[test]
+    fn the_default_level_is_configurable() {
+        let cfg: ServerConfig = toml::from_str("[admission]\ndefault = \"privileged\"").unwrap();
+        assert_eq!(cfg.admission.default_level, SecurityLevel::Privileged);
+    }
+
+    #[test]
+    fn an_unknown_level_is_refused() {
+        assert!(toml::from_str::<ServerConfig>("[admission]\ndefault = \"root\"").is_err());
     }
 }
