@@ -3,6 +3,7 @@ pub(crate) mod get;
 pub(crate) mod list;
 pub(crate) mod revoke;
 pub(crate) mod rotate;
+pub(crate) mod update;
 pub(crate) mod validation;
 
 pub(crate) use create::create;
@@ -10,6 +11,7 @@ pub(crate) use get::get;
 pub(crate) use list::list;
 pub(crate) use revoke::revoke;
 pub(crate) use rotate::rotate;
+pub(crate) use update::update;
 
 use crate::api::server::Db;
 use crate::api::validation::problem_response;

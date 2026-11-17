@@ -860,7 +860,7 @@ Scoped API tokens (Personal Access Tokens). A token authenticates like a session
 
 Every endpoint maps to a required scope, enforced centrally before the request reaches the handler: a token must hold the matching scope (or `admin`), otherwise `403 Forbidden`. The mapping is deny-by-default, so a route with no scope mapping is unreachable by a token. When the action targets a namespace, the token must also be scoped to it: this namespace boundary is checked against the resource's *actual* namespace (e.g. reading or deleting by id verifies the loaded resource's namespace, not just the request body), and list endpoints only ever return resources in the token's namespaces. A login session (a human Bearer token) is unscoped and reaches everything, so this is fully backward compatible.
 
-All token-management routes (`POST/GET /tokens`, `GET/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation: a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
+All token-management routes (`POST/GET /tokens`, `GET/PATCH/DELETE /tokens/{id}`, `POST /tokens/{id}/rotate`) require the `admin` scope. Rotation in particular mints a fresh clear secret carrying the existing token's scopes, so it is gated identically to creation: a lesser-scoped token cannot rotate an `admin` token into a new admin secret.
 
 ### `POST /tokens`
 
@@ -926,6 +926,18 @@ Lists the caller's own tokens (never the secret).
 ### `GET /tokens/{id}`
 
 Returns a single token you own (without the secret). A token you don't own returns `404 Not Found`, since the endpoint never confirms another user's token exists.
+
+### `PATCH /tokens/{id}`
+
+Replaces the scopes of a token you own, keeping its value: every holder of the token gets the new scopes on its next request, with no secret to redistribute. The scopes are validated as at creation, and replace the old ones entirely.
+
+**Request body:**
+
+```json
+{ "scopes": ["deployments:read", "volumes:read"] }
+```
+
+**Response:** `200 OK` with the token (without the secret). An unknown scope returns `422`, a token you don't own `404`, and a revoked token `409 Conflict`.
 
 ### `DELETE /tokens/{id}`
 

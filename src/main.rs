@@ -255,7 +255,8 @@ fn build_cli() -> Command {
                 .subcommand(commands::token::list::command_config())
                 .subcommand(commands::token::create::command_config())
                 .subcommand(commands::token::revoke::command_config())
-                .subcommand(commands::token::rotate::command_config()),
+                .subcommand(commands::token::rotate::command_config())
+                .subcommand(commands::token::update::command_config()),
         )
         .subcommand(
             Command::new("webhook")
@@ -465,6 +466,9 @@ async fn main() {
                 }
                 ("rotate", sub_matches) => {
                     commands::token::rotate::execute(sub_matches, config, &client).await;
+                }
+                ("update", sub_matches) => {
+                    commands::token::update::execute(sub_matches, config, &client).await;
                 }
                 _ => {}
             }

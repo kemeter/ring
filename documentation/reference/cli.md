@@ -465,6 +465,14 @@ ring token rotate <ID>
 
 Revokes the token and mints a new one with the same name, scopes, namespaces and expiry. The new clear value is printed on stdout (shown once).
 
+### `ring token update`
+
+```bash
+ring token update <ID> --scope <verb:resource> [--scope ...]
+```
+
+Replaces the token's scopes with exactly the ones given, keeping its value. Use it when a consumer needs one more scope: nothing has to be redistributed, unlike after a rotation.
+
 ## Webhooks
 
 Webhooks let an external endpoint receive Ring events by HTTP POST instead of polling the API. Each webhook subscribes to a set of event kinds (or all of them) and is delivered through a durable queue with retry and dead-lettering, so a transient outage on the receiver doesn't drop events.
