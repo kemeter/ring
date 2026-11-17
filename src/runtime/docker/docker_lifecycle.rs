@@ -164,6 +164,14 @@ impl DockerLifecycle {
 
 #[async_trait]
 impl RuntimeLifecycle for DockerLifecycle {
+    async fn remove_volume(
+        &self,
+        name: &str,
+        namespace: &str,
+    ) -> Result<crate::hypervisor::lifecycle_trait::VolumeRemoval, String> {
+        super::container::remove_named_volume(&self.docker, name, namespace).await
+    }
+
     async fn release_namespaces(&self, active: &std::collections::HashSet<String>) {
         super::container::release_namespace_networks(&self.docker, active).await;
     }
