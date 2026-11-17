@@ -1,7 +1,7 @@
 use crate::api::dto::stats::InstanceStatsOutput;
 use crate::hypervisor::error::RuntimeError;
 use crate::hypervisor::instance_driver::{InstanceDriver, Observation};
-use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle};
+use crate::hypervisor::lifecycle_trait::{Log, RuntimeLifecycle, VolumeRemoval};
 use crate::models::deployments::Deployment;
 use crate::models::health_check::{HealthCheck, HealthCheckStatus};
 use crate::models::volume::{ReloadSignal, ResolvedMount};
@@ -18,6 +18,8 @@ pub(crate) struct MockRuntime {
     started_at: std::collections::HashMap<String, chrono::DateTime<chrono::Utc>>,
     removed: Arc<Mutex<Vec<String>>>,
     refuse_removal: bool,
+    volume_removal: VolumeRemoval,
+    removed_volumes: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 impl MockRuntime {
@@ -29,6 +31,8 @@ impl MockRuntime {
             started_at: std::collections::HashMap::new(),
             removed: Arc::default(),
             refuse_removal: false,
+            volume_removal: VolumeRemoval::Absent,
+            removed_volumes: Arc::default(),
         }
     }
 
@@ -40,6 +44,8 @@ impl MockRuntime {
             started_at: std::collections::HashMap::new(),
             removed: Arc::default(),
             refuse_removal: false,
+            volume_removal: VolumeRemoval::Absent,
+            removed_volumes: Arc::default(),
         }
     }
 
@@ -67,6 +73,17 @@ impl MockRuntime {
     }
 
     /// Every instance id passed to `remove_instance`.
+    /// What `remove_volume` answers, every call being recorded in
+    /// `removed_volume_log`.
+    pub(crate) fn with_volume_removal(mut self, outcome: VolumeRemoval) -> Self {
+        self.volume_removal = outcome;
+        self
+    }
+
+    pub(crate) fn removed_volume_log(&self) -> Arc<Mutex<Vec<(String, String)>>> {
+        self.removed_volumes.clone()
+    }
+
     pub(crate) fn removed_log(&self) -> Arc<Mutex<Vec<String>>> {
         self.removed.clone()
     }
@@ -106,6 +123,14 @@ impl InstanceDriver for MockRuntime {
 
 #[async_trait]
 impl RuntimeLifecycle for MockRuntime {
+    async fn remove_volume(&self, name: &str, namespace: &str) -> Result<VolumeRemoval, String> {
+        self.removed_volumes
+            .lock()
+            .unwrap()
+            .push((name.to_string(), namespace.to_string()));
+        Ok(self.volume_removal)
+    }
+
     async fn list_instances(&self, _deployment_id: String, _status: &str) -> Vec<String> {
         Vec::new()
     }

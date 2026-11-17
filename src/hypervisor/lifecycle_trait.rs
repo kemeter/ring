@@ -230,10 +230,32 @@ pub(crate) fn extract_date(log: &str) -> Option<String> {
     Some(date.to_string())
 }
 
+/// What became of a named volume's data when Ring was asked to remove it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VolumeRemoval {
+    /// The runtime held the volume and has deleted it, data included.
+    Removed,
+    /// The runtime holds no volume of that name: nothing to delete.
+    Absent,
+    /// A container, even a stopped one, still mounts it. Retry once the
+    /// deployments that used it have had their instances removed.
+    InUse,
+    /// A volume of that name exists but was not created by Ring for this
+    /// namespace. Its data is left alone: volume names are host-wide, and it
+    /// may be another namespace's, or the operator's own.
+    NotOwned,
+}
+
 #[async_trait]
 pub(crate) trait RuntimeLifecycle:
     crate::hypervisor::instance_driver::InstanceDriver
 {
+    /// Delete the data of the named volume `name` that Ring provisioned for
+    /// `namespace`. Runtimes with no named volumes have nothing to delete.
+    async fn remove_volume(&self, _name: &str, _namespace: &str) -> Result<VolumeRemoval, String> {
+        Ok(VolumeRemoval::Absent)
+    }
+
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String>;
 
     /// Resolve the running instance ids for many deployments at once, keyed by

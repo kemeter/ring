@@ -1,5 +1,6 @@
 use super::{DockerImage, ImagePullPolicy, ImageReference, parse_image_reference, tiny_id};
 use crate::hypervisor::error::RuntimeError;
+use crate::hypervisor::lifecycle_trait::VolumeRemoval;
 use crate::models::deployments::{
     Deployment, EnvValue, NetworkMode, parse_cpu_string, parse_memory_string,
 };
@@ -322,6 +323,52 @@ async fn pull_image(
 /// name already exists returns the existing volume rather than erroring, so this
 /// is safe to call on every (re)deploy. Existing volumes keep their original
 /// options, which is the intended "preserve data across deploys" behaviour.
+/// Delete a named volume Ring provisioned for `namespace`, with its data.
+///
+/// Volume names are host-wide, so the labels `ensure_named_volume` sets are what
+/// says whose it is: a volume Ring did not create, or created for another
+/// namespace, is reported as not owned and kept.
+pub(crate) async fn remove_named_volume(
+    docker: &Docker,
+    name: &str,
+    namespace: &str,
+) -> Result<VolumeRemoval, String> {
+    let volume = match docker.inspect_volume(name).await {
+        Ok(volume) => volume,
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => return Ok(VolumeRemoval::Absent),
+        Err(e) => return Err(format!("failed to inspect volume '{}': {}", name, e)),
+    };
+
+    let labels = volume.labels;
+    let owned = labels.get("ring.managed").map(String::as_str) == Some("true")
+        && labels.get("ring.namespace").map(String::as_str) == Some(namespace);
+    if !owned {
+        return Ok(VolumeRemoval::NotOwned);
+    }
+
+    match docker
+        .remove_volume(name, None::<bollard::query_parameters::RemoveVolumeOptions>)
+        .await
+    {
+        Ok(()) => {
+            info!(
+                "Removed named volume '{}' of namespace '{}'",
+                name, namespace
+            );
+            Ok(VolumeRemoval::Removed)
+        }
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => Ok(VolumeRemoval::Absent),
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 409, ..
+        }) => Ok(VolumeRemoval::InUse),
+        Err(e) => Err(format!("failed to remove volume '{}': {}", name, e)),
+    }
+}
+
 async fn ensure_named_volume(
     docker: &Docker,
     name: &str,
@@ -876,6 +923,93 @@ mod tests {
         let names = ["ring_kept", "ring_gone", "ring_", "bridge", "other_gone"].map(String::from);
 
         assert_eq!(orphan_namespace_networks(names, &active), vec!["ring_gone"]);
+    }
+
+    /// Against a real daemon: only a volume Ring created for the namespace is
+    /// deleted, never while a container mounts it, and an absent one is no error.
+    #[tokio::test]
+    async fn removing_a_named_volume_spares_the_unowned_and_the_mounted() {
+        use crate::runtime::docker::test_support::{daemon, ensure_image};
+        use bollard::query_parameters::{
+            CreateContainerOptionsBuilder, RemoveContainerOptionsBuilder,
+        };
+
+        let Some(docker) = daemon().await else {
+            eprintln!("skipping: no Docker daemon");
+            return;
+        };
+        if !ensure_image(&docker).await {
+            eprintln!("skipping: could not obtain the test image");
+            return;
+        }
+
+        let suffix = super::super::tiny_id();
+        let owned = format!("ring-test-owned-{suffix}");
+        let foreign = format!("ring-test-foreign-{suffix}");
+
+        ensure_named_volume(&docker, &owned, "local", "tenant-a", "cache")
+            .await
+            .unwrap();
+        ensure_named_volume(&docker, &foreign, "local", "tenant-b", "cache")
+            .await
+            .unwrap();
+
+        // Another namespace's volume is not this namespace's to delete.
+        assert_eq!(
+            remove_named_volume(&docker, &foreign, "tenant-a").await,
+            Ok(VolumeRemoval::NotOwned)
+        );
+        assert!(docker.inspect_volume(&foreign).await.is_ok());
+
+        // Mounted by a container, even a stopped one: kept, and said so.
+        let container = format!("ring-test-mount-{suffix}");
+        docker
+            .create_container(
+                Some(
+                    CreateContainerOptionsBuilder::new()
+                        .name(&container)
+                        .build(),
+                ),
+                ContainerCreateBody {
+                    image: Some(crate::runtime::docker::test_support::TEST_IMAGE.to_string()),
+                    host_config: Some(HostConfig {
+                        binds: Some(vec![format!("{owned}:/data")]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            remove_named_volume(&docker, &owned, "tenant-a").await,
+            Ok(VolumeRemoval::InUse)
+        );
+
+        docker
+            .remove_container(
+                &container,
+                Some(RemoveContainerOptionsBuilder::new().force(true).build()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            remove_named_volume(&docker, &owned, "tenant-a").await,
+            Ok(VolumeRemoval::Removed)
+        );
+        assert!(docker.inspect_volume(&owned).await.is_err());
+        assert_eq!(
+            remove_named_volume(&docker, &owned, "tenant-a").await,
+            Ok(VolumeRemoval::Absent)
+        );
+
+        docker
+            .remove_volume(
+                &foreign,
+                None::<bollard::query_parameters::RemoveVolumeOptions>,
+            )
+            .await
+            .unwrap();
     }
 
     /// Works on its own networks only: the real release would also remove the
