@@ -53,7 +53,7 @@ Store the token as a masked secret (e.g. a GitHub Actions secret `RING_TOKEN`) a
 
 ## List, revoke and rotate
 
-Token management (list, get, create, revoke, rotate) is an administrative action: it needs a full-access login session or an `admin`-scoped token. A data-plane token scoped to, say, `deployments:write` cannot manage tokens (including its own), so a leaked low-privilege token can't mint or rotate itself into a stronger one.
+Token management (list, get, create, update, revoke, rotate) is an administrative action: it needs a full-access login session or an `admin`-scoped token. A data-plane token scoped to, say, `deployments:write` cannot manage tokens (including its own), so a leaked low-privilege token can't mint or rotate itself into a stronger one.
 
 ```bash
 ring token list
@@ -76,6 +76,12 @@ NEW=$(ring token rotate <ID>)
 
 `<ID>` comes from `ring token list`.
 
+When a consumer only needs more (or fewer) scopes, update the token instead of rotating it: its value stays the same, so nothing has to be redeployed. The scopes you pass replace the old ones entirely:
+
+```bash
+ring token update <ID> --scope deployments:read --scope volumes:read
+```
+
 ## Good practices
 
 - **One token per consumer.** A token per pipeline/agent means revoking one doesn't break the others, and `last_used_at` tells you who's still active.
@@ -83,4 +89,4 @@ NEW=$(ring token rotate <ID>)
 - **Set an expiry.** A token that never expires is a liability; `--expires 90d` and a rotation reminder cost nothing.
 - **Read-only by default.** Only grant `:write` scopes to consumers that actually mutate state.
 
-Every create, revoke and rotate is recorded in Ring's audit log, so the token lifecycle is auditable after the fact.
+Every create, update, revoke and rotate is recorded in Ring's audit log, so the token lifecycle is auditable after the fact.

@@ -314,6 +314,23 @@ pub(crate) async fn revoke(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Erro
     Ok(())
 }
 
+/// Replace the scopes of a live token. Its value, and so every caller holding
+/// it, stays as it is: what it may do changes, not who holds it.
+pub(crate) async fn update_scopes(
+    pool: &SqlitePool,
+    id: &str,
+    scopes: &[String],
+) -> Result<(), sqlx::Error> {
+    let scopes_json = serde_json::to_string(scopes).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query("UPDATE token SET scopes = ? WHERE id = ? AND revoked_at IS NULL")
+        .bind(&scopes_json)
+        .bind(id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
 /// Rotate: revoke the existing token and mint a new one carrying the same
 /// name/scopes/namespaces/expiry. Returns the new clear value.
 pub(crate) async fn rotate(

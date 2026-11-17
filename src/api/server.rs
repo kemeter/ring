@@ -57,6 +57,7 @@ use crate::api::action::token::get as token_get;
 use crate::api::action::token::list as token_list;
 use crate::api::action::token::revoke as token_revoke;
 use crate::api::action::token::rotate as token_rotate;
+use crate::api::action::token::update as token_update;
 
 use crate::api::action::volume::create as volume_create;
 use crate::api::action::volume::delete as volume_delete;
@@ -150,7 +151,10 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/secrets", get(secret_list).post(secret_create))
         .route("/secrets/{id}", get(secret_get).delete(secret_delete))
         .route("/tokens", get(token_list).post(token_create))
-        .route("/tokens/{id}", get(token_get).delete(token_revoke))
+        .route(
+            "/tokens/{id}",
+            get(token_get).patch(token_update).delete(token_revoke),
+        )
         .route("/tokens/{id}/rotate", post(token_rotate))
         .route("/volumes", get(volume_list).post(volume_create))
         .route("/volumes/{id}", get(volume_get).delete(volume_delete))
