@@ -62,7 +62,7 @@ If `cors_origins` is configured in `config.toml`, the API serves the listed orig
 
 ## Timeouts
 
-Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoints `GET /deployments/{id}/logs` (used with `?follow=true`) and `GET /deployments/{id}/exec` are mounted in a separate router with **no** timeout, so SSE and WebSocket connections can stay open indefinitely.
+Most endpoints are wrapped in a 10-second timeout, returning `408 Request Timeout` if the handler runs longer. The streaming endpoints `GET /deployments/{id}/logs` (used with `?follow=true`), `GET /deployments/{id}/exec` and `GET /deployments/{id}/port-forward` are mounted in a separate router with **no** timeout, so SSE and WebSocket connections can stay open indefinitely.
 
 ## Validation errors
 
@@ -483,6 +483,33 @@ Like the logs route, this one is mounted without the 10-second API timeout.
 Only instances Ring manages are reachable: the runtime re-checks the
 container's `ring_deployment` label before starting an exec, so an id naming
 someone else's container is refused exactly like a non-existent one.
+
+
+### `GET /deployments/{id}/port-forward`
+
+Open a raw TCP connection to a port of one of the deployment's running instances, over a **WebSocket**. Binary frames sent by the client are written to the instance's port; bytes the instance sends back arrive as binary frames. Text frames are ignored. Closing either side closes the other.
+
+Instances are only reachable from their namespace's network. Ring runs on the host and reaches them there, so this lets an authorised client (a database client, a tunnel) talk to a service that is deliberately not exposed.
+
+**Query parameters:**
+
+| Parameter | Description |
+| --- | --- |
+| `port` | **Required.** The port inside the instance, 1 to 65535. |
+
+The first running instance, by name, is used. The connection to the port is opened before the upgrade, so failures are plain HTTP statuses:
+
+| Status | Meaning |
+| --- | --- |
+| `400` | `port` is missing or out of range |
+| `404` | Unknown deployment, or no running instance |
+| `501` | The runtime does not expose instance addresses |
+| `502` | The instance refused the connection on that port |
+| `504` | The instance did not answer on that port within 5 seconds |
+
+**Authentication.** Requires the `deployments:exec` scope, and a token limited to namespaces reaches only theirs: reaching a port inside a container is no more than a shell in it allows. Stream tickets are not accepted. Each opened connection is recorded in the audit log, never the bytes relayed.
+
+Like exec, this route has no request timeout: the connection stays open for as long as both sides keep it.
 
 ### `GET /deployments/{id}/events`
 

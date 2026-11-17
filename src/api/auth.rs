@@ -193,6 +193,9 @@ fn scope_for_route(method: &Method, matched_path: &str) -> Option<&'static str> 
         // can reach. Being separate from `admin`, it can be granted on one
         // namespace without handing over the rest of the server.
         "/deployments/{id}/exec" => Some("deployments:exec"),
+        // Reaching a port inside a container is no more than a shell in it
+        // allows, and no less: the same scope gates both.
+        "/deployments/{id}/port-forward" => Some("deployments:exec"),
         _ => None,
     }
 }

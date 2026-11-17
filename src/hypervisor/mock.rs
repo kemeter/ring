@@ -20,6 +20,8 @@ pub(crate) struct MockRuntime {
     refuse_removal: bool,
     volume_removal: VolumeRemoval,
     removed_volumes: Arc<Mutex<Vec<(String, String)>>>,
+    running: Vec<(String, String)>,
+    address: Option<std::net::IpAddr>,
 }
 
 impl MockRuntime {
@@ -33,6 +35,8 @@ impl MockRuntime {
             refuse_removal: false,
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
+            running: Vec::new(),
+            address: None,
         }
     }
 
@@ -46,6 +50,8 @@ impl MockRuntime {
             refuse_removal: false,
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
+            running: Vec::new(),
+            address: None,
         }
     }
 
@@ -77,6 +83,19 @@ impl MockRuntime {
     /// `removed_volume_log`.
     pub(crate) fn with_volume_removal(mut self, outcome: VolumeRemoval) -> Self {
         self.volume_removal = outcome;
+        self
+    }
+
+    /// One running instance, reachable at `address`, for the routes that open
+    /// a connection to it.
+    pub(crate) fn with_running_instance(
+        mut self,
+        id: &str,
+        name: &str,
+        address: std::net::IpAddr,
+    ) -> Self {
+        self.running = vec![(id.to_string(), name.to_string())];
+        self.address = Some(address);
         self
     }
 
@@ -123,6 +142,18 @@ impl InstanceDriver for MockRuntime {
 
 #[async_trait]
 impl RuntimeLifecycle for MockRuntime {
+    async fn list_instances_with_names(
+        &self,
+        _deployment_id: String,
+        _status: &str,
+    ) -> Vec<(String, String)> {
+        self.running.clone()
+    }
+
+    async fn instance_address(&self, _instance_id: &str) -> Option<std::net::IpAddr> {
+        self.address
+    }
+
     async fn remove_volume(&self, name: &str, namespace: &str) -> Result<VolumeRemoval, String> {
         self.removed_volumes
             .lock()

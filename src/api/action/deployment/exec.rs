@@ -401,7 +401,7 @@ fn public_message(error: &ExecError) -> String {
 /// different replicas. That is the failure mode where a fix appears not to
 /// have taken effect, and it is why the sort is here rather than left to the
 /// runtime: every runtime would otherwise have to remember to do it.
-async fn resolve_instance(
+pub(crate) async fn resolve_instance(
     runtime: &dyn crate::hypervisor::lifecycle_trait::RuntimeLifecycle,
     deployment_id: &str,
     requested: Option<&str>,
@@ -446,8 +446,8 @@ async fn resolve_instance(
 /// in. Naming it is the difference between a default a user can predict and
 /// one they have to go and check.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedInstance {
-    id: String,
+pub(crate) struct ResolvedInstance {
+    pub(crate) id: String,
     name: String,
     position: usize,
     total: usize,

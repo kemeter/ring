@@ -26,6 +26,7 @@ use crate::api::action::deployment::get_deployment_metrics;
 use crate::api::action::deployment::get_health_checks;
 use crate::api::action::deployment::list as deployment_list;
 use crate::api::action::deployment::logs as deployment_logs;
+use crate::api::action::deployment::port_forward as deployment_port_forward;
 
 use crate::api::action::config::create as config_create;
 use crate::api::action::config::delete as config_delete;
@@ -120,6 +121,10 @@ pub(crate) fn router(state: AppState) -> Router {
         // Exec is long-lived like logs, so it belongs here rather than under
         // the 10s timeout that wraps the ordinary API routes.
         .route("/deployments/{id}/exec", get(deployment_exec))
+        .route(
+            "/deployments/{id}/port-forward",
+            get(deployment_port_forward),
+        )
         .route_layer(from_fn_with_state(state.clone(), auth_middleware));
 
     // All other routes: protected + 10s timeout.
