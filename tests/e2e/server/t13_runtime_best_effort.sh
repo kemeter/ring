@@ -17,7 +17,7 @@
 # Invariants:
 #   1. Server STARTS with cloud-hypervisor (ok) + containerd (bad socket): the
 #      down runtime does not take the node down.
-#   2. The startup log warns that containerd was skipped.
+#   2. The startup log warns that containerd is unreachable, and retried.
 #   3. A deployment targeting the skipped containerd runtime is rejected with
 #      503 + an actionable "not available on this node" message (not 422, not a
 #      generic unknown-runtime error).
@@ -98,11 +98,11 @@ done
 log "1: server started with one runtime down (best-effort)"
 
 # --- Invariant 2: the log warns containerd was skipped ---
-if ! grep -qiE 'containerd runtime enabled but unreachable, skipping' "$CFG/out.log"; then
+if ! grep -qiE 'containerd runtime enabled but unreachable, will retry' "$CFG/out.log"; then
   tail -40 "$CFG/out.log" >&2
-  fail "2: expected a 'containerd ... skipping' warning in the startup log"
+  fail "2: expected a 'containerd ... will retry' warning in the startup log"
 fi
-log "2: startup log warns containerd was skipped"
+log "2: startup log warns containerd is unreachable and will be retried"
 
 # Authenticate for the API calls below.
 "$RING_BIN" login --username admin --password changeme > /dev/null \
