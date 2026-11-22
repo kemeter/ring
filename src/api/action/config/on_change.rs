@@ -247,6 +247,7 @@ async fn roll_out(pool: &Db, current: &Deployment, config: &Config) {
         image_digest: None,
         pending_events: Vec::new(),
         pending_retire: vec![],
+        waiting: None,
         parent_id: None,
         ..current.clone()
     };

@@ -2326,6 +2326,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             pending_retire: vec![],
+            waiting: None,
             parent_id: Some("parent-id".to_string()),
             network: None,
             restart: None,
