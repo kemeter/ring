@@ -52,7 +52,9 @@ start_ring() {
   # Tests then see leftover deployments from previous runs and the
   # scheduler may even boot stale ones, masking failures and producing
   # false positives. Pin each test to its own database file.
-  export RING_DATABASE_PATH="$RING_TEST_DIR/ring.db"
+  # A test may put the database elsewhere (e.g. on a deliberately tiny
+  # filesystem) by setting RING_E2E_DATABASE_PATH before calling start_ring.
+  export RING_DATABASE_PATH="${RING_E2E_DATABASE_PATH:-$RING_TEST_DIR/ring.db}"
   # Required as soon as a deployment carries a `secretRef` (or any code path
   # touches `secret::encrypt_value`); the server panics otherwise. The
   # CI workflow sets the same constant — kept in sync.
