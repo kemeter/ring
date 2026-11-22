@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /deployments` and `GET /deployments/{id}` returned the registry `config.password` to any token allowed to read deployments. The API no longer returns it; it reads back as `null`
 
 ### Fixed
+- After the disk filled up during a database write, Ring failed every later write with `database is locked` until it was restarted, and lost writes it had already confirmed. Writes now resume once there is room again
 - Following logs live in the dashboard needed an `admin` token, since it goes through a stream ticket that only `admin` could mint. Any token that can read the deployment can now follow its logs
 - `POST /configs` accepted any `data`, such as plain text, that no `type: config` volume could mount, and that every later `PUT` (`ring apply` included) then refused. Both now require a JSON object mapping keys to string contents, and `PUT` no longer accepts other JSON values such as arrays or numbers. Configs already stored in another shape can still be read and deleted; updating one requires fixing its `data`
 - The dashboard lost its font: it loaded Inter from `rsms.me`, which its new Content Security Policy blocks. The font is now served by the dashboard itself, so the browser no longer contacts a third party either
