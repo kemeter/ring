@@ -486,6 +486,14 @@ async fn scale(
                 deployment.set_status(DeploymentStatus::Progressing);
             }
         }
+        // The image is being pulled in the background: nothing failed, so
+        // nothing is counted and no backoff starts. A later pass starts it.
+        Err(crate::hypervisor::error::RuntimeError::ImagePulling(image)) => {
+            debug!(
+                "Deployment {}: image {} is still being pulled",
+                deployment.id, image
+            );
+        }
         Err(err) => {
             let (reason, event_reason, message) = create_error_outcome(&err, deployment);
             error!("[{}] {}: {}", deployment.id, event_reason, err);

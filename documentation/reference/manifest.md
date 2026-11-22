@@ -529,6 +529,8 @@ config:
 | `stop_timeout` | Seconds an instance is given to exit after the stop signal before it is killed. Default: the runtime's own (10s). Docker, Podman and containerd. See below. |
 | `restart_interval` | Age after which Ring replaces an instance, one at a time, e.g. `24h` or `1h30m`. At least `5m`, at most `365d`. Workers on `docker`, `podman` and `containerd`. See below. |
 
+On Docker and Podman, an image pull runs in the background. A start waits up to 2 seconds for it; a longer pull leaves the deployment `pending`, with an `image_pull_started` event, and the start goes ahead on the pass after it ends. A slow or unreachable registry therefore never holds up the other deployments. A pull still running after 10 minutes is reported as failed (`image_pull`).
+
 The `password` field is **not** an encrypted secret; it lives in the deployment row in the database. The API never returns it. To avoid committing credentials, interpolate from the shell with `$VAR` and pass them via `ring apply --env-file`, or use `use_host_auth` to keep the secret on the host entirely.
 
 ### `stop_timeout`: time to shut down

@@ -2,6 +2,7 @@ mod container;
 pub(crate) mod docker_lifecycle;
 mod exec;
 mod health_check;
+pub(crate) mod image_pulls;
 mod instances;
 mod lifecycle;
 pub(crate) mod log_rotation;
