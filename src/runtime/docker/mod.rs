@@ -4,6 +4,7 @@ mod exec;
 mod health_check;
 mod instances;
 mod lifecycle;
+pub(crate) mod log_rotation;
 mod logs;
 mod stats;
 #[cfg(test)]

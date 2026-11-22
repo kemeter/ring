@@ -203,6 +203,8 @@ A failed exporter is logged and the server continues console-only rather than fa
 | `host` | string | no | `"unix:///var/run/docker.sock"` | Docker daemon URL. Use `tcp://host:2375` for a remote daemon, `tcp://host:2376` for TLS |
 | `use_host_registry_auth` | bool | no | `false` | Authorize deployments to resolve registry credentials from the host Docker config (see [host registry auth](#host-registry-auth)). A deployment must also set `config.use_host_auth: true` to activate it |
 | `host_registry_config` | string | no | unset | Explicit path to the host registry config (`config.json` schema). When unset, standard Docker resolution applies (`$DOCKER_CONFIG`, then `~/.docker/config.json`) |
+| `max_log_bytes` | int | no | `10485760` | Size at which a container's log file rotates (10 MiB). Applied only when the daemon logs to files (`json-file`, `local`); other drivers are left alone. `0` leaves logs to the daemon's own settings |
+| `max_log_files` | int | no | `3` | How many log files each container keeps, the live one included |
 
 ### `[server.runtime.podman]`
 
@@ -214,6 +216,8 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 | `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
 | `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)) |
 | `host_registry_config` | string | no | unset | Explicit path to the host registry config. Podman's `login` writes to `containers/auth.json`, so point at it here when the default Docker resolution doesn't pick it up |
+| `max_log_bytes` | int | no | `10485760` | Size at which a container's log file rotates (10 MiB). Podman applies it with `k8s-file` and ignores it with `journald`. `0` leaves logs to Podman's own settings |
+| `max_log_files` | int | no | `3` | How many log files each container keeps. Podman's `k8s-file` keeps a single file and ignores it |
 
 ### `[server.runtime.containerd]`
 

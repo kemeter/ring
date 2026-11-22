@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard can create users, change their role and delete them
 
 ### Changed
+- Docker and Podman container logs rotate: 3 files of 10 MiB per container by default. Docker never rotated them, so one chatty container could fill the host's disk. Set it with `max_log_bytes` and `max_log_files` under `[server.runtime.docker]` or `[server.runtime.podman]`, or `max_log_bytes = 0` to keep the daemon's own log settings. A daemon logging to `journald` or another driver that does not write files is left alone
 - Ring uses rustls for HTTPS instead of the system's OpenSSL, and still trusts the system's certificate authorities. The binary no longer links `libssl`, so one built on a machine with a different OpenSSL version runs anywhere, and building it no longer needs the OpenSSL headers
 
 ### Security

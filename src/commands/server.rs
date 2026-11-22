@@ -134,13 +134,19 @@ pub(crate) async fn execute(
         match docker::connect_and_verify(&host).await {
             Ok(docker) => {
                 info!("Connected to Docker at {}", host);
+                let log_rotation = crate::runtime::docker::log_rotation::resolve(
+                    &docker,
+                    "docker",
+                    configuration.server.runtime.docker.max_log_bytes,
+                    configuration.server.runtime.docker.max_log_files,
+                )
+                .await;
                 runtimes_map.insert(
                     "docker".to_string(),
-                    Arc::new(DockerLifecycle::new(
-                        docker,
-                        intentional_shutdowns.clone(),
-                        host_auth,
-                    )),
+                    Arc::new(
+                        DockerLifecycle::new(docker, intentional_shutdowns.clone(), host_auth)
+                            .with_log_rotation(log_rotation),
+                    ),
                 );
                 docker::connect_with_host(&host).ok()
             }
@@ -175,16 +181,26 @@ pub(crate) async fn execute(
         match docker::connect_and_verify(&host).await {
             Ok(podman) => {
                 info!("Connected to Podman at {}", host);
+                let log_rotation = crate::runtime::docker::log_rotation::resolve(
+                    &podman,
+                    "podman",
+                    configuration.server.runtime.podman.max_log_bytes,
+                    configuration.server.runtime.podman.max_log_files,
+                )
+                .await;
                 runtimes_map.insert(
                     "podman".to_string(),
                     // Podman has no event listener (see below) — use the
                     // reconcile-based crash detector so crash loops are
                     // still counted and backed off.
-                    Arc::new(DockerLifecycle::new_podman(
-                        podman,
-                        intentional_shutdowns.clone(),
-                        host_auth,
-                    )),
+                    Arc::new(
+                        DockerLifecycle::new_podman(
+                            podman,
+                            intentional_shutdowns.clone(),
+                            host_auth,
+                        )
+                        .with_log_rotation(log_rotation),
+                    ),
                 );
             }
             Err(e) => {

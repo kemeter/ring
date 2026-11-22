@@ -260,6 +260,15 @@ pub(crate) struct DockerConfig {
     /// Podman `containers/auth.json`.
     #[serde(default)]
     pub(crate) host_registry_config: Option<String>,
+    /// Size (bytes) at which a container's log file rotates. Defaults to
+    /// 10 MiB. Set to 0 to leave container logs to the daemon's own settings.
+    /// Applied only when the daemon logs to files (`json-file`, `local`).
+    #[serde(default)]
+    pub(crate) max_log_bytes: Option<u64>,
+    /// How many log files each container keeps, the live one included.
+    /// Defaults to 3.
+    #[serde(default)]
+    pub(crate) max_log_files: Option<u32>,
 }
 
 fn default_docker_host() -> String {
@@ -273,6 +282,8 @@ impl Default for DockerConfig {
             host: default_docker_host(),
             use_host_registry_auth: false,
             host_registry_config: None,
+            max_log_bytes: None,
+            max_log_files: None,
         }
     }
 }
@@ -301,6 +312,15 @@ pub(crate) struct PodmanConfig {
     /// [`DockerConfig::host_registry_config`].
     #[serde(default)]
     pub(crate) host_registry_config: Option<String>,
+    /// Size (bytes) at which a container's log file rotates. Defaults to
+    /// 10 MiB. Set to 0 to leave container logs to the daemon's own settings.
+    /// Applied only when the daemon logs to files (`json-file`, `local`).
+    #[serde(default)]
+    pub(crate) max_log_bytes: Option<u64>,
+    /// How many log files each container keeps, the live one included.
+    /// Defaults to 3.
+    #[serde(default)]
+    pub(crate) max_log_files: Option<u32>,
 }
 
 fn default_podman_host() -> String {
@@ -314,6 +334,8 @@ impl Default for PodmanConfig {
             host: default_podman_host(),
             use_host_registry_auth: false,
             host_registry_config: None,
+            max_log_bytes: None,
+            max_log_files: None,
         }
     }
 }

@@ -453,6 +453,7 @@ pub(crate) async fn create_container(
     docker: &Docker,
     resolved_mounts: &[crate::models::volume::ResolvedMount],
     host_auth: &crate::runtime::registry_auth::HostAuthSettings,
+    log_rotation: Option<&super::log_rotation::LogRotation>,
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
 
@@ -611,6 +612,7 @@ pub(crate) async fn create_container(
             .and_then(|r| r.requests.as_ref())
             .and_then(|req| req.memory.as_ref())
             .and_then(|m| parse_memory_string(m).ok()),
+        log_config: log_rotation.map(|r| r.log_config()),
         ..Default::default()
     };
 
