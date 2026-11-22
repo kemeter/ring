@@ -1125,9 +1125,22 @@ pub(crate) async fn deploy(
     mut deployment: Deployment,
     force: bool,
 ) -> Result<Deployment, DeployError> {
-    let active_deployments =
-        deployments::find_active_by_namespace_name(pool, &deployment.namespace, &deployment.name)
-            .await;
+    // The lookup, the replaced deployments and the new one are written in one
+    // transaction. Taken IMMEDIATE, it holds the write lock from the lookup on:
+    // a second deploy of the same name waits, then sees this one's row, so two
+    // concurrent rollouts cannot both pick the same parent; and a failed insert
+    // leaves the deployments it was replacing as they were, instead of deleted
+    // with nothing in their place.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.map_err(|e| {
+        error!("Failed to start the deploy transaction: {}", e);
+        DeployError::Database
+    })?;
+    let active_deployments = deployments::find_active_by_namespace_name(
+        &mut *tx,
+        &deployment.namespace,
+        &deployment.name,
+    )
+    .await;
 
     // Determine whether rolling update is possible:
     // - only when there is exactly one active deployment (the current one)
@@ -1210,11 +1223,12 @@ pub(crate) async fn deploy(
                     for replaced in deployments_list {
                         info!("Marking deployment {} as deleted", replaced.id);
                         replaced_deployment_ids.push(replaced.id.clone());
-                        if let Err(e) = deployments::mark_deleted(pool, &replaced.id).await {
+                        if let Err(e) = deployments::mark_deleted(&mut *tx, &replaced.id).await {
                             error!(
                                 "Failed to mark deployment {} as deleted: {}",
                                 replaced.id, e
                             );
+                            return Err(DeployError::Database);
                         }
                     }
                 }
@@ -1226,13 +1240,17 @@ pub(crate) async fn deploy(
         }
     }
 
-    let deployment = match deployments::create(pool, &deployment).await {
+    let deployment = match deployments::create(&mut *tx, &deployment).await {
         Ok(deployment) => deployment,
         Err(e) => {
             error!("Failed to create deployment: {}", e);
             return Err(DeployError::Conflict);
         }
     };
+    tx.commit().await.map_err(|e| {
+        error!("Failed to commit the deploy transaction: {}", e);
+        DeployError::Conflict
+    })?;
 
     let _ = deployment_event::log_event(
         pool,
@@ -4851,5 +4869,113 @@ mod tests {
             create_codes_in(app, manifest("/mnt/zerofs/../../var/run/docker.sock")).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(codes, ["deployment.volumes.bind.forbidden"]);
+    }
+
+    /// A redeploy whose new row cannot be stored leaves the running deployment
+    /// as it was, instead of deleted with nothing in its place.
+    #[tokio::test]
+    async fn a_failed_redeploy_keeps_the_deployment_it_was_replacing() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let body = json!({"runtime": "docker", "name": "web", "namespace": "atomic", "image": "nginx:1.0"});
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first_id = response.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER refuse_insert BEFORE INSERT ON deployment \
+             BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = server
+            .post("/deployments?force=true")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await;
+
+        assert_ne!(response.status_code(), StatusCode::CREATED);
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT id, status FROM deployment WHERE namespace = 'atomic' AND name = 'web'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(rows, vec![(first_id, "running".to_string())]);
+    }
+
+    /// Two rolling redeploys of the same name sent at once cannot both take
+    /// the same deployment as their parent.
+    #[tokio::test]
+    async fn concurrent_redeploys_leave_one_active_child() {
+        use std::future::IntoFuture;
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let body = |image: &str| {
+            json!({"runtime": "docker", "name": "web", "namespace": "racing", "image": image,
+                "health_checks": [{"type": "tcp", "port": 80, "interval": "10s", "timeout": "5s", "on_failure": "restart"}]})
+        };
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body("nginx:1"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first_id = response.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let a = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body("nginx:2"))
+            .into_future();
+        let b = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body("nginx:3"))
+            .into_future();
+        let (ra, rb) = tokio::join!(a, b);
+        assert_eq!(ra.status_code(), StatusCode::CREATED);
+        assert_eq!(rb.status_code(), StatusCode::CREATED);
+
+        let children: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM deployment WHERE namespace = 'racing' AND name = 'web' \
+             AND parent_id = ? AND status <> 'deleted'",
+        )
+        .bind(&first_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(children <= 1, "{children} active children share one parent");
+        let active: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM deployment WHERE namespace = 'racing' AND name = 'web' \
+             AND status <> 'deleted'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(active <= 2, "{active} active deployments for one name");
     }
 }

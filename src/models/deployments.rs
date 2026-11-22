@@ -903,11 +903,14 @@ pub(crate) async fn active_namespaces(
     Ok(namespaces.into_iter().collect())
 }
 
-pub(crate) async fn find_active_by_namespace_name(
-    pool: &SqlitePool,
+pub(crate) async fn find_active_by_namespace_name<'e, E>(
+    executor: E,
     namespace: &str,
     name: &str,
-) -> Result<Vec<Deployment>, sqlx::Error> {
+) -> Result<Vec<Deployment>, sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let sql = format!(
         "SELECT {} FROM deployment WHERE namespace = ? AND name = ? AND status <> 'deleted' ORDER BY created_at DESC",
         SELECT_COLUMNS
@@ -916,7 +919,7 @@ pub(crate) async fn find_active_by_namespace_name(
     let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(name)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
     Ok(rows.into_iter().map(Deployment::from).collect())
@@ -933,10 +936,13 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Deploymen
     Ok(row.map(Deployment::from))
 }
 
-pub(crate) async fn create(
-    pool: &SqlitePool,
+pub(crate) async fn create<'e, E>(
+    executor: E,
     deployment: &Deployment,
-) -> Result<Deployment, sqlx::Error> {
+) -> Result<Deployment, sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
     let environment =
         serde_json::to_string(&deployment.environment).unwrap_or_else(|_| "{}".to_string());
@@ -1000,7 +1006,7 @@ pub(crate) async fn create(
     .bind(&ports_json)
     .bind(&network_mode)
     .bind(&restart_json)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(deployment.clone())
@@ -1043,13 +1049,16 @@ pub(crate) async fn update(
 /// For callers that only want to delete: writing back a whole loaded copy, as
 /// [`update`] does, would also overwrite the image digest and rolling parent
 /// with whatever that copy held, undoing a change the scheduler made since.
-pub(crate) async fn mark_deleted(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn mark_deleted<'e, E>(executor: E, id: &str) -> Result<(), sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     sqlx::query(
         "UPDATE deployment SET status = 'deleted', reason = NULL, message = NULL, \
          updated_at = datetime('now') WHERE id = ?",
     )
     .bind(id)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(())
