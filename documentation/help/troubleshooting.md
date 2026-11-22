@@ -178,7 +178,7 @@ Ring retries on the backoff curve, so the deployment starts by itself once enoug
 - Free memory on the host (stop other workloads).
 - Lower the deployment's `resources.requests.memory` (or `resources.limits.memory` if no request is set) to fit, then re-apply.
 
-The check compares against memory available *at that moment*; it's a guard against gross over-asks, not a precise reservation system. CPU is not gated; CPU overcommit is allowed.
+The check compares against memory available *at that moment*, minus what instances Ring started in the last 60 seconds were admitted for (they may not have allocated it yet). When the event says `… MiB reserved by instances started in the last 60s`, the memory is promised to another replica: wait for the retry, or lower the requests. CPU is not gated; CPU overcommit is allowed.
 
 ### Health checks flap
 
