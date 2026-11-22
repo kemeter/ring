@@ -21,7 +21,10 @@ enabled = true
 # host = "unix:///run/user/1000/podman/podman.sock"   # rootless default
 # use_host_registry_auth = true                        # pull private images using the host auth file
 # host_registry_config = "/run/user/1000/containers/auth.json"  # podman login writes here
+# max_log_bytes = 10485760                             # container log size cap (10 MiB); 0 leaves it to Podman
 ```
+
+With the `k8s-file` log driver, Podman caps each container's log at `max_log_bytes`. With `journald`, the journal handles retention and the setting is ignored.
 
 Ring resolves the rootless socket first. If `enabled = true` but the socket is unreachable, Ring logs a warning and skips Podman (the node still starts if another runtime is usable).
 

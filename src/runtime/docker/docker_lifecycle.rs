@@ -38,6 +38,10 @@ pub struct DockerLifecycle {
     /// Server-side host registry auth settings for this runtime, from
     /// `[server.runtime.docker]` / `[server.runtime.podman]`.
     host_auth: HostAuthSettings,
+    /// Log rotation set on every container this runtime creates, resolved
+    /// against the daemon's logging driver at startup. `None` leaves logs to
+    /// the daemon.
+    log_rotation: Option<super::log_rotation::LogRotation>,
 }
 
 impl DockerLifecycle {
@@ -54,7 +58,16 @@ impl DockerLifecycle {
             docker,
             intentional_shutdowns,
             host_auth,
+            log_rotation: None,
         }
+    }
+
+    pub fn with_log_rotation(
+        mut self,
+        log_rotation: Option<super::log_rotation::LogRotation>,
+    ) -> Self {
+        self.log_rotation = log_rotation;
+        self
     }
 
     /// Podman registers under its own key but shares the Docker-compatible
@@ -103,6 +116,7 @@ impl InstanceDriver for DockerLifecycle {
             &self.docker,
             resolved_mounts,
             &self.host_auth,
+            self.log_rotation.as_ref(),
         )
         .await
     }

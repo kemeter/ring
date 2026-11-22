@@ -16,9 +16,17 @@ enabled = true
 # host = "unix:///var/run/docker.sock"   # default; override for a remote daemon
 # use_host_registry_auth = true          # allow deployments to pull with the host's docker login
 # host_registry_config = "/home/deploy/.docker/config.json"  # pin the file if the daemon runs as another user
+# max_log_bytes = 10485760               # container log rotation (10 MiB); 0 leaves it to the daemon
+# max_log_files = 3
 ```
 
 If `enabled = true` but the daemon is unreachable, Ring logs a warning and skips Docker (the node still starts if another runtime is usable).
+
+## Log rotation
+
+Docker's `json-file` driver never rotates on its own, so one chatty container can fill the disk. Ring sets `max-size` and `max-file` on every container it creates: 3 files of 10 MiB by default, about 30 MiB of logs per container. `ring deployment logs` reads every kept file.
+
+Ring asks the daemon which logging driver it uses at startup and only sets these options for `json-file` and `local`. Under `journald`, `fluentd` or any other driver, which refuse them, the logs are left to the daemon. Set `max_log_bytes = 0` to keep the daemon's own `log-opts` from `daemon.json` instead.
 
 ## Deploy
 
