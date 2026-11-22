@@ -411,7 +411,47 @@ pub(crate) async fn remove_named_volume(
     }
 }
 
+/// Provision `name` for `namespace`, or check that it is this namespace's to
+/// mount.
+///
+/// Named volumes live in one host-wide Docker namespace, so without this check
+/// a deployment could mount another namespace's volume, and read or write its
+/// data, just by naming it. A volume Ring created for another namespace is
+/// refused; one Ring did not label (created by hand, or by a Ring version
+/// that did not label its volumes yet) is mounted as before.
 async fn ensure_named_volume(
+    docker: &Docker,
+    name: &str,
+    driver: &str,
+    namespace: &str,
+    deployment_name: &str,
+) -> Result<(), RuntimeError> {
+    match docker.inspect_volume(name).await {
+        Ok(volume) => {
+            let labels = volume.labels;
+            let managed = labels.get("ring.managed").map(String::as_str) == Some("true");
+            match labels.get("ring.namespace") {
+                Some(owner) if managed && owner != namespace => {
+                    Err(RuntimeError::InstanceCreationFailed(format!(
+                        "volume '{}' belongs to namespace '{}' and cannot be mounted from '{}'; \
+                         use a volume name of this namespace",
+                        name, owner, namespace
+                    )))
+                }
+                _ => Ok(()),
+            }
+        }
+        Err(bollard::errors::Error::DockerResponseServerError {
+            status_code: 404, ..
+        }) => create_named_volume(docker, name, driver, namespace, deployment_name).await,
+        Err(e) => Err(RuntimeError::InstanceCreationFailed(format!(
+            "failed to inspect named volume '{}': {}",
+            name, e
+        ))),
+    }
+}
+
+async fn create_named_volume(
     docker: &Docker,
     name: &str,
     driver: &str,
@@ -968,6 +1008,63 @@ mod tests {
         let names = ["ring_kept", "ring_gone", "ring_", "bridge", "other_gone"].map(String::from);
 
         assert_eq!(orphan_namespace_networks(names, &active), vec!["ring_gone"]);
+    }
+
+    /// Against a real daemon: a namespace mounts its own volumes and those Ring
+    /// did not label, never one Ring created for another namespace.
+    #[tokio::test]
+    async fn a_named_volume_is_only_mounted_from_its_own_namespace() {
+        use crate::runtime::docker::test_support::daemon;
+
+        let Some(docker) = daemon().await else {
+            eprintln!("skipping: no Docker daemon");
+            return;
+        };
+        let suffix = super::super::tiny_id();
+        let shared = format!("ring-test-shared-{suffix}");
+        let unlabeled = format!("ring-test-unlabeled-{suffix}");
+
+        // tenant-a creates it, and mounts it again later.
+        ensure_named_volume(&docker, &shared, "local", "tenant-a", "db")
+            .await
+            .unwrap();
+        ensure_named_volume(&docker, &shared, "local", "tenant-a", "db")
+            .await
+            .unwrap();
+
+        match ensure_named_volume(&docker, &shared, "local", "tenant-b", "spy").await {
+            Err(RuntimeError::InstanceCreationFailed(msg)) => {
+                assert!(msg.contains("belongs to namespace 'tenant-a'"), "{msg}");
+            }
+            other => panic!("tenant-b must not mount tenant-a's volume, got {other:?}"),
+        }
+
+        // A volume Ring did not create (by hand, or by an older Ring) keeps
+        // working, labels untouched.
+        docker
+            .create_volume(bollard::models::VolumeCreateRequest {
+                name: Some(unlabeled.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        ensure_named_volume(&docker, &unlabeled, "local", "tenant-b", "app")
+            .await
+            .unwrap();
+        assert!(
+            docker
+                .inspect_volume(&unlabeled)
+                .await
+                .unwrap()
+                .labels
+                .is_empty()
+        );
+
+        for v in [&shared, &unlabeled] {
+            let _ = docker
+                .remove_volume(v, None::<bollard::query_parameters::RemoveVolumeOptions>)
+                .await;
+        }
     }
 
     /// Against a real daemon: only a volume Ring created for the namespace is

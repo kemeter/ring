@@ -280,6 +280,8 @@ Things to know before choosing:
 
 Named volumes a deployment mounts are auto-registered as first-class [volumes](/documentation/reference/api#volumes), so they are traceable and can be managed via the `/volumes` API. Anonymous volumes (from an image's `VOLUME` directive) are removed with their container; named volumes are never deleted by a deployment's deletion.
 
+A named volume belongs to the namespace that first mounted it. On Docker and Podman, a deployment in another namespace that names the same volume is refused (`spec_rejected`, with an event naming the owning namespace), so one namespace cannot read or write another's data. A Docker volume Ring did not create is still mounted as before.
+
 ## `ports`
 
 Host-port publishings. Each entry maps a host port to a container port:
