@@ -21,6 +21,7 @@ pub(crate) struct MockRuntime {
     volume_removal: VolumeRemoval,
     removed_volumes: Arc<Mutex<Vec<(String, String)>>>,
     retired: Arc<Mutex<Vec<String>>>,
+    failing_list: bool,
 }
 
 impl MockRuntime {
@@ -35,6 +36,7 @@ impl MockRuntime {
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
             retired: Arc::default(),
+            failing_list: false,
         }
     }
 
@@ -49,6 +51,7 @@ impl MockRuntime {
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
             retired: Arc::default(),
+            failing_list: false,
         }
     }
 
@@ -72,6 +75,12 @@ impl MockRuntime {
     /// Make `remove_instance` fail, as a runtime refusing a removal would.
     pub(crate) fn refusing_removal(mut self) -> Self {
         self.refuse_removal = true;
+        self
+    }
+
+    /// `try_list_instances` fails, as with a daemon that does not answer.
+    pub(crate) fn failing_list(mut self) -> Self {
+        self.failing_list = true;
         self
     }
 
@@ -145,6 +154,17 @@ impl RuntimeLifecycle for MockRuntime {
 
     async fn list_instances(&self, _deployment_id: String, _status: &str) -> Vec<String> {
         Vec::new()
+    }
+
+    async fn try_list_instances(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        if self.failing_list {
+            return Err(RuntimeError::Other("daemon unreachable".to_string()));
+        }
+        Ok(self.list_instances(deployment_id, status).await)
     }
 
     async fn remove_instance(&self, instance_id: String) -> bool {

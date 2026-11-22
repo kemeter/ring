@@ -65,8 +65,22 @@ pub(crate) struct RestartState {
 
 impl RestartState {
     /// Whether the deployment must not be started before a later tick.
-    pub(crate) fn backing_off(&self, now: DateTime<Utc>) -> bool {
-        self.next_attempt_at.is_some_and(|at| at > now)
+    ///
+    /// No retry is ever scheduled more than `longest_wait` (the policy's cap)
+    /// ahead. A date further than that can only come from the wall clock
+    /// stepping back after it was stored (NTP correcting at boot), or from a
+    /// cap lowered since: either way the wait is over, instead of stretching
+    /// by the size of the jump.
+    pub(crate) fn backing_off(
+        &self,
+        now: DateTime<Utc>,
+        longest_wait: std::time::Duration,
+    ) -> bool {
+        let Some(at) = self.next_attempt_at else {
+            return false;
+        };
+        let longest = chrono::Duration::from_std(longest_wait).unwrap_or(chrono::Duration::MAX);
+        at > now && at - now <= longest
     }
 }
 
@@ -207,9 +221,23 @@ mod tests {
             next_attempt_at: Some(at("2026-01-01T00:05:00Z")),
             ..Default::default()
         };
-        assert!(state.backing_off(at("2026-01-01T00:04:59Z")));
-        assert!(!state.backing_off(at("2026-01-01T00:05:00Z")));
-        assert!(!RestartState::default().backing_off(at("2026-01-01T00:00:00Z")));
+        let cap = std::time::Duration::from_secs(300);
+        assert!(state.backing_off(at("2026-01-01T00:04:59Z"), cap));
+        assert!(!state.backing_off(at("2026-01-01T00:05:00Z"), cap));
+        assert!(!RestartState::default().backing_off(at("2026-01-01T00:00:00Z"), cap));
+    }
+
+    /// The clock steps back an hour during a five-minute backoff: the retry
+    /// is not pushed an hour later.
+    #[test]
+    fn a_clock_stepping_back_does_not_stretch_the_backoff() {
+        let state = RestartState {
+            next_attempt_at: Some(at("2026-01-01T01:05:00Z")),
+            ..Default::default()
+        };
+        let cap = std::time::Duration::from_secs(300);
+        // Stored at 01:00 for 01:05; the clock now reads 00:01.
+        assert!(!state.backing_off(at("2026-01-01T00:01:00Z"), cap));
     }
 
     #[test]

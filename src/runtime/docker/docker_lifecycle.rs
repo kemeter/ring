@@ -42,6 +42,8 @@ pub struct DockerLifecycle {
     /// against the daemon's logging driver at startup. `None` leaves logs to
     /// the daemon.
     log_rotation: Option<super::log_rotation::LogRotation>,
+    /// This daemon's background image pulls.
+    pulls: super::image_pulls::ImagePulls,
 }
 
 impl DockerLifecycle {
@@ -59,6 +61,7 @@ impl DockerLifecycle {
             intentional_shutdowns,
             host_auth,
             log_rotation: None,
+            pulls: Default::default(),
         }
     }
 
@@ -117,6 +120,7 @@ impl InstanceDriver for DockerLifecycle {
             resolved_mounts,
             &self.host_auth,
             self.log_rotation.as_ref(),
+            &self.pulls,
         )
         .await
     }
@@ -192,6 +196,16 @@ impl RuntimeLifecycle for DockerLifecycle {
 
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         super::instances::list_instances(&self.docker, deployment_id, status).await
+    }
+
+    async fn try_list_instances(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        super::instances::try_list_instances(&self.docker, &deployment_id, status)
+            .await
+            .map_err(|e| RuntimeError::Other(format!("listing containers failed: {e}")))
     }
 
     async fn list_running_instances_grouped(
@@ -403,7 +417,13 @@ mod tests {
             namespace: "ring-driver-test".to_string(),
             name: id.to_string(),
             image: crate::runtime::docker::test_support::TEST_IMAGE.to_string(),
-            config: None,
+            // The test image is pulled beforehand (`ensure_image`): checking
+            // it against the registry on every start (the default `Always`)
+            // only makes the start wait on the network.
+            config: Some(
+                serde_json::from_value(serde_json::json!({"image_pull_policy": "IfNotPresent"}))
+                    .unwrap(),
+            ),
             runtime: "docker".to_string(),
             kind: "worker".to_string(),
             replicas: 1,

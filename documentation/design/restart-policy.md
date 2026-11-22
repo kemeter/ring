@@ -188,6 +188,8 @@ New columns on `deployment`:
 | `running_since` | datetime, nullable | Start of the current uninterrupted run, for `stable_after` |
 | `last_termination` | JSON, nullable | The last `Termination` (exit code, reason, time, logs tail) |
 
+`next_attempt_at` is a wall-clock date, so the wait survives a server restart. No attempt is ever scheduled more than `cap` ahead, so a stored date further away than that is read as the clock having stepped back since (NTP correcting at boot, a host clock fixed by hand), and the attempt runs on the next pass instead of waiting for the size of the jump.
+
 `RetryBackoff` and `HealthyWindow` disappear. A `ring server` restart no longer resets anyone's backoff, so it no longer triggers a burst of retries.
 
 ### 4. Status model: status and reason

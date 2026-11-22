@@ -45,6 +45,9 @@ pub(crate) fn classify_create_error(err: &RuntimeError) -> Disposition {
         // Transient: a pull that failed mid-flight (registry/network) can succeed
         // on a retry.
         RuntimeError::ImagePullFailed(_) => Disposition::Retry,
+        // Not a failure at all: the scheduler waits for the pull without
+        // counting it. Retry is what it amounts to if it ever gets here.
+        RuntimeError::ImagePulling(_) => Disposition::Retry,
         // Permanent: the runtime rejecting `create`/`start` almost always means
         // a bad container spec (entrypoint, mount, options) — retrying
         // re-submits the same rejected spec. Fail fast onto spec_rejected.
@@ -94,6 +97,11 @@ pub(crate) fn create_error_outcome(
             Reason::ImagePull,
             "image_pull_back_off",
             format!("Failed to pull image '{}': {}", deployment.image, detail),
+        ),
+        RuntimeError::ImagePulling(image) => (
+            Reason::ImagePull,
+            "image_pulling",
+            format!("Image '{}' is being pulled", image),
         ),
         RuntimeError::InstanceCreationFailed(msg) => (
             Reason::SpecRejected,

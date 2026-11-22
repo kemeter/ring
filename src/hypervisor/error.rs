@@ -6,6 +6,10 @@ pub enum RuntimeError {
     ImageNotFound(String),
     #[error("image pull failed: {0}")]
     ImagePullFailed(String),
+    /// Not a failure: the image is being pulled in the background, and the
+    /// start is tried again on a later pass. Never counted as a failed start.
+    #[error("image {0} is being pulled")]
+    ImagePulling(String),
     #[error("instance creation failed: {0}")]
     InstanceCreationFailed(String),
     // Part of the runtime error contract; not constructed on every code path yet.

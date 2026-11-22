@@ -207,6 +207,48 @@ fn classify_pull_error(msg: &str, image: &str) -> RuntimeError {
     RuntimeError::ImagePullFailed(msg.to_string())
 }
 
+/// The digest of the image to start from. Served at once from the local cache
+/// when the policy allows it; otherwise pulled in the background, the start
+/// answering `ImagePulling` until a later pass picks up the result, so a slow
+/// registry never holds the scheduler.
+async fn image_digest(
+    docker: &Docker,
+    image_config: DockerImage,
+    policy: ImagePullPolicy,
+    pulls: &super::image_pulls::ImagePulls,
+    deployment: &mut Deployment,
+) -> Result<Option<String>, RuntimeError> {
+    use super::image_pulls::PullProgress;
+
+    let image_name = image_config.full_ref();
+    if prefer_local_cache(policy, &image_config.reference, image_config.auth.is_some())
+        && let Ok(inspect) = docker.inspect_image(&image_name).await
+    {
+        debug!("Docker image {} served from local cache", image_name);
+        return Ok(extract_digest(&inspect.repo_digests, &image_config.name));
+    }
+
+    let docker = docker.clone();
+    match pulls
+        .take_or_start_waiting(&image_name, super::image_pulls::INLINE_WAIT, move || {
+            Box::pin(pull_image(docker, image_config, policy))
+        })
+        .await
+    {
+        PullProgress::Done(result) => result,
+        PullProgress::Started => {
+            deployment.emit_event(
+                "info",
+                format!("Pulling image '{}'", image_name),
+                &deployment.runtime.clone(),
+                Some("image_pull_started"),
+            );
+            Err(RuntimeError::ImagePulling(image_name))
+        }
+        PullProgress::InFlight => Err(RuntimeError::ImagePulling(image_name)),
+    }
+}
+
 async fn pull_image(
     docker: Docker,
     image_config: DockerImage,
@@ -454,6 +496,7 @@ pub(crate) async fn create_container(
     resolved_mounts: &[crate::models::volume::ResolvedMount],
     host_auth: &crate::runtime::registry_auth::HostAuthSettings,
     log_rotation: Option<&super::log_rotation::LogRotation>,
+    pulls: &super::image_pulls::ImagePulls,
 ) -> Result<(), RuntimeError> {
     debug!("Create container for deployment id: {}", &deployment.id);
 
@@ -499,8 +542,8 @@ pub(crate) async fn create_container(
             }
         }
         ImagePullPolicy::Always | ImagePullPolicy::IfNotPresent => {
-            let digest = pull_image(docker.clone(), image_config, policy).await?;
-            deployment.image_digest = digest;
+            deployment.image_digest =
+                image_digest(docker, image_config, policy, pulls, deployment).await?;
         }
     }
 

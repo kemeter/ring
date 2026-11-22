@@ -399,7 +399,7 @@ async fn scale(
         return;
     }
 
-    if state.backing_off(now) {
+    if state.backing_off(now, policy.cap) {
         debug!(
             "Deployment {} backing off until {:?}",
             deployment.id, state.next_attempt_at
@@ -485,6 +485,14 @@ async fn scale(
             if deployment.status != DeploymentStatus::Running || current == 0 {
                 deployment.set_status(DeploymentStatus::Progressing);
             }
+        }
+        // The image is being pulled in the background: nothing failed, so
+        // nothing is counted and no backoff starts. A later pass starts it.
+        Err(crate::hypervisor::error::RuntimeError::ImagePulling(image)) => {
+            debug!(
+                "Deployment {}: image {} is still being pulled",
+                deployment.id, image
+            );
         }
         Err(err) => {
             let (reason, event_reason, message) = create_error_outcome(&err, deployment);
