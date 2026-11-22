@@ -8,10 +8,13 @@
 #   tests/e2e/run.sh containerd         # run only containerd tests (root + CNI)
 #   tests/e2e/run.sh cloud-hypervisor   # run only Cloud Hypervisor tests
 #   tests/e2e/run.sh firecracker        # run only Firecracker tests
+#   tests/e2e/run.sh host-resources     # run only host exhaustion tests (root)
 #
 # The containerd suite is not in the default set: it needs access to the
 # root-owned containerd socket and CNI plugins, so run it explicitly
-# (e.g. `sudo -E tests/e2e/run.sh containerd`).
+# (e.g. `sudo -E tests/e2e/run.sh containerd`). Neither is the host-resources
+# suite: it mounts small filesystems to exhaust them, which needs root
+# (`sudo -E tests/e2e/run.sh host-resources`).
 #
 # Both micro-VM suites are in the default set and gate themselves the same way:
 # each setup.sh exits non-zero with an install hint when its VMM binary or
