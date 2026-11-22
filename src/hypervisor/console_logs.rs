@@ -27,7 +27,7 @@ use tracing::{debug, warn};
 /// rotated backup first (`<path>.N`), then `.N-1`, ..., `.1`, then the live
 /// `<path>`. Missing files are skipped silently — rotations may be sparse if
 /// the VM has not produced enough output to fill every slot yet.
-fn rotated_files_in_read_order(path: &Path) -> Vec<PathBuf> {
+pub(crate) fn rotated_files_in_read_order(path: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     // Discover up to a generous upper bound; in practice the configured
     // `max_console_log_backups` caps this at 3-10.
@@ -377,6 +377,16 @@ async fn rotate_all_in_dir_with(
     max_backups: u32,
     strategy: RotateStrategy,
 ) {
+    rotate_matching_in_dir(dir, ".console.log", max_bytes, max_backups, strategy).await;
+}
+
+async fn rotate_matching_in_dir(
+    dir: &Path,
+    suffix: &str,
+    max_bytes: u64,
+    max_backups: u32,
+    strategy: RotateStrategy,
+) {
     if max_bytes == 0 {
         return;
     }
@@ -389,7 +399,7 @@ async fn rotate_all_in_dir_with(
         let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if !name.ends_with(".console.log") {
+        if !name.ends_with(suffix) {
             continue;
         }
         match strategy {
@@ -412,6 +422,26 @@ enum RotateStrategy {
 /// Rename-based directory sweep — Cloud Hypervisor.
 pub(crate) async fn rotate_all_in_dir(dir: &Path, max_bytes: u64, max_backups: u32) {
     rotate_all_in_dir_with(dir, max_bytes, max_backups, RotateStrategy::Rename).await;
+}
+
+/// Copy-truncate sweep of every `*<suffix>` file in `dir`, for writers that
+/// hold their file by inode under another name (containerd's `<id>.log`,
+/// written by the shim). A rotated `<id>.log.1` does not end with the suffix,
+/// so it is never rotated again.
+pub(crate) async fn copy_truncate_matching_in_dir(
+    dir: &Path,
+    suffix: &str,
+    max_bytes: u64,
+    max_backups: u32,
+) {
+    rotate_matching_in_dir(
+        dir,
+        suffix,
+        max_bytes,
+        max_backups,
+        RotateStrategy::CopyTruncate,
+    )
+    .await;
 }
 
 /// Copy-truncate directory sweep — Firecracker (inode-held console fd).
@@ -766,5 +796,35 @@ mod tests {
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"small");
         assert!(!backup_path(&path, 1).exists());
         tokio::fs::remove_file(&path).await.ok();
+    }
+
+    #[tokio::test]
+    async fn a_suffix_sweep_rotates_matching_files_once() {
+        let dir = std::env::temp_dir().join(format!("ring-suffix-sweep-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let live = dir.join("ns_web_abc.log");
+        tokio::fs::write(&live, vec![b'x'; 2048]).await.unwrap();
+        let other = dir.join("vm.console.log");
+        tokio::fs::write(&other, vec![b'y'; 2048]).await.unwrap();
+
+        copy_truncate_matching_in_dir(&dir, ".log", 1024, 2).await;
+
+        assert_eq!(
+            tokio::fs::metadata(&live).await.unwrap().len(),
+            0,
+            "truncated in place"
+        );
+        assert_eq!(
+            tokio::fs::metadata(dir.join("ns_web_abc.log.1"))
+                .await
+                .unwrap()
+                .len(),
+            2048
+        );
+        // A second sweep leaves the backup alone: `.log.1` does not match.
+        copy_truncate_matching_in_dir(&dir, ".log", 1024, 2).await;
+        assert!(!dir.join("ns_web_abc.log.1.1").exists());
+
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

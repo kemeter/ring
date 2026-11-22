@@ -49,6 +49,7 @@ ring apply -f web.yaml
 - **`command` health checks** run via `Tasks.Exec` (gRPC), no in-guest agent needed.
 - **Crash detection is reconcile-based** (tick-paced), like Podman: it inspects task exit status on each scheduler pass.
 - **No published ports yet.** The CNI network is a bridge without port mapping, so `ports` is refused on containerd: reach an instance on its bridge address, or use Docker or Podman to publish a host port.
+- **Logs rotate.** Each instance writes to `/var/log/ring/containerd/<id>.log`, rotated past 10 MiB with 3 files kept (`max_log_bytes`, `max_log_files`). `ring deployment logs` reads the rotated files too.
 - **Named volumes** are host directories, one per namespace, under `/var/lib/ring/volumes/<namespace>/<name>`. Ring creates them on first use.
 - **Private registries.** containerd has no `login` of its own. Inline `config.server`/`username`/`password`; or set `use_host_registry_auth = true` and pull with `config.use_host_auth: true` (since `nerdctl login` writes to `~/.docker/config.json`); or store credentials in an encrypted `Secret` and reference it with `config.image_pull_secret`. See [manifest `config`](/documentation/reference/manifest#config) and [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
 

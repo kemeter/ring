@@ -222,6 +222,21 @@ pub(crate) async fn execute(
         match ContainerdLifecycle::connect_and_verify(containerd_config).await {
             Ok(containerd) => {
                 runtimes_map.insert("containerd".to_string(), Arc::new(containerd));
+                // Lives as long as the server, like the microVM log rotators.
+                crate::runtime::containerd::logs::spawn_log_rotator(
+                    configuration
+                        .server
+                        .runtime
+                        .containerd
+                        .max_log_bytes
+                        .unwrap_or(10 * 1024 * 1024),
+                    configuration
+                        .server
+                        .runtime
+                        .containerd
+                        .max_log_files
+                        .unwrap_or(3),
+                );
             }
             Err(e) => {
                 warn!(

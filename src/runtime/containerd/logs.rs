@@ -9,8 +9,35 @@ use futures::stream::{self, Stream};
 use std::pin::Pin;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+/// Where the shim writes each instance's stdout and stderr.
+pub(crate) const LOG_DIR: &str = "/var/log/ring/containerd";
+
 fn log_file(instance_id: &str) -> String {
-    format!("/var/log/ring/containerd/{}.log", instance_id)
+    format!("{}/{}.log", LOG_DIR, instance_id)
+}
+
+/// Copy-truncate every instance log past `max_bytes` once a minute, keeping
+/// `max_files - 1` backups. The shim holds the file by inode, so it cannot be
+/// renamed away. The logs used to grow until the disk was full.
+pub(crate) fn spawn_log_rotator(max_bytes: u64, max_files: u32) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if max_bytes == 0 {
+            tracing::info!("containerd log rotation disabled (max_log_bytes = 0)");
+            return;
+        }
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            crate::hypervisor::console_logs::copy_truncate_matching_in_dir(
+                std::path::Path::new(LOG_DIR),
+                ".log",
+                max_bytes,
+                max_files.saturating_sub(1).max(1),
+            )
+            .await;
+        }
+    })
 }
 
 /// Read the instance log file into lines, honouring an optional `tail` count.
@@ -22,14 +49,17 @@ pub(crate) async fn read_logs(
     tail: Option<&str>,
     _since: Option<i32>,
 ) -> Vec<String> {
+    // The rotated backups first, oldest first, then the live file.
     let path = log_file(instance_id);
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(c) => c,
-        Err(e) => {
-            debug!("could not read log file {}: {}", path, e);
-            return Vec::new();
+    let mut content = String::new();
+    for file in
+        crate::hypervisor::console_logs::rotated_files_in_read_order(std::path::Path::new(&path))
+    {
+        match tokio::fs::read_to_string(&file).await {
+            Ok(c) => content.push_str(&c),
+            Err(e) => debug!("could not read log file {}: {}", file.display(), e),
         }
-    };
+    }
     let mut lines: Vec<String> = content
         .lines()
         .map(|l| l.trim_end().to_string())

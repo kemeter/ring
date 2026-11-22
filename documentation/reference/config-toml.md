@@ -230,6 +230,8 @@ containerd speaks its own native gRPC API on a Unix socket, with no Docker daemo
 | `namespace` | string | no | `ring` | containerd metadata namespace Ring creates its images, snapshots, containers and tasks under. Keeps Ring's objects from colliding with `k8s.io`, `moby` or `default` on a shared host. This is containerd's own partition concept, unrelated to a Ring deployment namespace |
 | `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)). containerd has no `login` of its own; tools like `nerdctl` write to `~/.docker/config.json`, the default this resolves |
 | `host_registry_config` | string | no | unset | Explicit path to the host registry config |
+| `max_log_bytes` | int | no | `10485760` | Size at which an instance's log file (`/var/log/ring/containerd/<id>.log`) is rotated, checked every minute. `0` disables rotation |
+| `max_log_files` | int | no | `3` | How many log files each instance keeps, the live one included |
 
 ### Host registry auth
 
