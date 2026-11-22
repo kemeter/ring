@@ -20,6 +20,7 @@ pub(crate) struct MockRuntime {
     refuse_removal: bool,
     volume_removal: VolumeRemoval,
     removed_volumes: Arc<Mutex<Vec<(String, String)>>>,
+    retired: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockRuntime {
@@ -33,6 +34,7 @@ impl MockRuntime {
             refuse_removal: false,
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
+            retired: Arc::default(),
         }
     }
 
@@ -46,6 +48,7 @@ impl MockRuntime {
             refuse_removal: false,
             volume_removal: VolumeRemoval::Absent,
             removed_volumes: Arc::default(),
+            retired: Arc::default(),
         }
     }
 
@@ -88,6 +91,11 @@ impl MockRuntime {
         self.removed.clone()
     }
 
+    /// Every instance passed to `retire_instance`.
+    pub(crate) fn retired_log(&self) -> Arc<Mutex<Vec<String>>> {
+        self.retired.clone()
+    }
+
     /// Every `(deployment_id, signal)` passed to `signal_instances`, shared so
     /// a test can keep a handle after the mock moves into a runtime map.
     pub(crate) fn signal_log(&self) -> Arc<Mutex<Vec<(String, ReloadSignal)>>> {
@@ -99,6 +107,10 @@ impl MockRuntime {
 impl InstanceDriver for MockRuntime {
     async fn observe(&self, _deployment: &Deployment) -> Result<Observation, RuntimeError> {
         Ok(Observation::default())
+    }
+
+    async fn retire_instance(&self, instance_id: &str) {
+        self.retired.lock().unwrap().push(instance_id.to_string());
     }
 
     async fn start_instance(

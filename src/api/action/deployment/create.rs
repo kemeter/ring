@@ -990,6 +990,7 @@ pub(crate) async fn create(
         image_digest: None,
         ports: input.ports,
         pending_events: vec![],
+        pending_retire: vec![],
         parent_id: None,
         network: input.network.clone(),
         restart: input.restart.clone(),

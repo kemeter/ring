@@ -2442,6 +2442,7 @@ mod tests {
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
+            pending_retire: vec![],
             parent_id: None,
             network: None,
             restart: None,

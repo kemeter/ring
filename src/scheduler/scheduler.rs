@@ -814,6 +814,22 @@ async fn write_back(pool: &SqlitePool, old: &Snapshot, deployment: &Deployment) 
     }
 }
 
+/// Store the pass, then retire the instances of a job it finished. Retired
+/// first, a crash before the write would leave nothing saying the job ran, and
+/// it would run again on restart; this way the worst a crash leaves is a
+/// finished job's instance still on the host.
+async fn write_back_then_retire(
+    pool: &SqlitePool,
+    old: &Snapshot,
+    deployment: &mut Deployment,
+    runtime: &dyn RuntimeLifecycle,
+) {
+    write_back(pool, old, deployment).await;
+    for instance_id in std::mem::take(&mut deployment.pending_retire) {
+        runtime.retire_instance(&instance_id).await;
+    }
+}
+
 async fn release_namespaces(
     pool: &SqlitePool,
     runtimes: &HashMap<String, Arc<dyn RuntimeLifecycle>>,
@@ -2181,7 +2197,7 @@ pub(crate) async fn schedule(
                 );
             }
 
-            write_back(&pool, &old, &result).await;
+            write_back_then_retire(&pool, &old, &mut result, runtime.as_ref()).await;
         }
 
         namespaces_to_release |= !deleted.is_empty();
@@ -2294,6 +2310,7 @@ mod tests {
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
+            pending_retire: vec![],
             parent_id: Some("parent-id".to_string()),
             network: None,
             restart: None,
@@ -2874,6 +2891,28 @@ mod tests {
                 "failure": { "reason": "crash_loop", "message": "Instance a exited with code 1" },
             })
         );
+    }
+
+    /// A finished job's instance is retired after its `Completed` is stored.
+    #[tokio::test]
+    async fn a_finished_job_is_stored_before_its_instance_is_retired() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        let mut deployment = child_with_health_checks("job1", vec![]);
+        deployment.set_status(DeploymentStatus::Progressing);
+        deployments::create(&pool, &deployment).await.unwrap();
+        deployment.set_status(DeploymentStatus::Completed);
+        deployment.pending_retire = vec!["vm-1".to_string()];
+        let runtime = MockRuntime::healthy();
+        let retired = runtime.retired_log();
+
+        write_back_then_retire(&pool, &progressing(), &mut deployment, &runtime).await;
+
+        let stored = deployments::find(&pool, "job1").await.unwrap().unwrap();
+        assert_eq!(stored.status, DeploymentStatus::Completed);
+        assert_eq!(*retired.lock().unwrap(), ["vm-1"]);
+        assert!(deployment.pending_retire.is_empty());
     }
 
     #[tokio::test]

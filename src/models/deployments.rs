@@ -581,6 +581,11 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
+    /// Ended instances of a finished job to retire once its status is stored:
+    /// retired first, a crash before the write would leave nothing saying the
+    /// job ran, and it would be run again. Never stored.
+    #[serde(skip)]
+    pub(crate) pending_retire: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -838,6 +843,7 @@ impl From<DeploymentRow> for Deployment {
                 })
                 .unwrap_or_default(),
             pending_events: vec![],
+            pending_retire: vec![],
             restart: row
                 .restart
                 .filter(|s| !s.is_empty())
@@ -1529,6 +1535,7 @@ mod tests {
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
+            pending_retire: vec![],
             parent_id: None,
             network: None,
             restart: None,

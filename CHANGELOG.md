@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - After the disk filled up during a database write, Ring failed every later write with `database is locked` until it was restarted, and lost writes it had already confirmed. Writes now resume once there is room again
 - Replicas started one after the other could all be admitted on the same free memory, before the first had allocated its own, and the OOM killer settled it later. Each admitted instance now reserves its memory for 60 seconds, and later admissions count those reservations
+- On Cloud Hypervisor and Firecracker, a job that finished just before Ring stopped could run again on restart: its VM was removed before the job's end was stored. The end is now stored first
 - A token rotation that failed half-way revoked the old token without creating the new one, leaving the caller with no working token. The old token is now revoked only when its replacement is stored
 - A redeploy that replaces its predecessor at once (`force`, a job, no health checks, a published host port) marked it deleted before storing the new deployment: when that failed, the service was gone with nothing in its place. Both now happen together or not at all, and two redeploys of the same name sent at once can no longer start two competing rollouts
 - Following logs live in the dashboard needed an `admin` token, since it goes through a stream ticket that only `admin` could mint. Any token that can read the deployment can now follow its logs
