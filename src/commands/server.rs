@@ -89,6 +89,16 @@ pub(crate) async fn execute(
         std::process::exit(1);
     }
 
+    // Before anything touches the database: a second server on it would
+    // reconcile every deployment a second time.
+    let _server_lock = match crate::database::lock_database(&crate::database::database_path()) {
+        Ok(lock) => lock,
+        Err(e) => {
+            error!("Refusing to start: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     let pool = get_database_pool().await;
 
     migrate_from_refinery_if_needed(&pool).await;
