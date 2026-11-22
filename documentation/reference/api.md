@@ -99,10 +99,10 @@ The endpoints that produce validation errors are flagged in their sections below
 
 Check the server is up. Does not require authentication.
 
-**Response:**
+**Response:** always `200` while the server runs. `state` is `DEGRADED` while a runtime whose daemon was unreachable at startup has not answered yet: its deployments wait, and new ones are refused, until it does.
 
 ```json
-{ "state": "UP" }
+{ "state": "DEGRADED", "runtimes": { "docker": "DOWN", "podman": "UP" } }
 ```
 
 ### `GET /metrics`

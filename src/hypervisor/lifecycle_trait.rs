@@ -270,6 +270,12 @@ pub(crate) trait RuntimeLifecycle:
         Ok(self.list_instances(deployment_id, status).await)
     }
 
+    /// Whether the runtime's daemon is reachable now. Only a runtime that was
+    /// unreachable at startup and is still being reconnected says no.
+    fn is_connected(&self) -> bool {
+        true
+    }
+
     /// Resolve the running instance ids for many deployments at once, keyed by
     /// deployment id.
     ///

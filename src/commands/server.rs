@@ -1,6 +1,7 @@
 use crate::api::server as ApiServer;
 use crate::cli::style;
 use crate::hypervisor::lifecycle_trait::RuntimeLifecycle;
+use crate::hypervisor::reconnecting::ReconnectingRuntime;
 use crate::runtime::cloud_hypervisor::CloudHypervisorLifecycle;
 use crate::runtime::containerd::{ContainerdLifecycle, ContainerdRuntimeConfig};
 use crate::runtime::docker;
@@ -124,6 +125,10 @@ pub(crate) async fn execute(
     // apply targeting an enabled-but-unregistered runtime gets an actionable
     // error (see api::action::create) instead of a confusing "unknown runtime".
     let mut runtimes_map: HashMap<String, Arc<dyn RuntimeLifecycle>> = HashMap::new();
+    // Enabled runtimes whose daemon did not answer: registered after the
+    // check below, as stand-ins that connect once the daemon answers, so
+    // their deployments are reconciled again without restarting Ring.
+    let mut reconnecting: Vec<(String, ReconnectingRuntime)> = Vec::new();
     // (runtime name, reason) for every enabled runtime that failed to come up.
     let mut runtime_failures: Vec<(String, String)> = Vec::new();
 
@@ -161,8 +166,28 @@ pub(crate) async fn execute(
                 docker::connect_with_host(&host).ok()
             }
             Err(e) => {
-                warn!("Docker runtime enabled but unreachable, skipping: {}", e);
+                warn!("Docker runtime enabled but unreachable, will retry: {}", e);
                 runtime_failures.push(("docker".to_string(), e.to_string()));
+                let (shutdowns, auth) = (intentional_shutdowns.clone(), host_auth.clone());
+                reconnecting.push((
+                    "docker".to_string(),
+                    ReconnectingRuntime::new(
+                        "docker",
+                        Box::new(move || {
+                            let (host, shutdowns, auth) =
+                                (host.clone(), shutdowns.clone(), auth.clone());
+                            Box::pin(async move {
+                                docker::connect_and_verify(&host)
+                                    .await
+                                    .map(|docker| {
+                                        Arc::new(DockerLifecycle::new(docker, shutdowns, auth))
+                                            as Arc<dyn RuntimeLifecycle>
+                                    })
+                                    .map_err(|e| e.to_string())
+                            })
+                        }),
+                    ),
+                ));
                 None
             }
         }
@@ -214,8 +239,30 @@ pub(crate) async fn execute(
                 );
             }
             Err(e) => {
-                warn!("Podman runtime enabled but unreachable, skipping: {}", e);
+                warn!("Podman runtime enabled but unreachable, will retry: {}", e);
                 runtime_failures.push(("podman".to_string(), e.to_string()));
+                let (shutdowns, auth) = (intentional_shutdowns.clone(), host_auth.clone());
+                reconnecting.push((
+                    "podman".to_string(),
+                    ReconnectingRuntime::new(
+                        "podman",
+                        Box::new(move || {
+                            let (host, shutdowns, auth) =
+                                (host.clone(), shutdowns.clone(), auth.clone());
+                            Box::pin(async move {
+                                docker::connect_and_verify(&host)
+                                    .await
+                                    .map(|podman| {
+                                        Arc::new(DockerLifecycle::new_podman(
+                                            podman, shutdowns, auth,
+                                        ))
+                                            as Arc<dyn RuntimeLifecycle>
+                                    })
+                                    .map_err(|e| e.to_string())
+                            })
+                        }),
+                    ),
+                ));
             }
         }
     } else {
@@ -229,7 +276,7 @@ pub(crate) async fn execute(
     if configuration.server.runtime.containerd.enabled {
         let containerd_config =
             ContainerdRuntimeConfig::from_user_config(&configuration.server.runtime.containerd);
-        match ContainerdLifecycle::connect_and_verify(containerd_config).await {
+        match ContainerdLifecycle::connect_and_verify(containerd_config.clone()).await {
             Ok(containerd) => {
                 runtimes_map.insert("containerd".to_string(), Arc::new(containerd));
                 // Lives as long as the server, like the microVM log rotators.
@@ -250,10 +297,27 @@ pub(crate) async fn execute(
             }
             Err(e) => {
                 warn!(
-                    "containerd runtime enabled but unreachable, skipping: {}",
+                    "containerd runtime enabled but unreachable, will retry: {}",
                     e
                 );
                 runtime_failures.push(("containerd".to_string(), e.to_string()));
+                reconnecting.push((
+                    "containerd".to_string(),
+                    ReconnectingRuntime::new(
+                        "containerd",
+                        Box::new(move || {
+                            let config = containerd_config.clone();
+                            Box::pin(async move {
+                                ContainerdLifecycle::connect_and_verify(config)
+                                    .await
+                                    .map(|containerd| {
+                                        Arc::new(containerd) as Arc<dyn RuntimeLifecycle>
+                                    })
+                                    .map_err(|e| e.to_string())
+                            })
+                        }),
+                    ),
+                ));
             }
         }
     } else {
@@ -354,6 +418,14 @@ pub(crate) async fn execute(
             );
         }
         std::process::exit(1);
+    }
+
+    // After the check above: a server needs at least one runtime that works
+    // now. The others wait for their daemon.
+    for (name, runtime) in reconnecting {
+        let runtime = Arc::new(runtime);
+        runtime.spawn_reconnect_loop();
+        runtimes_map.insert(name, runtime);
     }
 
     info!(
