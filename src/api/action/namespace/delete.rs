@@ -12,8 +12,8 @@ use crate::models::namespace;
 /// `DELETE /namespaces/{name}` — remove an empty namespace and purge its
 /// audit trail (retention is namespace-bound by design).
 ///
-/// Refuses with 409 if the namespace still holds live deployments, secrets
-/// or configs: we never cascade-delete an operator's resources.
+/// Refuses with 409 if the namespace still holds live deployments, secrets,
+/// configs or volumes: we never cascade-delete an operator's resources.
 // The path param is `{id}` to share the route shape with `namespace_get`,
 // but namespaces are addressed by name throughout the API, so we treat it
 // as a name (find_by_name / delete_by_name).
@@ -40,7 +40,7 @@ pub(crate) async fn delete(
                 Json(json!({
                     "error": "namespace is not empty",
                     "remaining": n,
-                    "hint": "delete its deployments, secrets and configs first"
+                    "hint": "delete its deployments, secrets, configs and volumes first"
                 })),
             )
                 .into_response();
@@ -190,5 +190,42 @@ mod tests {
         let server = TestServer::new(app);
         let response = server.delete("/namespaces/x").await;
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_namespace_holding_a_volume_is_not_empty() {
+        let (pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        server
+            .post("/namespaces")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "name": "vol-only" }))
+            .await;
+        let volume = crate::models::volumes::Volume::create(
+            "data".into(),
+            "vol-only".into(),
+            None,
+            "local".into(),
+            "data".into(),
+            Default::default(),
+        );
+        crate::models::volumes::insert(&pool, &volume)
+            .await
+            .unwrap();
+
+        let response = server
+            .delete("/namespaces/vol-only")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CONFLICT);
+        assert!(
+            crate::models::volumes::find(&pool, &volume.id)
+                .await
+                .unwrap()
+                .is_some()
+        );
     }
 }

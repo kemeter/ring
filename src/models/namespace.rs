@@ -111,7 +111,7 @@ pub(crate) async fn delete_by_name(pool: &SqlitePool, name: &str) -> Result<u64,
 
 /// Number of resources still living in a namespace. A namespace is only
 /// deletable when this is zero — we never cascade-delete deployments,
-/// secrets or configs out from under the operator. A "deleted"-status
+/// secrets, configs or volumes out from under the operator. A "deleted"-status
 /// deployment is a tombstone, not a live resource, so it does not count.
 pub(crate) async fn count_resources(pool: &SqlitePool, name: &str) -> Result<i64, sqlx::Error> {
     let deployments: i64 = sqlx::query_scalar(
@@ -131,7 +131,14 @@ pub(crate) async fn count_resources(pool: &SqlitePool, name: &str) -> Result<i64
         .fetch_one(pool)
         .await?;
 
-    Ok(deployments + secrets + configs)
+    // A volume holds data: deleting its namespace would orphan it, and hand it
+    // to whoever recreates the name, at whatever security level.
+    let volumes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM volumes WHERE namespace = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await?;
+
+    Ok(deployments + secrets + configs + volumes)
 }
 
 #[cfg(test)]
