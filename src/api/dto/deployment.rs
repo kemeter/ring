@@ -39,6 +39,11 @@ pub(crate) struct DeploymentOutput {
     /// Why the deployment is backing off or failed; null in any other status.
     #[serde(default)]
     pub(crate) failure: Option<FailureOutput>,
+    /// Why some instances are not running while others serve: the last crash
+    /// or refused start. Null once every instance runs, and while `failure` is
+    /// set.
+    #[serde(default)]
+    pub(crate) waiting: Option<FailureOutput>,
     pub(crate) restart_count: u32,
     pub(crate) name: String,
     pub(crate) runtime: String,
@@ -123,6 +128,10 @@ impl DeploymentOutput {
             failure: deployment.reason.map(|reason| FailureOutput {
                 reason: reason.to_string(),
                 message: deployment.message.unwrap_or_default(),
+            }),
+            waiting: deployment.waiting.map(|waiting| FailureOutput {
+                reason: waiting.reason.to_string(),
+                message: waiting.message,
             }),
             restart_count: deployment.restart_count,
             name: deployment.name,

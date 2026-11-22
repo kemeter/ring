@@ -166,7 +166,7 @@ Fixing the cause (a config, a dependency) is enough: the next attempt picks it u
 
 ### `backing_off` with `insufficient_resources`
 
-The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it, *before* creating any container or booting any VM. The event names the gap:
+The host doesn't have enough free memory to honour the deployment's requested memory, so Ring refused to start it, *before* creating any container or booting any VM. A deployment that still has instances serving stays `running` instead, and `ring deployment list` shows `N waiting: insufficient_resources` in its `Reason` column. The event names the gap:
 
 ```bash
 ring deployment events <DEPLOYMENT_ID> --level error --limit 5

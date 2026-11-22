@@ -93,6 +93,9 @@ pub(crate) async fn execute(
             if let Some(failure) = &deployment.failure {
                 println!("Failure       : {} ({})", failure.reason, failure.message);
             }
+            if let Some(waiting) = &deployment.waiting {
+                println!("Waiting       : {} ({})", waiting.reason, waiting.message);
+            }
             // On an autoscaled deployment `replicas` is only the declared
             // starting point, so showing it alone would misreport how many
             // instances Ring is actually aiming for.

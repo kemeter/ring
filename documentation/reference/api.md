@@ -136,7 +136,7 @@ List deployments.
 - `reason` or `reason[]`: filter by one or more failure reasons (values below)
 - `kind` or `kind[]`: filter by `worker` or `job` (the CLI flag `--type` maps to this)
 
-**`status` values.** Every deployment carries a `status`, and a `failure` that is `null` unless it is backing off or failed, and then gives the `reason` (`snake_case`) and a human-readable `message`. See [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle) for transitions and meaning.
+**`status` values.** Every deployment carries a `status`, and a `failure` that is `null` unless it is backing off or failed, and then gives the `reason` (`snake_case`) and a human-readable `message`. A deployment that keeps instances serving while another went down (a crash, a liveness check) or cannot start stays in its status, with `failure: null`; its `waiting` field then gives the `reason` and `message` of the last failure, and is `null` once every instance runs. See [Deployment statuses and reasons](/documentation/concepts/deployment-status-lifecycle) for transitions and meaning.
 
 | Status | Meaning | Terminal? |
 |---|---|---|
@@ -173,6 +173,7 @@ curl -H "Authorization: Bearer $TOKEN" \
     "updated_at": "2026-04-15T10:30:05Z",
     "status": "running",
     "failure": null,
+    "waiting": null,
     "restart_count": 0,
     "name": "nginx-demo",
     "runtime": "docker",
@@ -323,6 +324,7 @@ Retrieve a deployment by UUID.
   "updated_at": "2026-04-15T10:30:05Z",
   "status": "running",
   "failure": null,
+  "waiting": null,
   "restart_count": 0,
   "name": "nginx-demo",
   "runtime": "docker",
