@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ring uses rustls for HTTPS instead of the system's OpenSSL, and still trusts the system's certificate authorities. The binary no longer links `libssl`, so one built on a machine with a different OpenSSL version runs anywhere, and building it no longer needs the OpenSSL headers
 
 ### Security
+- A token whose stored namespace list could not be read was let into every namespace, since an empty list means unrestricted. It is now granted nothing, as a token with an unreadable expiry already was
 - A deployment could mount another namespace's named volume on Docker and Podman, and read or write its data, just by naming it: volume names are shared by the whole host. A volume Ring created for one namespace is now refused to the others (`spec_rejected`)
 - A token limited to namespaces could mint a stream ticket for a deployment outside them and open its logs or a shell with it, since a ticket is not checked against namespaces when used. `POST /auth/stream-ticket` now authorises the stream it opens: the scope it needs and the deployment's namespace
 - The dashboard sends a strict Content Security Policy, with the hash of its inline script, refuses to be framed, and sends `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `Cross-Origin-Opener-Policy: same-origin`

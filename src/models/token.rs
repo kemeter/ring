@@ -115,19 +115,21 @@ const SELECT_COLUMNS: &str = "id, user_id, name, kind, token_hash, token_prefix,
 
 impl From<TokenRow> for Token {
     fn from(row: TokenRow) -> Self {
-        // Lenient deserialization with a logged fallback, mirroring how
-        // deployment labels/volumes are read: a malformed JSON column must not
-        // make the whole token unreadable (which on the auth path would lock a
-        // user out), it degrades to "no scopes / all namespaces" and is logged.
-        let scopes = serde_json::from_str(&row.scopes).unwrap_or_else(|e| {
+        // A malformed JSON column must not make the whole row unreadable, but
+        // it must fail closed, like an unparseable expiry: unreadable scopes
+        // grant none. Unreadable namespaces cannot fall back to the empty
+        // list, which means "every namespace" and would widen a scoped token;
+        // the token gets no scopes instead.
+        let mut scopes = serde_json::from_str(&row.scopes).unwrap_or_else(|e| {
             warn!("Failed to deserialize scopes for token {}: {}", row.id, e);
             Vec::new()
         });
         let namespaces = serde_json::from_str(&row.namespaces).unwrap_or_else(|e| {
             warn!(
-                "Failed to deserialize namespaces for token {}: {}",
+                "Failed to deserialize namespaces for token {}: {}; it is granted nothing",
                 row.id, e
             );
+            scopes = Vec::new();
             Vec::new()
         });
 
@@ -497,5 +499,42 @@ mod tests {
             !old.is_revoked(),
             "the old token was revoked with no replacement"
         );
+    }
+
+    async fn migrated_pool() -> SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    /// A token scoped to tenant-a whose `namespaces` column no longer parses
+    /// must not become a token for every namespace: it is granted nothing.
+    #[tokio::test]
+    async fn unreadable_namespaces_fail_closed() {
+        let pool = migrated_pool().await;
+        let (_, token) = create(
+            &pool,
+            "1c5a5fe9-84e0-4a18-821e-8058232c2c23",
+            "ci",
+            TokenKind::Pat,
+            &["deployments:read".to_string()],
+            &["tenant-a".to_string()],
+            None,
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE token SET namespaces = 'not-json' WHERE id = ?")
+            .bind(&token.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let loaded = find(&pool, &token.id).await.unwrap().unwrap();
+
+        assert!(loaded.scopes.is_empty(), "it must be granted no scope");
     }
 }
