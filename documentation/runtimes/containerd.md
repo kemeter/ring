@@ -12,7 +12,7 @@ The OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is re
    dnf install containernetworking-plugins   # Fedora → /usr/libexec/cni
    ```
 
-   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**.
+   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**. With them, a plugin that fails, or takes more than 30 seconds, fails the start (`network` reason) and the instance is retried, instead of running unreachable.
 
 ## Enable it
 

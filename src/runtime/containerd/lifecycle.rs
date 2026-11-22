@@ -690,8 +690,22 @@ impl ContainerdLifecycle {
         // time, exposed at /proc/<pid>/ns/net.
         cni::ensure_default_config();
         let netns = format!("/proc/{}/ns/net", pid);
-        if cni::add(instance_id, &netns).await.is_none() {
-            debug!("no CNI address assigned for {}", instance_id);
+        match cni::add(instance_id, &netns).await {
+            Ok(Some(_)) => {}
+            Ok(None) => debug!("no CNI address assigned for {}", instance_id),
+            Err(message) => {
+                // Started anyway, it would count as running while unreachable.
+                cni::del(instance_id, &netns).await;
+                let _ = tasks
+                    .delete(with_namespace!(
+                        DeleteTaskRequest {
+                            container_id: instance_id.to_string(),
+                        },
+                        self.config.namespace
+                    ))
+                    .await;
+                return Err(RuntimeError::NetworkCreationFailed(message));
+            }
         }
 
         let start = StartRequest {
