@@ -95,7 +95,7 @@ impl HealthChecker {
                     continue;
                 }
 
-                let result = self
+                let mut result = self
                     .execute_single_check_with_runtime(
                         runtime,
                         deployment,
@@ -103,6 +103,7 @@ impl HealthChecker {
                         instance_id,
                     )
                     .await;
+                result.check_index = u32::try_from(hc_index).ok();
 
                 // In the creating status we only persist the result for the
                 // gate to read; no failure counting, no `on_failure` action.
@@ -154,6 +155,7 @@ impl HealthChecker {
                     deployment_id: deployment.id.clone(),
                     instance_id: Some(instance_id.to_string()),
                     check_type: health_check.check_type().to_string(),
+                    check_index: None,
                     status: HealthCheckStatus::Failed,
                     message: Some(format!("Invalid timeout duration: {}", e)),
                     created_at: created_time.to_rfc3339(),
@@ -178,6 +180,7 @@ impl HealthChecker {
                 deployment_id: deployment.id.clone(),
                 instance_id: Some(instance_id.to_string()),
                 check_type: health_check.check_type().to_string(),
+                check_index: None,
                 status: check_result.0,
                 message: check_result.1,
                 created_at: created_time.to_rfc3339(),
@@ -189,6 +192,7 @@ impl HealthChecker {
                 deployment_id: deployment.id.clone(),
                 instance_id: Some(instance_id.to_string()),
                 check_type: health_check.check_type().to_string(),
+                check_index: None,
                 status: HealthCheckStatus::Timeout,
                 message: Some("Health check timed out".to_string()),
                 created_at: created_time.to_rfc3339(),
@@ -212,12 +216,13 @@ impl HealthChecker {
 
         let message = result.message.as_deref();
         if let Err(e) = sqlx::query(
-            "INSERT INTO health_check (id, deployment_id, instance_id, check_type, status, message, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT INTO health_check (id, deployment_id, instance_id, check_type, check_index, status, message, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
             .bind(&result.id)
             .bind(&result.deployment_id)
             .bind(&result.instance_id)
             .bind(&result.check_type)
+            .bind(result.check_index.map(i64::from))
             .bind(status_str)
             .bind(message)
             .bind(&result.created_at)
@@ -686,6 +691,7 @@ mod tests {
             deployment_id: "test-persist".to_string(),
             instance_id: Some("instance-1".to_string()),
             check_type: "tcp".to_string(),
+            check_index: None,
             status: HealthCheckStatus::Success,
             message: Some("OK".to_string()),
             created_at: chrono::Utc::now().to_rfc3339(),

@@ -108,7 +108,7 @@ deployments:
         on_failure: alert
 ```
 
-Each row writes to the `health_check` table independently, but **counters are tracked per `(deployment, instance, check_type)`**, *not* per individual check. Two checks of the **same type** on one deployment share a counter, which means a failure on one resets the other. To run "cheap + deep" probes of the same type, declare one and let it cover both responsibilities (or use different types).
+Each check writes its own results, and Ring tracks each one separately on each instance, so "cheap + deep" probes of the same type work as two independent checks: each has its own failure counter, and a readiness gate waits for both, on every instance.
 
 ## Gate a rolling update on real readiness
 

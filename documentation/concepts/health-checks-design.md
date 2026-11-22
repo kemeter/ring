@@ -44,7 +44,7 @@ Retention: 50 results per deployment, 7-day window.
 
 ## Failure counter and `on_failure`
 
-For each `(deployment, instance, check_type)` triple, Ring keeps an **in-memory** consecutive-failure counter. **Caveat:** the key is the check **type** (`tcp` / `http` / `command`), not a per-check index, so declaring two `http` checks on the same deployment makes them share a counter. Use one check per type (cheap + deep variants of the same type require a workaround):
+For each check on each instance, Ring keeps an **in-memory** consecutive-failure counter. Checks are told apart by their position in `health_checks`, so two checks of the same type (a cheap and a deep `http` probe) each have their own counter, and each must pass on every instance for the [readiness gate](#the-readiness-gate) to open:
 
 - A `success` resets it to zero
 - A `failed` or `timeout` increments it
@@ -64,7 +64,7 @@ Pick `restart` unless you have a specific reason not to. `stop` and `alert` are 
 
 `readiness: true` makes a check gate two things:
 
-1. **The deployment's own `running` status**: a deployment with at least one readiness check stays `progressing` until every readiness check has been green for `min_healthy_time`. `running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `running` as soon as the container stays up.
+1. **The deployment's own `running` status**: a deployment with at least one readiness check stays `progressing` until every readiness check has been green on every instance for `min_healthy_time`. `running` then means *the app is actually serving*, not merely *the container started*. This is what makes the `deployment.status_changed → running` event trustworthy for external subscribers. A deployment with **no** readiness check keeps the legacy behaviour: `running` as soon as the container stays up.
 2. **The rolling-update drain**: during an update, Ring drains the old (parent) deployment only once the new (child) deployment's readiness gate has opened.
 
 Readiness probes are evaluated even while a deployment is `progressing` (readiness-only, record-only: no `on_failure` action fires during boot, since a probe that isn't green yet isn't a failure). Liveness checks run only once `running`.
