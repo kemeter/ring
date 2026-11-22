@@ -22,6 +22,9 @@ export interface Deployment {
   status: string;
   /** Why the deployment is backing off or failed; null in any other status. */
   failure?: DeploymentFailure | null;
+  /** Why some instances are not running while others serve: the last crash
+   *  or refused start. Null once every instance runs, and while `failure` is set. */
+  waiting?: DeploymentFailure | null;
   replicas: number;
   image: string;
   /** SQL-style timestamp from the API; parse with `formatDate`. */
