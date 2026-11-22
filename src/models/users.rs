@@ -520,3 +520,59 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod unique_username_tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    const UNIQUE_USERNAME_MIGRATION: i64 = 20220101000033;
+
+    /// Duplicates already stored keep their accounts: all but the oldest are
+    /// renamed so the unique index can be created.
+    #[tokio::test]
+    async fn existing_duplicates_are_renamed_by_the_migration() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let migrations = sqlx::migrate!("./migrations");
+        for migration in migrations
+            .iter()
+            .filter(|m| m.version < UNIQUE_USERNAME_MIGRATION)
+        {
+            sqlx::raw_sql(migration.sql.clone())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for id in ["aaaaaaaa-1111", "bbbbbbbb-2222"] {
+            sqlx::query(
+                "INSERT INTO user (id, created_at, status, role, username, password) \
+                 VALUES (?, datetime(), 'active', 'viewer', 'twin', 'x')",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        for migration in migrations
+            .iter()
+            .filter(|m| m.version >= UNIQUE_USERNAME_MIGRATION)
+        {
+            sqlx::raw_sql(migration.sql.clone())
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let mut names: Vec<String> =
+            sqlx::query_scalar("SELECT username FROM user WHERE username LIKE 'twin%'")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        names.sort();
+        assert_eq!(names, ["twin", "twin-bbbbbbbb"]);
+    }
+}

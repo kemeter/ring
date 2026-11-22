@@ -805,7 +805,7 @@ Returns the same shape as a list entry.
 }
 ```
 
-**Response:** `201 Created`
+**Response:** `201 Created`. `409 Conflict` when another user already has that username; renaming a user to a taken name with `PUT /users/{id}` is refused the same way.
 
 **Validation** (see [Validation errors](#validation-errors) for the response shape):
 
