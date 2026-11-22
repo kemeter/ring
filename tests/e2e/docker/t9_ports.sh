@@ -96,27 +96,17 @@ deployments:
     ports:
       - { published: $PORT_HTTP, target: 80 }
 EOF
-"$RING_BIN" apply --file "$CONFLICT_FIXTURE"
-
-# Poll for ~30s. The conflicting deployment must NOT reach `running`
-# because Docker keeps refusing to bind the busy port. Acceptable terminal
-# states are `progressing`, `failed`, `backing_off`, etc. — anything but
-# `running`.
-saw_running=0
-for _ in $(seq 1 30); do
-  status=$("$RING_BIN" deployment list --output json 2>/dev/null \
-    | jq -r '.[] | select(.namespace=="ring-e2e" and .name=="nginx-ports-conflict") | '"$STATE_JQ" \
-    | head -n1)
-  if [ "$status" = "running" ]; then
-    saw_running=1
-    break
-  fi
-  sleep 1
-done
-if [ "$saw_running" -eq 1 ]; then
-  fail "conflicting deployment unexpectedly reached 'running' on busy port $PORT_HTTP"
+# The host port is already published by the first deployment: the apply is
+# refused up front, instead of creating a deployment that could only back off.
+if conflict_out=$("$RING_BIN" apply --file "$CONFLICT_FIXTURE" 2>&1); then
+  echo "$conflict_out" >&2
+  fail "a deployment publishing busy host port $PORT_HTTP was accepted"
 fi
-log "conflicting deployment correctly stayed out of 'running' (last status: ${status:-<none>})"
+echo "$conflict_out" | grep -q "already published by deployment 'ring-e2e/nginx-ports'" \
+  || { echo "$conflict_out" >&2; fail "the refusal does not name the deployment holding the port"; }
+[ -z "$(get_deployment_id "ring-e2e" "nginx-ports-conflict")" ] \
+  || fail "the refused deployment was stored anyway"
+log "conflicting deployment refused at apply time"
 
 # Original deployment is still running on the port.
 status_orig=$("$RING_BIN" deployment list --output json 2>/dev/null \
@@ -124,11 +114,7 @@ status_orig=$("$RING_BIN" deployment list --output json 2>/dev/null \
 if [ "$status_orig" != "running" ]; then
   fail "original deployment $DEPLOYMENT_ID lost its 'running' state during conflict (got '$status_orig')"
 fi
-log "original deployment still 'running' — conflict did not steal the port"
-
-# Cleanup the conflicting one before tearing down the original.
-CONFLICT_ID=$(get_deployment_id "ring-e2e" "nginx-ports-conflict")
-[ -n "$CONFLICT_ID" ] && "$RING_BIN" deployment delete "$CONFLICT_ID" || true
+log "original deployment still 'running'"
 
 # === ExposedPorts is set (regression: PR exposing published ports) ===
 # Without `ExposedPorts` mirroring the PortBindings keys, Docker silently
