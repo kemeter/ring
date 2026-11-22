@@ -208,15 +208,19 @@ fn generate_token() -> (String, String, String) {
 /// Create a token for `user_id`. Returns the clear value (`ring_pat_...`)
 /// alongside the persisted row — the clear value is shown to the user once and
 /// then unrecoverable.
-pub(crate) async fn create(
-    pool: &SqlitePool,
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn create<'e, E>(
+    executor: E,
     user_id: &str,
     name: &str,
     kind: TokenKind,
     scopes: &[String],
     namespaces: &[String],
     expire_at: Option<&str>,
-) -> Result<(String, Token), sqlx::Error> {
+) -> Result<(String, Token), sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let (clear, prefix, hash) = generate_token();
     let id = Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339();
@@ -237,7 +241,7 @@ pub(crate) async fn create(
     .bind(&namespaces_json)
     .bind(&created_at)
     .bind(expire_at)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     let token = Token {
@@ -303,12 +307,15 @@ pub(crate) async fn find_all_for_user(
 }
 
 /// Soft-delete: mark the token revoked. Idempotent — re-revoking is a no-op.
-pub(crate) async fn revoke(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn revoke<'e, E>(executor: E, id: &str) -> Result<(), sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let now = Utc::now().to_rfc3339();
     sqlx::query("UPDATE token SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
         .bind(&now)
         .bind(id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
     Ok(())
@@ -333,13 +340,18 @@ pub(crate) async fn update_scopes(
 
 /// Rotate: revoke the existing token and mint a new one carrying the same
 /// name/scopes/namespaces/expiry. Returns the new clear value.
+///
+/// Both writes commit together: a rotation that fails, or whose request is
+/// cancelled half-way, leaves the old token working instead of revoked with
+/// no replacement.
 pub(crate) async fn rotate(
     pool: &SqlitePool,
     existing: &Token,
 ) -> Result<(String, Token), sqlx::Error> {
-    revoke(pool, &existing.id).await?;
-    create(
-        pool,
+    let mut tx = pool.begin().await?;
+    revoke(&mut *tx, &existing.id).await?;
+    let rotated = create(
+        &mut *tx,
         &existing.user_id,
         &existing.name,
         existing.kind,
@@ -347,7 +359,9 @@ pub(crate) async fn rotate(
         &existing.namespaces,
         existing.expire_at.as_deref(),
     )
-    .await
+    .await?;
+    tx.commit().await?;
+    Ok(rotated)
 }
 
 /// Best-effort last-use marker, throttled to one write per minute so the auth
@@ -446,5 +460,42 @@ mod tests {
         t.revoked_at = Some("2026-01-02T00:00:00Z".into());
         assert!(t.is_revoked());
         assert!(!t.is_active());
+    }
+
+    /// A rotation whose new token cannot be stored leaves the old one working.
+    #[tokio::test]
+    async fn a_failed_rotation_keeps_the_old_token() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let (_, token) = create(
+            &pool,
+            "1c5a5fe9-84e0-4a18-821e-8058232c2c23",
+            "ci",
+            TokenKind::Pat,
+            &["admin".to_string()],
+            &[],
+            None,
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TRIGGER refuse_insert BEFORE INSERT ON token \
+             BEGIN SELECT RAISE(ABORT, 'injected'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(rotate(&pool, &token).await.is_err());
+
+        let old = find(&pool, &token.id).await.unwrap().unwrap();
+        assert!(
+            !old.is_revoked(),
+            "the old token was revoked with no replacement"
+        );
     }
 }

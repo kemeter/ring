@@ -131,7 +131,10 @@ pub(crate) async fn reconcile(
                 "scheduler",
                 Some("job_completed"),
             );
-            driver.retire_instance(&termination.instance_id).await;
+            // Retired by the scheduler once `Completed` is stored.
+            deployment
+                .pending_retire
+                .push(termination.instance_id.clone());
             state.last_termination = Some(termination);
             state.next_attempt_at = None;
             break;
@@ -165,7 +168,10 @@ pub(crate) async fn reconcile(
         }
         let job_done = matches!(kind, WorkloadKind::Job { .. }) && decision == Decision::Fail;
         if job_done {
-            driver.retire_instance(&termination.instance_id).await;
+            // Retired by the scheduler once `Failed` is stored.
+            deployment
+                .pending_retire
+                .push(termination.instance_id.clone());
         } else {
             driver.discard_instance(&termination.instance_id).await;
         }
@@ -763,6 +769,7 @@ mod tests {
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
+            pending_retire: vec![],
             parent_id: None,
             network: None,
             restart: None,
@@ -1455,7 +1462,10 @@ mod tests {
 
         assert_eq!(d.status, DeploymentStatus::Completed);
         assert!(driver.discarded.lock().unwrap().is_empty());
-        assert_eq!(*driver.retired.lock().unwrap(), ["j"]);
+        // Retired by the scheduler once `Completed` is stored, not here: a
+        // crash in between would otherwise run the job again.
+        assert!(driver.retired.lock().unwrap().is_empty());
+        assert_eq!(d.pending_retire, ["j"]);
         assert!(reasons(&d).contains(&"job_completed".to_string()));
         assert_eq!(d.restart_count, 0);
     }
@@ -1470,7 +1480,8 @@ mod tests {
 
         assert_eq!(d.status, DeploymentStatus::Failed);
         assert!(driver.discarded.lock().unwrap().is_empty());
-        assert_eq!(*driver.retired.lock().unwrap(), ["j"]);
+        assert!(driver.retired.lock().unwrap().is_empty());
+        assert_eq!(d.pending_retire, ["j"]);
         assert_eq!(driver.starts(), 0);
         assert_eq!(state.run_failures, 1);
     }

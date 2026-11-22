@@ -581,6 +581,11 @@ pub(crate) struct Deployment {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[serde(skip_deserializing)]
     pub(crate) pending_events: Vec<crate::models::deployment_event::DeploymentEvent>,
+    /// Ended instances of a finished job to retire once its status is stored:
+    /// retired first, a crash before the write would leave nothing saying the
+    /// job ran, and it would be run again. Never stored.
+    #[serde(skip)]
+    pub(crate) pending_retire: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) parent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -838,6 +843,7 @@ impl From<DeploymentRow> for Deployment {
                 })
                 .unwrap_or_default(),
             pending_events: vec![],
+            pending_retire: vec![],
             restart: row
                 .restart
                 .filter(|s| !s.is_empty())
@@ -903,11 +909,14 @@ pub(crate) async fn active_namespaces(
     Ok(namespaces.into_iter().collect())
 }
 
-pub(crate) async fn find_active_by_namespace_name(
-    pool: &SqlitePool,
+pub(crate) async fn find_active_by_namespace_name<'e, E>(
+    executor: E,
     namespace: &str,
     name: &str,
-) -> Result<Vec<Deployment>, sqlx::Error> {
+) -> Result<Vec<Deployment>, sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let sql = format!(
         "SELECT {} FROM deployment WHERE namespace = ? AND name = ? AND status <> 'deleted' ORDER BY created_at DESC",
         SELECT_COLUMNS
@@ -916,7 +925,7 @@ pub(crate) async fn find_active_by_namespace_name(
     let rows = sqlx::query_as::<_, DeploymentRow>(sqlx::AssertSqlSafe(sql))
         .bind(namespace)
         .bind(name)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
 
     Ok(rows.into_iter().map(Deployment::from).collect())
@@ -933,10 +942,13 @@ pub(crate) async fn find(pool: &SqlitePool, id: &str) -> Result<Option<Deploymen
     Ok(row.map(Deployment::from))
 }
 
-pub(crate) async fn create(
-    pool: &SqlitePool,
+pub(crate) async fn create<'e, E>(
+    executor: E,
     deployment: &Deployment,
-) -> Result<Deployment, sqlx::Error> {
+) -> Result<Deployment, sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     let labels = serde_json::to_string(&deployment.labels).unwrap_or_else(|_| "[]".to_string());
     let environment =
         serde_json::to_string(&deployment.environment).unwrap_or_else(|_| "{}".to_string());
@@ -1000,7 +1012,7 @@ pub(crate) async fn create(
     .bind(&ports_json)
     .bind(&network_mode)
     .bind(&restart_json)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(deployment.clone())
@@ -1043,13 +1055,16 @@ pub(crate) async fn update(
 /// For callers that only want to delete: writing back a whole loaded copy, as
 /// [`update`] does, would also overwrite the image digest and rolling parent
 /// with whatever that copy held, undoing a change the scheduler made since.
-pub(crate) async fn mark_deleted(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn mark_deleted<'e, E>(executor: E, id: &str) -> Result<(), sqlx::Error>
+where
+    E: sqlx::SqliteExecutor<'e>,
+{
     sqlx::query(
         "UPDATE deployment SET status = 'deleted', reason = NULL, message = NULL, \
          updated_at = datetime('now') WHERE id = ?",
     )
     .bind(id)
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(())
@@ -1520,6 +1535,7 @@ mod tests {
             image_digest: None,
             ports: vec![],
             pending_events: vec![],
+            pending_retire: vec![],
             parent_id: None,
             network: None,
             restart: None,
