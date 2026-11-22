@@ -8,6 +8,8 @@ pub(crate) struct HealthCheckResultRecord {
     pub(crate) deployment_id: String,
     pub(crate) instance_id: Option<String>,
     pub(crate) check_type: String,
+    #[sqlx(default)]
+    pub(crate) check_index: Option<i64>,
     pub(crate) status: String,
     pub(crate) message: Option<String>,
     pub(crate) created_at: String,
@@ -29,6 +31,7 @@ impl From<HealthCheckResultRecord> for HealthCheckResult {
             deployment_id: record.deployment_id,
             instance_id: record.instance_id,
             check_type: record.check_type,
+            check_index: record.check_index.and_then(|i| u32::try_from(i).ok()),
             status,
             message: record.message,
             created_at: record.created_at,
@@ -77,56 +80,81 @@ pub(crate) async fn find_latest_by_deployment(
     .await
 }
 
-/// Per-check_type entry returned by `find_ready_since_by_deployment`.
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub(crate) struct ReadySinceRecord {
-    pub(crate) check_type: String,
-    pub(crate) ready_since: String,
+/// Where one check stands on one instance, from its recent results.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckState {
+    pub(crate) instance_id: String,
+    pub(crate) check_index: u32,
+    /// `success`, `failed` or `timeout`: the most recent result.
+    pub(crate) latest_status: String,
+    pub(crate) latest_finished_at: String,
+    /// When the current run of successes began, i.e. the first success after
+    /// the last non-success. `None` when the latest result is not a success.
+    /// Anchoring the anti-flap window there, rather than on the latest
+    /// success, lets it elapse instead of being re-armed by every probe.
+    pub(crate) ready_since: Option<String>,
 }
 
-/// For each `check_type`, return the timestamp of the **first** success since
-/// the last non-success result (or the first success ever if there was no
-/// failure). Used by the readiness gate to compute the anti-flap window
-/// against a stable point in time rather than the most recent success
-/// (which would slide forward at every probe and never let the window
-/// elapse). Check types whose most recent result is not Success are
-/// excluded — caller must treat a missing row as "failing or no result".
-pub(crate) async fn find_ready_since_by_deployment(
+/// How many recent results are read to work out each check's state. Enough
+/// for any realistic number of instances times checks; a run of successes
+/// longer than this only starts its window later than it could, never earlier.
+const RECENT_RESULTS: i64 = 5000;
+
+/// The state of every check on every instance of `deployment_id`, one entry
+/// per `(instance, check)` pair that has produced a result. Results stored
+/// before checks were numbered are left out.
+pub(crate) async fn find_check_states(
     pool: &SqlitePool,
-    deployment_id: String,
-) -> Result<Vec<ReadySinceRecord>, sqlx::Error> {
-    sqlx::query_as::<_, ReadySinceRecord>(
-        "WITH last_failure AS (
-            SELECT check_type, MAX(finished_at) AS finished_at
-            FROM health_check
-            WHERE deployment_id = ? AND status != 'success'
-            GROUP BY check_type
-        ),
-        latest AS (
-            SELECT hc.check_type, hc.status
-            FROM health_check hc
-            INNER JOIN (
-                SELECT check_type, MAX(finished_at) AS max_f
-                FROM health_check WHERE deployment_id = ?
-                GROUP BY check_type
-            ) m ON hc.check_type = m.check_type AND hc.finished_at = m.max_f
-            WHERE hc.deployment_id = ?
-        )
-        SELECT hc.check_type, MIN(hc.finished_at) AS ready_since
-        FROM health_check hc
-        INNER JOIN latest ON latest.check_type = hc.check_type AND latest.status = 'success'
-        LEFT JOIN last_failure lf ON lf.check_type = hc.check_type
-        WHERE hc.deployment_id = ?
-          AND hc.status = 'success'
-          AND (lf.finished_at IS NULL OR hc.finished_at > lf.finished_at)
-        GROUP BY hc.check_type",
+    deployment_id: &str,
+) -> Result<Vec<CheckState>, sqlx::Error> {
+    let rows: Vec<(String, i64, String, String)> = sqlx::query_as(
+        "SELECT instance_id, check_index, status, finished_at
+         FROM health_check
+         WHERE deployment_id = ? AND instance_id IS NOT NULL AND check_index IS NOT NULL
+         ORDER BY finished_at DESC
+         LIMIT ?",
     )
-    .bind(&deployment_id)
-    .bind(&deployment_id)
-    .bind(&deployment_id)
-    .bind(&deployment_id)
+    .bind(deployment_id)
+    .bind(RECENT_RESULTS)
     .fetch_all(pool)
-    .await
+    .await?;
+    Ok(check_states(rows))
+}
+
+/// Fold results, newest first, into one state per `(instance, check)`.
+fn check_states(rows: Vec<(String, i64, String, String)>) -> Vec<CheckState> {
+    let mut states: Vec<CheckState> = Vec::new();
+    // Pairs whose run of successes already met an older non-success.
+    let mut closed: std::collections::HashSet<(String, u32)> = std::collections::HashSet::new();
+    for (instance_id, index, status, finished_at) in rows {
+        let Ok(check_index) = u32::try_from(index) else {
+            continue;
+        };
+        let key = (instance_id.clone(), check_index);
+        match states
+            .iter_mut()
+            .find(|s| s.instance_id == instance_id && s.check_index == check_index)
+        {
+            None => states.push(CheckState {
+                instance_id,
+                check_index,
+                ready_since: (status == "success").then(|| finished_at.clone()),
+                latest_status: status,
+                latest_finished_at: finished_at,
+            }),
+            Some(state) => {
+                if state.ready_since.is_none() || closed.contains(&key) {
+                    continue;
+                }
+                if status == "success" {
+                    state.ready_since = Some(finished_at);
+                } else {
+                    closed.insert(key);
+                }
+            }
+        }
+    }
+    states
 }
 
 pub(crate) async fn delete_by_deployment_id(
@@ -205,4 +233,55 @@ pub(crate) async fn cleanup_old_health_checks(pool: &SqlitePool) -> Result<u64, 
     }
 
     Ok(total_deleted)
+}
+
+#[cfg(test)]
+mod check_state_tests {
+    use super::check_states;
+
+    fn row(instance: &str, index: i64, status: &str, at: &str) -> (String, i64, String, String) {
+        (instance.into(), index, status.into(), at.into())
+    }
+
+    #[test]
+    fn ready_since_is_the_start_of_the_current_run_of_successes() {
+        // Newest first: ok@3, ok@2, failed@1, ok@0.
+        let states = check_states(vec![
+            row("i1", 0, "success", "3"),
+            row("i1", 0, "success", "2"),
+            row("i1", 0, "failed", "1"),
+            row("i1", 0, "success", "0"),
+        ]);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].latest_status, "success");
+        assert_eq!(states[0].ready_since.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn a_failing_check_is_not_ready() {
+        let states = check_states(vec![
+            row("i1", 0, "failed", "2"),
+            row("i1", 0, "success", "1"),
+        ]);
+        assert_eq!(states[0].ready_since, None);
+        assert_eq!(states[0].latest_status, "failed");
+    }
+
+    #[test]
+    fn checks_and_instances_are_kept_apart() {
+        // Two http checks (index 0 and 1) on two instances.
+        let states = check_states(vec![
+            row("i1", 0, "success", "4"),
+            row("i1", 1, "failed", "4"),
+            row("i2", 0, "success", "4"),
+            row("i2", 1, "success", "4"),
+        ]);
+        assert_eq!(states.len(), 4);
+        let failing: Vec<_> = states.iter().filter(|s| s.ready_since.is_none()).collect();
+        assert_eq!(failing.len(), 1);
+        assert_eq!(
+            (failing[0].instance_id.as_str(), failing[0].check_index),
+            ("i1", 1)
+        );
+    }
 }

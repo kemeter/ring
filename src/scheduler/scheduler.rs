@@ -1003,13 +1003,24 @@ async fn readiness_decision(
 
     let child = deployment;
 
-    // We need two things per check_type: (1) the latest status, to detect
-    // Failing / PendingNoResult; (2) the **ready-since** timestamp, i.e. the
-    // first success after the last non-success — anchoring the anti-flap
-    // window to a stable point so the gate actually elapses instead of
-    // being re-armed by every new success.
-    let latest = match health_check_logs::find_latest_by_deployment(pool, child.id.clone()).await {
-        Ok(rows) => rows,
+    // Readiness is per instance and per check: every running instance must
+    // pass every readiness check. Keyed by `check_type`, two checks of the
+    // same type shared one result and the gate never opened, and one ready
+    // instance stood for another that had not been probed yet.
+    if child.instances.is_empty() {
+        return ReadinessDecision::PendingNoResult;
+    }
+    let readiness_indices: Vec<u32> = child
+        .health_checks
+        .iter()
+        .enumerate()
+        .filter(|(_, hc)| hc.is_readiness())
+        .filter_map(|(i, _)| u32::try_from(i).ok())
+        .collect();
+    let expected = readiness_indices.len() * child.instances.len();
+
+    let states = match health_check_logs::find_check_states(pool, &child.id).await {
+        Ok(states) => states,
         Err(e) => {
             warn!(
                 "Failed to load readiness check results for deployment {}: {} — holding",
@@ -1018,66 +1029,33 @@ async fn readiness_decision(
             return ReadinessDecision::PendingNoResult;
         }
     };
-    let ready_since =
-        match health_check_logs::find_ready_since_by_deployment(pool, child.id.clone()).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                warn!(
-                    "Failed to load ready-since timestamps for deployment {}: {} — holding",
-                    child.id, e
-                );
-                return ReadinessDecision::PendingNoResult;
-            }
-        };
 
-    // Restrict to the check_types that are marked readiness in the manifest.
-    let readiness_types: std::collections::HashSet<&str> = child
-        .health_checks
-        .iter()
-        .filter(|hc| hc.is_readiness())
-        .map(|hc| hc.check_type())
-        .collect();
-
-    let ready_since_by_type: std::collections::HashMap<&str, chrono::DateTime<chrono::Utc>> =
-        ready_since
-            .iter()
-            .filter_map(|r| {
-                chrono::DateTime::parse_from_rfc3339(&r.ready_since)
-                    .ok()
-                    .map(|t| (r.check_type.as_str(), t.with_timezone(&chrono::Utc)))
-            })
-            .collect();
-
-    // We currently identify a HC by its `check_type`. That works as long as
-    // a deployment doesn't declare two HCs of the same type (e.g. two
-    // separate http probes) — the storage layer aggregates results by
-    // check_type, so distinguishing two http checks would need a richer
-    // identifier. Document the limitation; revisit if a real use case lands.
+    let parse = |at: &str| {
+        chrono::DateTime::parse_from_rfc3339(at)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc))
+    };
     let mut filtered: Vec<(HealthCheckStatus, chrono::DateTime<chrono::Utc>)> = Vec::new();
-    for record in &latest {
-        if !readiness_types.contains(record.check_type.as_str()) {
-            continue;
+    for instance_id in &child.instances {
+        for index in &readiness_indices {
+            let Some(state) = states
+                .iter()
+                .find(|s| &s.instance_id == instance_id && s.check_index == *index)
+            else {
+                continue; // no result yet: one short of `expected`
+            };
+            let entry = match (state.latest_status.as_str(), &state.ready_since) {
+                // Anchored to the start of the run of successes (stable).
+                ("success", Some(since)) => parse(since).map(|t| (HealthCheckStatus::Success, t)),
+                ("timeout", _) => {
+                    parse(&state.latest_finished_at).map(|t| (HealthCheckStatus::Timeout, t))
+                }
+                _ => parse(&state.latest_finished_at).map(|t| (HealthCheckStatus::Failed, t)),
+            };
+            if let Some(entry) = entry {
+                filtered.push(entry);
+            }
         }
-        let status = match record.status.as_str() {
-            "success" => HealthCheckStatus::Success,
-            "timeout" => HealthCheckStatus::Timeout,
-            _ => HealthCheckStatus::Failed,
-        };
-        // For success, anchor the timestamp to ready_since (stable). For
-        // non-success, the timestamp is irrelevant — evaluate_readiness will
-        // short-circuit to Failing.
-        let anchor = if matches!(status, HealthCheckStatus::Success) {
-            match ready_since_by_type.get(record.check_type.as_str()) {
-                Some(t) => *t,
-                None => continue,
-            }
-        } else {
-            match chrono::DateTime::parse_from_rfc3339(&record.finished_at) {
-                Ok(t) => t.with_timezone(&chrono::Utc),
-                Err(_) => continue,
-            }
-        };
-        filtered.push((status, anchor));
     }
 
     let min_healthy_time = min_healthy_time_for(child);
@@ -1278,7 +1256,22 @@ async fn handle_rolling_update(
     // RING_ROLLOUT_DEADLINE (default 600s), force the drain: the child is
     // serving traffic regardless, so one instance is strictly better than a
     // stuck pair. Operators still get a warning + event to fix the probe.
+    //
+    // Not when the child's readiness is failing, though: the child reaches
+    // `running` only through the readiness gate, so a failing check here
+    // means it was ready once and broke since. Draining then would replace a
+    // working version with a broken one; the parent keeps serving instead.
     if !is_ready_to_drain(pool, child).await {
+        if matches!(
+            readiness_decision(pool, child).await,
+            crate::models::health_check::ReadinessDecision::Failing
+        ) {
+            warn!(
+                "Rolling update: child {} is failing its readiness check, keeping parent {} serving",
+                child.id, parent_id
+            );
+            return;
+        }
         if rollout_deadline_exceeded(child) {
             warn!(
                 "Rolling update: child {} still not ready after deadline — forcing parent drain to avoid a stuck duplicate (check its readiness probe)",
@@ -2473,21 +2466,25 @@ mod tests {
     /// Insert a health_check row directly so the gate has something to read.
     /// `seconds_ago` is the offset from now() applied to all timestamps —
     /// makes the anti-flap window deterministic without sleeping.
+    /// The result is for `instance-1` (the fixtures' instance) and for the
+    /// check at `check_index` in the manifest.
     async fn insert_hc_result(
         pool: &SqlitePool,
         deployment_id: &str,
         check_type: &str,
+        check_index: i64,
         status: &str,
         seconds_ago: i64,
     ) {
         let ts = (chrono::Utc::now() - chrono::Duration::seconds(seconds_ago)).to_rfc3339();
         sqlx::query(
-            "INSERT INTO health_check (id, deployment_id, check_type, status, message, created_at, started_at, finished_at)
-             VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+            "INSERT INTO health_check (id, deployment_id, instance_id, check_type, check_index, status, message, created_at, started_at, finished_at)
+             VALUES (?, ?, 'instance-1', ?, ?, ?, NULL, ?, ?, ?)",
         )
         .bind(uuid::Uuid::new_v4().to_string())
         .bind(deployment_id)
         .bind(check_type)
+        .bind(check_index)
         .bind(status)
         .bind(&ts)
         .bind(&ts)
@@ -2608,7 +2605,7 @@ mod tests {
         let pool = new_test_pool().await;
         let child = child_with_health_checks("child-3", vec![readiness_command("ready")]);
         // Success 5s ago, MIN_HEALTHY_TIME is 10s → not enough.
-        insert_hc_result(&pool, "child-3", "command", "success", 5).await;
+        insert_hc_result(&pool, "child-3", "command", 0, "success", 5).await;
         assert!(!is_ready_to_drain(&pool, &child).await);
     }
 
@@ -2617,7 +2614,7 @@ mod tests {
         let pool = new_test_pool().await;
         let child = child_with_health_checks("child-4", vec![readiness_command("ready")]);
         // Success 30s ago — well past MIN_HEALTHY_TIME.
-        insert_hc_result(&pool, "child-4", "command", "success", 30).await;
+        insert_hc_result(&pool, "child-4", "command", 0, "success", 30).await;
         assert!(is_ready_to_drain(&pool, &child).await);
     }
 
@@ -2635,14 +2632,14 @@ mod tests {
             *min_healthy_time = Some("60s".to_string());
         }
         let child = child_with_health_checks("child-mht", hcs);
-        insert_hc_result(&pool, "child-mht", "command", "success", 30).await;
+        insert_hc_result(&pool, "child-mht", "command", 0, "success", 30).await;
         assert!(
             !is_ready_to_drain(&pool, &child).await,
             "30s should be too recent for a 60s anti-flap window"
         );
 
         // Bump the recorded success to 90s ago — now past the custom window.
-        insert_hc_result(&pool, "child-mht", "command", "success", 90).await;
+        insert_hc_result(&pool, "child-mht", "command", 0, "success", 90).await;
         assert!(is_ready_to_drain(&pool, &child).await);
     }
 
@@ -2651,8 +2648,8 @@ mod tests {
         let pool = new_test_pool().await;
         let child = child_with_health_checks("child-5", vec![readiness_command("ready")]);
         // An old success and a recent failure — gate must read the latest only.
-        insert_hc_result(&pool, "child-5", "command", "success", 60).await;
-        insert_hc_result(&pool, "child-5", "command", "failed", 5).await;
+        insert_hc_result(&pool, "child-5", "command", 0, "success", 60).await;
+        insert_hc_result(&pool, "child-5", "command", 0, "failed", 5).await;
         assert!(!is_ready_to_drain(&pool, &child).await);
     }
 
@@ -2663,12 +2660,12 @@ mod tests {
         // a result. We must wait until both have at least one entry.
         let child =
             child_with_health_checks("child-6", vec![readiness_tcp(), readiness_command("ready")]);
-        insert_hc_result(&pool, "child-6", "command", "success", 30).await;
+        insert_hc_result(&pool, "child-6", "command", 1, "success", 30).await;
         // tcp has no result yet — gate must hold.
         assert!(!is_ready_to_drain(&pool, &child).await);
 
         // After both are green and old enough, gate opens.
-        insert_hc_result(&pool, "child-6", "tcp", "success", 30).await;
+        insert_hc_result(&pool, "child-6", "tcp", 0, "success", 30).await;
         assert!(is_ready_to_drain(&pool, &child).await);
     }
 
@@ -2689,9 +2686,117 @@ mod tests {
             start_period: None,
         });
         let child = child_with_health_checks("child-7", hcs);
-        insert_hc_result(&pool, "child-7", "command", "success", 30).await;
+        insert_hc_result(&pool, "child-7", "command", 0, "success", 30).await;
         // tcp has no result, but it's not a readiness HC, so gate opens.
         assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    fn readiness_http(path: &str) -> HealthCheck {
+        HealthCheck::Http {
+            url: format!("http://localhost:80{path}"),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 3,
+            on_failure: FailureAction::Alert,
+            readiness: true,
+            min_healthy_time: None,
+            start_period: None,
+        }
+    }
+
+    /// Two readiness checks of the same type are two checks: both green, the
+    /// gate opens (it never did when results were keyed by type).
+    #[tokio::test]
+    async fn two_readiness_checks_of_the_same_type_can_both_pass() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks(
+            "two-http",
+            vec![readiness_http("/ready"), readiness_http("/db")],
+        );
+        insert_hc_result(&pool, "two-http", "http", 0, "success", 30).await;
+        assert!(
+            !is_ready_to_drain(&pool, &child).await,
+            "/db has no result yet"
+        );
+        insert_hc_result(&pool, "two-http", "http", 1, "success", 30).await;
+        assert!(is_ready_to_drain(&pool, &child).await);
+    }
+
+    /// One failing check of two of the same type holds the gate.
+    #[tokio::test]
+    async fn one_failing_check_of_the_same_type_holds_the_gate() {
+        let pool = new_test_pool().await;
+        let child = child_with_health_checks(
+            "two-http-bad",
+            vec![readiness_http("/ready"), readiness_http("/db")],
+        );
+        insert_hc_result(&pool, "two-http-bad", "http", 0, "success", 30).await;
+        insert_hc_result(&pool, "two-http-bad", "http", 1, "failed", 1).await;
+        assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    /// Every instance must be ready: one that was not probed yet is not
+    /// covered by its sibling's results.
+    #[tokio::test]
+    async fn an_unprobed_instance_is_not_ready() {
+        let pool = new_test_pool().await;
+        let mut child = child_with_health_checks("two-replicas", vec![readiness_command("ready")]);
+        child.instances = vec!["instance-1".to_string(), "instance-2".to_string()];
+        insert_hc_result(&pool, "two-replicas", "command", 0, "success", 30).await;
+        assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    async fn rolling_parent(pool: &SqlitePool, id: &str) {
+        let mut parent = child_with_health_checks(id, vec![]);
+        parent.parent_id = None;
+        parent.replicas = 2;
+        parent.created_at = (chrono::Utc::now() - chrono::Duration::seconds(5000)).to_string();
+        deployments::create(pool, &parent).await.unwrap();
+    }
+
+    fn overdue_child(id: &str, parent: &str) -> Deployment {
+        let mut child = child_with_health_checks(id, vec![readiness_http("/ready")]);
+        child.parent_id = Some(parent.to_string());
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(5000)).to_string();
+        child
+    }
+
+    /// A new version that was ready, then started failing its readiness check,
+    /// does not get the old version drained at the rollout deadline: that
+    /// would replace a working version with a broken one.
+    #[tokio::test]
+    async fn a_child_failing_readiness_does_not_evict_its_parent() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        rolling_parent(&pool, "healthy-parent").await;
+        let mut child = overdue_child("broken-child", "healthy-parent");
+        insert_hc_result(&pool, "broken-child", "http", 0, "success", 60).await;
+        insert_hc_result(&pool, "broken-child", "http", 0, "failed", 1).await;
+        let runtime = MockRuntime::healthy();
+        let mut deleted = vec![];
+
+        handle_rolling_update(&pool, &mut child, &mut deleted, &runtime).await;
+
+        assert!(deleted.is_empty(), "the serving parent was drained");
+        assert_eq!(child.parent_id.as_deref(), Some("healthy-parent"));
+    }
+
+    /// The deadline still ends a rollout whose readiness never reported, so a
+    /// silent probe cannot keep two versions running forever.
+    #[tokio::test]
+    async fn the_deadline_still_drains_when_readiness_never_reported() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        rolling_parent(&pool, "old-parent").await;
+        let mut child = overdue_child("silent-child", "old-parent");
+        let runtime = MockRuntime::healthy();
+        let mut deleted = vec![];
+
+        handle_rolling_update(&pool, &mut child, &mut deleted, &runtime).await;
+
+        assert_eq!(deleted, ["old-parent"]);
     }
 
     // ---- gate_running_on_readiness ----
@@ -2730,7 +2835,7 @@ mod tests {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-3", vec![readiness_command("ready")]);
         // Green only 5s ago, anti-flap default is 10s → still holding.
-        insert_hc_result(&pool, "gate-3", "command", "success", 5).await;
+        insert_hc_result(&pool, "gate-3", "command", 0, "success", 5).await;
         gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Progressing);
     }
@@ -2739,7 +2844,7 @@ mod tests {
     async fn gate_keeps_running_when_readiness_green_long_enough() {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-4", vec![readiness_command("ready")]);
-        insert_hc_result(&pool, "gate-4", "command", "success", 30).await;
+        insert_hc_result(&pool, "gate-4", "command", 0, "success", 30).await;
         gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Running);
     }
@@ -2748,8 +2853,8 @@ mod tests {
     async fn gate_reverts_when_readiness_failing() {
         let pool = new_test_pool().await;
         let mut d = simple_running("gate-5", vec![readiness_command("ready")]);
-        insert_hc_result(&pool, "gate-5", "command", "success", 60).await;
-        insert_hc_result(&pool, "gate-5", "command", "failed", 5).await;
+        insert_hc_result(&pool, "gate-5", "command", 0, "success", 60).await;
+        insert_hc_result(&pool, "gate-5", "command", 0, "failed", 5).await;
         gate_running_on_readiness(&pool, DeploymentStatus::Progressing, &mut d, None).await;
         assert_eq!(d.status, DeploymentStatus::Progressing);
     }

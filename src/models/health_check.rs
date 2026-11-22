@@ -97,6 +97,10 @@ pub(crate) struct HealthCheckResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) instance_id: Option<String>,
     pub(crate) check_type: String,
+    /// Position of the check in the manifest's `health_checks`, which tells
+    /// two checks of the same type apart. `None` for older results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) check_index: Option<u32>,
     pub(crate) status: HealthCheckStatus,
     pub(crate) message: Option<String>,
     pub(crate) created_at: String,
