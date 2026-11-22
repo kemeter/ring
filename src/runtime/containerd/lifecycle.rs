@@ -521,7 +521,16 @@ impl ContainerdLifecycle {
             .prepare_snapshot(client, &instance_id, &resolved.chain_id)
             .await?;
 
-        // 3. Materialize content mounts to disk, then build the OCI spec.
+        // 3. Materialize named volume directories and content mounts on disk,
+        //    then build the OCI spec.
+        if let Err(e) = oci::ensure_named_volume_dirs(
+            std::path::Path::new(oci::VOLUMES_ROOT),
+            &deployment.namespace,
+            resolved_mounts,
+        ) {
+            self.remove_snapshot(client, &instance_id).await;
+            return Err(RuntimeError::Io(e));
+        }
         let config_files = match write_config_files(deployment, resolved_mounts).await {
             Ok(f) => f,
             Err(e) => {

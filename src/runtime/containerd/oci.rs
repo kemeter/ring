@@ -16,6 +16,7 @@ use crate::models::deployments::{Deployment, EnvValue};
 use crate::models::volume::ResolvedMount;
 use prost_types::Any;
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 /// The type url the runc shim matches to decode the container spec. This is the
 /// fixed identifier containerd registers for the OCI runtime spec; it is not a
@@ -85,7 +86,11 @@ pub(crate) fn build_spec_value(
         .unwrap_or((0, 0));
 
     let mut mounts = default_mounts();
-    mounts.extend(spec_mounts_from_resolved(resolved_mounts, config_files));
+    mounts.extend(spec_mounts_from_resolved(
+        &deployment.namespace,
+        resolved_mounts,
+        config_files,
+    ));
 
     // `args` is resolved above (deployment command, else image default). It can
     // still be empty if the image declares neither Entrypoint nor Cmd — such an
@@ -157,6 +162,7 @@ fn default_mounts() -> Vec<Value> {
 /// temp files by the caller and bind-mounted read-only (the `config_files` pairs
 /// are `(host_path, destination)`).
 fn spec_mounts_from_resolved(
+    namespace: &str,
     resolved_mounts: &[ResolvedMount],
     config_files: &[(String, String)],
 ) -> Vec<Value> {
@@ -176,10 +182,12 @@ fn spec_mounts_from_resolved(
                 read_only,
                 ..
             } => {
-                // Named volumes are materialized under a host directory keyed by
-                // the volume name. Bind that directory into the container.
-                let source = format!("/var/lib/ring/volumes/{}", name);
-                out.push(bind_mount(&source, destination, *read_only));
+                let source = named_volume_dir(Path::new(VOLUMES_ROOT), namespace, name);
+                out.push(bind_mount(
+                    &source.to_string_lossy(),
+                    destination,
+                    *read_only,
+                ));
             }
             // Content mounts are handled via `config_files` (written to disk by
             // the lifecycle before spec construction).
@@ -190,6 +198,33 @@ fn spec_mounts_from_resolved(
         out.push(bind_mount(host_path, destination, true));
     }
     out
+}
+
+/// Where named volumes live on the host.
+pub(crate) const VOLUMES_ROOT: &str = "/var/lib/ring/volumes";
+
+/// The host directory behind named volume `name` of `namespace`. One per
+/// namespace: keyed by the name alone, two namespaces naming the same volume
+/// shared its data, as on Docker. Created by the lifecycle before the spec is
+/// built ([`ensure_named_volume_dirs`]).
+pub(crate) fn named_volume_dir(root: &Path, namespace: &str, name: &str) -> PathBuf {
+    root.join(namespace).join(name)
+}
+
+/// Create the host directory of every named volume `resolved_mounts` uses, so
+/// runc finds the bind source; it used to be left to the operator, and a
+/// deployment mounting a named volume failed to start on a clean host.
+pub(crate) fn ensure_named_volume_dirs(
+    root: &Path,
+    namespace: &str,
+    resolved_mounts: &[ResolvedMount],
+) -> std::io::Result<()> {
+    for mount in resolved_mounts {
+        if let ResolvedMount::Named { name, .. } = mount {
+            std::fs::create_dir_all(named_volume_dir(root, namespace, name))?;
+        }
+    }
+    Ok(())
 }
 
 fn bind_mount(source: &str, destination: &str, read_only: bool) -> Value {
@@ -400,5 +435,25 @@ mod tests {
             m.iter()
                 .any(|x| x["destination"] == "/data" && x["source"] == "/host/data")
         );
+    }
+
+    #[test]
+    fn named_volumes_are_kept_apart_by_namespace() {
+        let root = std::env::temp_dir().join(format!("ring-oci-volumes-{}", uuid::Uuid::new_v4()));
+        let mounts = vec![ResolvedMount::Named {
+            name: "data".to_string(),
+            destination: "/data".to_string(),
+            read_only: false,
+            driver: "local".to_string(),
+        }];
+
+        ensure_named_volume_dirs(&root, "tenant-a", &mounts).unwrap();
+        ensure_named_volume_dirs(&root, "tenant-b", &mounts).unwrap();
+
+        let a = named_volume_dir(&root, "tenant-a", "data");
+        let b = named_volume_dir(&root, "tenant-b", "data");
+        assert!(a.is_dir() && b.is_dir());
+        assert_ne!(a, b);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
