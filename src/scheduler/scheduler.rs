@@ -1256,7 +1256,22 @@ async fn handle_rolling_update(
     // RING_ROLLOUT_DEADLINE (default 600s), force the drain: the child is
     // serving traffic regardless, so one instance is strictly better than a
     // stuck pair. Operators still get a warning + event to fix the probe.
+    //
+    // Not when the child's readiness is failing, though: the child reaches
+    // `running` only through the readiness gate, so a failing check here
+    // means it was ready once and broke since. Draining then would replace a
+    // working version with a broken one; the parent keeps serving instead.
     if !is_ready_to_drain(pool, child).await {
+        if matches!(
+            readiness_decision(pool, child).await,
+            crate::models::health_check::ReadinessDecision::Failing
+        ) {
+            warn!(
+                "Rolling update: child {} is failing its readiness check, keeping parent {} serving",
+                child.id, parent_id
+            );
+            return;
+        }
         if rollout_deadline_exceeded(child) {
             warn!(
                 "Rolling update: child {} still not ready after deadline — forcing parent drain to avoid a stuck duplicate (check its readiness probe)",
@@ -2729,6 +2744,59 @@ mod tests {
         child.instances = vec!["instance-1".to_string(), "instance-2".to_string()];
         insert_hc_result(&pool, "two-replicas", "command", 0, "success", 30).await;
         assert!(!is_ready_to_drain(&pool, &child).await);
+    }
+
+    async fn rolling_parent(pool: &SqlitePool, id: &str) {
+        let mut parent = child_with_health_checks(id, vec![]);
+        parent.parent_id = None;
+        parent.replicas = 2;
+        parent.created_at = (chrono::Utc::now() - chrono::Duration::seconds(5000)).to_string();
+        deployments::create(pool, &parent).await.unwrap();
+    }
+
+    fn overdue_child(id: &str, parent: &str) -> Deployment {
+        let mut child = child_with_health_checks(id, vec![readiness_http("/ready")]);
+        child.parent_id = Some(parent.to_string());
+        child.created_at = (chrono::Utc::now() - chrono::Duration::seconds(5000)).to_string();
+        child
+    }
+
+    /// A new version that was ready, then started failing its readiness check,
+    /// does not get the old version drained at the rollout deadline: that
+    /// would replace a working version with a broken one.
+    #[tokio::test]
+    async fn a_child_failing_readiness_does_not_evict_its_parent() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        rolling_parent(&pool, "healthy-parent").await;
+        let mut child = overdue_child("broken-child", "healthy-parent");
+        insert_hc_result(&pool, "broken-child", "http", 0, "success", 60).await;
+        insert_hc_result(&pool, "broken-child", "http", 0, "failed", 1).await;
+        let runtime = MockRuntime::healthy();
+        let mut deleted = vec![];
+
+        handle_rolling_update(&pool, &mut child, &mut deleted, &runtime).await;
+
+        assert!(deleted.is_empty(), "the serving parent was drained");
+        assert_eq!(child.parent_id.as_deref(), Some("healthy-parent"));
+    }
+
+    /// The deadline still ends a rollout whose readiness never reported, so a
+    /// silent probe cannot keep two versions running forever.
+    #[tokio::test]
+    async fn the_deadline_still_drains_when_readiness_never_reported() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        rolling_parent(&pool, "old-parent").await;
+        let mut child = overdue_child("silent-child", "old-parent");
+        let runtime = MockRuntime::healthy();
+        let mut deleted = vec![];
+
+        handle_rolling_update(&pool, &mut child, &mut deleted, &runtime).await;
+
+        assert_eq!(deleted, ["old-parent"]);
     }
 
     // ---- gate_running_on_readiness ----

@@ -54,7 +54,7 @@ A deployment that declares **at least one health check** gets a rolling update o
 4. Once the child's readiness gate opens (see [Health checks](/documentation/concepts/health-checks-design#readiness-gate)), Ring removes one old instance per tick. While the child is running, the parent does not replace an instance it loses, so the drain converges whatever its `replicas`.
 5. When the parent has zero instances, it's marked `deleted`.
 
-If the child never becomes healthy, the parent stays running and the child is marked `failed`. No traffic is dropped, no operator action needed to roll back: just inspect and `ring apply` a fix.
+If the child never becomes healthy, it stays `progressing` and the parent keeps serving: no traffic is dropped, no operator action needed to roll back, just inspect and `ring apply` a fix. The same holds when a child that was ready starts failing its readiness check: the old version is not drained behind a broken one. Only a child that runs but never gets a readiness result has the parent drained anyway once `RING_ROLLOUT_DEADLINE` passes (`rolling_update_deadline_forced` event), so a silent probe cannot keep two versions running forever.
 
 Rolling updates are **skipped** (immediate replacement, brief downtime) when:
 
