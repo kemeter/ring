@@ -1314,7 +1314,20 @@ async fn handle_rolling_update(
     // exhausted parent look empty, and the finalization below would mark it
     // deleted without ever calling `remove_instance` — leaking everything a
     // crashed VM left behind.
-    parent.instances = runtime.list_instances(parent.id.clone(), "all").await;
+    //
+    // A list call that failed must not read as an empty parent: the parent
+    // would be marked deleted with its instances still running, and nothing
+    // would ever remove them. Retried on the next cycle instead.
+    parent.instances = match runtime.try_list_instances(parent.id.clone(), "all").await {
+        Ok(instances) => instances,
+        Err(e) => {
+            warn!(
+                "Rolling update: could not list the instances of parent {}, will retry next cycle: {}",
+                parent.id, e
+            );
+            return;
+        }
+    };
 
     // Drain one instance per cycle if the parent still has some. If the
     // remove fails, bail — the next cycle will retry.
@@ -2913,6 +2926,37 @@ mod tests {
         assert_eq!(stored.status, DeploymentStatus::Completed);
         assert_eq!(*retired.lock().unwrap(), ["vm-1"]);
         assert!(deployment.pending_retire.is_empty());
+    }
+
+    /// A runtime that cannot list the parent's instances must not make a
+    /// rolling parent look empty: it would be deleted with its instances
+    /// still running, and nothing would remove them.
+    #[tokio::test]
+    async fn a_failed_listing_does_not_finish_a_rolling_update() {
+        use crate::hypervisor::mock::MockRuntime;
+
+        let pool = new_test_pool().await;
+        let mut parent = child_with_health_checks("parent", vec![]);
+        parent.parent_id = None;
+        parent.replicas = 2;
+        parent.created_at = (chrono::Utc::now() - chrono::Duration::seconds(5000)).to_string();
+        deployments::create(&pool, &parent).await.unwrap();
+        let mut child = child_with_health_checks("child", vec![]);
+        child.parent_id = Some("parent".to_string());
+        let runtime = MockRuntime::healthy().failing_list();
+        let removed = runtime.removed_log();
+        let mut deleted = vec![];
+
+        handle_rolling_update(&pool, &mut child, &mut deleted, &runtime).await;
+
+        assert!(
+            deleted.is_empty(),
+            "the parent was finalized on a failed listing"
+        );
+        assert!(removed.lock().unwrap().is_empty());
+        let stored = deployments::find(&pool, "parent").await.unwrap().unwrap();
+        assert_ne!(stored.status, DeploymentStatus::Deleted);
+        assert_eq!(child.parent_id.as_deref(), Some("parent"));
     }
 
     #[tokio::test]

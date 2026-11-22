@@ -258,6 +258,18 @@ pub(crate) trait RuntimeLifecycle:
 
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String>;
 
+    /// Like [`list_instances`](Self::list_instances), but a list call that
+    /// failed is an error, not an empty list, for callers that act on the
+    /// absence of instances (the rolling drain deletes a parent it sees
+    /// empty). A runtime that cannot tell the two apart keeps the default.
+    async fn try_list_instances(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        Ok(self.list_instances(deployment_id, status).await)
+    }
+
     /// Resolve the running instance ids for many deployments at once, keyed by
     /// deployment id.
     ///

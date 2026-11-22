@@ -165,6 +165,18 @@ impl InstanceDriver for ContainerdLifecycle {
 
 #[async_trait]
 impl RuntimeLifecycle for ContainerdLifecycle {
+    async fn try_list_instances(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        if status != "all" {
+            return Ok(self.list_instances(deployment_id, status).await);
+        }
+        let client = self.connect().await?;
+        instances::try_list_instances(&client, &self.config.namespace, &deployment_id).await
+    }
+
     async fn list_instances(&self, deployment_id: String, status: &str) -> Vec<String> {
         let Ok(client) = self.connect().await else {
             return Vec::new();

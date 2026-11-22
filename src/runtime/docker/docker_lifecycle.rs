@@ -198,6 +198,16 @@ impl RuntimeLifecycle for DockerLifecycle {
         super::instances::list_instances(&self.docker, deployment_id, status).await
     }
 
+    async fn try_list_instances(
+        &self,
+        deployment_id: String,
+        status: &str,
+    ) -> Result<Vec<String>, RuntimeError> {
+        super::instances::try_list_instances(&self.docker, &deployment_id, status)
+            .await
+            .map_err(|e| RuntimeError::Other(format!("listing containers failed: {e}")))
+    }
+
     async fn list_running_instances_grouped(
         &self,
         deployment_ids: &[String],
