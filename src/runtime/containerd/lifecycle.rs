@@ -796,12 +796,41 @@ impl ContainerdLifecycle {
         self.delete_container_object(client, instance_id).await;
         self.remove_snapshot(client, instance_id).await;
 
+        // Each step above is best-effort, so check the outcome rather than
+        // trusting it: a container still there (containerd restarted mid-way,
+        // a delete refused) must not be reported gone, or a rolling update
+        // finishes with the old instance still running and nothing to remove
+        // it. Not gone, or not known to be: retried on a later pass.
+        if !self.container_gone(client, instance_id).await {
+            warn!(
+                "containerd: instance {} is still there after its teardown, will retry",
+                instance_id
+            );
+            return false;
+        }
+
         // Clean up the instance log file and its last CPU reading.
         let _ = std::fs::remove_file(log_path(instance_id));
         if let Ok(mut samples) = self.cpu_samples.lock() {
             samples.remove(instance_id);
         }
         true
+    }
+
+    /// Whether containerd confirms the container no longer exists. An error
+    /// other than NotFound says nothing, so it is not taken as gone.
+    async fn container_gone(&self, client: &containerd_client::Client, instance_id: &str) -> bool {
+        let mut containers = ContainersClient::new(client.channel());
+        let req = with_namespace!(
+            GetContainerRequest {
+                id: instance_id.to_string(),
+            },
+            self.config.namespace
+        );
+        match containers.get(req).await {
+            Ok(_) => false,
+            Err(status) => status.code() == tonic::Code::NotFound,
+        }
     }
 
     /// The grace period recorded on the instance's container, or the default
