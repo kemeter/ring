@@ -617,6 +617,16 @@ fn validate_cross_field_constraints(input: &DeploymentInput, errors: &mut Violat
 }
 
 fn validate_runtime_constraints(input: &DeploymentInput, errors: &mut ViolationList) {
+    // containerd's network is a CNI bridge with no port mapping: a published
+    // port was accepted and silently never reachable.
+    if input.runtime == "containerd" && !input.ports.is_empty() {
+        errors.push(Violation::new(
+            "ports",
+            "published ports are not supported on the containerd runtime yet; reach the instance on its bridge address, or use docker or podman",
+            "deployment.ports.runtime_unsupported",
+        ));
+    }
+
     // Only the container runtimes carry a per-instance stop grace period.
     // Accepting the field elsewhere would leave an operator believing their
     // workload is given time to shut down when it is not.
@@ -5241,6 +5251,32 @@ mod tests {
                 .await
                 .status_code(),
             StatusCode::CREATED
+        );
+    }
+
+    #[tokio::test]
+    async fn published_ports_are_refused_on_containerd() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(
+                &json!({"runtime": "containerd", "name": "web", "namespace": "ctrd",
+                "image": "docker.io/library/nginx:alpine",
+                "ports": [{"published": 8080, "target": 80}]}),
+            )
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            response
+                .text()
+                .contains("deployment.ports.runtime_unsupported"),
+            "{}",
+            response.text()
         );
     }
 }
