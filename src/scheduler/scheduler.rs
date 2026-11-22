@@ -601,7 +601,16 @@ async fn run_health_checks(
             .into_iter()
             .map(|log| log.message)
             .collect();
-        runtime.remove_instance(instance_id.clone()).await;
+        // An instance the runtime refused to remove is still there, still
+        // serving: forgetting it would count a restart that did not happen,
+        // with the failure counter already reset. Kept and retried instead.
+        if !runtime.remove_instance(instance_id.clone()).await {
+            warn!(
+                "Deployment {}: could not remove instance {} after its health check failed, will retry",
+                deployment.id, instance_id
+            );
+            continue;
+        }
         deployment.instances.retain(|id| id != instance_id);
         removed.push(restart_state::Termination {
             instance_id: instance_id.clone(),
@@ -2957,6 +2966,52 @@ mod tests {
         let stored = deployments::find(&pool, "parent").await.unwrap().unwrap();
         assert_ne!(stored.status, DeploymentStatus::Deleted);
         assert_eq!(child.parent_id.as_deref(), Some("parent"));
+    }
+
+    /// A failing liveness check whose instance the runtime refuses to remove
+    /// keeps the instance, and counts no restart.
+    #[tokio::test]
+    async fn a_removal_the_runtime_refuses_is_not_a_restart() {
+        use crate::hypervisor::mock::MockRuntime;
+        use crate::scheduler::health_checker::HealthChecker;
+
+        let pool = new_test_pool().await;
+        let checker = HealthChecker::new(pool.clone());
+        let liveness = HealthCheck::Http {
+            url: "http://localhost:80/".to_string(),
+            interval: "10s".to_string(),
+            timeout: "5s".to_string(),
+            threshold: 1,
+            on_failure: FailureAction::Restart,
+            readiness: false,
+            min_healthy_time: None,
+            start_period: None,
+        };
+        let mut deployment = child_with_health_checks("sick", vec![liveness]);
+        deployment.parent_id = None;
+        deployment.instances = vec!["i1".to_string()];
+        let runtime = MockRuntime::unhealthy("down").refusing_removal();
+        let removed = runtime.removed_log();
+
+        let terminations = run_health_checks(
+            &pool,
+            &mut deployment,
+            DeploymentStatus::Running,
+            &checker,
+            &runtime,
+        )
+        .await;
+
+        assert_eq!(
+            *removed.lock().unwrap(),
+            ["i1"],
+            "the removal was attempted"
+        );
+        assert!(
+            terminations.is_empty(),
+            "a refused removal is not a restart"
+        );
+        assert_eq!(deployment.instances, ["i1"]);
     }
 
     #[tokio::test]
