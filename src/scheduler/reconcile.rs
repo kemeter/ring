@@ -399,7 +399,7 @@ async fn scale(
         return;
     }
 
-    if state.backing_off(now) {
+    if state.backing_off(now, policy.cap) {
         debug!(
             "Deployment {} backing off until {:?}",
             deployment.id, state.next_attempt_at
