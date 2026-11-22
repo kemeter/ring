@@ -8,7 +8,7 @@ A deployment can ask for more than its own container: a privileged container, th
 | `baseline` | `config.user.privileged: true`, `network.mode: host`, and `bind` volumes. |
 | `restricted` | What `baseline` refuses, and a container running as root: `config.user.id` must be set to a user other than `0`. |
 
-`baseline` is the default. Named volumes, configs, secrets and published `ports` are allowed at every level.
+`baseline` is the default. Named volumes, configs, secrets and published `ports` are allowed at every level. A named volume is only mounted from the namespace it belongs to, whatever the level (see [volumes](/documentation/reference/manifest#volumes)).
 
 `restricted` checks the user on the container runtimes only (Docker, Podman, containerd). A Cloud Hypervisor or Firecracker guest runs its own kernel, so its user says nothing about the host. Ring cannot read the user an image declares, so `config.user.id` is required even when the image already runs as a non-root user.
 
