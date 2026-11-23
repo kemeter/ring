@@ -170,9 +170,9 @@ The policy module never reads the configuration itself: it receives a resolved `
 
 A liveness check with `on_failure: restart` currently removes the instance without counting a restart, so an instance killed by its liveness check every few seconds is never throttled. Under this proposal a liveness kill is a termination like any other: it increments the attempt counter and the replacement waits on the backoff curve, as Kubernetes does.
 
-**No special case for `insufficient_resources`**
+**A memory refusal is not a restart**
 
-It follows the same curve and cap as every other reason. On a permanently undersized host, that is one failed attempt every five minutes per deployment, which is cheap and keeps the policy uniform.
+`insufficient_resources` is decided before anything is created: the deployment did not fail, the host is short on memory for now. It does not increment `restart_count` and never uses up `max_attempts`, so a deployment with `on_exhaustion = "fail"` is not given up because the host was busy. It is checked again within `base`, as Kubernetes keeps retrying a pod that does not fit, and its event is recorded once rather than on every check. The restart budget a refusal finds is the one the deployment keeps when it starts.
 
 ### 3. Restart state is persisted
 
