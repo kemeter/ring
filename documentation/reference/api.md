@@ -288,6 +288,9 @@ Environment values support two forms:
 | `ports` set with `replicas > 1` would race; surfaces on both fields          | `deployment.ports.replicas_conflict` + `deployment.replicas.ports_conflict` |
 | `kind: job` requires `replicas: 1`                                           | `deployment.replicas.job_must_be_one`                      |
 | `kind: job` doesn't take readiness checks                                    | `deployment.health_checks.job_readiness_unsupported`       |
+| `health_checks[i].timeout` must be a positive `ms` or `s` duration           | `deployment.health_checks.timeout.invalid`                 |
+| At most 16 `health_checks`                                                   | `deployment.health_checks.too_many`                        |
+| The `health_checks` timeouts add up to at most 60s                           | `deployment.health_checks.timeouts_too_long`               |
 | `kind: job` cannot be autoscaled                                             | `deployment.autoscale.job_unsupported`                     |
 | `autoscale` on containerd needs a cgroup v2 host                              | `deployment.autoscale.runtime_unsupported`                 |
 | `autoscale` needs `min >= 1`, `max >= min`, `0 < target_cpu < 100`           | `deployment.autoscale.invalid`                             |

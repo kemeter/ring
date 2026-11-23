@@ -372,6 +372,50 @@ fn validate_replicas(input: &DeploymentInput, errors: &mut ViolationList) {
     }
 }
 
+/// Most health checks a deployment may declare.
+const MAX_HEALTH_CHECKS: usize = 16;
+/// Longest the probes of one instance may take together, at worst.
+const MAX_HEALTH_CHECK_TIMEOUTS: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Health checks run one after the other in the scheduler, for every
+/// instance: a probe that hangs holds every other deployment for its whole
+/// `timeout`. A timeout that does not parse made every probe fail instead.
+fn validate_health_checks(input: &DeploymentInput, errors: &mut ViolationList) {
+    use crate::models::health_check::HealthCheck;
+    let Some(checks) = input.health_checks.as_ref() else {
+        return;
+    };
+    if checks.len() > MAX_HEALTH_CHECKS {
+        errors.push(Violation::new(
+            "health_checks",
+            format!("must hold at most {MAX_HEALTH_CHECKS} checks"),
+            "deployment.health_checks.too_many",
+        ));
+    }
+    let mut total = std::time::Duration::ZERO;
+    for (index, check) in checks.iter().enumerate() {
+        match HealthCheck::parse_duration(check.timeout()) {
+            Ok(timeout) if !timeout.is_zero() => total += timeout,
+            _ => errors.push(Violation::new(
+                format!("health_checks[{index}].timeout"),
+                "must be a positive duration in milliseconds or seconds, such as \"500ms\" or \"5s\"",
+                "deployment.health_checks.timeout.invalid",
+            )),
+        }
+    }
+    if total > MAX_HEALTH_CHECK_TIMEOUTS {
+        errors.push(Violation::new(
+            "health_checks",
+            format!(
+                "the timeouts add up to {}s; they must add up to at most {}s, since the checks of every instance run one after the other",
+                total.as_secs(),
+                MAX_HEALTH_CHECK_TIMEOUTS.as_secs()
+            ),
+            "deployment.health_checks.timeouts_too_long",
+        ));
+    }
+}
+
 /// The name and namespace end up in container names, network names and
 /// runtime ids, which refuse most characters; and a namespace a deployment
 /// names is created on the fly, so it follows the same rules as
@@ -1033,6 +1077,7 @@ pub(crate) async fn create(
     }
     validate_names(&input, &mut violations);
     validate_replicas(&input, &mut violations);
+    validate_health_checks(&input, &mut violations);
     validate_runtime_constraints(&input, &mut violations);
     validate_network_constraints(&input, &mut violations);
     validate_ports(&input, &mut violations);
@@ -5153,6 +5198,69 @@ mod tests {
 
         assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
         assert!(violation_codes(&response).contains(&"deployment.replicas.too_many".to_string()));
+    }
+
+    fn tcp_check(timeout: &str) -> serde_json::Value {
+        json!({"type": "tcp", "port": 80, "interval": "10s", "timeout": timeout, "on_failure": "alert"})
+    }
+
+    #[tokio::test]
+    async fn health_checks_that_could_hold_the_scheduler_are_refused() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let with = |checks: Vec<serde_json::Value>| {
+            json!({"runtime": "docker", "name": "web", "namespace": "probes", "image": "nginx",
+                "health_checks": checks})
+        };
+
+        for (checks, code) in [
+            (
+                vec![tcp_check("1m")],
+                "deployment.health_checks.timeout.invalid",
+            ),
+            (
+                vec![tcp_check("0s")],
+                "deployment.health_checks.timeout.invalid",
+            ),
+            (
+                vec![tcp_check("61s")],
+                "deployment.health_checks.timeouts_too_long",
+            ),
+            (
+                vec![tcp_check("30s"), tcp_check("31s")],
+                "deployment.health_checks.timeouts_too_long",
+            ),
+            (
+                vec![tcp_check("1s"); 17],
+                "deployment.health_checks.too_many",
+            ),
+        ] {
+            let response = post_deployment(&server, &token, with(checks)).await;
+            assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+            assert!(
+                violation_codes(&response).contains(&code.to_string()),
+                "{code}: {}",
+                response.text()
+            );
+        }
+
+        let response = post_deployment(
+            &server,
+            &token,
+            with(vec![
+                tcp_check("30s"),
+                tcp_check("29500ms"),
+                tcp_check("500ms"),
+            ]),
+        )
+        .await;
+        assert_eq!(
+            response.status_code(),
+            StatusCode::CREATED,
+            "{}",
+            response.text()
+        );
     }
 
     #[tokio::test]
