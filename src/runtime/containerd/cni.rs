@@ -9,11 +9,13 @@
 //! CNI spec defines, with the spec's wire format).
 //!
 //! On `ADD` we capture the assigned IP so [`super::health_check`] can resolve a
-//! reachable address; on `DEL` we tear the interface down.
+//! reachable address; on `DEL` we tear the interface down. An instance that
+//! publishes ports also goes through the `portmap` plugin, chained after
+//! `bridge`, which forwards each host port to it.
 //!
 //! [CNI]: https://github.com/containernetworking/cni
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
@@ -54,6 +56,33 @@ const CNI_BRIDGE: &str = "ring-cni0";
 const CNI_SUBNET: &str = "10.43.0.0/16";
 /// Interface name inside the container.
 const CNI_IFNAME: &str = "eth0";
+
+/// A host port forwarded to an instance, as the `portmap` plugin takes it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PortMapping {
+    #[serde(rename = "hostPort")]
+    pub(crate) host_port: u16,
+    #[serde(rename = "containerPort")]
+    pub(crate) container_port: u16,
+    pub(crate) protocol: String,
+    #[serde(rename = "hostIP")]
+    pub(crate) host_ip: String,
+}
+
+/// The port mappings of a deployment's published ports.
+pub(crate) fn port_mappings(
+    ports: &[crate::models::deployments::DeploymentPort],
+) -> Vec<PortMapping> {
+    ports
+        .iter()
+        .map(|p| PortMapping {
+            host_port: p.published,
+            container_port: p.target,
+            protocol: p.protocol.as_str().to_string(),
+            host_ip: p.host_ip.clone().unwrap_or_else(|| "0.0.0.0".to_string()),
+        })
+        .collect()
+}
 
 /// Subset of a CNI ADD result we parse: the IPs assigned to the interface.
 #[derive(Deserialize)]
@@ -113,7 +142,11 @@ fn default_conflist() -> String {
 /// still boots, just without a CNI address (health checks that need an IP will
 /// report the missing address).
 pub(crate) fn plugins_available() -> bool {
-    Path::new(&cni_bin_dir()).join("bridge").is_file()
+    plugin_installed("bridge")
+}
+
+fn plugin_installed(plugin: &str) -> bool {
+    Path::new(&cni_bin_dir()).join(plugin).is_file()
 }
 
 /// Run `CNI ADD` for a container's network namespace and return the assigned IP.
@@ -126,20 +159,50 @@ pub(crate) fn plugins_available() -> bool {
 /// (`Ok(None)`). With them, a plugin that fails, hangs or answers nonsense is
 /// an error: the instance would otherwise count as running while nothing can
 /// reach it.
-pub(crate) async fn add(container_id: &str, netns_path: &str) -> Result<Option<IpAddr>, String> {
+pub(crate) async fn add(
+    container_id: &str,
+    netns_path: &str,
+    ports: &[PortMapping],
+) -> Result<Option<IpAddr>, String> {
     if !plugins_available() {
+        // Without a network, a published port could never be reached.
+        if !ports.is_empty() {
+            return Err(format!(
+                "the CNI plugins are not installed (looked under {:?}), so published ports cannot be forwarded",
+                CNI_BIN_DIRS
+            ));
+        }
         warn!(
             "CNI plugins not found under any of {:?} — instance {} will have no CNI network",
             CNI_BIN_DIRS, container_id
         );
         return Ok(None);
     }
+    if !ports.is_empty() && !plugin_installed("portmap") {
+        return Err(format!(
+            "the CNI portmap plugin is not installed in {}, so published ports cannot be forwarded",
+            cni_bin_dir()
+        ));
+    }
     // The plugin invocation (fork-exec + host-local IPAM filesystem I/O) blocks,
     // so run it off the async runtime's worker threads.
-    let (cid, ns) = (container_id.to_string(), netns_path.to_string());
-    let stdout = tokio::task::spawn_blocking(move || exec_plugin("ADD", &cid, &ns))
-        .await
-        .map_err(|e| format!("CNI ADD for {container_id} did not run: {e}"))??;
+    let (cid, ns, mappings) = (
+        container_id.to_string(),
+        netns_path.to_string(),
+        ports.to_vec(),
+    );
+    let stdout = tokio::task::spawn_blocking(move || {
+        let bridge = exec_plugin("bridge", "ADD", &cid, &ns, &bridge_config().to_string())?;
+        if !mappings.is_empty() {
+            let previous: serde_json::Value = serde_json::from_slice(&bridge)
+                .map_err(|e| format!("could not parse the CNI bridge result: {e}"))?;
+            let config = portmap_config(&mappings, Some(previous)).to_string();
+            exec_plugin("portmap", "ADD", &cid, &ns, &config)?;
+        }
+        Ok::<_, String>(bridge)
+    })
+    .await
+    .map_err(|e| format!("CNI ADD for {container_id} did not run: {e}"))??;
     let result: CniResult = serde_json::from_slice(&stdout)
         .map_err(|e| format!("could not parse the CNI ADD result for {container_id}: {e}"))?;
     for ip in result.ips {
@@ -155,23 +218,30 @@ pub(crate) async fn add(container_id: &str, netns_path: &str) -> Result<Option<I
 /// Run `CNI DEL` to tear down a container's network. Best-effort and idempotent
 /// (the CNI spec requires DEL to succeed even if ADD never ran, so calling it
 /// during cleanup of a half-created instance is safe).
-pub(crate) async fn del(container_id: &str, netns_path: &str) {
+pub(crate) async fn del(container_id: &str, netns_path: &str, ports: &[PortMapping]) {
     if !plugins_available() {
         return;
     }
-    let (cid, ns) = (container_id.to_string(), netns_path.to_string());
-    let _ = tokio::task::spawn_blocking(move || exec_plugin("DEL", &cid, &ns)).await;
+    let (cid, ns, mappings) = (
+        container_id.to_string(),
+        netns_path.to_string(),
+        ports.to_vec(),
+    );
+    let _ = tokio::task::spawn_blocking(move || {
+        // In the reverse order of ADD: the forwarding goes before the
+        // interface it points to.
+        if !mappings.is_empty() && plugin_installed("portmap") {
+            let config = portmap_config(&mappings, None).to_string();
+            let _ = exec_plugin("portmap", "DEL", &cid, &ns, &config);
+        }
+        let _ = exec_plugin("bridge", "DEL", &cid, &ns, &bridge_config().to_string());
+    })
+    .await;
 }
 
-/// Execute the chained CNI plugins for the conflist. We invoke the first plugin
-/// (`bridge`) directly with the conflist's plugin config — for Ring's simple two
-/// plugin chain this is sufficient; a full chained runtime would feed each
-/// plugin's output as `prevResult` to the next, which is unnecessary for a
-/// bridge+loopback chain where only the bridge allocates an IP.
-fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Result<Vec<u8>, String> {
-    // Extract the bridge plugin config from the conflist and add the required
-    // top-level fields each plugin invocation expects (`cniVersion`, `name`).
-    let net_config = serde_json::json!({
+/// The config of the `bridge` plugin: Ring's network.
+fn bridge_config() -> serde_json::Value {
+    serde_json::json!({
         "cniVersion": "1.0.0",
         "name": CNI_NETWORK_NAME,
         "type": "bridge",
@@ -185,10 +255,37 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Result<Ve
             "routes": [{ "dst": "0.0.0.0/0" }]
         }
     })
-    .to_string();
+}
 
+/// The config of the `portmap` plugin for `ports`, chained after `bridge`
+/// whose result it takes on `ADD`.
+fn portmap_config(ports: &[PortMapping], previous: Option<serde_json::Value>) -> serde_json::Value {
+    let mut config = serde_json::json!({
+        "cniVersion": "1.0.0",
+        "name": CNI_NETWORK_NAME,
+        "type": "portmap",
+        "capabilities": { "portMappings": true },
+        // Lets the host reach a port published on 127.0.0.1, and a container
+        // reach one through the host.
+        "snat": true,
+        "runtimeConfig": { "portMappings": ports },
+    });
+    if let Some(previous) = previous {
+        config["prevResult"] = previous;
+    }
+    config
+}
+
+/// Run one CNI plugin binary with `config` on stdin.
+fn exec_plugin(
+    plugin_type: &str,
+    command: &str,
+    container_id: &str,
+    netns_path: &str,
+    net_config: &str,
+) -> Result<Vec<u8>, String> {
     let bin_dir = cni_bin_dir();
-    let plugin = Path::new(&bin_dir).join("bridge");
+    let plugin = Path::new(&bin_dir).join(plugin_type);
     let mut child = match std::process::Command::new(&plugin)
         .env("CNI_COMMAND", command)
         .env("CNI_CONTAINERID", container_id)
@@ -202,8 +299,8 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Result<Ve
     {
         Ok(c) => c,
         Err(e) => {
-            warn!("failed to spawn CNI bridge plugin: {}", e);
-            return Err(format!("failed to spawn the CNI bridge plugin: {e}"));
+            warn!("failed to spawn CNI {} plugin: {}", plugin_type, e);
+            return Err(format!("failed to spawn the CNI {plugin_type} plugin: {e}"));
         }
     };
 
@@ -250,8 +347,14 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Result<Ve
         .map_err(|e| format!("CNI {command} did not complete: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!("CNI {} failed for {}: {}", command, container_id, stderr);
-        return Err(format!("CNI {command} failed: {}", stderr.trim()));
+        warn!(
+            "CNI {} {} failed for {}: {}",
+            plugin_type, command, container_id, stderr
+        );
+        return Err(format!(
+            "CNI {plugin_type} {command} failed: {}",
+            stderr.trim()
+        ));
     }
     Ok(output.stdout)
 }
@@ -317,5 +420,39 @@ mod tests {
                 std::env::set_var("CNI_PATH", v);
             }
         }
+    }
+
+    #[test]
+    fn portmap_takes_the_bridge_result_and_the_mappings() {
+        let ports = port_mappings(&[crate::models::deployments::DeploymentPort {
+            published: 8080,
+            target: 80,
+            host_ip: Some("127.0.0.1".to_string()),
+            protocol: crate::models::deployments::PortProtocol::Udp,
+        }]);
+        let previous = serde_json::json!({"ips": [{"address": "10.43.0.5/16"}]});
+
+        let config = portmap_config(&ports, Some(previous.clone()));
+
+        assert_eq!(config["type"], "portmap");
+        assert_eq!(config["capabilities"]["portMappings"], true);
+        assert_eq!(
+            config["runtimeConfig"]["portMappings"],
+            serde_json::json!([{"hostPort": 8080, "containerPort": 80, "protocol": "udp", "hostIP": "127.0.0.1"}])
+        );
+        assert_eq!(config["prevResult"], previous);
+        assert!(portmap_config(&ports, None).get("prevResult").is_none());
+    }
+
+    #[test]
+    fn a_port_without_a_host_ip_is_published_on_every_interface() {
+        let ports = port_mappings(&[crate::models::deployments::DeploymentPort {
+            published: 8080,
+            target: 80,
+            host_ip: None,
+            protocol: Default::default(),
+        }]);
+        assert_eq!(ports[0].host_ip, "0.0.0.0");
+        assert_eq!(ports[0].protocol, "tcp");
     }
 }

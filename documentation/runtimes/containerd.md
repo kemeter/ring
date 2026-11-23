@@ -12,7 +12,7 @@ The OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is re
    dnf install containernetworking-plugins   # Fedora → /usr/libexec/cni
    ```
 
-   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**. With them, a plugin that fails, or takes more than 30 seconds, fails the start (`network` reason) and the instance is retried, instead of running unreachable.
+   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**, and a deployment publishing `ports` fails to start. With them, a plugin that fails, or takes more than 30 seconds, fails the start (`network` reason) and the instance is retried, instead of running unreachable.
 
 ## Enable it
 
@@ -48,7 +48,7 @@ ring apply -f web.yaml
 - **Image entrypoint is honoured.** containerd is low-level and doesn't merge the image's `Entrypoint`/`Cmd` for you the way the Docker daemon does, so Ring reads them from the image config and applies them when the deployment gives no `command`.
 - **`command` health checks** run via `Tasks.Exec` (gRPC), no in-guest agent needed.
 - **Crash detection is reconcile-based** (tick-paced), like Podman: it inspects task exit status on each scheduler pass.
-- **No published ports yet.** The CNI network is a bridge without port mapping, so `ports` is refused on containerd: reach an instance on its bridge address, or use Docker or Podman to publish a host port.
+- **Published ports** go through the CNI `portmap` plugin (part of `containernetworking-plugins`), which Ring chains after `bridge`: each `ports` entry forwards its host port to the instance with NAT rules, removed with the instance. The instance answers on the host's addresses and on `127.0.0.1`. As on Docker, a port a host process already listens on is refused (`Port N is already allocated`), since the NAT rules would take its traffic. Without `portmap`, a deployment publishing ports fails to start with the `network` reason.
 - **Logs rotate.** Each instance writes to `/var/log/ring/containerd/<id>.log`, rotated past 10 MiB with 3 files kept (`max_log_bytes`, `max_log_files`). `ring deployment logs` reads the rotated files too.
 - **Named volumes** are host directories, one per namespace, under `/var/lib/ring/volumes/<namespace>/<name>`. Ring creates them on first use.
 - **Private registries.** containerd has no `login` of its own. Inline `config.server`/`username`/`password`; or set `use_host_registry_auth = true` and pull with `config.use_host_auth: true` (since `nerdctl login` writes to `~/.docker/config.json`); or store credentials in an encrypted `Secret` and reference it with `config.image_pull_secret`. See [manifest `config`](/documentation/reference/manifest#config) and [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
