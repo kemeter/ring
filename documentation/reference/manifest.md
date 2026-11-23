@@ -127,8 +127,8 @@ A map of deployment declarations. A manifest may carry `configs:` alone, to upda
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | string | Deployment name. Together with `namespace` forms the unique identity. |
-| `namespace` | string | Namespace the deployment belongs to. Auto-created if missing. |
+| `name` | string | Deployment name. Together with `namespace` forms the unique identity. 1 to 63 letters, digits, `_`, `.` or `-`, starting with a letter or digit (what a container name allows). |
+| `namespace` | string | Namespace the deployment belongs to. Auto-created if missing, so it follows the rules of `ring namespace create`: 2 to 63 lowercase letters, digits or `-`, starting and ending with a letter or digit. |
 | `runtime` | enum | `docker` (default runtime) or `cloud-hypervisor` (alpha microVM runtime). |
 | `image` | string | Docker image reference (Docker runtime, e.g. `nginx:1.25`) **or** absolute path to a raw disk image (Cloud Hypervisor runtime, e.g. `/var/lib/ring/images/ubuntu-focal.raw`). The API rejects a Docker-style reference on the CH runtime up front. |
 
@@ -137,7 +137,7 @@ A map of deployment declarations. A manifest may carry `configs:` alone, to upda
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `kind` | enum | `worker` | `worker` (long-running) or `job` (one-shot). On CH, a job moves to `completed` when the guest powers off cleanly; the workload's exit code is not surfaced. See [how-to: run a job](/documentation/how-to/run-a-job). |
-| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. `0` keeps a worker without any instance, to pause it without deleting it: `ring apply` warns about it, and the deployment gets a `zero_replicas` warning event. |
+| `replicas` | integer | `1` | Number of instances. Jobs always run a single instance regardless. When `autoscale` is set, this is the starting count, not a fixed one. At most `1000`, like `autoscale.max`. `0` keeps a worker without any instance, to pause it without deleting it: `ring apply` warns about it, and the deployment gets a `zero_replicas` warning event. |
 | `autoscale` | object | unset | Adjust the instance count from observed CPU. Opt-in: without it the count never changes on its own. See [autoscale](#autoscale). |
 | `restart` | object | unset | How this deployment is restarted after a failure, over the server's `[server.restart]`. See [restart](#restart). |
 | `command` | string list | `[]` | Override the image's entrypoint/CMD. **Docker only**, rejected at the API on the CH runtime. |
@@ -292,6 +292,8 @@ ports:
   - { published: 3000, target: 3000 }
   - { published: 5432, target: 5432, host_ip: 127.0.0.1 }
 ```
+
+A host port is published by one deployment at a time: `ring apply` refuses a port that another active deployment already publishes, in any namespace and on any runtime, with the same protocol on an overlapping address (`0.0.0.0` overlaps every address). Redeploying the deployment that holds it is fine.
 
 | Field | Type | Description |
 |---|---|---|

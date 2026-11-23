@@ -341,6 +341,120 @@ fn validate_config(input: &DeploymentInput, errors: &mut ViolationList) {
 /// to surface duplicate `published` values that would race for the same host
 /// port. Paths use JSONPath form (`ports[idx].published`) so a client can
 /// point straight at the offending entry.
+/// Most instances a deployment may ask for. Ring runs on one machine: past
+/// this a count is a typo (or `4294967295`, which used to be stored as `-1`
+/// and started one more container every pass until the host ran out).
+pub(crate) const MAX_REPLICAS: u32 = 1000;
+
+/// Longest deployment name: it goes into container names and runtime ids.
+pub(crate) const DEPLOYMENT_NAME_MAX: usize = 63;
+
+/// A deployment name: the characters a Docker container name allows.
+static DEPLOYMENT_NAME_PATTERN: once_cell::sync::Lazy<regex::Regex> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$").unwrap());
+
+fn validate_replicas(input: &DeploymentInput, errors: &mut ViolationList) {
+    if input.replicas > MAX_REPLICAS {
+        errors.push(Violation::new(
+            "replicas",
+            format!("must be at most {MAX_REPLICAS}"),
+            "deployment.replicas.too_many",
+        ));
+    }
+    if let Some(autoscale) = &input.autoscale
+        && autoscale.max > MAX_REPLICAS
+    {
+        errors.push(Violation::new(
+            "autoscale.max",
+            format!("must be at most {MAX_REPLICAS}"),
+            "deployment.autoscale.max.too_many",
+        ));
+    }
+}
+
+/// The name and namespace end up in container names, network names and
+/// runtime ids, which refuse most characters; and a namespace a deployment
+/// names is created on the fly, so it follows the same rules as
+/// `POST /namespaces`.
+fn validate_names(input: &DeploymentInput, errors: &mut ViolationList) {
+    use crate::api::action::namespace::validation::{
+        NAMESPACE_NAME_MAX, NAMESPACE_NAME_MIN, NAMESPACE_NAME_PATTERN,
+    };
+
+    let len = input.namespace.chars().count() as u64;
+    if !(NAMESPACE_NAME_MIN..=NAMESPACE_NAME_MAX).contains(&len)
+        || !NAMESPACE_NAME_PATTERN.is_match(&input.namespace)
+    {
+        errors.push(Violation::new(
+            "namespace",
+            format!(
+                "must be {NAMESPACE_NAME_MIN} to {NAMESPACE_NAME_MAX} lowercase letters, digits or dashes, starting and ending with a letter or digit"
+            ),
+            "deployment.namespace.invalid",
+        ));
+    }
+    if input.name.chars().count() > DEPLOYMENT_NAME_MAX
+        || !DEPLOYMENT_NAME_PATTERN.is_match(&input.name)
+    {
+        errors.push(Violation::new(
+            "name",
+            format!(
+                "must be 1 to {DEPLOYMENT_NAME_MAX} letters, digits, '_', '.' or '-', starting with a letter or digit"
+            ),
+            "deployment.name.invalid",
+        ));
+    }
+}
+
+/// Whether two host bindings can collide: `0.0.0.0` (or no address) listens
+/// on every interface, so it overlaps any address.
+fn host_ips_overlap(a: Option<&str>, b: Option<&str>) -> bool {
+    let any = |ip: Option<&str>| matches!(ip, None | Some("") | Some("0.0.0.0"));
+    any(a) || any(b) || a == b
+}
+
+/// A published host port another active deployment already holds. Checked
+/// across namespaces and runtimes, which all bind on the same host; the
+/// deployment being redeployed (same namespace and name) is not a conflict,
+/// since the new one replaces it.
+async fn published_port_conflicts(pool: &Db, input: &DeploymentInput) -> ViolationList {
+    let mut errors = ViolationList::new();
+    if input.ports.is_empty() {
+        return errors;
+    }
+    let active = match deployments::find_all(pool, HashMap::new()).await {
+        Ok(all) => all,
+        Err(e) => {
+            error!("Failed to load deployments to check published ports: {}", e);
+            return errors;
+        }
+    };
+    for (idx, port) in input.ports.iter().enumerate() {
+        let holder = active.iter().find(|other| {
+            !matches!(
+                other.status,
+                DeploymentStatus::Deleted | DeploymentStatus::Completed | DeploymentStatus::Failed
+            ) && !(other.namespace == input.namespace && other.name == input.name)
+                && other.ports.iter().any(|theirs| {
+                    theirs.published == port.published
+                        && theirs.protocol == port.protocol
+                        && host_ips_overlap(theirs.host_ip.as_deref(), port.host_ip.as_deref())
+                })
+        });
+        if let Some(holder) = holder {
+            errors.push(Violation::new(
+                format!("ports[{}].published", idx),
+                format!(
+                    "host port {} is already published by deployment '{}/{}'",
+                    port.published, holder.namespace, holder.name
+                ),
+                "deployment.ports.published.in_use",
+            ));
+        }
+    }
+    errors
+}
+
 fn validate_ports(input: &DeploymentInput, errors: &mut ViolationList) {
     use std::collections::HashMap;
 
@@ -907,6 +1021,8 @@ pub(crate) async fn create(
     if let Err(errs) = input.validate() {
         violations.extend_from_validator(errs);
     }
+    validate_names(&input, &mut violations);
+    validate_replicas(&input, &mut violations);
     validate_runtime_constraints(&input, &mut violations);
     validate_network_constraints(&input, &mut violations);
     validate_ports(&input, &mut violations);
@@ -920,6 +1036,9 @@ pub(crate) async fn create(
     );
     validate_config(&input, &mut violations);
     validate_cross_field_constraints(&input, &mut violations);
+    if violations.is_empty() {
+        violations = published_port_conflicts(&pool, &input).await;
+    }
     if !violations.is_empty() {
         return violations.into_response();
     }
@@ -4978,5 +5097,150 @@ mod tests {
         .await
         .unwrap();
         assert!(active <= 2, "{active} active deployments for one name");
+    }
+
+    async fn post_deployment(
+        server: &TestServer,
+        token: &str,
+        body: serde_json::Value,
+    ) -> axum_test::TestResponse {
+        server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await
+    }
+
+    fn violation_codes(response: &axum_test::TestResponse) -> Vec<String> {
+        response.json::<serde_json::Value>()["violations"]
+            .as_array()
+            .map(|v| {
+                v.iter()
+                    .filter_map(|v| v["code"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn a_replica_count_past_the_cap_is_refused() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response = post_deployment(
+            &server,
+            &token,
+            json!({"runtime": "docker", "name": "huge", "namespace": "caps", "image": "nginx", "replicas": 4294967295u64}),
+        )
+        .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(violation_codes(&response).contains(&"deployment.replicas.too_many".to_string()));
+    }
+
+    #[tokio::test]
+    async fn names_the_runtimes_cannot_use_are_refused() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        for (name, namespace, code) in [
+            ("a/b c", "names", "deployment.name.invalid"),
+            ("名前", "names", "deployment.name.invalid"),
+            ("", "names", "deployment.name.invalid"),
+            (&*"x".repeat(300), "names", "deployment.name.invalid"),
+            ("web", "Ünï/../côde", "deployment.namespace.invalid"),
+            ("web", "", "deployment.namespace.invalid"),
+        ] {
+            let response = post_deployment(
+                &server,
+                &token,
+                json!({"runtime": "docker", "name": name, "namespace": namespace, "image": "nginx"}),
+            )
+            .await;
+            assert_eq!(
+                response.status_code(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{name:?} in {namespace:?}"
+            );
+            assert!(
+                violation_codes(&response).contains(&code.to_string()),
+                "{name:?}"
+            );
+        }
+
+        // What Docker accepts stays accepted.
+        let response = post_deployment(
+            &server,
+            &token,
+            json!({"runtime": "docker", "name": "Web_1.api-v2", "namespace": "names", "image": "nginx"}),
+        )
+        .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn a_host_port_another_deployment_publishes_is_refused() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let web = |name: &str, namespace: &str, host_ip: Option<&str>| {
+            let mut port = json!({"published": 18080, "target": 80});
+            if let Some(ip) = host_ip {
+                port["host_ip"] = json!(ip);
+            }
+            json!({"runtime": "docker", "name": name, "namespace": namespace, "image": "nginx", "ports": [port]})
+        };
+
+        assert_eq!(
+            post_deployment(&server, &token, web("web-a", "ports-a", None))
+                .await
+                .status_code(),
+            StatusCode::CREATED
+        );
+
+        // Another deployment, even in another namespace: refused.
+        let response = post_deployment(&server, &token, web("web-b", "ports-b", None)).await;
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            violation_codes(&response).contains(&"deployment.ports.published.in_use".to_string())
+        );
+
+        // A specific address overlaps 0.0.0.0.
+        let response =
+            post_deployment(&server, &token, web("web-c", "ports-b", Some("127.0.0.1"))).await;
+        assert_eq!(response.status_code(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        // Redeploying the deployment that holds it is fine.
+        assert_eq!(
+            post_deployment(&server, &token, web("web-a", "ports-a", None))
+                .await
+                .status_code(),
+            StatusCode::CREATED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_same_port_on_two_distinct_addresses_is_allowed() {
+        let (_pool, app) = new_test_app_with_pool().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let on = |name: &str, ip: &str| {
+            json!({"runtime": "docker", "name": name, "namespace": "two-ips", "image": "nginx",
+                "ports": [{"published": 18081, "target": 80, "host_ip": ip}]})
+        };
+        assert_eq!(
+            post_deployment(&server, &token, on("lo", "127.0.0.1"))
+                .await
+                .status_code(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            post_deployment(&server, &token, on("lo2", "127.0.0.2"))
+                .await
+                .status_code(),
+            StatusCode::CREATED
+        );
     }
 }
