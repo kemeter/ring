@@ -538,6 +538,7 @@ async fn scale(
                 Disposition::Terminal(
                     Reason::ConfigMissing | Reason::SpecRejected | Reason::Error,
                 ) => StartFailure::NeedsOperator,
+                Disposition::Terminal(Reason::InsufficientResources) => StartFailure::NoCapacity,
                 _ => StartFailure::Transient,
             };
             record_start_failure(
@@ -572,12 +573,19 @@ fn record_start_failure(
     message: String,
     failure: StartFailure,
 ) {
-    deployment.emit_event(
-        "error",
-        message.clone(),
-        &deployment.runtime.clone(),
-        Some(event_reason),
-    );
+    // A host short on memory is checked again within seconds, for as long as
+    // it lasts: said once, not on every check.
+    let already_said = failure == StartFailure::NoCapacity
+        && (deployment.reason == Some(reason)
+            || deployment.waiting.as_ref().map(|w| w.reason) == Some(reason));
+    if !already_said {
+        deployment.emit_event(
+            "error",
+            message.clone(),
+            &deployment.runtime.clone(),
+            Some(event_reason),
+        );
+    }
     // Instances still serving keep the deployment as it was, their health
     // checks with it: only the next start waits. With none, the deployment
     // waits for it. So does a rolling update's new deployment, which would
@@ -1011,6 +1019,44 @@ mod tests {
         assert!(reasons(&d).contains(&"restart_limit_reached".to_string()));
     }
 
+    /// A host short on memory is not the deployment failing: however long it
+    /// lasts, it never uses up `max_attempts`, and it is said once.
+    #[tokio::test]
+    async fn memory_refusals_never_use_up_max_attempts() {
+        let driver = FakeDriver::default();
+        let policy = RestartPolicy {
+            on_exhaustion: OnExhaustion::Fail,
+            max_attempts: 2,
+            ..Default::default()
+        };
+        let mut state = RestartState::default();
+        let mut d = worker(1);
+        d.set_status(DeploymentStatus::Pending);
+        for i in 0..5 {
+            driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+            d = pass(&driver, &policy, d, &mut state, now() + secs(1000 * i)).await;
+        }
+
+        assert_eq!(
+            d.condition(),
+            (
+                DeploymentStatus::BackingOff,
+                Some(Reason::InsufficientResources)
+            )
+        );
+        assert_eq!(d.restart_count, 0);
+        let said = reasons(&d)
+            .iter()
+            .filter(|r| *r == "insufficient_resources")
+            .count();
+        assert_eq!(said, 1, "{:?}", reasons(&d));
+
+        // Memory freed: it starts, with its restart budget whole.
+        d = pass(&driver, &policy, d, &mut state, now() + secs(6000)).await;
+        assert_eq!(d.instances.len(), 1);
+        assert_eq!(d.restart_count, 0);
+    }
+
     #[tokio::test]
     async fn an_unrunnable_program_backs_off_as_spec_rejected() {
         let driver = FakeDriver::running(&["a"]);
@@ -1070,7 +1116,7 @@ mod tests {
         .await;
 
         assert_eq!(d.condition(), (DeploymentStatus::Running, None));
-        assert_eq!(d.restart_count, 1);
+        assert_eq!(d.restart_count, 0, "nothing was created, nothing restarted");
         assert!(state.next_attempt_at.is_some());
         assert!(reasons(&d).contains(&"insufficient_resources".to_string()));
         // The status cannot say why it is short of an instance: `waiting` does.

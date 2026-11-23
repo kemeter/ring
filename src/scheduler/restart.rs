@@ -172,6 +172,10 @@ pub(crate) enum StartFailure {
     /// Needs an operator: a missing config, a spec the runtime rejects. Still
     /// retried, but straight at `cap`.
     NeedsOperator,
+    /// Refused before anything was created: the host is short on memory now.
+    /// Not a failure of the deployment, so it neither counts as a restart nor
+    /// uses up `max_attempts`; retried within `base`, as memory gets freed.
+    NoCapacity,
 }
 
 /// What just happened to the deployment's instance.
@@ -242,6 +246,15 @@ pub(crate) fn decide(
     now: DateTime<Utc>,
     rng: &mut impl Rng,
 ) -> Decision {
+    // Nothing was created, and the instances already running are untouched:
+    // the restart bookkeeping stays as it was.
+    if event == Event::StartFailed(StartFailure::NoCapacity) {
+        return match retry_at(policy, 1, false, now, rng) {
+            Some(at) => Decision::WaitUntil(at),
+            None => Decision::StartNow,
+        };
+    }
+
     // Whatever happened, the instance is no longer running. Settle a pending
     // reset first so a crash after a long healthy run starts from attempt 1.
     reset_if_stable(policy, state, now);
@@ -837,6 +850,41 @@ mod tests {
         ];
         for (o, expected) in cases {
             assert_eq!(p.with_override(&o), Err(expected));
+        }
+    }
+
+    #[test]
+    fn a_memory_refusal_leaves_the_restart_state_alone() {
+        let p = RestartPolicy::default();
+        let since = Utc::now();
+        let mut state = RestartState {
+            restart_count: 3,
+            running_since: Some(since),
+            run_failures: 1,
+        };
+        let now = since + chrono::Duration::seconds(5);
+        let decision = decide(
+            &p,
+            WorkloadKind::Worker,
+            &mut state,
+            Event::StartFailed(StartFailure::NoCapacity),
+            now,
+            &mut rand::rngs::StdRng::seed_from_u64(1),
+        );
+        assert_eq!(
+            state,
+            RestartState {
+                restart_count: 3,
+                running_since: Some(since),
+                run_failures: 1,
+            }
+        );
+        match decision {
+            Decision::WaitUntil(at) => {
+                assert!(at - now <= chrono::Duration::from_std(p.base).unwrap())
+            }
+            Decision::StartNow => {}
+            other => panic!("{other:?}"),
         }
     }
 }

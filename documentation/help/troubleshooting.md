@@ -173,7 +173,7 @@ ring deployment events <DEPLOYMENT_ID> --level error --limit 5
 # insufficient host memory for 'web': needs 4096 MiB but only 1800 MiB is available — …
 ```
 
-Ring retries on the backoff curve, so the deployment starts by itself once enough memory is free. To get it running sooner:
+Ring checks again every few seconds (within the restart policy's `base`), so the deployment starts by itself once enough memory is free. A refusal is not a restart: it does not raise `restart_count` and never uses up `max_attempts`. To get it running sooner:
 
 - Free memory on the host (stop other workloads).
 - Lower the deployment's `resources.requests.memory` (or `resources.limits.memory` if no request is set) to fit, then re-apply.
