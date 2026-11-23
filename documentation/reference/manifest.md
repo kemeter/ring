@@ -488,7 +488,7 @@ health_checks:
 |---|---|---|
 | `type` | yes | `tcp`, `http`, or `command`. |
 | `interval` | yes | Currently advisory (see [health checks (design) → the probe cycle](/documentation/concepts/health-checks-design#the-probe-cycle)). Only `ms` and `s` suffixes parse. |
-| `timeout` | yes | Probe timeout. Only `ms` and `s` suffixes parse. |
+| `timeout` | yes | Probe timeout, `ms` or `s` (`500ms`, `5s`). The checks of every instance run one after the other in the scheduler, so a deployment takes at most 16 checks whose timeouts add up to at most 60s. |
 | `threshold` | no (default `3`) | Consecutive failures before `on_failure` triggers. |
 | `on_failure` | yes | `restart` (recreate the instance), `stop` (delete the deployment), or `alert` (log only). |
 | `readiness` | no (default `false`) | When `true`, this check gates rolling updates and (for `command` on Docker) is translated into a native `HEALTHCHECK`. See [health checks (design) → the readiness gate](/documentation/concepts/health-checks-design#the-readiness-gate). |
