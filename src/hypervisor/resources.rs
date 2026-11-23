@@ -45,6 +45,9 @@ pub(crate) struct Reservations {
 }
 
 struct Reservation {
+    /// Tells this reservation apart, so the start it was made for can give it
+    /// back without touching the others of its deployment.
+    id: u64,
     deployment_id: String,
     at: Instant,
     bytes: i64,
@@ -62,7 +65,13 @@ impl Reservations {
     /// has more than `replicas` instances alive, so it never holds more than
     /// `replicas` reservations: the oldest goes, which is what keeps a crash
     /// loop restarting the same instance from stacking reservations.
-    pub(crate) fn reserve(&mut self, now: Instant, deployment_id: &str, replicas: u32, bytes: i64) {
+    pub(crate) fn reserve(
+        &mut self,
+        now: Instant,
+        deployment_id: &str,
+        replicas: u32,
+        bytes: i64,
+    ) -> u64 {
         let held = self
             .entries
             .iter()
@@ -76,11 +85,19 @@ impl Reservations {
         {
             self.entries.remove(oldest);
         }
+        let id = NEXT_RESERVATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.entries.push(Reservation {
+            id,
             deployment_id: deployment_id.to_string(),
             at: now,
             bytes,
         });
+        id
+    }
+
+    /// Give back reservation `id`: the start it was made for did not happen.
+    pub(crate) fn release(&mut self, id: u64) {
+        self.entries.retain(|r| r.id != id);
     }
 
     /// Admit `required_bytes` against `available_bytes` minus what is still
@@ -91,14 +108,13 @@ impl Reservations {
         deployment: &Deployment,
         required_bytes: i64,
         available_bytes: i64,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<u64, RuntimeError> {
         let replicas = deployment.replicas;
         // The oldest reservation of this deployment is about to make room for
         // this one when it already holds all its slots: do not count it.
         let reserved = self.reserved(now) - self.displaced(deployment, replicas);
         check_against(&deployment.name, required_bytes, available_bytes, reserved)?;
-        self.reserve(now, &deployment.id, replicas, required_bytes);
-        Ok(())
+        Ok(self.reserve(now, &deployment.id, replicas, required_bytes))
     }
 
     fn displaced(&self, deployment: &Deployment, replicas: u32) -> i64 {
@@ -117,6 +133,40 @@ impl Reservations {
 static RESERVATIONS: Mutex<Reservations> = Mutex::new(Reservations {
     entries: Vec::new(),
 });
+
+static NEXT_RESERVATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn ledger() -> std::sync::MutexGuard<'static, Reservations> {
+    // A poisoned lock only means another admission panicked mid-way; the
+    // ledger is still a plain list of reservations.
+    RESERVATIONS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The memory an admitted start reserved. Dropped without [`keep`], the start
+/// did not happen (it failed, or returned while its image is pulled), and the
+/// memory goes back: held for the whole reservation window, it refused the
+/// next attempt of the very instance it was reserved for.
+///
+/// [`keep`]: Admission::keep
+#[must_use = "dropping an admission gives its memory back: call keep() once the instance started"]
+pub(crate) struct Admission {
+    reservation: Option<u64>,
+}
+
+impl Admission {
+    /// The instance started: its memory stays reserved for the window.
+    pub(crate) fn keep(mut self) {
+        self.reservation = None;
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        if let Some(id) = self.reservation.take() {
+            ledger().release(id);
+        }
+    }
+}
 
 /// The memory figure we admit against, in bytes. `requests.memory` is the
 /// scheduling intent ("how much this workload needs to run"), so it wins;
@@ -179,9 +229,9 @@ pub(crate) fn check_against(
 /// not start, but it catches the common, gross case ("asked for 8 GiB on a
 /// 2 GiB host") and replicas outrunning each other before any expensive image
 /// pull or VM boot.
-pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<(), RuntimeError> {
+pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<Admission, RuntimeError> {
     let Some(required) = required_memory_bytes(deployment) else {
-        return Ok(());
+        return Ok(Admission { reservation: None });
     };
 
     let mut sys = match System::new() {
@@ -191,7 +241,7 @@ pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<(), RuntimeEr
                 "skipping the host memory check for '{}': {}",
                 deployment.name, e
             );
-            return Ok(());
+            return Ok(Admission { reservation: None });
         }
     };
     sys.refresh_memory();
@@ -199,10 +249,10 @@ pub(crate) fn check_host_memory(deployment: &Deployment) -> Result<(), RuntimeEr
     // matching what the kernel would actually hand out.
     let available = sys.available_memory() as i64;
 
-    // A poisoned lock only means another admission panicked mid-way; the
-    // ledger is still a plain list of reservations.
-    let mut reservations = RESERVATIONS.lock().unwrap_or_else(|e| e.into_inner());
-    reservations.admit(Instant::now(), deployment, required, available)
+    let reservation = ledger().admit(Instant::now(), deployment, required, available)?;
+    Ok(Admission {
+        reservation: Some(reservation),
+    })
 }
 
 #[cfg(test)]
@@ -410,5 +460,47 @@ mod tests {
                 )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_released_reservation_leaves_the_others_of_its_deployment() {
+        let mut ledger = Reservations::default();
+        let now = Instant::now();
+        let first = ledger.reserve(now, "dep", 2, 100);
+        let second = ledger.reserve(now, "dep", 2, 50);
+        ledger.release(second);
+        assert_eq!(ledger.reserved(now), 100);
+        ledger.release(first);
+        assert_eq!(ledger.reserved(now), 0);
+    }
+
+    fn held_by(deployment_id: &str) -> usize {
+        ledger()
+            .entries
+            .iter()
+            .filter(|r| r.deployment_id == deployment_id)
+            .count()
+    }
+
+    /// A start that returns before its instance exists (an image still being
+    /// pulled, a failed create) gives its memory back, so the next attempt of
+    /// the same instance is not refused on it.
+    #[test]
+    fn an_admission_given_up_returns_its_memory_and_a_kept_one_holds_it() {
+        let dropped = format!("dropped-{}", uuid::Uuid::new_v4());
+        let id = ledger().reserve(Instant::now(), &dropped, 1, 100);
+        drop(Admission {
+            reservation: Some(id),
+        });
+        assert_eq!(held_by(&dropped), 0);
+
+        let kept = format!("kept-{}", uuid::Uuid::new_v4());
+        let id = ledger().reserve(Instant::now(), &kept, 1, 100);
+        Admission {
+            reservation: Some(id),
+        }
+        .keep();
+        assert_eq!(held_by(&kept), 1);
+        ledger().entries.retain(|r| r.deployment_id != kept);
     }
 }

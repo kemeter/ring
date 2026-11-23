@@ -471,7 +471,7 @@ impl FirecrackerLifecycle {
         // allocation failure — and here it would do so only *after* copying a
         // full rootfs image. Same check Cloud Hypervisor already ran; without it
         // Firecracker had no memory gate at all.
-        crate::hypervisor::resources::check_host_memory(deployment)?;
+        let admission = crate::hypervisor::resources::check_host_memory(deployment)?;
 
         // Private to Ring's user: it stages the decrypted config files and the
         // environment handed to the guest.
@@ -732,6 +732,7 @@ impl FirecrackerLifecycle {
             self.taps.lock().unwrap().insert(instance_id.clone(), t);
         }
         info!("Firecracker microVM {} booted (pid {})", instance_id, pid);
+        admission.keep();
         Ok(instance_id)
     }
 

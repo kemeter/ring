@@ -450,7 +450,7 @@ impl CloudHypervisorLifecycle {
         // reserves its whole memory at boot, so an over-ask fails the spawn with
         // an opaque "Cannot allocate memory". Catch it here with a clear
         // need/have message instead.
-        crate::hypervisor::resources::check_host_memory(deployment)?;
+        let admission = crate::hypervisor::resources::check_host_memory(deployment)?;
 
         let instance_image = self.instance_image_path(instance_id);
         if !instance_image.exists() {
@@ -811,6 +811,7 @@ impl CloudHypervisorLifecycle {
             instance_id, deployment.id
         );
 
+        admission.keep();
         Ok(())
     }
 
