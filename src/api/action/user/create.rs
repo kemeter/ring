@@ -35,7 +35,14 @@ pub(crate) async fn create(
 
     users_model::create(&pool, &input.username, &password_hash)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            if is_unique_violation(&e) {
+                return crate::api::validation::problem_response(
+                    StatusCode::CONFLICT,
+                    "Conflict",
+                    format!("a user named '{}' already exists", input.username),
+                );
+            }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "errors": ["User creation failed"] })),
@@ -97,6 +104,13 @@ pub(crate) struct UserInput {
     password: String,
 }
 
+/// Whether `error` is the database refusing a duplicate (a taken username).
+pub(crate) fn is_unique_violation(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|e| e.is_unique_violation())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::api::server::tests::{login, new_test_app};
@@ -120,6 +134,32 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::CREATED);
+    }
+
+    /// A taken username is refused, instead of a second account that can
+    /// never log in, answered with the first account's id.
+    #[tokio::test]
+    async fn a_taken_username_is_refused() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+        let body = json!({ "username": "dup.user", "password": "ringring" });
+
+        let first = server
+            .post("/users")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&body)
+            .await;
+        assert_eq!(first.status_code(), StatusCode::CREATED);
+
+        for username in ["dup.user", "admin"] {
+            let response = server
+                .post("/users")
+                .add_header("Authorization", format!("Bearer {}", token))
+                .json(&json!({ "username": username, "password": "ringring" }))
+                .await;
+            assert_eq!(response.status_code(), StatusCode::CONFLICT, "{username}");
+        }
     }
 
     #[tokio::test]

@@ -1062,16 +1062,21 @@ pub(crate) async fn create(
         return resp;
     }
 
-    // A runtime that is valid but was not loaded on this node (disabled, or
-    // skipped at startup because it was unreachable) would never schedule the
-    // deployment: the scheduler skips it on every tick and it stays `creating`
-    // with nothing saying why. Refuse it before anything is stored.
-    if !runtimes.contains_key(&input.runtime) {
+    // A runtime that is valid but disabled on this node would never schedule
+    // the deployment: the scheduler skips it on every tick and it stays
+    // `creating` with nothing saying why. One that was unreachable at startup
+    // and has not answered since is refused too, so a new deployment is not
+    // queued behind a daemon that may never come back; those it already ran
+    // are picked up again once it does. Refuse it before anything is stored.
+    if !runtimes
+        .get(&input.runtime)
+        .is_some_and(|runtime| runtime.is_connected())
+    {
         return problem_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "Service Unavailable",
             format!(
-                "runtime '{}' is not available on this node: it is disabled, or it was unreachable when the server started",
+                "runtime '{}' is not available on this node: it is disabled, or it has been unreachable since the server started",
                 input.runtime
             ),
         );

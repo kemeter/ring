@@ -99,10 +99,10 @@ The endpoints that produce validation errors are flagged in their sections below
 
 Check the server is up. Does not require authentication.
 
-**Response:**
+**Response:** always `200` while the server runs. `state` is `DEGRADED` while a runtime whose daemon was unreachable at startup has not answered yet: its deployments wait, and new ones are refused, until it does.
 
 ```json
-{ "state": "UP" }
+{ "state": "DEGRADED", "runtimes": { "docker": "DOWN", "podman": "UP" } }
 ```
 
 ### `GET /metrics`
@@ -805,7 +805,7 @@ Returns the same shape as a list entry.
 }
 ```
 
-**Response:** `201 Created`
+**Response:** `201 Created`. `409 Conflict` when another user already has that username; renaming a user to a taken name with `PUT /users/{id}` is refused the same way.
 
 **Validation** (see [Validation errors](#validation-errors) for the response shape):
 

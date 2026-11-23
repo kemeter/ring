@@ -38,7 +38,7 @@ No container runtime is enabled by default. Ring registers a runtime **only** wh
 Two rules follow:
 
 - **At least one runtime must be enabled.** With none, Ring refuses to start (it could not deploy anything).
-- **An enabled-but-unreachable runtime is a hard error.** Enable Docker but the daemon doesn't answer, or enable Cloud Hypervisor but its binary can't be found, and Ring fails fast at startup with a clear message, rather than starting and returning a 500 on the first deployment.
+- **An enabled-but-unreachable runtime does not stop the others.** A Docker, Podman or containerd daemon that does not answer at startup is logged, and retried every 30 seconds in the background: its existing deployments are reconciled again as soon as it answers (Docker coming up after Ring at boot), `GET /healthz` reports it `DOWN` with the server `DEGRADED` meanwhile, and a new deployment on it is refused with `503`. A Cloud Hypervisor or Firecracker binary that can't be found leaves that runtime out. Ring refuses to start only when no enabled runtime works.
 
 ## Fields
 
@@ -199,7 +199,7 @@ A failed exporter is logged and the server continues console-only rather than fa
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
-| `enabled` | bool | no | `false` | Register the Docker runtime. Must be `true` for Ring to use Docker. When `true` and the daemon is unreachable at startup, Ring fails fast |
+| `enabled` | bool | no | `false` | Register the Docker runtime. Must be `true` for Ring to use Docker. When `true` and the daemon is unreachable at startup, Ring retries it every 30s (see above) |
 | `host` | string | no | `"unix:///var/run/docker.sock"` | Docker daemon URL. Use `tcp://host:2375` for a remote daemon, `tcp://host:2376` for TLS |
 | `use_host_registry_auth` | bool | no | `false` | Authorize deployments to resolve registry credentials from the host Docker config (see [host registry auth](#host-registry-auth)). A deployment must also set `config.use_host_auth: true` to activate it |
 | `host_registry_config` | string | no | unset | Explicit path to the host registry config (`config.json` schema). When unset, standard Docker resolution applies (`$DOCKER_CONFIG`, then `~/.docker/config.json`) |
@@ -212,7 +212,7 @@ Podman speaks the Docker-compatible API (`podman system service`), so Ring drive
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
-| `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring fails fast |
+| `enabled` | bool | no | `false` | Register the Podman runtime. Must be `true` for Ring to use Podman. When `true` and the socket is unreachable at startup, Ring retries it every 30s (see above) |
 | `host` | string | no | rootless-first resolution | Podman API socket. Default resolution: `RING_PODMAN_HOST` → `DOCKER_HOST` → `unix:///run/user/$UID/podman/podman.sock` → `unix:///run/podman/podman.sock`. Start it with `systemctl --user start podman.socket` (rootless) |
 | `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)) |
 | `host_registry_config` | string | no | unset | Explicit path to the host registry config. Podman's `login` writes to `containers/auth.json`, so point at it here when the default Docker resolution doesn't pick it up |
@@ -225,7 +225,7 @@ containerd speaks its own native gRPC API on a Unix socket, with no Docker daemo
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
-| `enabled` | bool | no | `false` | Register the containerd runtime. Must be `true` for Ring to use containerd. When `true` and the socket doesn't answer a `Version` round-trip at startup, Ring fails fast |
+| `enabled` | bool | no | `false` | Register the containerd runtime. Must be `true` for Ring to use containerd. When `true` and the socket doesn't answer a `Version` round-trip at startup, Ring retries it every 30s (see above) |
 | `socket` | string | no | `/run/containerd/containerd.sock` | Path to the containerd gRPC Unix socket (the stock location used by `containerd`, k3s and RKE2) |
 | `namespace` | string | no | `ring` | containerd metadata namespace Ring creates its images, snapshots, containers and tasks under. Keeps Ring's objects from colliding with `k8s.io`, `moby` or `default` on a shared host. This is containerd's own partition concept, unrelated to a Ring deployment namespace |
 | `use_host_registry_auth` | bool | no | `false` | Authorize host-resolved registry credentials (see [host registry auth](#host-registry-auth)). containerd has no `login` of its own; tools like `nerdctl` write to `~/.docker/config.json`, the default this resolves |

@@ -5,7 +5,7 @@ Variables Ring reads from the process environment. Set them in your shell, a sys
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
 | `RING_SECRET_KEY` | **Yes** | none | 32-byte base64-encoded encryption key for secrets at rest. Server refuses to start if missing or malformed (exits with code 1). Generate with `openssl rand -base64 32`. **Losing it makes every encrypted secret unrecoverable.** |
-| `RING_DATABASE_PATH` | No | `./ring.db` | Path to the SQLite database file. The path is created on first start; parent directory must exist and be writable |
+| `RING_DATABASE_PATH` | No | `./ring.db` | Path to the SQLite database file. The path is created on first start; parent directory must exist and be writable. One server per database: a second server pointed at a database in use refuses to start, naming the process that holds `<path>.lock` |
 | `RING_DB_POOL_SIZE` | No | `5` | Maximum SQLite connections in the pool |
 | `RING_CONFIG_DIR` | No | `~/.config/kemeter/ring` | Where Ring reads `config.toml` and `auth.json`. Also the default location for Cloud Hypervisor firmware/sockets |
 | `RING_CONFIG_FILE` | No | `$RING_CONFIG_DIR/config.toml` | Path to a specific `config.toml` to load. Overrides **only** the config file, not `RING_CONFIG_DIR` (`auth.json`, firmware, etc. still come from the directory). The `--config` flag takes precedence over this. If set but the file is missing, Ring logs an error instead of silently using the default |

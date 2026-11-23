@@ -3,8 +3,58 @@ use std::env;
 use std::str::FromStr;
 use std::time::Duration;
 
+/// The database file the server uses: `RING_DATABASE_PATH`, or `ring.db`.
+pub(crate) fn database_path() -> String {
+    env::var("RING_DATABASE_PATH").unwrap_or_else(|_| "ring.db".to_string())
+}
+
+/// Held for the life of a server: only one may use a database.
+///
+/// Two servers on one database both reconciled every deployment, starting
+/// replicas twice over (15 containers for 12 deployments of one replica) and
+/// delivering each webhook twice, since the event queue is read without a
+/// claim. The lock is an advisory one on `<database>.lock`, released by the
+/// kernel when the process ends, however it ends.
+pub(crate) struct ServerLock {
+    _file: std::fs::File,
+}
+
+/// Take the server lock for `database`, or say which process holds it.
+pub(crate) fn lock_database(database: &str) -> Result<ServerLock, String> {
+    use std::io::Write;
+
+    let path = format!("{database}.lock");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| format!("cannot open {path}: {e}"))?;
+    match file.try_lock() {
+        Ok(()) => {
+            let _ = file.set_len(0);
+            let _ = write!(file, "{}", std::process::id());
+            Ok(ServerLock { _file: file })
+        }
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let holder = std::fs::read_to_string(&path).unwrap_or_default();
+            Err(format!(
+                "another Ring server{} is already using the database {database}; \
+                 stop it, or give this one its own RING_DATABASE_PATH",
+                if holder.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(" (pid {})", holder.trim())
+                }
+            ))
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(format!("cannot lock {path}: {e}")),
+    }
+}
+
 pub(crate) async fn get_database_pool() -> SqlitePool {
-    let database_path = env::var("RING_DATABASE_PATH").unwrap_or_else(|_| "ring.db".to_string());
+    let database_path = database_path();
 
     let connect_options = SqliteConnectOptions::from_str(&format!("sqlite:{}", database_path))
         .expect("Invalid database path")
@@ -165,5 +215,34 @@ mod tests {
             .run(&pool)
             .await
             .expect("the existing schema must not be migrated again");
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    #[test]
+    fn a_second_server_cannot_take_the_lock() {
+        let db = std::env::temp_dir().join(format!("ring-lock-{}.db", uuid::Uuid::new_v4()));
+        let db = db.to_string_lossy().to_string();
+
+        let first = super::lock_database(&db).expect("the first server takes the lock");
+        let second = super::lock_database(&db);
+        match second {
+            Err(msg) => {
+                assert!(msg.contains("already using the database"), "{msg}");
+                assert!(
+                    msg.contains(&std::process::id().to_string()),
+                    "names the holder: {msg}"
+                );
+            }
+            Ok(_) => panic!("two servers held the lock at once"),
+        }
+
+        drop(first);
+        assert!(
+            super::lock_database(&db).is_ok(),
+            "released with its holder"
+        );
+        let _ = std::fs::remove_file(format!("{db}.lock"));
     }
 }

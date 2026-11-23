@@ -151,7 +151,14 @@ pub(crate) async fn update(
         _ => None,
     };
 
-    if users_model::update(&pool, &user).await.is_err() {
+    if let Err(e) = users_model::update(&pool, &user).await {
+        if crate::api::action::user::create::is_unique_violation(&e) {
+            return Err(problem_response(
+                StatusCode::CONFLICT,
+                "Conflict",
+                format!("a user named '{}' already exists", user.username),
+            ));
+        }
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "errors": ["Failed to update user"] })),
@@ -448,6 +455,21 @@ mod tests {
             .await;
 
         assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn renaming_to_a_taken_username_is_refused() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        let response: TestResponse = server
+            .put(&format!("/users/{JOHN_ID}"))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&json!({ "username": "admin" }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

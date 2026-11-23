@@ -17,6 +17,7 @@ pub(crate) mod lifecycle_trait;
 pub(crate) mod mock;
 pub(crate) mod net_slots;
 pub(crate) mod port_forwarder;
+pub(crate) mod reconnecting;
 pub(crate) mod resources;
 pub(crate) mod stats;
 pub(crate) mod tap;

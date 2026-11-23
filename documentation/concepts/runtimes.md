@@ -13,7 +13,7 @@ Runtimes are **opt-in**: none is enabled by default. You turn one on in `config.
 enabled = true
 ```
 
-Enable just the runtimes a host actually runs: Docker-only, Podman-only, containerd-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none is enabled or if an enabled runtime is unreachable (an explicit-but-broken runtime is a configuration error, surfaced at startup rather than as a failed deployment later). See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
+Enable just the runtimes a host actually runs: Docker-only, Podman-only, containerd-only, Cloud-Hypervisor-only, or any mix. Ring registers exactly those, and refuses to start if none of them works. One whose daemon is unreachable at startup is retried in the background, and reported by `GET /healthz` until it answers. See the [config.toml reference](/documentation/reference/config-toml#runtimes-are-opt-in) for the full rules.
 
 ## Quick comparison
 
@@ -59,7 +59,7 @@ enabled = true
 # host = "unix:///run/user/1000/podman/podman.sock"   # rootless default
 ```
 
-The socket must be running; start it once with `systemctl --user start podman.socket` (rootless) or `systemctl start podman.socket` (root). Ring pings it at startup and fails fast if it's unreachable.
+The socket must be running; start it once with `systemctl --user start podman.socket` (rootless) or `systemctl start podman.socket` (root). Ring pings it at startup, and keeps retrying in the background while it's unreachable.
 
 **Good fit when:**
 - You want rootless containers (no privileged daemon on the host)
