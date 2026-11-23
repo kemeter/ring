@@ -2221,6 +2221,10 @@ pub(crate) async fn schedule(
         .instrument(cycle_span)
         .await;
 
+        // A config update stored without its `on_change` having run (the
+        // request was cancelled, or the server stopped) is finished here.
+        crate::api::action::config::on_change::resume_pending(&pool, &runtimes).await;
+
         // On the first cycle too, for what a previous run left behind.
         if namespaces_to_release {
             namespaces_to_release = false;

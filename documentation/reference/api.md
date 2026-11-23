@@ -1140,7 +1140,7 @@ A config is a named blob (typically a config file or JSON document) attached to 
 
 Full replacement (not partial). All fields must be provided.
 
-When `data` changes and `name` does not, the deployments of the namespace that mount the config react as their volume's [`on_change`](/documentation/reference/manifest#on_change-when-a-config-changes) says: nothing, a live rewrite of the file, or a redeploy. This happens before the response is returned; a failure is reported in the deployment's events and never undoes the update.
+When `data` changes and `name` does not, the deployments of the namespace that mount the config react as their volume's [`on_change`](/documentation/reference/manifest#on_change-when-a-config-changes) says: nothing, a live rewrite of the file, or a redeploy. This happens before the response is returned; a failure is reported in the deployment's events and never undoes the update. The change is recorded with the update: if the request is cut short after the config is stored (the client hangs up, the server stops), the scheduler carries it to the deployments on its next pass.
 
 | Query parameter | Description |
 | --- | --- |

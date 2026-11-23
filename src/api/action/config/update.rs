@@ -2,7 +2,6 @@ use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, http::StatusCode};
 use serde::Deserialize;
-use std::collections::HashSet;
 use validator::Validate;
 
 use crate::api::action::config::on_change;
@@ -98,7 +97,17 @@ pub(crate) async fn update(
             config.labels = request.labels.unwrap_or_default();
             config.updated_at = Some(chrono::Utc::now().to_rfc3339());
 
-            match ConfigModel::update(&pool, config.clone()).await {
+            let skip: Vec<String> = params
+                .skip_deployments
+                .as_deref()
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
+
+            match ConfigModel::update(&pool, config.clone(), propagate.then_some(&skip[..])).await {
                 Ok(_) => {
                     let _ = audit_log::record(
                         &pool,
@@ -110,16 +119,7 @@ pub(crate) async fn update(
                     )
                     .await;
                     if propagate {
-                        let skip: HashSet<String> = params
-                            .skip_deployments
-                            .as_deref()
-                            .unwrap_or_default()
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|name| !name.is_empty())
-                            .map(str::to_string)
-                            .collect();
-                        on_change::propagate(&pool, &runtimes, &config, &skip).await;
+                        on_change::propagate(&pool, &runtimes, &config.id).await;
                     }
                     let output = ConfigOutput::from_to_model(config);
                     (StatusCode::OK, Json(output)).into_response()
