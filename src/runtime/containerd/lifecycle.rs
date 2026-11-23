@@ -74,6 +74,10 @@ const STOP_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(10
 /// deployment that created it.
 const STOP_TIMEOUT_LABEL: &str = "ring.stop_timeout";
 
+/// Label holding an instance's published ports, as `portmap` mappings: the
+/// teardown needs them to remove the forwarding, and only has the container.
+const PORTS_LABEL: &str = "ring.ports";
+
 /// The labels of a deployment's containerd containers: the owning deployment
 /// id (for list/remove filtering) plus the user's labels, matching the Docker
 /// runtime's label set, and the grace period.
@@ -83,11 +87,26 @@ fn container_labels(deployment: &Deployment) -> std::collections::HashMap<String
     // user label of the same name is dropped, or it would set one that skipped
     // validation.
     labels.remove(STOP_TIMEOUT_LABEL);
+    labels.remove(PORTS_LABEL);
     if let Some(secs) = deployment.config.as_ref().and_then(|c| c.stop_timeout) {
         labels.insert(STOP_TIMEOUT_LABEL.to_string(), secs.to_string());
     }
+    let ports = cni::port_mappings(&deployment.ports);
+    if !ports.is_empty()
+        && let Ok(json) = serde_json::to_string(&ports)
+    {
+        labels.insert(PORTS_LABEL.to_string(), json);
+    }
     labels.insert(RING_DEPLOYMENT_LABEL.to_string(), deployment.id.clone());
     labels
+}
+
+/// The published ports recorded on a container.
+fn recorded_ports(labels: &std::collections::HashMap<String, String>) -> Vec<cni::PortMapping> {
+    labels
+        .get(PORTS_LABEL)
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default()
 }
 
 /// The grace period recorded on a container, or the default.
@@ -479,6 +498,21 @@ impl ContainerdLifecycle {
     ) -> Result<(), RuntimeError> {
         let admission = crate::hypervisor::resources::check_host_memory(deployment)?;
 
+        // `portmap` forwards with NAT rules, which take precedence over a
+        // process listening on the port: published over it, the port would
+        // silently stop reaching that process. Docker refuses it the same way.
+        for port in &deployment.ports {
+            let host_ip = port
+                .host_ip
+                .as_deref()
+                .unwrap_or(crate::hypervisor::port_forwarder::DEFAULT_HOST_IP);
+            if port.protocol == crate::models::deployments::PortProtocol::Tcp
+                && !crate::hypervisor::port_forwarder::host_port_available(host_ip, port.published)
+            {
+                return Err(RuntimeError::PortAlreadyInUse(port.published));
+            }
+        }
+
         let ns = &self.config.namespace;
 
         // 1. Image + rootfs chain id. Credentials come either from the host's
@@ -556,7 +590,12 @@ impl ContainerdLifecycle {
 
         // 5. Create + start the task, wiring CNI in between.
         if let Err(e) = self
-            .create_and_start_task(client, &instance_id, mounts)
+            .create_and_start_task(
+                client,
+                &instance_id,
+                mounts,
+                &cni::port_mappings(&deployment.ports),
+            )
             .await
         {
             self.delete_container_object(client, &instance_id).await;
@@ -662,6 +701,7 @@ impl ContainerdLifecycle {
         client: &containerd_client::Client,
         instance_id: &str,
         mounts: Vec<Mount>,
+        ports: &[cni::PortMapping],
     ) -> Result<(), RuntimeError> {
         // Ensure the log file's parent dir exists so the shim can write stdio.
         let log_file = log_path(instance_id);
@@ -691,12 +731,12 @@ impl ContainerdLifecycle {
         // time, exposed at /proc/<pid>/ns/net.
         cni::ensure_default_config();
         let netns = format!("/proc/{}/ns/net", pid);
-        match cni::add(instance_id, &netns).await {
+        match cni::add(instance_id, &netns, ports).await {
             Ok(Some(_)) => {}
             Ok(None) => debug!("no CNI address assigned for {}", instance_id),
             Err(message) => {
                 // Started anyway, it would count as running while unreachable.
-                cni::del(instance_id, &netns).await;
+                cni::del(instance_id, &netns, ports).await;
                 let _ = tasks
                     .delete(with_namespace!(
                         DeleteTaskRequest {
@@ -720,7 +760,7 @@ impl ContainerdLifecycle {
             // The task was created (a shim + netns exist) and CNI may have
             // reserved an IP. Unwind both before surfacing the error, otherwise
             // we leak a created-but-stopped task and a permanent IPAM lease.
-            cni::del(instance_id, &netns).await;
+            cni::del(instance_id, &netns, ports).await;
             let _ = tasks
                 .delete(with_namespace!(
                     DeleteTaskRequest {
@@ -743,8 +783,10 @@ impl ContainerdLifecycle {
     ) -> bool {
         let mut tasks = TasksClient::new(client.channel());
 
-        // Read before anything is torn down: the container object holds it.
-        let grace = self.container_grace_period(client, instance_id).await;
+        // Read before anything is torn down: the container object holds them.
+        let labels = self.labels_of(client, instance_id).await;
+        let grace = labels.as_ref().map_or(STOP_GRACE_PERIOD, grace_period);
+        let ports = labels.as_ref().map(recorded_ports).unwrap_or_default();
 
         // Capture the pid for CNI teardown before we kill the task.
         let netns = self
@@ -795,8 +837,8 @@ impl ContainerdLifecycle {
         // (so no /proc/<pid>/ns/net), but host-local IPAM keys its lease off the
         // container id alone, so DEL with an empty netns still frees the address.
         match &netns {
-            Some(netns) => cni::del(instance_id, netns).await,
-            None => cni::del(instance_id, "").await,
+            Some(netns) => cni::del(instance_id, netns, &ports).await,
+            None => cni::del(instance_id, "", &ports).await,
         }
 
         let _ = tasks
@@ -850,11 +892,11 @@ impl ContainerdLifecycle {
 
     /// The grace period recorded on the instance's container, or the default
     /// when it carries none or cannot be read.
-    async fn container_grace_period(
+    async fn labels_of(
         &self,
         client: &containerd_client::Client,
         instance_id: &str,
-    ) -> std::time::Duration {
+    ) -> Option<std::collections::HashMap<String, String>> {
         let mut containers = ContainersClient::new(client.channel());
         let req = with_namespace!(
             GetContainerRequest {
@@ -862,14 +904,13 @@ impl ContainerdLifecycle {
             },
             self.config.namespace
         );
-        match containers.get(req).await {
-            Ok(resp) => resp
-                .into_inner()
-                .container
-                .map(|c| grace_period(&c.labels))
-                .unwrap_or(STOP_GRACE_PERIOD),
-            Err(_) => STOP_GRACE_PERIOD,
-        }
+        containers
+            .get(req)
+            .await
+            .ok()?
+            .into_inner()
+            .container
+            .map(|c| c.labels)
     }
 
     async fn task_pid(&self, client: &containerd_client::Client, instance_id: &str) -> Option<u32> {
@@ -1016,6 +1057,28 @@ mod tests {
         assert_eq!(grace_period(&HashMap::new()), STOP_GRACE_PERIOD);
         let labels = HashMap::from([(STOP_TIMEOUT_LABEL.to_string(), "soon".to_string())]);
         assert_eq!(grace_period(&labels), STOP_GRACE_PERIOD);
+    }
+
+    #[test]
+    fn container_labels_record_the_published_ports_for_the_teardown() {
+        let mut deployment = worker();
+        deployment.ports = vec![crate::models::deployments::DeploymentPort {
+            published: 8080,
+            target: 80,
+            host_ip: None,
+            protocol: Default::default(),
+        }];
+        deployment
+            .labels
+            .insert(PORTS_LABEL.to_string(), "forged".to_string());
+
+        let labels = container_labels(&deployment);
+
+        assert_eq!(
+            recorded_ports(&labels),
+            cni::port_mappings(&deployment.ports)
+        );
+        assert!(recorded_ports(&HashMap::new()).is_empty());
     }
 
     #[test]
