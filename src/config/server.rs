@@ -369,6 +369,14 @@ pub(crate) struct ContainerdConfig {
     /// [`DockerConfig::host_registry_config`].
     #[serde(default)]
     pub(crate) host_registry_config: Option<String>,
+    /// Size (bytes) at which an instance's log file is rotated. Defaults to
+    /// 10 MiB. Set to 0 to disable rotation.
+    #[serde(default)]
+    pub(crate) max_log_bytes: Option<u64>,
+    /// How many log files each instance keeps, the live one included.
+    /// Defaults to 3.
+    #[serde(default)]
+    pub(crate) max_log_files: Option<u32>,
 }
 
 fn default_containerd_socket() -> String {
@@ -387,6 +395,8 @@ impl Default for ContainerdConfig {
             namespace: default_containerd_namespace(),
             use_host_registry_auth: false,
             host_registry_config: None,
+            max_log_bytes: None,
+            max_log_files: None,
         }
     }
 }

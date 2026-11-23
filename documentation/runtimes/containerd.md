@@ -12,7 +12,7 @@ The OCI runtime that sits *underneath* Docker and Kubernetes. Where Podman is re
    dnf install containernetworking-plugins   # Fedora → /usr/libexec/cni
    ```
 
-   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**.
+   Ring probes `/opt/cni/bin`, `/usr/lib/cni`, and `/usr/libexec/cni` (override with `CNI_PATH`). Without the plugins, containers boot with **no network**. With them, a plugin that fails, or takes more than 30 seconds, fails the start (`network` reason) and the instance is retried, instead of running unreachable.
 
 ## Enable it
 
@@ -36,8 +36,6 @@ deployments:
     runtime: containerd
     image: "docker.io/library/nginx:alpine"
     replicas: 3
-    ports:
-      - { published: 8080, target: 80 }
 ```
 
 ```bash
@@ -50,6 +48,9 @@ ring apply -f web.yaml
 - **Image entrypoint is honoured.** containerd is low-level and doesn't merge the image's `Entrypoint`/`Cmd` for you the way the Docker daemon does, so Ring reads them from the image config and applies them when the deployment gives no `command`.
 - **`command` health checks** run via `Tasks.Exec` (gRPC), no in-guest agent needed.
 - **Crash detection is reconcile-based** (tick-paced), like Podman: it inspects task exit status on each scheduler pass.
+- **No published ports yet.** The CNI network is a bridge without port mapping, so `ports` is refused on containerd: reach an instance on its bridge address, or use Docker or Podman to publish a host port.
+- **Logs rotate.** Each instance writes to `/var/log/ring/containerd/<id>.log`, rotated past 10 MiB with 3 files kept (`max_log_bytes`, `max_log_files`). `ring deployment logs` reads the rotated files too.
+- **Named volumes** are host directories, one per namespace, under `/var/lib/ring/volumes/<namespace>/<name>`. Ring creates them on first use.
 - **Private registries.** containerd has no `login` of its own. Inline `config.server`/`username`/`password`; or set `use_host_registry_auth = true` and pull with `config.use_host_auth: true` (since `nerdctl login` writes to `~/.docker/config.json`); or store credentials in an encrypted `Secret` and reference it with `config.image_pull_secret`. See [manifest `config`](/documentation/reference/manifest#config) and [deploy with secrets](/documentation/how-to/deploy-with-secrets#pull-a-private-image-with-a-secret).
 
 ## See also

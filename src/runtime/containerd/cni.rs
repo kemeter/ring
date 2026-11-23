@@ -121,40 +121,35 @@ pub(crate) fn plugins_available() -> bool {
 /// `netns_path` is the path to the network namespace (e.g.
 /// `/proc/<pid>/ns/net`); `container_id` is the CNI container id (we use the
 /// task/instance id).
-pub(crate) async fn add(container_id: &str, netns_path: &str) -> Option<IpAddr> {
+///
+/// Without the plugins the instance runs with no network, as documented
+/// (`Ok(None)`). With them, a plugin that fails, hangs or answers nonsense is
+/// an error: the instance would otherwise count as running while nothing can
+/// reach it.
+pub(crate) async fn add(container_id: &str, netns_path: &str) -> Result<Option<IpAddr>, String> {
     if !plugins_available() {
         warn!(
             "CNI plugins not found under any of {:?} — instance {} will have no CNI network",
             CNI_BIN_DIRS, container_id
         );
-        return None;
+        return Ok(None);
     }
     // The plugin invocation (fork-exec + host-local IPAM filesystem I/O) blocks,
     // so run it off the async runtime's worker threads.
     let (cid, ns) = (container_id.to_string(), netns_path.to_string());
-    let stdout = match tokio::task::spawn_blocking(move || exec_plugin("ADD", &cid, &ns))
+    let stdout = tokio::task::spawn_blocking(move || exec_plugin("ADD", &cid, &ns))
         .await
-        .ok()
-        .flatten()
-    {
-        Some(out) => out,
-        None => return None,
-    };
-    let result: CniResult = match serde_json::from_slice(&stdout) {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("could not parse CNI ADD result for {}: {}", container_id, e);
-            return None;
-        }
-    };
+        .map_err(|e| format!("CNI ADD for {container_id} did not run: {e}"))??;
+    let result: CniResult = serde_json::from_slice(&stdout)
+        .map_err(|e| format!("could not parse the CNI ADD result for {container_id}: {e}"))?;
     for ip in result.ips {
         if let Some((addr, _)) = ip.address.split_once('/')
             && let Ok(parsed) = addr.parse::<IpAddr>()
         {
-            return Some(parsed);
+            return Ok(Some(parsed));
         }
     }
-    None
+    Err(format!("CNI ADD gave {container_id} no address"))
 }
 
 /// Run `CNI DEL` to tear down a container's network. Best-effort and idempotent
@@ -173,7 +168,7 @@ pub(crate) async fn del(container_id: &str, netns_path: &str) {
 /// plugin chain this is sufficient; a full chained runtime would feed each
 /// plugin's output as `prevResult` to the next, which is unnecessary for a
 /// bridge+loopback chain where only the bridge allocates an IP.
-fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Option<Vec<u8>> {
+fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Result<Vec<u8>, String> {
     // Extract the bridge plugin config from the conflist and add the required
     // top-level fields each plugin invocation expects (`cniVersion`, `name`).
     let net_config = serde_json::json!({
@@ -208,7 +203,7 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Option<Ve
         Ok(c) => c,
         Err(e) => {
             warn!("failed to spawn CNI bridge plugin: {}", e);
-            return None;
+            return Err(format!("failed to spawn the CNI bridge plugin: {e}"));
         }
     };
 
@@ -216,28 +211,53 @@ fn exec_plugin(command: &str, container_id: &str, netns_path: &str) -> Option<Ve
         && let Err(e) = stdin.write_all(net_config.as_bytes())
     {
         warn!("failed to write CNI config to plugin stdin: {}", e);
-        return None;
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("failed to write the CNI config: {e}"));
     }
 
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => {
-            warn!("CNI bridge plugin {} did not complete: {}", command, e);
-            return None;
+    // Bounded: a plugin that hangs would otherwise hold a blocking thread and
+    // its process forever, on every retry, and hang the teardown's DEL too.
+    // Its output (a small JSON result) fits in the pipe, so it can exit
+    // before being read.
+    let deadline = std::time::Instant::now() + PLUGIN_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                warn!(
+                    "CNI {} for {} did not finish within {}s, killed",
+                    command,
+                    container_id,
+                    PLUGIN_TIMEOUT.as_secs()
+                );
+                return Err(format!(
+                    "CNI {command} did not finish within {}s",
+                    PLUGIN_TIMEOUT.as_secs()
+                ));
+            }
+            Err(e) => return Err(format!("CNI {command} could not be waited for: {e}")),
         }
-    };
-
-    if !output.status.success() {
-        warn!(
-            "CNI {} failed for {}: {}",
-            command,
-            container_id,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
     }
-    Some(output.stdout)
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("CNI {command} did not complete: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        warn!("CNI {} failed for {}: {}", command, container_id, stderr);
+        return Err(format!("CNI {command} failed: {}", stderr.trim()));
+    }
+    Ok(output.stdout)
 }
+
+/// Longest a CNI plugin may run before it is killed.
+const PLUGIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests {

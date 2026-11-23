@@ -22,6 +22,15 @@ The upgrade sets every namespace that holds such a deployment to `privileged`, s
 default = "privileged"
 ```
 
+### containerd named volumes
+
+On containerd, a named volume is now a directory per namespace, `/var/lib/ring/volumes/<namespace>/<name>`, which Ring creates. It used to be `/var/lib/ring/volumes/<name>`, shared by every namespace naming it, and Ring never created it: a deployment mounting one only started once the directory was made by hand. If you made such directories, move each one under the namespace of the deployments that mount it before upgrading:
+
+```bash
+mkdir -p /var/lib/ring/volumes/<namespace>
+mv /var/lib/ring/volumes/<name> /var/lib/ring/volumes/<namespace>/<name>
+```
+
 ### Secret and config files
 
 The decrypted content of `secret` and `config` volumes moves out of `/tmp/ring_configs` to a directory only Ring's user can enter (see [Mount a secret as a file](documentation/how-to/deploy-with-secrets.md#mount-a-secret-as-a-file)). Under systemd, add to the unit:
