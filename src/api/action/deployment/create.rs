@@ -1120,6 +1120,7 @@ pub(crate) async fn create(
         ports: input.ports,
         pending_events: vec![],
         pending_retire: vec![],
+        waiting: None,
         parent_id: None,
         network: input.network.clone(),
         restart: input.restart.clone(),

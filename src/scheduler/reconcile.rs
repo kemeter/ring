@@ -21,7 +21,7 @@ use crate::hypervisor::classifier::{
     Disposition, classify_create_error, classify_exit_code, create_error_outcome,
 };
 use crate::hypervisor::instance_driver::InstanceDriver;
-use crate::models::deployments::{Deployment, DeploymentStatus, Reason};
+use crate::models::deployments::{Deployment, DeploymentStatus, Reason, Waiting};
 use crate::models::restart_state::RestartState;
 use crate::models::volume::ResolvedMount;
 use crate::scheduler::restart::{self, Decision, Event, RestartPolicy, StartFailure, WorkloadKind};
@@ -199,10 +199,13 @@ pub(crate) async fn reconcile(
     // With nothing left running, the deployment waits for its next start. A
     // program that cannot run says so even while other instances still do.
     let failed_this_pass = failure.is_some();
-    if let Some((reason, message)) = failure
-        && (deployment.instances.is_empty() || reason == Reason::SpecRejected)
-    {
-        deployment.back_off(reason, message);
+    if let Some((reason, message)) = failure {
+        if deployment.instances.is_empty() || reason == Reason::SpecRejected {
+            deployment.back_off(reason, message);
+        } else {
+            // Crashed, or never started, beside instances that serve.
+            report_waiting(&mut deployment, reason, &message);
+        }
     }
 
     scale(
@@ -258,6 +261,29 @@ pub(crate) async fn reconcile(
     deployment
 }
 
+/// The deployment lost an instance, or could not start one, and keeps its
+/// status because others still serve: `waiting` says why it is short of one
+/// until the replacement runs. A deployment in any other status has a
+/// `reason` of its own, or nothing to start; one still at its target (it had
+/// a surplus instance) is not short of anything.
+fn report_waiting(deployment: &mut Deployment, reason: Reason, message: &str) {
+    let target = match deployment.workload_kind() {
+        WorkloadKind::Job { .. } => 1,
+        WorkloadKind::Worker => usize::try_from(deployment.target_replicas()).unwrap_or(usize::MAX),
+    };
+    if deployment.instances.len() < target
+        && matches!(
+            deployment.status,
+            DeploymentStatus::Running | DeploymentStatus::Progressing
+        )
+    {
+        deployment.waiting = Some(Waiting {
+            reason,
+            message: message.to_string(),
+        });
+    }
+}
+
 /// Count instances the scheduler removed because they failed a check (a
 /// liveness check, the readiness deadline) as failures, exactly like instances
 /// that exited on their own. For a job that is a failed run, bounded by its
@@ -307,6 +333,9 @@ pub(crate) fn record_removals(
         && deployment.status != DeploymentStatus::Failed
     {
         deployment.back_off(reason, message);
+    } else if removed > 0 && !deployment.instances.is_empty() {
+        // A liveness check removed one of several instances.
+        report_waiting(deployment, reason, message);
     }
 }
 
@@ -373,6 +402,11 @@ async fn scale(
         WorkloadKind::Job { .. } => 1,
         WorkloadKind::Worker => usize::try_from(deployment.target_replicas()).unwrap_or(usize::MAX),
     };
+
+    if current >= target {
+        // Nothing is missing any more, so nothing is waiting.
+        deployment.waiting = None;
+    }
 
     if current > target && kind == WorkloadKind::Worker {
         let Some(instance_id) = deployment.instances.first().cloned() else {
@@ -470,6 +504,9 @@ async fn scale(
     match driver.start_instance(deployment, resolved_mounts).await {
         Ok(()) => {
             state.next_attempt_at = None;
+            if current + 1 >= target {
+                deployment.waiting = None;
+            }
             deployment.emit_event(
                 "info",
                 format!("Scaled up from {} to {} replicas", current, current + 1),
@@ -551,6 +588,8 @@ fn record_start_failure(
         || deployment.status == DeploymentStatus::BackingOff
     {
         deployment.back_off(reason, message.clone());
+    } else {
+        report_waiting(deployment, reason, &message);
     }
 
     let decision = restart::decide(policy, kind, counter, Event::StartFailed(failure), now, rng);
@@ -778,6 +817,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             pending_retire: vec![],
+            waiting: None,
             parent_id: None,
             network: None,
             restart: None,
@@ -1033,6 +1073,126 @@ mod tests {
         assert_eq!(d.restart_count, 1);
         assert!(state.next_attempt_at.is_some());
         assert!(reasons(&d).contains(&"insufficient_resources".to_string()));
+        // The status cannot say why it is short of an instance: `waiting` does.
+        assert_eq!(
+            d.waiting.as_ref().map(|w| w.reason),
+            Some(Reason::InsufficientResources)
+        );
+    }
+
+    /// The refusal stays shown while the start waits, and goes once the last
+    /// missing instance starts.
+    #[tokio::test]
+    async fn waiting_is_cleared_once_every_instance_runs() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+
+        let d = pass(&driver, &policy, worker(3), &mut state, now()).await;
+        assert!(d.waiting.is_some());
+
+        // Refused again: the reason stays.
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let d = pass(&driver, &policy, d, &mut state, now() + secs(301)).await;
+        assert!(d.waiting.is_some());
+
+        let d = pass(&driver, &policy, d, &mut state, now() + secs(602)).await;
+        assert_eq!(d.instances.len(), 3);
+        assert_eq!(d.waiting, None);
+        assert_eq!(d.condition(), (DeploymentStatus::Running, None));
+    }
+
+    /// With no instance left, the deployment backs off and `failure` says why:
+    /// `waiting` would only repeat it.
+    #[tokio::test]
+    async fn waiting_gives_way_to_backing_off() {
+        let driver = FakeDriver::running(&["a"]);
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+
+        let d = pass(&driver, &policy, worker(2), &mut state, now()).await;
+        assert!(d.waiting.is_some());
+
+        driver.crash("a", Some(1));
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let d = pass(&driver, &policy, d, &mut state, now() + secs(301)).await;
+        assert_eq!(d.status, DeploymentStatus::BackingOff);
+        assert_eq!(d.waiting, None);
+    }
+
+    /// A replica that crashed beside one that serves is waiting for its
+    /// restart, and says why.
+    #[tokio::test]
+    async fn a_crash_beside_serving_instances_is_reported_as_waiting() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.crash("b", Some(1));
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(2),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(d.condition(), (DeploymentStatus::Running, None));
+        if d.instances.len() < 2 {
+            assert_eq!(d.waiting.map(|w| w.reason), Some(Reason::CrashLoop));
+        } else {
+            // Restarted on the spot: nothing is missing.
+            assert_eq!(d.waiting, None);
+        }
+    }
+
+    /// An instance created but never started (Ring stopped in between) beside
+    /// one that serves is a refused start like any other.
+    #[tokio::test]
+    async fn an_instance_that_never_started_beside_serving_ones_is_reported_as_waiting() {
+        let driver = FakeDriver::running(&["a"]);
+        driver.terminated.lock().unwrap().push(Termination {
+            instance_id: "b".to_string(),
+            exit_code: None,
+            finished_at: now(),
+            started: false,
+            logs_tail: None,
+        });
+        let mut state = RestartState::default();
+
+        let d = pass(
+            &driver,
+            &RestartPolicy::default(),
+            worker(2),
+            &mut state,
+            now(),
+        )
+        .await;
+
+        assert_eq!(d.condition(), (DeploymentStatus::Running, None));
+        if d.instances.len() < 2 {
+            assert!(d.waiting.is_some());
+        } else {
+            assert_eq!(d.waiting, None);
+        }
+    }
+
+    /// Scaled down to what it runs, nothing is missing any more.
+    #[tokio::test]
+    async fn waiting_is_cleared_when_scaled_down_to_what_runs() {
+        let driver = FakeDriver::running(&["a", "b"]);
+        driver.fail_starts_with(RuntimeError::InsufficientResources("memory".to_string()));
+        let policy = RestartPolicy::default();
+        let mut state = RestartState::default();
+
+        let mut d = pass(&driver, &policy, worker(3), &mut state, now()).await;
+        assert!(d.waiting.is_some());
+
+        d.replicas = 2;
+        let d = pass(&driver, &policy, d, &mut state, now() + secs(1)).await;
+        assert_eq!(d.waiting, None);
     }
 
     /// Backing off beside a serving instance, a deployment whose next start
@@ -1564,6 +1724,60 @@ mod tests {
         let at = state.next_attempt_at.unwrap_or(now()) + secs(1);
         let d = pass(&driver, &policy, d, &mut state, at).await;
         assert_eq!(d.status, DeploymentStatus::Progressing);
+    }
+
+    /// One of three instances of a deployment scaled down to two is removed by
+    /// its liveness check: it is at its target, nothing is missing.
+    #[test]
+    fn a_surplus_instance_removed_by_its_liveness_check_is_not_waiting() {
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.instances = vec!["a".to_string(), "b".to_string()];
+        let mut rng = StdRng::seed_from_u64(1);
+
+        record_removals(
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            &mut d,
+            &mut state,
+            1,
+            Reason::CrashLoop,
+            "liveness",
+            now(),
+            &mut rng,
+        );
+
+        assert_eq!(d.waiting, None);
+    }
+
+    #[test]
+    fn a_replica_removed_by_its_liveness_check_beside_others_is_waiting() {
+        let mut state = RestartState::default();
+        let mut d = worker(2);
+        d.instances = vec!["a".to_string()];
+        let mut rng = StdRng::seed_from_u64(1);
+
+        // The liveness check removed "b"; "a" still serves.
+        record_removals(
+            &RestartPolicy::default(),
+            WorkloadKind::Worker,
+            &mut d,
+            &mut state,
+            1,
+            Reason::CrashLoop,
+            "liveness",
+            now(),
+            &mut rng,
+        );
+
+        assert_eq!(d.condition(), (DeploymentStatus::Running, None));
+        assert_eq!(
+            d.waiting,
+            Some(Waiting {
+                reason: Reason::CrashLoop,
+                message: "liveness".to_string()
+            })
+        );
     }
 
     #[tokio::test]

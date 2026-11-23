@@ -4,7 +4,7 @@
   import { page } from '$app/state';
   import { listDeployments, type Deployment } from '#lib/api.ts';
   import { hasSession } from '#lib/auth.ts';
-  import { statusKind, statusLabel } from '#lib/status.ts';
+  import { statusKind, statusLabel, statusMessage } from '#lib/status.ts';
   import { formatDate, timeAgo } from '#lib/utils.ts';
 
   let items = $state<Deployment[]>([]);
@@ -232,7 +232,7 @@
             <td>
               <span
                 class="status-pill"
-                title={d.failure?.message}
+                title={statusMessage(d)}
                 class:success={kind === 'success'}
                 class:warn={kind === 'warn'}
                 class:danger={kind === 'danger'}

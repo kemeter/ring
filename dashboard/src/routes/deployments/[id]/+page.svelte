@@ -21,7 +21,7 @@
   import CopyButton from '#lib/CopyButton.svelte';
   import DeploymentLogs from '#lib/DeploymentLogs.svelte';
   import ExecTerminal from '#lib/ExecTerminal.svelte';
-  import { statusKind, statusLabel } from '#lib/status.ts';
+  import { statusKind, statusLabel, statusMessage } from '#lib/status.ts';
   import DetailTableCard from '#lib/DetailTableCard.svelte';
   import { hasSession } from '#lib/auth.ts';
   import { formatBytes, formatDate, timeAgo } from '#lib/utils.ts';
@@ -208,8 +208,8 @@
           {statusLabel(detail)}
         </span>
       </div>
-      {#if detail.failure}
-        <p class="status-message">{detail.failure.message}</p>
+      {#if statusMessage(detail)}
+        <p class="status-message">{statusMessage(detail)}</p>
       {/if}
       <p class="subtitle">
         <span class="mono">{detail.id}</span>

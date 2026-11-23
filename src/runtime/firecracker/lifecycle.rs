@@ -2443,6 +2443,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             pending_retire: vec![],
+            waiting: None,
             parent_id: None,
             network: None,
             restart: None,

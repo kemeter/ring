@@ -206,6 +206,8 @@ ring deployment list [OPTIONS]
 
 The table has eleven columns: `Id`, `Created at (UTC)`, `Updated at (UTC)`, `Namespace`, `Name`, `Image`, `Runtime`, `Kind`, `Replicas` (formatted `instances/desired`), `Status`, `Reason`.
 
+`Reason` gives why a deployment is backing off or failed. On a deployment that keeps instances serving while others went down (a crash, a liveness check) or cannot start, it says how many wait and why instead (`2 waiting: insufficient_resources`), and `ring deployment inspect` adds a `Waiting` line with the message.
+
 On an [autoscaled](/documentation/reference/manifest#autoscale) deployment the desired count is the one the autoscaler is currently targeting, not the number declared in the manifest, and it is suffixed with `*` (`3/8*`). `ring deployment inspect` spells both out.
 
 Timestamps are rendered to the second (`2026-05-03 22:22:21`); sub-second

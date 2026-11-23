@@ -23,7 +23,19 @@ export function statusKind(status: string): StatusKind {
   }
 }
 
-/** The status with its failure reason, when it has one: `backing_off · crash_loop`. */
-export function statusLabel(d: Pick<Deployment, 'status' | 'failure'>): string {
-  return d.failure ? `${d.status} · ${d.failure.reason}` : d.status;
+/** The status with its failure reason, when it has one: `backing_off · crash_loop`,
+ *  or else why some instances are still waiting: `running · waiting: insufficient_resources`. */
+export function statusLabel(d: Pick<Deployment, 'status' | 'failure' | 'waiting'>): string {
+  if (d.failure) {
+    return `${d.status} · ${d.failure.reason}`;
+  }
+  if (d.waiting) {
+    return `${d.status} · waiting: ${d.waiting.reason}`;
+  }
+  return d.status;
+}
+
+/** The detail behind `statusLabel`, for a tooltip or a line under it. */
+export function statusMessage(d: Pick<Deployment, 'failure' | 'waiting'>): string | undefined {
+  return d.failure?.message ?? d.waiting?.message ?? undefined;
 }

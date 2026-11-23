@@ -593,6 +593,19 @@ pub(crate) struct Deployment {
     /// The manifest's `restart` block, `None` when it has none.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub(crate) restart: Option<RestartSpec>,
+    /// Why some instances are not running while others serve: the last crash
+    /// or refused start that left the deployment in its status. `None` once it has all
+    /// its instances, and while backing off or failed (`reason` says why).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub(crate) waiting: Option<Waiting>,
+}
+
+/// The last crash or refused start of a deployment that still has instances
+/// serving.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Waiting {
+    pub(crate) reason: Reason,
+    pub(crate) message: String,
 }
 
 /// The status of a deployment with its reason: what a change is announced on.
@@ -614,10 +627,20 @@ impl Deployment {
         self.status = status;
         self.reason = None;
         self.message = None;
+        // Only a deployment with instances to start can be waiting for one:
+        // a deleted (a health check stopping it), completed or pending one
+        // must not carry an earlier refusal along.
+        if !matches!(
+            status,
+            DeploymentStatus::Running | DeploymentStatus::Progressing
+        ) {
+            self.waiting = None;
+        }
     }
 
     /// The last attempt failed for `reason`: wait for the next one.
     pub(crate) fn back_off(&mut self, reason: Reason, message: impl Into<String>) {
+        self.waiting = None;
         self.status = DeploymentStatus::BackingOff;
         self.reason = Some(reason);
         self.message = Some(message.into());
@@ -625,6 +648,7 @@ impl Deployment {
 
     /// Give up for good, for `reason`.
     pub(crate) fn fail(&mut self, reason: Reason, message: impl Into<String>) {
+        self.waiting = None;
         self.status = DeploymentStatus::Failed;
         self.reason = Some(reason);
         self.message = Some(message.into());
@@ -744,6 +768,8 @@ struct DeploymentRow {
     ports: Option<String>,
     network_mode: Option<String>,
     restart: Option<String>,
+    waiting_reason: Option<String>,
+    waiting_message: Option<String>,
 }
 
 fn parse_environment(json_str: &str, deployment_id: &str) -> HashMap<String, EnvValue> {
@@ -844,6 +870,13 @@ impl From<DeploymentRow> for Deployment {
                 .unwrap_or_default(),
             pending_events: vec![],
             pending_retire: vec![],
+            waiting: row
+                .waiting_reason
+                .and_then(|r| r.parse().ok())
+                .map(|reason| Waiting {
+                    reason,
+                    message: row.waiting_message.clone().unwrap_or_default(),
+                }),
             restart: row
                 .restart
                 .filter(|s| !s.is_empty())
@@ -868,7 +901,8 @@ impl From<DeploymentRow> for Deployment {
 const SELECT_COLUMNS: &str = "
     id, created_at, updated_at, status, reason, message, restart_count,
     namespace, name, image, command, config, runtime, kind,
-    replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart
+    replicas, labels, environment, volumes, health_checks, resources, autoscale, desired_replicas, image_digest, parent_id, ports, network_mode, restart,
+    waiting_reason, waiting_message
 ";
 
 const ALLOWED_FILTER_COLUMNS: &[&str] = &["namespace", "status", "reason", "kind"];
@@ -1034,7 +1068,7 @@ pub(crate) async fn update(
     let status = deployment.status.as_str();
     let result = sqlx::query(
         "UPDATE deployment SET status = ?, reason = ?, message = ?, updated_at = datetime('now'), \
-         image_digest = ?, parent_id = ? \
+         image_digest = ?, parent_id = ?, waiting_reason = ?, waiting_message = ? \
          WHERE id = ? AND (status <> 'deleted' OR ? = 'deleted')",
     )
     .bind(status)
@@ -1042,6 +1076,8 @@ pub(crate) async fn update(
     .bind(&deployment.message)
     .bind(&deployment.image_digest)
     .bind(&deployment.parent_id)
+    .bind(deployment.waiting.as_ref().map(|w| w.reason.as_str()))
+    .bind(deployment.waiting.as_ref().map(|w| w.message.as_str()))
     .bind(&deployment.id)
     .bind(status)
     .execute(pool)
@@ -1061,7 +1097,7 @@ where
 {
     sqlx::query(
         "UPDATE deployment SET status = 'deleted', reason = NULL, message = NULL, \
-         updated_at = datetime('now') WHERE id = ?",
+         waiting_reason = NULL, waiting_message = NULL, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(id)
     .execute(executor)
@@ -1536,6 +1572,7 @@ mod tests {
             ports: vec![],
             pending_events: vec![],
             pending_retire: vec![],
+            waiting: None,
             parent_id: None,
             network: None,
             restart: None,
@@ -1821,6 +1858,50 @@ mod tests {
         let stored = find(&pool, "d1").await.unwrap().unwrap();
         assert_eq!(stored.status, DeploymentStatus::Deleted);
         assert_eq!(stored.parent_id, None);
+    }
+
+    #[test]
+    fn waiting_only_survives_statuses_that_start_instances() {
+        let refused = Some(Waiting {
+            reason: Reason::InsufficientResources,
+            message: String::new(),
+        });
+        for status in [DeploymentStatus::Running, DeploymentStatus::Progressing] {
+            let mut d = worker("d1", 0);
+            d.waiting = refused.clone();
+            d.set_status(status);
+            assert_eq!(d.waiting, refused, "{status} keeps it");
+        }
+        // A health check stopping it marks it deleted this way.
+        for status in [
+            DeploymentStatus::Deleted,
+            DeploymentStatus::Completed,
+            DeploymentStatus::Pending,
+        ] {
+            let mut d = worker("d1", 0);
+            d.waiting = refused.clone();
+            d.set_status(status);
+            assert_eq!(d.waiting, None, "{status} clears it");
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_is_stored_and_cleared() {
+        let pool = test_pool().await;
+        let mut deployment = worker("d1", 0);
+        create(&pool, &deployment).await.unwrap();
+
+        deployment.waiting = Some(Waiting {
+            reason: Reason::InsufficientResources,
+            message: "needs 300 MiB".to_string(),
+        });
+        update(&pool, &deployment).await.unwrap();
+        let stored = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.waiting, deployment.waiting);
+
+        mark_deleted(&pool, "d1").await.unwrap();
+        let stored = find(&pool, "d1").await.unwrap().unwrap();
+        assert_eq!(stored.waiting, None);
     }
 
     #[tokio::test]

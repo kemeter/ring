@@ -178,6 +178,7 @@ pub(crate) async fn execute(
 
             let mut deployments = vec![];
             for deployment in deployments_list {
+                let reason = reason_cell(&deployment);
                 deployments.push(DeploymentTableItem {
                     id: deployment.id,
                     created_at: style::format_date(&deployment.created_at),
@@ -191,6 +192,7 @@ pub(crate) async fn execute(
                     // the deployment opted in. Showing the declared `replicas`
                     // there would read as "2/2 instances" on a deployment Ring
                     // has scaled to 8.
+                    reason,
                     replicas: {
                         let target = match (&deployment.autoscale, deployment.desired_replicas) {
                             (Some(_), Some(desired)) => desired,
@@ -204,7 +206,6 @@ pub(crate) async fn execute(
                         format!("{}/{}{}", deployment.instances.len(), target, marker)
                     },
                     status: style::status(&deployment.status),
-                    reason: deployment.failure.map(|f| f.reason).unwrap_or_default(),
                 })
             }
 
@@ -214,6 +215,25 @@ pub(crate) async fn execute(
             eprintln!("Error fetching deployments: {}", error);
             exit_code::from_reqwest_error(&error).exit();
         }
+    }
+}
+
+/// The Reason column: why it is backing off or failed, or else why some of its
+/// instances are not running while others serve (`2 waiting: insufficient_resources`).
+fn reason_cell(deployment: &DeploymentOutput) -> String {
+    if let Some(failure) = &deployment.failure {
+        return failure.reason.clone();
+    }
+    let Some(waiting) = &deployment.waiting else {
+        return String::new();
+    };
+    let target = match (&deployment.autoscale, deployment.desired_replicas) {
+        (Some(_), Some(desired)) => desired,
+        _ => deployment.replicas,
+    } as usize;
+    match target.saturating_sub(deployment.instances.len()) {
+        0 => String::new(),
+        missing => format!("{missing} waiting: {}", waiting.reason),
     }
 }
 
@@ -232,7 +252,49 @@ fn keep_reasons(body: &str, reasons: &[&str]) -> serde_json::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::keep_reasons;
+    use super::{keep_reasons, reason_cell};
+    use crate::api::dto::deployment::DeploymentOutput;
+
+    fn output(json: serde_json::Value) -> DeploymentOutput {
+        let mut base = serde_json::json!({
+            "id": "d1", "created_at": "", "updated_at": "", "status": "running",
+            "restart_count": 0, "name": "web", "runtime": "docker", "kind": "worker",
+            "namespace": "default", "image": "nginx", "command": [], "config": null,
+            "replicas": 3, "labels": {}, "environment": {}, "volumes": [],
+            "health_checks": [], "ports": [], "instances": [{"id": "a"}]
+        });
+        for (k, v) in json.as_object().unwrap() {
+            base[k] = v.clone();
+        }
+        serde_json::from_value(base).expect("a DeploymentOutput")
+    }
+
+    #[test]
+    fn reason_cell_counts_the_instances_waiting() {
+        let d = output(serde_json::json!({
+            "waiting": {"reason": "insufficient_resources", "message": "needs 300 MiB"}
+        }));
+        assert_eq!(reason_cell(&d), "2 waiting: insufficient_resources");
+    }
+
+    #[test]
+    fn reason_cell_prefers_the_failure() {
+        let d = output(serde_json::json!({
+            "status": "backing_off",
+            "failure": {"reason": "crash_loop", "message": ""}
+        }));
+        assert_eq!(reason_cell(&d), "crash_loop");
+    }
+
+    #[test]
+    fn reason_cell_is_empty_when_nothing_is_missing() {
+        let d = output(serde_json::json!({
+            "replicas": 1,
+            "waiting": {"reason": "insufficient_resources", "message": ""}
+        }));
+        assert_eq!(reason_cell(&d), "");
+        assert_eq!(reason_cell(&output(serde_json::json!({}))), "");
+    }
 
     #[test]
     fn keep_reasons_keeps_only_the_matching_failures() {
