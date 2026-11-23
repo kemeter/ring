@@ -70,27 +70,101 @@ pub(crate) async fn create(pool: &SqlitePool, config: Config) -> Result<(), sqlx
 }
 
 pub(crate) async fn delete(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     let result = sqlx::query("DELETE FROM config WHERE id = ?")
         .bind(id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     if result.rows_affected() == 0 {
         return Err(sqlx::Error::RowNotFound);
     }
+    sqlx::query("DELETE FROM config_propagation WHERE config_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
 
     Ok(())
 }
 
-pub(crate) async fn update(pool: &SqlitePool, config: Config) -> Result<(), sqlx::Error> {
+/// Store `config`. With `propagate`, also record that its change still has to
+/// reach the deployments mounting it, leaving out those named there, in the
+/// same transaction: a propagation cut short is then resumed, never lost.
+pub(crate) async fn update(
+    pool: &SqlitePool,
+    config: Config,
+    propagate: Option<&[String]>,
+) -> Result<(), sqlx::Error> {
+    let version = config.updated_at.unwrap_or_default();
+    let mut tx = pool.begin().await?;
     sqlx::query("UPDATE config SET updated_at = ?, name = ?, data = ?, labels = ? WHERE id = ?")
-        .bind(config.updated_at.unwrap_or_default())
+        .bind(&version)
         .bind(&config.name)
         .bind(&config.data)
         .bind(&config.labels)
         .bind(&config.id)
+        .execute(&mut *tx)
+        .await?;
+    if let Some(skip) = propagate {
+        sqlx::query(
+            "INSERT INTO config_propagation (config_id, version, skip_deployments) VALUES (?, ?, ?) \
+             ON CONFLICT (config_id) DO UPDATE SET version = excluded.version, \
+             skip_deployments = excluded.skip_deployments",
+        )
+        .bind(&config.id)
+        .bind(&version)
+        .bind(serde_json::to_string(skip).unwrap_or_else(|_| "[]".to_string()))
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    Ok(())
+}
+
+/// A config change that has not reached its deployments yet.
+pub(crate) struct PendingPropagation {
+    /// The config's `updated_at` the propagation was recorded for.
+    pub(crate) version: String,
+    /// Deployments the caller redeploys itself.
+    pub(crate) skip: Vec<String>,
+}
+
+pub(crate) async fn pending_propagation(
+    pool: &SqlitePool,
+    config_id: &str,
+) -> Result<Option<PendingPropagation>, sqlx::Error> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT version, skip_deployments FROM config_propagation WHERE config_id = ?",
+    )
+    .bind(config_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(version, skip)| PendingPropagation {
+        version,
+        skip: serde_json::from_str(&skip).unwrap_or_default(),
+    }))
+}
+
+/// Ids of the configs whose change has not reached their deployments yet.
+pub(crate) async fn pending_propagations(pool: &SqlitePool) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT config_id FROM config_propagation ORDER BY config_id")
+        .fetch_all(pool)
+        .await
+}
+
+/// Mark the propagation of `version` done. A newer update recorded meanwhile
+/// has another version, and stays pending.
+pub(crate) async fn clear_propagation(
+    pool: &SqlitePool,
+    config_id: &str,
+    version: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM config_propagation WHERE config_id = ? AND version = ?")
+        .bind(config_id)
+        .bind(version)
         .execute(pool)
         .await?;
-
     Ok(())
 }

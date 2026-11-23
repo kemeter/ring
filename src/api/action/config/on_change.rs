@@ -20,30 +20,74 @@ use crate::models::deployment_event;
 use crate::models::deployments::{self, Deployment, DeploymentStatus};
 use crate::models::volume::{OnChange, ReloadSignal, live_config_path};
 
-/// Apply the change of `config` to every active deployment of its namespace
-/// that mounts it, except those named in `skip`, which the caller redeploys
-/// itself. Runs after the config is stored: a failure here is reported on the
-/// deployment concerned and never undoes the update.
-pub(crate) async fn propagate(
-    pool: &Db,
-    runtimes: &RuntimeMap,
-    config: &Config,
-    skip: &HashSet<String>,
-) {
+/// Apply the stored change of config `config_id` to every active deployment
+/// of its namespace that mounts it, except those the update said the caller
+/// redeploys itself. Runs after the config is stored: a failure here is
+/// reported on the deployment concerned and never undoes the update.
+pub(crate) async fn propagate(pool: &Db, runtimes: &RuntimeMap, config_id: &str) {
     // One propagation at a time, each from the config as stored once it holds
     // the lock rather than from the request that triggered it. Two updates in
     // quick succession could otherwise rewrite a live file in the wrong order
     // and leave it on the older content; this way the last one to run always
     // writes the latest.
     let _serialized = PROPAGATION.lock().await;
-    let config = match config_model::find(pool, &config.id).await {
-        Ok(Some(current)) => current,
-        // Deleted since: nothing mounts it any more.
+    run(pool, runtimes, config_id, false).await;
+}
+
+/// Finish the propagations an update recorded but did not complete: the
+/// request was cancelled (a client that hung up drops it), or the server
+/// stopped, after the config was stored. Called by the scheduler each pass.
+pub(crate) async fn resume_pending(pool: &Db, runtimes: &RuntimeMap) {
+    let pending = match config_model::pending_propagations(pool).await {
+        Ok(pending) => pending,
+        Err(e) => {
+            error!(
+                "Failed to list the config changes still to propagate: {}",
+                e
+            );
+            return;
+        }
+    };
+    for config_id in pending {
+        // Behind a request propagating the same change, this finds it done.
+        let _serialized = PROPAGATION.lock().await;
+        run(pool, runtimes, &config_id, true).await;
+    }
+}
+
+async fn run(pool: &Db, runtimes: &RuntimeMap, config_id: &str, resumed: bool) {
+    let pending = match config_model::pending_propagation(pool, config_id).await {
+        Ok(Some(pending)) => pending,
+        // Already propagated, by the request or an earlier pass.
         Ok(None) => return,
         Err(e) => {
             error!(
-                "Failed to reload config {}/{} before propagating it: {}",
-                config.namespace, config.name, e
+                "Failed to read the pending propagation of config {}: {}",
+                config_id, e
+            );
+            return;
+        }
+    };
+    if resumed {
+        info!("Resuming the propagation of config {}", config_id);
+    }
+    let done = || async {
+        if let Err(e) = config_model::clear_propagation(pool, config_id, &pending.version).await {
+            error!(
+                "Failed to mark the propagation of config {} done: {}",
+                config_id, e
+            );
+        }
+    };
+
+    let config = match config_model::find(pool, config_id).await {
+        Ok(Some(current)) => current,
+        // Deleted since: nothing mounts it any more.
+        Ok(None) => return done().await,
+        Err(e) => {
+            error!(
+                "Failed to reload config {} before propagating it: {}",
+                config_id, e
             );
             return;
         }
@@ -69,14 +113,18 @@ pub(crate) async fn propagate(
                 "Config {}/{} is not a map of file contents, not propagating it: {}",
                 config.namespace, config.name, e
             );
-            return;
+            return done().await;
         }
     };
 
+    let skip: HashSet<&str> = pending.skip.iter().map(String::as_str).collect();
     // Newest first: the first deployment seen for a name is the current one,
     // which is what a rollout redeploys.
     let mut rolled_out: HashSet<String> = HashSet::new();
-    for deployment in referencing.iter().filter(|d| !skip.contains(&d.name)) {
+    for deployment in referencing
+        .iter()
+        .filter(|d| !skip.contains(d.name.as_str()))
+    {
         let volumes = config_volumes(deployment, &config.name);
 
         if volumes.iter().any(|(_, v)| v.on_change == OnChange::Live) {
@@ -87,9 +135,27 @@ pub(crate) async fn propagate(
             .iter()
             .any(|(_, v)| v.on_change == OnChange::Rollout)
             && rolled_out.insert(deployment.name.clone())
+            // A resumed propagation may find the rollout an interrupted one
+            // already made: that deployment mounts the new content.
+            && !created_after(deployment, &pending.version)
         {
             roll_out(pool, deployment, config).await;
         }
+    }
+
+    done().await;
+}
+
+/// Whether `deployment` was created after the config update of `version`, so
+/// it started with the new content.
+fn created_after(deployment: &Deployment, version: &str) -> bool {
+    let Ok(version) = chrono::DateTime::parse_from_rfc3339(version) else {
+        return false;
+    };
+    let created = deployment.created_at.trim_end_matches(" UTC").trim();
+    match chrono::NaiveDateTime::parse_from_str(created, "%Y-%m-%d %H:%M:%S%.f") {
+        Ok(created) => created.and_utc() > version.with_timezone(&Utc),
+        Err(_) => false,
     }
 }
 
@@ -393,6 +459,12 @@ mod tests {
                 .unwrap()
         }
 
+        async fn pending(&self) -> Vec<String> {
+            crate::models::config::pending_propagations(&self.pool)
+                .await
+                .unwrap()
+        }
+
         async fn reasons(&self, deployment_id: &str) -> Vec<String> {
             deployment_event::find_events_by_deployment(&self.pool, deployment_id, None)
                 .await
@@ -555,27 +627,130 @@ mod tests {
         assert_eq!(active[0].id, first);
     }
 
+    /// Store an update the way the API does, but stop before propagating it:
+    /// what a request cancelled after the write leaves behind.
+    async fn store_without_propagating(pool: &sqlx::SqlitePool, id: &str, data: &str) {
+        let mut config = crate::models::config::find(pool, id)
+            .await
+            .unwrap()
+            .unwrap();
+        config.data = data.to_string();
+        config.updated_at = Some(chrono::Utc::now().to_rfc3339());
+        crate::models::config::update(pool, config, Some(&[]))
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
-    async fn a_late_propagation_writes_the_latest_content_not_its_own() {
+    async fn a_propagation_leaves_nothing_pending() {
         let h = harness().await;
         let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
         let id = h.deploy(config_volume("live"), false).await;
 
-        // The update to v2 is stored, but the propagation of an earlier
-        // update to v1-bis only runs now, holding the content it was given.
         h.update_config(&config_id, "app-config", r#"{"app.yaml":"v2"}"#)
             .await;
-        let mut stale = crate::models::config::find(&h.pool, &config_id)
+
+        assert!(h.pending().await.is_empty());
+        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
+    }
+
+    #[tokio::test]
+    async fn a_cut_short_live_propagation_is_resumed() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        let id = h.deploy(config_volume("live"), false).await;
+        let path = live_config_path(&id, 0);
+
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v2"}"#).await;
+        assert!(
+            !std::path::Path::new(&path).exists()
+                || std::fs::read_to_string(&path).unwrap() != "v2"
+        );
+        assert_eq!(h.pending().await, vec![config_id.clone()]);
+
+        let no_runtimes: RuntimeMap = Arc::new(HashMap::new());
+        super::resume_pending(&h.pool, &no_runtimes).await;
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "v2");
+        assert!(h.pending().await.is_empty());
+        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
+    }
+
+    #[tokio::test]
+    async fn a_cut_short_rollout_is_resumed() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        let first = h.deploy(config_volume("rollout"), false).await;
+
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v2"}"#).await;
+        let no_runtimes: RuntimeMap = Arc::new(HashMap::new());
+        super::resume_pending(&h.pool, &no_runtimes).await;
+
+        let active = h.active().await;
+        assert_eq!(active.len(), 1);
+        assert_ne!(active[0].id, first, "the resumed propagation redeployed it");
+        assert!(h.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rollout_already_made_is_not_made_again() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        h.deploy(config_volume("rollout"), false).await;
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v2"}"#).await;
+        let pending = crate::models::config::pending_propagation(&h.pool, &config_id)
             .await
             .unwrap()
             .unwrap();
-        stale.data = r#"{"app.yaml":"v1-bis"}"#.to_string();
         let no_runtimes: RuntimeMap = Arc::new(HashMap::new());
-        super::propagate(&h.pool, &no_runtimes, &stale, &Default::default()).await;
+        super::resume_pending(&h.pool, &no_runtimes).await;
+        let redeployed = h.active().await[0].id.clone();
 
-        let path = live_config_path(&id, 0);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "v2");
+        // The server stopped after the redeploy, before marking it done.
+        sqlx::query("INSERT INTO config_propagation (config_id, version) VALUES (?, ?)")
+            .bind(&config_id)
+            .bind(&pending.version)
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        super::resume_pending(&h.pool, &no_runtimes).await;
 
-        let _ = crate::runtime::config_files::remove_deployment_dir(&id);
+        let active = h.active().await;
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].id, redeployed);
+        assert!(h.pending().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_update_stored_during_a_propagation_stays_pending() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v2"}"#).await;
+        let first = crate::models::config::pending_propagation(&h.pool, &config_id)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v3"}"#).await;
+
+        // The propagation of v2 ends after v3 was stored.
+        crate::models::config::clear_propagation(&h.pool, &config_id, &first.version)
+            .await
+            .unwrap();
+
+        assert_eq!(h.pending().await, vec![config_id]);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_config_drops_its_pending_propagation() {
+        let h = harness().await;
+        let config_id = h.create_config(r#"{"app.yaml":"v1"}"#).await;
+        store_without_propagating(&h.pool, &config_id, r#"{"app.yaml":"v2"}"#).await;
+
+        crate::models::config::delete(&h.pool, &config_id)
+            .await
+            .unwrap();
+
+        assert!(h.pending().await.is_empty());
     }
 }

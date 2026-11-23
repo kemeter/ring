@@ -274,6 +274,7 @@ Things to know before choosing:
 - **`live` changes every instance at once.** There is no rollout, no health check and no way back: a broken config reaches every instance an application reloads it in. `rollout` keeps the protection of a rolling update.
 - **`live` rewrites the file in place**, so the instances keep seeing the same file. The rewrite is not atomic: an application reading the file at that very moment can see it partly written.
 - **`live` is supported on `docker`, `podman` and `containerd`.** On `firecracker` and `cloud-hypervisor` a config reaches the guest as a disk image, which cannot change under a running VM. Use `rollout` there.
+- **A change is never lost.** It is recorded with the config, and if the update request is cut short (the client hangs up, the server stops), the scheduler finishes it on its next pass.
 - **Only a content change counts.** Renaming a config does not touch the deployments mounting it, which reference it by its former name.
 - **`ring apply` does not redeploy twice.** When the manifest also carries the deployments mounting the config, they are redeployed by the apply itself, and the config update leaves them out of their `on_change`.
 - Each action is recorded in the deployment's events: `config_reloaded` for a rewrite, `config_reload_signal` for a signal, `config_rollout` for a redeploy.
