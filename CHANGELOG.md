@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /deployments` and `GET /deployments/{id}` returned the registry `config.password` to any token allowed to read deployments. The API no longer returns it; it reads back as `null`
 
 ### Fixed
+- An instance whose image was still being pulled kept the memory admitted for it reserved: the next pass refused that very instance on its own reservation, and any other deployment needing the memory, until the pull ended or the reservation expired. A start that does not get its instance running now gives its reservation back
 - A config update whose request was cut short after the config was stored (a client that hung up, a server stopped) left the deployments mounting it on the old content: `live` files were not rewritten and `rollout` deployments not redeployed, and nothing caught up. The change is now recorded with the update and the scheduler finishes it
 - After the disk filled up during a database write, Ring failed every later write with `database is locked` until it was restarted, and lost writes it had already confirmed. Writes now resume once there is room again
 - Replicas started one after the other could all be admitted on the same free memory, before the first had allocated its own, and the OOM killer settled it later. Each admitted instance now reserves its memory for 60 seconds, and later admissions count those reservations

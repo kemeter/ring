@@ -544,7 +544,7 @@ pub(crate) async fn create_container(
     // if the host can't hold the requested memory, the container would only get
     // OOM-killed at runtime (or, with no limit, take the host down with it).
     // Fail here with an actionable message instead.
-    crate::hypervisor::resources::check_host_memory(deployment)?;
+    let admission = crate::hypervisor::resources::check_host_memory(deployment)?;
 
     let (name, reference) = parse_image_reference(&deployment.image);
 
@@ -758,6 +758,7 @@ pub(crate) async fn create_container(
                 "Docker container {} created and started successfully",
                 container_name
             );
+            admission.keep();
             Ok(())
         }
         Err(e) => {

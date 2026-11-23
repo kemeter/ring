@@ -477,7 +477,7 @@ impl ContainerdLifecycle {
         client: &containerd_client::Client,
         resolved_mounts: &[ResolvedMount],
     ) -> Result<(), RuntimeError> {
-        crate::hypervisor::resources::check_host_memory(deployment)?;
+        let admission = crate::hypervisor::resources::check_host_memory(deployment)?;
 
         let ns = &self.config.namespace;
 
@@ -566,6 +566,7 @@ impl ContainerdLifecycle {
 
         deployment.instances.push(instance_id.clone());
         info!("containerd instance {} created and started", instance_id);
+        admission.keep();
         Ok(())
     }
 
