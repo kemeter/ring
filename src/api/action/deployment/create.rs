@@ -1351,6 +1351,15 @@ pub(crate) async fn deploy(
                 // downtime, but deterministic and loop-free.
                 let publishes_host_port = deployment.ports.iter().any(|p| p.published > 0);
 
+                // Same collision without a published port: a container on the
+                // host's network binds its ports on the host directly, so the
+                // new one cannot listen while the old one still does, and dies
+                // on "address in use" while the old one keeps running.
+                let uses_host_network = deployment
+                    .network
+                    .as_ref()
+                    .is_some_and(|network| matches!(network.mode, NetworkMode::Host));
+
                 // A job runs once and has no instance left to hand traffic
                 // over to: it always replaces its predecessor.
                 let is_job = deployment.kind == "job";
@@ -1361,6 +1370,7 @@ pub(crate) async fn deploy(
                     && has_health_checks
                     && deployments_list.len() == 1
                     && !publishes_host_port
+                    && !uses_host_network
                 {
                     let existing = &deployments_list[0];
                     info!(
@@ -1379,7 +1389,8 @@ pub(crate) async fn deploy(
                     // Immediate replace. Pick the most specific reason so
                     // operators can fix the root cause: `force=true` is a
                     // deliberate caller choice, the others are config gaps,
-                    // and `host_port_published` is the rolling-incompatible case.
+                    // and `host_port_published` / `host_network` are the
+                    // rolling-incompatible cases.
                     replace_reason = Some(if force {
                         "force"
                     } else if is_job {
@@ -1388,6 +1399,8 @@ pub(crate) async fn deploy(
                         "no_health_checks"
                     } else if deployments_list.len() > 1 {
                         "multiple_active_deployments"
+                    } else if uses_host_network {
+                        "host_network"
                     } else {
                         "host_port_published"
                     });
@@ -1505,6 +1518,10 @@ pub(crate) async fn deploy(
             ),
             "host_port_published" => format!(
                 "Replaced {} immediately because it publishes a host port — rolling update would collide on the port (it creates the new container before stopping the old), so Ring recreated it instead (brief downtime)",
+                replaced
+            ),
+            "host_network" => format!(
+                "Replaced {} immediately because it runs on the host's network — rolling update would collide on the ports it binds (it creates the new container before stopping the old), so Ring recreated it instead (brief downtime)",
                 replaced
             ),
             other => format!("Replaced {} immediately ({})", replaced, other),
@@ -3179,6 +3196,81 @@ mod tests {
         .expect("recreate event must be logged");
         assert_eq!(event.0, "warning");
         assert!(event.1.contains("host port"), "got message: {}", event.1);
+    }
+
+    #[tokio::test]
+    async fn host_network_forces_recreate_instead_of_rolling() {
+        let test_app = TestApp::anonymous().await;
+        test_app
+            .namespace_at("host-ns", SecurityLevel::Privileged)
+            .await;
+        let (pool, app) = (test_app.pool.clone(), test_app.router());
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        // Health checks and a single active parent would allow rolling, but on
+        // the host's network the new container cannot bind while the old does.
+        let manifest = |image: &str| {
+            json!({
+                "runtime": "docker",
+                "name": "host-app",
+                "namespace": "host-ns",
+                "image": image,
+                "network": { "mode": "host" },
+                "health_checks": [{"type": "command", "command": "true", "interval": "10s", "timeout": "5s", "on_failure": "restart"}]
+            })
+        };
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&manifest("nginx:1.0"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let first_id = response.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        sqlx::query("UPDATE deployment SET status = 'running' WHERE id = ?")
+            .bind(&first_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = server
+            .post("/deployments")
+            .add_header("Authorization", format!("Bearer {}", token))
+            .json(&manifest("nginx:2.0"))
+            .await;
+        assert_eq!(response.status_code(), StatusCode::CREATED);
+        let new_id = response.json::<serde_json::Value>()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let parent: serde_json::Value = server
+            .get(&format!("/deployments/{}", first_id))
+            .add_header("Authorization", format!("Bearer {}", token))
+            .await
+            .json();
+        assert_eq!(
+            parent["status"], "deleted",
+            "host-network deployment must recreate, not roll"
+        );
+
+        let event: (String, String) = sqlx::query_as(
+            "SELECT level, message FROM deployment_event WHERE deployment_id = ? AND reason = 'force_replace'",
+        )
+        .bind(&new_id)
+        .fetch_one(&pool)
+        .await
+        .expect("recreate event must be logged");
+        assert_eq!(event.0, "warning");
+        assert!(
+            event.1.contains("host's network"),
+            "got message: {}",
+            event.1
+        );
     }
 
     #[tokio::test]
