@@ -61,6 +61,7 @@ Rolling updates are **skipped** (immediate replacement, brief downtime) when:
 - The deployment declares no health checks
 - `ring apply --force` is set
 - Multiple active deployments share the same `name`+`namespace` (unusual; fix the duplicates first)
+- The deployment publishes a host port or runs on the host's network: two containers cannot bind the same host port, so the old one is stopped first
 
 Each skip emits a `ForceReplace` event with the precise reason.
 

@@ -14,12 +14,15 @@ For the underlying mechanism (parent/child deployments, readiness gate, drain lo
 | `kind: job` | Immediate replacement (a job runs once, there is nothing to hand over) |
 | Multiple active deployments share `name`+`namespace` | Immediate replacement (clean up duplicates first) |
 | Manifest publishes a host port (`ports[].published`) | Immediate replacement (**recreate**), see below |
+| Manifest runs on the host's network (`network.mode: host`) | Immediate replacement (**recreate**), see below |
 
 Immediate replacement stops every old instance before starting the new ones, causing brief downtime. Rolling update keeps traffic flowing.
 
-### Why a published host port forces recreate
+### Why a published host port or host networking forces recreate
 
 A host port can be bound by only one container at a time. A rolling update creates the new container *before* stopping the old one, so the new bind would collide with the old (`port is already allocated`) and the deployment would loop in `instance_creation_failed`. To avoid that, Ring automatically **recreates** any deployment that publishes a host port: it stops the old container first, then starts the new one. This means a **brief downtime** during the swap, which is unavoidable while a single host port is shared. The switch is logged as a warning event on the new deployment so it's visible in `ring deployment inspect`.
+
+The same goes for a deployment on the host's network (`network.mode: host`): it publishes no port, but its container binds its ports on the host directly, so the new one would fail to listen (`address in use`) while the old one still does. Ring recreates it too.
 
 ## Trigger a rollout
 
