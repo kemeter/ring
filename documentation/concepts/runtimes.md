@@ -86,7 +86,7 @@ enabled = true
 
 Ring keeps all the objects it creates under its own containerd **namespace** (`ring` by default) so they don't collide with `k8s.io`, `moby` or `default`. This is containerd's metadata-partition concept and is unrelated to a Ring deployment namespace; deployments are still scoped the usual way, via the `ring_deployment` label.
 
-Because containerd is lower-level than Docker, Ring assembles by hand what bollard would otherwise hide: images are pulled through the **transfer** service (resolve → fetch layers → unpack), the rootfs is a writable **snapshot** prepared from the image's layer chain, the container runs as a **task** under the `runc` shim, and networking is wired with **CNI** (a `bridge` + `host-local` IPAM chain, auto-written to `/etc/cni/net.d` if absent) so every container gets a routable IP, the same model Kubernetes and `nerdctl` use.
+Because containerd is lower-level than Docker, Ring assembles by hand what bollard would otherwise hide: images are pulled through the **transfer** service (resolve → fetch layers → unpack), the rootfs is a writable **snapshot** prepared from the image's layer chain (under a short-lived `ring-create-*` lease until the container holds it, so containerd's garbage collector cannot remove it mid-creation), the container runs as a **task** under the `runc` shim, and networking is wired with **CNI** (a `bridge` + `host-local` IPAM chain, auto-written to `/etc/cni/net.d` if absent) so every container gets a routable IP, the same model Kubernetes and `nerdctl` use.
 
 **Good fit when:**
 - The host already runs containerd (Kubernetes nodes, k3s/RKE2) and you don't want Docker too
