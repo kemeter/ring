@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # T1-containerd: apply a minimal nginx deployment, assert it becomes Running with
 # a real containerd container + task, then delete it and assert the container is
-# gone (task killed, container + snapshot removed).
+# gone (task killed, container + snapshot removed). The lease that holds the
+# snapshot during creation must not outlive it.
 #
 # Requires: a reachable containerd socket, `ctr`, and CNI plugins. See setup.sh.
 
@@ -43,6 +44,11 @@ log "deployment id: $DEPLOYMENT_ID"
 
 assert_containerd_container_exists "$DEPLOYMENT_ID"
 wait_containerd_task_running "$DEPLOYMENT_ID" 30
+
+# The lease that protects the snapshot while the instance is created is
+# released once the container holds it.
+leftover=$(ctr -n "$RING_CONTAINERD_NS" leases ls -q | grep -c '^ring-create-' || true)
+[ "$leftover" -eq 0 ] || fail "$leftover creation lease(s) left after the instance started"
 
 "$RING_BIN" deployment delete "$DEPLOYMENT_ID"
 

@@ -34,12 +34,16 @@ use axum::response::sse::Event;
 use chrono::{DateTime, Utc};
 use containerd_client::services::v1::container::Runtime;
 use containerd_client::services::v1::containers_client::ContainersClient;
+use containerd_client::services::v1::leases_client::LeasesClient;
 use containerd_client::services::v1::snapshots::snapshots_client::SnapshotsClient;
 use containerd_client::services::v1::snapshots::{PrepareSnapshotRequest, RemoveSnapshotRequest};
 use containerd_client::services::v1::tasks_client::TasksClient;
 use containerd_client::services::v1::{
     Container, CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest,
     DeleteTaskRequest, GetContainerRequest, GetRequest, KillRequest, StartRequest, WaitRequest,
+};
+use containerd_client::services::v1::{
+    CreateRequest as CreateLeaseRequest, DeleteRequest as DeleteLeaseRequest,
 };
 use containerd_client::types::Mount;
 use containerd_client::types::v1::Status as TaskStatus;
@@ -48,6 +52,17 @@ use futures::stream::{self, Stream};
 use std::convert::Infallible;
 use std::pin::Pin;
 use tonic::Request;
+
+/// Label containerd reads to garbage collect a lease once its time is up.
+const LEASE_EXPIRE_LABEL: &str = "containerd.io/gc.expire";
+
+/// How long a creation lease protects its snapshot when Ring never gets to
+/// delete it (a crash, or a creation dropped mid-way). Past that, the lease
+/// and the snapshot it holds are collected.
+const CREATION_LEASE_TTL: chrono::Duration = chrono::Duration::minutes(10);
+
+/// Metadata key that attaches a request to a lease.
+const LEASE_HEADER: &str = "containerd-lease";
 
 /// SIGTERM / SIGKILL signal numbers (Linux). Used for graceful then forced kill.
 const SIGTERM: u32 = 15;
@@ -550,43 +565,33 @@ impl ContainerdLifecycle {
         // Instance id: human-readable, unique, also the container + snapshot key.
         let instance_id = format!("{}_{}_{}", deployment.namespace, deployment.name, tiny_id());
 
-        // 2. Writable snapshot from the chain id.
-        let mounts = self
-            .prepare_snapshot(client, &instance_id, &resolved.chain_id)
-            .await?;
-
-        // 3. Materialize named volume directories and content mounts on disk,
-        //    then build the OCI spec.
-        if let Err(e) = oci::ensure_named_volume_dirs(
-            std::path::Path::new(oci::VOLUMES_ROOT),
-            &deployment.namespace,
-            resolved_mounts,
-        ) {
-            self.remove_snapshot(client, &instance_id).await;
-            return Err(RuntimeError::Io(e));
-        }
-        let config_files = match write_config_files(deployment, resolved_mounts).await {
-            Ok(f) => f,
+        // 2. Writable snapshot from the chain id. Until the container below
+        //    references it, nothing but a lease keeps containerd's garbage
+        //    collector (run by any deletion on the host) from removing it.
+        let lease = self.create_lease(client, &instance_id).await?;
+        let mounts = match self
+            .prepare_snapshot(client, &instance_id, &resolved.chain_id, &lease)
+            .await
+        {
+            Ok(mounts) => mounts,
             Err(e) => {
-                self.remove_snapshot(client, &instance_id).await;
+                self.delete_lease(client, &lease).await;
                 return Err(e);
             }
         };
-        let spec = oci::build_spec(
-            deployment,
-            resolved_mounts,
-            &config_files,
-            &image_default_args,
-        );
-
-        // 4. Register the container object, tagged with the owning deployment.
-        if let Err(e) = self
-            .create_container_object(client, &instance_id, deployment, &image.reference, spec)
-            .await
-        {
-            self.remove_snapshot(client, &instance_id).await;
-            return Err(e);
-        }
+        let created = self
+            .create_container(
+                client,
+                &instance_id,
+                deployment,
+                resolved_mounts,
+                &image,
+                &image_default_args,
+            )
+            .await;
+        // The container holds the snapshot from now on, or it is removed.
+        self.delete_lease(client, &lease).await;
+        created?;
 
         // 5. Create + start the task, wiring CNI in between.
         if let Err(e) = self
@@ -609,14 +614,100 @@ impl ContainerdLifecycle {
         Ok(())
     }
 
+    /// Steps 3 and 4 of a creation: files on disk, the OCI spec, then the
+    /// container object. On failure the snapshot is removed.
+    async fn create_container(
+        &self,
+        client: &containerd_client::Client,
+        instance_id: &str,
+        deployment: &Deployment,
+        resolved_mounts: &[ResolvedMount],
+        image: &ContainerdImage,
+        image_default_args: &[String],
+    ) -> Result<(), RuntimeError> {
+        // 3. Materialize named volume directories and content mounts on disk,
+        //    then build the OCI spec.
+        if let Err(e) = oci::ensure_named_volume_dirs(
+            std::path::Path::new(oci::VOLUMES_ROOT),
+            &deployment.namespace,
+            resolved_mounts,
+        ) {
+            self.remove_snapshot(client, instance_id).await;
+            return Err(RuntimeError::Io(e));
+        }
+        let config_files = match write_config_files(deployment, resolved_mounts).await {
+            Ok(f) => f,
+            Err(e) => {
+                self.remove_snapshot(client, instance_id).await;
+                return Err(e);
+            }
+        };
+        let spec = oci::build_spec(
+            deployment,
+            resolved_mounts,
+            &config_files,
+            image_default_args,
+        );
+
+        // 4. Register the container object, tagged with the owning deployment.
+        if let Err(e) = self
+            .create_container_object(client, instance_id, deployment, &image.reference, spec)
+            .await
+        {
+            self.remove_snapshot(client, instance_id).await;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Lease that holds what a creation makes until the container exists. It
+    /// expires on its own, so one Ring never deletes does not pin anything.
+    async fn create_lease(
+        &self,
+        client: &containerd_client::Client,
+        instance_id: &str,
+    ) -> Result<String, RuntimeError> {
+        let expire =
+            (Utc::now() + CREATION_LEASE_TTL).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let id = format!("ring-create-{}", instance_id);
+        let mut leases = LeasesClient::new(client.channel());
+        let req = with_namespace!(
+            CreateLeaseRequest {
+                id: id.clone(),
+                labels: [(LEASE_EXPIRE_LABEL.to_string(), expire)].into(),
+            },
+            self.config.namespace
+        );
+        leases
+            .create(req)
+            .await
+            .map_err(|e| creation_error("CreateLease", instance_id, e))?;
+        Ok(id)
+    }
+
+    async fn delete_lease(&self, client: &containerd_client::Client, lease: &str) {
+        let mut leases = LeasesClient::new(client.channel());
+        let req = with_namespace!(
+            DeleteLeaseRequest {
+                id: lease.to_string(),
+                sync: false,
+            },
+            self.config.namespace
+        );
+        if let Err(e) = leases.delete(req).await {
+            debug!("DeleteLease failed for {}: {}", lease, e);
+        }
+    }
+
     async fn prepare_snapshot(
         &self,
         client: &containerd_client::Client,
         instance_id: &str,
         chain_id: &str,
+        lease: &str,
     ) -> Result<Vec<Mount>, RuntimeError> {
         let mut snapshots = SnapshotsClient::new(client.channel());
-        let req = with_namespace!(
+        let mut req = with_namespace!(
             PrepareSnapshotRequest {
                 snapshotter: DEFAULT_SNAPSHOTTER.to_string(),
                 key: instance_id.to_string(),
@@ -624,6 +715,12 @@ impl ContainerdLifecycle {
                 labels: Default::default(),
             },
             self.config.namespace
+        );
+        req.metadata_mut().insert(
+            LEASE_HEADER,
+            lease.parse().map_err(|_| {
+                RuntimeError::InstanceCreationFailed(format!("invalid lease id {}", lease))
+            })?,
         );
         let resp = snapshots
             .prepare(req)
