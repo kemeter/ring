@@ -366,14 +366,24 @@ pub(crate) async fn rotate(
     Ok(rotated)
 }
 
+/// Whether `last_used_at` is due for a write: never set, unreadable, or at
+/// least a minute old. Checked by the auth path before it spawns the write, so
+/// that the requests in between cost nothing.
+pub(crate) fn last_use_is_stale(token: &Token, now: DateTime<Utc>) -> bool {
+    match &token.last_used_at {
+        Some(prev) => match DateTime::parse_from_rfc3339(prev) {
+            Ok(prev_ts) => (now - prev_ts.with_timezone(&Utc)).num_seconds() >= 60,
+            Err(_) => true,
+        },
+        None => true,
+    }
+}
+
 /// Best-effort last-use marker, throttled to one write per minute so the auth
 /// hot path doesn't issue a write on every single request. Failures are
 /// swallowed by the caller — a missed `last_used_at` must never fail auth.
 pub(crate) async fn touch_last_used(pool: &SqlitePool, token: &Token) -> Result<(), sqlx::Error> {
-    if let Some(prev) = &token.last_used_at
-        && let Ok(prev_ts) = DateTime::parse_from_rfc3339(prev)
-        && (Utc::now() - prev_ts.with_timezone(&Utc)).num_seconds() < 60
-    {
+    if !last_use_is_stale(token, Utc::now()) {
         return Ok(());
     }
 
@@ -437,6 +447,24 @@ mod tests {
     // Scope/namespace authorisation lives in `api::auth::require_scope` (the
     // single enforcement point) and is tested there. Here we only cover the
     // model's own lifecycle (active / expired / revoked).
+
+    #[test]
+    fn last_use_is_written_at_most_once_a_minute() {
+        let now = DateTime::parse_from_rfc3339("2026-11-28T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut t = token_with(&["admin"], &[]);
+        assert!(last_use_is_stale(&t, now), "never used: due");
+
+        t.last_used_at = Some("2026-11-28T11:59:30Z".into());
+        assert!(!last_use_is_stale(&t, now), "30 s ago: not due");
+
+        t.last_used_at = Some("2026-11-28T11:59:00Z".into());
+        assert!(last_use_is_stale(&t, now), "a minute ago: due");
+
+        t.last_used_at = Some("not-a-date".into());
+        assert!(last_use_is_stale(&t, now), "unreadable: rewritten");
+    }
 
     #[test]
     fn expired_token_is_not_active() {
