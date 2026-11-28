@@ -9,7 +9,7 @@ use crate::models::namespace as NamespaceModel;
 // Scope (`namespaces:read`) is enforced centrally by the auth middleware.
 pub(crate) async fn list(
     State(pool): State<Db>,
-    State(configuration): State<crate::config::config::Config>,
+    State(configuration): State<std::sync::Arc<crate::config::config::Config>>,
 ) -> Response {
     let mut namespaces: Vec<NamespaceOutput> = Vec::new();
 

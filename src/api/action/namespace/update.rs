@@ -22,7 +22,7 @@ use crate::models::security_level::SecurityLevel;
 pub(crate) async fn update(
     Path(name): Path<String>,
     State(pool): State<Db>,
-    State(configuration): State<Config>,
+    State(configuration): State<std::sync::Arc<Config>>,
     auth: Auth,
     Json(input): Json<serde_json::Map<String, serde_json::Value>>,
 ) -> Response {

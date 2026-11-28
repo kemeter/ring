@@ -36,7 +36,7 @@ pub(crate) struct NamespaceInput {
 
 pub(crate) async fn create(
     State(pool): State<Db>,
-    State(configuration): State<crate::config::config::Config>,
+    State(configuration): State<std::sync::Arc<crate::config::config::Config>>,
     auth: Auth,
     Json(input): Json<NamespaceInput>,
 ) -> Response {

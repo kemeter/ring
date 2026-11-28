@@ -1049,7 +1049,7 @@ pub(crate) struct CreateQueryParams {
 pub(crate) async fn create(
     State(pool): State<Db>,
     State(runtimes): State<RuntimeMap>,
-    State(configuration): State<crate::config::config::Config>,
+    State(configuration): State<std::sync::Arc<crate::config::config::Config>>,
     auth: Auth,
     Query(params): Query<CreateQueryParams>,
     Json(input): Json<DeploymentInput>,

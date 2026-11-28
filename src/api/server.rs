@@ -96,7 +96,10 @@ pub(crate) type ExecLimiterState = crate::api::exec_sessions::ExecSessionLimiter
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
-    pub(crate) configuration: Config,
+    /// Shared rather than owned: axum clones the state for every extractor
+    /// and middleware of every request, and a deep copy of the whole config
+    /// showed up as several percent of the API's CPU time.
+    pub(crate) configuration: std::sync::Arc<Config>,
     pub(crate) runtimes: RuntimeMap,
     pub(crate) ticket_store: TicketStoreState,
     pub(crate) stats_cache: StatsCacheState,
@@ -244,7 +247,7 @@ pub(crate) async fn start(
 
     let state = AppState {
         connection: pool,
-        configuration,
+        configuration: std::sync::Arc::new(configuration),
         runtimes,
         ticket_store: TicketStoreState::new(),
         stats_cache,
@@ -396,7 +399,7 @@ pub(crate) mod tests {
 
         let state = AppState {
             connection: pool.clone(),
-            configuration,
+            configuration: std::sync::Arc::new(configuration),
             runtimes,
             ticket_store: TicketStoreState::new(),
             stats_cache: crate::scheduler::stats_cache::new_cache(),

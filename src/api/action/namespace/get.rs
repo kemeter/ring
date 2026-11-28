@@ -10,7 +10,7 @@ use axum::http::StatusCode;
 pub(crate) async fn get(
     Path(id): Path<String>,
     State(pool): State<Db>,
-    State(configuration): State<crate::config::config::Config>,
+    State(configuration): State<std::sync::Arc<crate::config::config::Config>>,
 ) -> impl IntoResponse {
     match namespace::find(&pool, &id).await {
         Ok(Some(ns)) => {
