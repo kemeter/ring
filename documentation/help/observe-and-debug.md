@@ -171,10 +171,11 @@ scrape_configs:
       - targets: ['localhost:3030']
 ```
 
-Two families of series:
+Three families of series:
 
 - **Inventory**: `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` = outbound-queue depth, `dead` = dead-lettered), `ring_health_checks_by_status{status=…}`, plus counts for namespaces, secrets, volumes, users, webhooks, configs.
 - **Per-deployment resource usage**: `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_network_*_bytes_total`, `ring_deployment_restarts_total`, … labelled `deployment` / `namespace` / `runtime`.
+- **API latency**: `ring_http_server_request_duration_seconds`, a histogram labelled `method` / `route` / `status_code`, where `route` is the route template such as `/deployments/{id}`.
 
 Resource usage is refreshed in the background on the scheduler interval, not per scrape, so scraping is cheap regardless of how many deployments are running. `ring_runtime_last_refresh_seconds` exposes the last refresh time; values are at most one interval stale.
 
@@ -192,6 +193,9 @@ ring_events_by_status{status="dead"} > 0
 
 # The background stats refresh has stalled (no update in 2 minutes)
 time() - ring_runtime_last_refresh_seconds > 120
+
+# p99 latency of each API route over 5 minutes, above 500 ms
+histogram_quantile(0.99, sum by (le, route) (rate(ring_http_server_request_duration_seconds_bucket[5m]))) > 0.5
 ```
 
 See [Reference: REST API](/documentation/reference/api) for the full list of series.

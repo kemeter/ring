@@ -114,10 +114,12 @@ Content negotiation by `Accept`:
 - default (or any non-JSON `Accept`) → Prometheus text exposition `version=0.0.4`
 - `Accept: application/json` → the same values as a JSON object
 
-Two families of series are exposed:
+Three families of series are exposed:
 
 - **Inventory** (read from the database on each scrape): `ring_deployments`, `ring_deployments_by_status{status=…}`, `ring_deployments_by_runtime{runtime=…}`, `ring_events_by_status{status=…}` (`pending` is the outbound-queue depth, `dead` the dead-letter count), `ring_health_checks_by_status{status=…}`, and counts for `ring_namespaces` / `ring_secrets` / `ring_volumes` / `ring_users` / `ring_webhooks` / `ring_configs`. Every known status is emitted even at `0`, so a series never disappears between scrapes (which would break alerts written against it).
 - **Per-deployment resource usage** (labelled `deployment` / `namespace` / `runtime`): gauges `ring_deployment_instances`, `ring_deployment_cpu_usage_percent`, `ring_deployment_memory_usage_bytes`, `ring_deployment_memory_limit_bytes`, `ring_deployment_pids`; counters `ring_deployment_network_rx_bytes_total`, `ring_deployment_network_tx_bytes_total`, `ring_deployment_disk_read_bytes_total`, `ring_deployment_disk_write_bytes_total`, `ring_deployment_restarts_total`.
+
+- **API request duration** (recorded in memory as requests are served): histogram `ring_http_server_request_duration_seconds`, labelled `method` / `route` / `status_code`, with `_bucket{le=…}`, `_sum` and `_count` series. `route` is the matched route template (`/deployments/{id}`), never the raw path, and is empty when no route matched; a non-standard method is recorded as `_OTHER`. The duration runs until the response head is ready, so for `/deployments/{id}/logs` and `/deployments/{id}/exec` it is the time to open the stream. Buckets run from 5 ms to 10 s. The series appear after the first request and restart from zero when the server restarts. In the JSON form they are the `http_requests` array, with cumulative `buckets`.
 
 Resource usage is refreshed in the background on the scheduler interval, not at request time, so a scrape never blocks on the runtimes. `ring_runtime_last_refresh_seconds` carries the Unix time of the last successful refresh; alert on `time() - ring_runtime_last_refresh_seconds` to catch a stalled refresh. Values are therefore at most one interval stale; for a fresh point-in-time read of one deployment use [`GET /deployments/{id}/metrics`](#get-deploymentsidmetrics).
 

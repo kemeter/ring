@@ -172,7 +172,7 @@ Each telemetry signal is independent: you can enable traces, metrics, or logs on
 
 ### `[server.telemetry.metrics]`
 
-Opt-in OpenTelemetry metric export (push) over OTLP/gRPC. Off by default. When enabled, Ring periodically pushes the same per-deployment resource series the Prometheus `/metrics` endpoint serves, read from the background stats cache (so enabling it adds no extra runtime round-trip). Only `ring server start` exports metrics.
+Opt-in OpenTelemetry metric export (push) over OTLP/gRPC. Off by default. When enabled, Ring periodically pushes the same per-deployment resource series and API request durations the Prometheus `/metrics` endpoint serves, read from the background stats cache (so enabling it adds no extra runtime round-trip). Only `ring server start` exports metrics.
 
 | Field | Type | Required | Default | Purpose |
 |---|---|---|---|---|
@@ -181,7 +181,7 @@ Opt-in OpenTelemetry metric export (push) over OTLP/gRPC. Off by default. When e
 | `service_name` | string | no | `"ring-server"` | `service.name` resource attribute. Override with `OTEL_SERVICE_NAME` |
 | `interval_seconds` | int | no | `15` | Push interval. Floored at 1s |
 
-The exported gauges, labelled `{deployment, namespace, runtime}`, are: `ring.deployment.cpu.percent`, `ring.deployment.memory.used_bytes`, `ring.deployment.memory.limit_bytes`, `ring.deployment.network.rx_bytes`, `ring.deployment.network.tx_bytes`, `ring.deployment.disk.read_bytes`, `ring.deployment.disk.write_bytes`, `ring.deployment.pids`, `ring.deployment.instances`, and `ring.deployment.restarts`. Values are at most one stats-cache refresh (the scheduler interval) stale. A failed exporter is logged and the server continues without OTLP metrics.
+The exported gauges, labelled `{deployment, namespace, runtime}`, are: `ring.deployment.cpu.percent`, `ring.deployment.memory.used_bytes`, `ring.deployment.memory.limit_bytes`, `ring.deployment.network.rx_bytes`, `ring.deployment.network.tx_bytes`, `ring.deployment.disk.read_bytes`, `ring.deployment.disk.write_bytes`, `ring.deployment.pids`, `ring.deployment.instances`, and `ring.deployment.restarts`. Values are at most one stats-cache refresh (the scheduler interval) stale. The API's request durations go out as the `http.server.request.duration` histogram (seconds), with the `http.request.method`, `http.route` and `http.response.status_code` attributes of the OpenTelemetry HTTP conventions. A failed exporter is logged and the server continues without OTLP metrics.
 
 ### `[server.telemetry.logs]`
 

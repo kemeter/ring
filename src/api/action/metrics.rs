@@ -22,6 +22,7 @@
 //! exposes that staleness. For a fresh point-in-time read of one deployment,
 //! use `/deployments/{id}/metrics`.
 
+use crate::api::http_metrics::HttpSeriesSnapshot;
 use crate::api::server::AppState;
 use crate::models::deployments;
 use crate::models::deployments::DeploymentStatus;
@@ -50,6 +51,7 @@ pub(crate) async fn metrics(State(state): State<AppState>, headers: HeaderMap) -
         }
         Err(e) => error!("metrics: stats cache lock poisoned: {}", e),
     }
+    snap.http_requests = state.http_metrics.snapshot();
 
     let (body, content_type) = if wants_json(&headers) {
         let body = serde_json::to_string(&snap).unwrap_or_else(|e| {
@@ -119,6 +121,9 @@ struct Snapshot {
     /// cache (not the DB). Empty until the first refresh, or when no active
     /// deployment reports stats.
     deployment_runtime: Vec<RuntimeSeries>,
+    /// Request duration histogram of this API, one series per
+    /// `(method, route, status)` seen since the server started.
+    http_requests: Vec<HttpSeriesSnapshot>,
 }
 
 /// One `(namespace, status, reason)` bucket with its deployment count, ready
@@ -328,8 +333,43 @@ fn render_prom(snap: &Snapshot) -> String {
     );
 
     render_runtime(&mut out, snap);
+    render_http_requests(&mut out, &snap.http_requests);
 
     out
+}
+
+/// Render the request duration histogram. Nothing is written before the first
+/// request: a histogram has no meaningful zero series. In PromQL, the p99 of a
+/// route over five minutes is
+/// `histogram_quantile(0.99, sum by (le, route) (rate(ring_http_server_request_duration_seconds_bucket[5m])))`.
+fn render_http_requests(out: &mut String, series: &[HttpSeriesSnapshot]) {
+    if series.is_empty() {
+        return;
+    }
+    let name = "ring_http_server_request_duration_seconds";
+    let _ = writeln!(
+        out,
+        "# HELP {name} Duration of HTTP requests served by the API, until the response head."
+    );
+    let _ = writeln!(out, "# TYPE {name} histogram");
+    for s in series {
+        let labels = format!(
+            "method=\"{}\",route=\"{}\",status_code=\"{}\"",
+            escape_label_value(&s.method),
+            escape_label_value(&s.route),
+            s.status_code,
+        );
+        for bucket in &s.buckets {
+            let _ = writeln!(
+                out,
+                "{name}_bucket{{{labels},le=\"{}\"}} {}",
+                bucket.le, bucket.count
+            );
+        }
+        let _ = writeln!(out, "{name}_bucket{{{labels},le=\"+Inf\"}} {}", s.count);
+        let _ = writeln!(out, "{name}_sum{{{labels}}} {}", s.sum_seconds);
+        let _ = writeln!(out, "{name}_count{{{labels}}} {}", s.count);
+    }
 }
 
 /// Render the per-deployment runtime resource usage section. Sourced from the
@@ -583,6 +623,59 @@ mod tests {
         assert!(json["deployments"].is_number());
         assert!(json["deployments_by_status"].is_object());
         assert!(json["users"].is_number());
+    }
+
+    #[tokio::test]
+    async fn metrics_expose_the_request_duration_of_matched_routes() {
+        let app = new_test_app().await;
+        let token = login(app.clone(), "admin", "changeme").await;
+        let server = TestServer::new(app);
+
+        server
+            .get("/deployments")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .await;
+        server
+            .get("/deployments/does-not-exist")
+            .add_header("Authorization", format!("Bearer {token}"))
+            .await;
+
+        let body = server.get("/metrics").await.text();
+        assert!(body.contains("# TYPE ring_http_server_request_duration_seconds histogram"));
+        assert!(body.contains(
+            r#"ring_http_server_request_duration_seconds_count{method="GET",route="/deployments",status_code="200"} 1"#
+        ));
+        // The route label is the template, never the raw path.
+        assert!(body.contains(
+            r#"ring_http_server_request_duration_seconds_count{method="GET",route="/deployments/{id}",status_code="404"} 1"#
+        ));
+        assert!(!body.contains("does-not-exist"));
+        assert!(body.contains(
+            r#"ring_http_server_request_duration_seconds_bucket{method="GET",route="/deployments",status_code="200",le="+Inf"} 1"#
+        ));
+        // The login of this test went through the middleware too.
+        assert!(body.contains(r#"route="/login",status_code="200""#));
+    }
+
+    #[tokio::test]
+    async fn metrics_json_carries_the_request_duration_histogram() {
+        let server = TestServer::new(new_test_app().await);
+        server.get("/healthz").await;
+
+        let json: serde_json::Value = server
+            .get("/metrics")
+            .add_header(header::ACCEPT, "application/json")
+            .await
+            .json();
+        let healthz = json["http_requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["route"] == "/healthz")
+            .expect("a series for /healthz");
+        assert_eq!(healthz["method"], "GET");
+        assert_eq!(healthz["count"], 1);
+        assert_eq!(healthz["buckets"].as_array().unwrap().len(), 14);
     }
 
     #[test]

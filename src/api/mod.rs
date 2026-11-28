@@ -2,6 +2,7 @@ pub(crate) mod action;
 pub(crate) mod auth;
 pub(crate) mod dto;
 pub(crate) mod exec_sessions;
+pub(crate) mod http_metrics;
 pub(crate) mod server;
 pub(crate) mod stream_tickets;
 #[cfg(test)]
