@@ -325,12 +325,15 @@ async fn resolve_api_token(state: &AppState, req: &mut Request, clear: &str) -> 
     // Mark last-use off the request path: the UPDATE takes SQLite's single
     // writer lock, so awaiting it inline would serialise auth behind unrelated
     // writes. It is best-effort and throttled, so fire-and-forget is correct —
-    // a missed touch never matters and never blocks dispatch.
-    let pool = state.connection.clone();
-    let touched = token.clone();
-    tokio::spawn(async move {
-        let _ = token_model::touch_last_used(&pool, &touched).await;
-    });
+    // a missed touch never matters and never blocks dispatch. The throttle is
+    // checked here first: within the minute, no task is spawned at all.
+    if token_model::last_use_is_stale(&token, chrono::Utc::now()) {
+        let pool = state.connection.clone();
+        let touched = token.clone();
+        tokio::spawn(async move {
+            let _ = token_model::touch_last_used(&pool, &touched).await;
+        });
+    }
 
     req.extensions_mut().insert(AuthContext {
         user,
