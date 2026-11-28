@@ -11,7 +11,8 @@
 //!   periodic OTLP push reader and an observable callback that reads the
 //!   background stats cache (no extra runtime round-trip) and reports the
 //!   per-deployment resource gauges the Prometheus `/metrics` endpoint already
-//!   serves.
+//!   serves, plus the `http.server.request.duration` histogram the API
+//!   middleware records.
 //! - **logs** — [`build_logger`] builds an [`SdkLoggerProvider`] and returns an
 //!   `opentelemetry-appender-tracing` layer that ships `tracing` events over
 //!   OTLP in addition to the console.
@@ -37,6 +38,7 @@ use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use std::time::Duration;
 use tracing::Instrument as _;
 
+use crate::api::http_metrics::HttpMetrics;
 use crate::config::server::{LogsConfig, MetricsConfig, TracesConfig};
 use crate::scheduler::stats_cache::StatsCache;
 
@@ -202,6 +204,7 @@ where
 pub(crate) fn build_meter(
     cfg: &MetricsConfig,
     stats: StatsCache,
+    http_metrics: &HttpMetrics,
 ) -> anyhow::Result<SdkMeterProvider> {
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
@@ -222,6 +225,10 @@ pub(crate) fn build_meter(
         .build();
 
     register_deployment_gauges(&provider, stats);
+    {
+        use opentelemetry::metrics::MeterProvider as _;
+        http_metrics.attach_otel(&provider.meter("ring-server"));
+    }
 
     Ok(provider)
 }
@@ -367,15 +374,17 @@ pub(crate) fn build_logger(
 }
 
 /// axum middleware: open one `tracing` span per HTTP request, carrying the
-/// stable OpenTelemetry HTTP-server semantic-convention attributes. Attached to
-/// the root router, so when the OTel layer is active each request becomes a
-/// span; when it isn't, this is just a cheap `tracing` span with no exporter.
+/// stable OpenTelemetry HTTP-server semantic-convention attributes, and record
+/// its duration in [`HttpMetrics`]. Attached to the root router, so when the
+/// OTel layer is active each request becomes a span; when it isn't, this is
+/// just a cheap `tracing` span with no exporter.
 ///
 /// The span name is `{method} {http.route}` (low cardinality — the matched
 /// route template, never the raw path). Attributes follow the semconv stable
 /// set: `http.request.method`, `url.path`, `http.route`,
 /// `http.response.status_code`.
 pub(crate) async fn http_trace_middleware(
+    axum::extract::State(http_metrics): axum::extract::State<HttpMetrics>,
     matched: Option<axum::extract::MatchedPath>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -384,10 +393,9 @@ pub(crate) async fn http_trace_middleware(
     let path = request.uri().path().to_string();
     // `http.route` is the low-cardinality template (e.g. `/users/{id}`); fall
     // back to the raw path only when no route matched.
-    let route = matched
-        .as_ref()
-        .map(|m| m.as_str().to_string())
-        .unwrap_or_else(|| path.clone());
+    let matched_route = matched.as_ref().map(|m| m.as_str().to_string());
+    let route = matched_route.clone().unwrap_or_else(|| path.clone());
+    let started = std::time::Instant::now();
 
     let span = info_span!(
         "http.server.request",
@@ -404,9 +412,13 @@ pub(crate) async fn http_trace_middleware(
     // executor parks on at the yield point).
     async move {
         let response = next.run(request).await;
-        tracing::Span::current().record(
-            "http.response.status_code",
-            response.status().as_u16() as i64,
+        let status = response.status().as_u16();
+        tracing::Span::current().record("http.response.status_code", i64::from(status));
+        http_metrics.record(
+            method.as_str(),
+            matched_route.as_deref(),
+            status,
+            started.elapsed().as_secs_f64(),
         );
         response
     }

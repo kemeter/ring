@@ -447,6 +447,10 @@ pub(crate) async fn execute(
     // runtimes. See `scheduler::stats_cache`.
     let stats_cache = crate::scheduler::stats_cache::new_cache();
 
+    // Request duration histogram, recorded by the API middleware and served on
+    // `/metrics`; also pushed over OTLP when metrics export is on.
+    let http_metrics = crate::api::http_metrics::HttpMetrics::new();
+
     // OTLP metrics push (opt-in). The meter provider is built here — not in
     // `init_tracing` — because its observable gauges read this stats cache, and
     // it reports the same per-deployment series the Prometheus `/metrics`
@@ -455,7 +459,7 @@ pub(crate) async fn execute(
     if let Some(guard) = telemetry_guard {
         let metrics_cfg = &configuration.server.telemetry.metrics;
         if metrics_cfg.enabled {
-            match crate::telemetry::build_meter(metrics_cfg, stats_cache.clone()) {
+            match crate::telemetry::build_meter(metrics_cfg, stats_cache.clone(), &http_metrics) {
                 Ok(provider) => {
                     guard.attach_meter(provider);
                     info!(
@@ -497,6 +501,7 @@ pub(crate) async fn execute(
         configuration.clone(),
         runtimes.clone(),
         stats_cache,
+        http_metrics,
     ));
 
     // Embedded dashboard — only spawned when explicitly enabled in config,

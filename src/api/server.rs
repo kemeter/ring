@@ -2,7 +2,7 @@ use axum::{
     Router,
     error_handling::HandleErrorLayer,
     http::{HeaderValue, Method, StatusCode, header},
-    middleware::{from_fn, from_fn_with_state},
+    middleware::from_fn_with_state,
     routing::{delete, get, post, put},
 };
 use axum_macros::FromRef;
@@ -93,6 +93,8 @@ pub(crate) type StatsCacheState = crate::scheduler::stats_cache::StatsCache;
 
 pub(crate) type ExecLimiterState = crate::api::exec_sessions::ExecSessionLimiter;
 
+pub(crate) type HttpMetricsState = crate::api::http_metrics::HttpMetrics;
+
 #[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     pub(crate) connection: SqlitePool,
@@ -101,6 +103,7 @@ pub(crate) struct AppState {
     pub(crate) ticket_store: TicketStoreState,
     pub(crate) stats_cache: StatsCacheState,
     pub(crate) exec_limiter: ExecLimiterState,
+    pub(crate) http_metrics: HttpMetricsState,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -185,15 +188,20 @@ pub(crate) fn router(state: AppState) -> Router {
         );
 
     let cors_origins = state.configuration.api.cors_origins.clone();
+    let http_metrics = state.http_metrics.clone();
 
     let mut app = Router::new()
         .merge(public_routes)
         .merge(streaming_routes)
         .merge(api_routes)
         .with_state(state)
-        // One tracing span per request (OTel HTTP-server semconv). Outermost so
-        // it wraps every route; a no-op when trace export is disabled.
-        .layer(from_fn(crate::telemetry::http_trace_middleware));
+        // One tracing span and one duration measurement per request (OTel
+        // HTTP-server semconv). Outermost so it wraps every route, auth and
+        // timeout included.
+        .layer(from_fn_with_state(
+            http_metrics,
+            crate::telemetry::http_trace_middleware,
+        ));
 
     if !cors_origins.is_empty() {
         let origins: Vec<HeaderValue> = cors_origins
@@ -229,6 +237,7 @@ pub(crate) async fn start(
     configuration: Config,
     runtimes: RuntimeMap,
     stats_cache: StatsCacheState,
+    http_metrics: HttpMetricsState,
 ) {
     let bind_addr = format!(
         "{}:{}",
@@ -249,6 +258,7 @@ pub(crate) async fn start(
         ticket_store: TicketStoreState::new(),
         stats_cache,
         exec_limiter,
+        http_metrics,
     };
 
     let app = router(state);
@@ -401,6 +411,7 @@ pub(crate) mod tests {
             ticket_store: TicketStoreState::new(),
             stats_cache: crate::scheduler::stats_cache::new_cache(),
             exec_limiter: ExecLimiterState::new(&exec_config),
+            http_metrics: crate::api::http_metrics::HttpMetrics::new(),
         };
 
         (pool, router(state))
